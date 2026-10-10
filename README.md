@@ -40,7 +40,9 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | L | Measure tool on / off |
 | Y | Array tool on / off |
 | (Lathe button) | Lathe tool on / off: the Unity app gives it no key; Enter creates, Esc puts it away |
+| T | Tube tool on / off: Enter fuses the tubes into the model, Esc puts it away |
 | N | Mask tool: on (box), again for lasso, again for off |
+| (Hide button) | Hide tool: a box or lasso hides part of the selected object; it has no key, as H hides whole objects |
 | K | Split tool: on (line), again for lasso, box, then off |
 | J | Keys tool on / off |
 | Z, Shift + Z (also Ctrl + Z, Ctrl + Y) | Undo, redo |
@@ -254,13 +256,76 @@ Scale sliders; the preview is drawn at up to 256 around and Create always uses
 the full Density. Dragging on the background orbits. The profile is a scaffold:
 not saved, with its own Z while the tool is up.
 
-## Mask, Trim, Split and Extract
+## Tube
 
-Three tools act on what a shape drawn over the viewport covers, front and
-back, straight through the model, and a fourth turns a masked area into a
+Press **T** (or the Tube button) to draw tubes along a stroke: horns, arms,
+legs, tails, veins. A tube stays live after you draw it, as a curve through
+round points that you can move, add to and thicken, with the solid following
+as you work. When it is right, fuse it into the model or make it an object of
+its own.
+
+1. Drag from the model, out into the air, to draw a tube. The stroke is laid
+   on a plane facing you through the spot where it began, so the tube grows
+   out of that spot. **On Surface** lays it along the model instead, half sunk
+   into it (a vein, a ridge, a tail draped along a body). The ring at the
+   pointer shows how thick the next tube will be. With a mirror axis on, one
+   stroke makes both: the twin's curve and points are drawn fainter, and
+   grabbing one of its points edits the tube through the mirror.
+2. Shape it by its points, the dots along its orange curve; press one to
+   select it (it turns orange). Drag a point, click the curve to add one,
+   double-click a point to make it a sharp corner (it turns square) or smooth
+   again, Shift + drag an end point to carry the tube on from there. Each
+   point can be made thicker or thinner. The panel sets the whole tube:
+   **Radius**, how thick; **Taper**, which narrows it toward its end, for a
+   horn or a claw (**Thick End at the Tip** turns that round, so the start of
+   the stroke narrows instead); **Smoothness**, how loosely it flows between
+   its points; and **Round** or **Flat** ends. These change the selected tube,
+   and the next one you draw.
+3. **Merge** (Enter) fuses every live tube into the object it was drawn on, as
+   one surface with a soft join; **Blend** sets how soft (0 is a crisp seam).
+   The object is rebuilt at its current density, as a remesh does, so it
+   starts with a clear mask and everything showing. The work runs in the
+   background, with its progress and a Cancel button (or Esc) while it does.
+   **Keep Separate** makes each tube an object of its own to sculpt, placed
+   with the object it was drawn on. Either is one undo step.
+
+| Input (Tube up) | Action |
+| --- | --- |
+| Drag from the model | Draw a tube (Ctrl + drag starts one from empty space, at the depth of the selected object) |
+| Drag a point | Move it (a point on the surface slides over the model) |
+| Shift + drag an end point | Extend the tube from that end |
+| Click the selected tube | Add a point there, and keep dragging it |
+| Click another tube | Select it |
+| Double-click a point | Sharp / smooth |
+| Right-click a point | Delete it |
+| Delete | Delete the selected point, else the selected tube |
+| Drag the square beside the selected point | Thicker / thinner there |
+| Scroll over a point | The same |
+| S + move sideways | Thickness of the point under the pointer, else of the tube |
+| Enter | Merge |
+| Z, Shift + Z | Undo, redo the tubes' own edits |
+| Esc | Cancel the drag, then deselect, then put the tool away |
+
+Dragging on the background orbits, as everywhere else (the Unity app drew a
+tube there; here that is Ctrl + drag). Live tubes are a scaffold: not saved in
+`.sclp` files, and drawn only while the tool is up. Put it away and they wait,
+out of sight, until it is brought back. While the tool is up Z steps the
+tubes' own edits first (a point moved, a slider changed), then the scene's.
+Merge and Keep Separate are steps of the scene's history: Z right after one
+gives the tubes back live, with the tool brought up if it was put away, and
+Shift + Z fuses them again. A tube thinner than the model's own detail comes
+out thicker than drawn: undo, remesh the model finer, and merge again.
+
+## Mask, Hide, Trim, Split and Extract
+
+Four tools act on what a shape drawn over the viewport covers, front and
+back, straight through the model, and a fifth turns a masked area into a
 piece of its own:
 
 - **Mask** (**N**): drag a box or draw a lasso, and what it covers is masked.
+- **Hide**: drag a box or draw a lasso, and the part of the selected object it
+  covers is hidden, to get at what is behind it (see Hidden parts). It has no
+  key, since H hides whole objects: use the Hide button.
 - **Trim**: a box, a lasso or a straight line. What it covers is cut away and
   the hole closed with a face you can sculpt on; a line leaves a flat one.
 - **Split** (**K**): the same cut, keeping both sides. The covered side becomes
@@ -271,24 +336,25 @@ piece of its own:
   thickness, offset and smoothing; **Accept** (Enter) makes it an object, Esc
   cancels.
 
-| Input (Mask, Trim or Split up) | Action |
+| Input (Mask, Hide, Trim or Split up) | Action |
 | --- | --- |
 | Drag, anywhere on the viewport | Draw the shape; it acts when you let go |
-| Ctrl + drag, or right drag | The reverse: unmask; trim keeps what the shape covers |
+| Ctrl + drag, or right drag | The reverse: unmask; show what was hidden; trim keeps what the shape covers |
 | Shift | Box, lasso: everything outside the shape. Line: turn it in steps of 15 degrees |
-| Click | Mask: clear the mask |
+| Click | Mask: clear the mask. Hide: show everything |
 | N / K | The next shape, then put the tool away |
-| Space (hold) | Shape wheel |
+| Space (hold) | Shape wheel (Mask adds Clear and Invert, Hide adds Show All and Invert) |
 | Esc | Cancel the drag, else put the tool away |
 | 1 to 9 | Back to sculpting |
 
-While Mask, Trim or Split is up, a drag on the background draws a shape
+While Mask, Hide, Trim or Split is up, a drag on the background draws a shape
 instead of orbiting, because a box or a cut line has to be able to start
 beside the model: orbit with Alt + drag, pan with the middle button. (With
-Extract up a drag orbits as usual.) A cut made with a mirror axis on repeats
-on the other side. Each mask, trim, split and extract is one undo step, and a
-mask is carried across a cut. On a large model a cut runs in the background:
-its progress shows at the bottom of the viewport, with a Cancel button.
+Extract up a drag orbits as usual.) They work on the selected object. With a
+mirror axis on, a mask or a hide covers the other side too, and a cut repeats
+there. Each mask, hide, trim, split and extract is one undo step, and a mask
+is carried across a cut. On a large model a cut runs in the background: its
+progress shows at the bottom of the viewport, with a Cancel button.
 
 ## Keys
 
@@ -452,16 +518,25 @@ part is not drawn, the pointer goes straight through it to whatever is
 behind, and brushes leave it alone; the edge of what still shows sculpts like
 any other surface. Nothing is cut away.
 
+- The **Hide** button brings up the Hide tool (no key: H hides whole objects).
+  Drag a box or draw a lasso over the part to hide: what it covers goes, front
+  and back, straight through the selected object. A face is hidden when all
+  three of its corners are under the shape, so a face on the edge stays.
+  Ctrl + drag (or a right drag) shows what the shape covers instead, Shift +
+  drag hides everything outside it (to isolate a limb), and a click shows
+  everything again. With a mirror axis on, the other side goes too. A drag
+  that would hide the whole object is refused, with a line saying so. A box or
+  lasso mask leaves hidden parts alone, so hide a limb first and a mask drawn
+  over the body in front of it will not reach it.
 - **Show All** brings everything back and **Invert Visible** swaps the hidden
   and the showing parts. Both are in the **Hidden Parts** card of the Sculpt
-  panel, under Masking; its header says how many faces are hidden.
+  panel, under Masking, and in the Hide tool's own panel and wheel; the card's
+  header says how many faces are hidden.
 - Hiding, showing and inverting are each an undo step.
 - Remesh, Quad Remesh, Join and both exports always work on the whole model,
   hidden parts included, and what a remesh or a join makes starts with
   everything showing, as in the Unity app.
 - The wireframe draws only the faces that show.
-
-Choosing what to hide is the job of the box and lasso tools.
 
 ## Turntable
 
@@ -518,6 +593,11 @@ wheel, the two-panel interface, and multiple objects with the scene graph
 (sphere blockout with a live skin, symmetry, posing, attaching to an object,
 and Make Skin).
 
+Also ported: tubes (see Tube above) and box / lasso hide (see Mask, Hide,
+Trim, Split and Extract, and Hidden parts, above). A tube is drawn along a
+stroke, shaped by its points, and fused into the model or kept as an object of
+its own; the Hide tool hides part of an object with a box or lasso.
+
 Quad remesh is ported too: **Quad Remesh** in the Remesh card rebuilds the
 selected object as about the number of quads on the **Quads** slider, even in
 size and following the form. It is one undo step, and OBJ export then writes
@@ -526,8 +606,8 @@ draws the edges of every face (the quads after a quad remesh, the triangles
 otherwise); a quad remesh turns it on. The result ignores mirror symmetry. The
 quads are kept in `.sclp` files.
 
-Not ported yet: the Pose brush, radial symmetry, dynamic topology, box / lasso hide (listed in the Mask tool, greyed out), the gizmo on an SSphere,
-live mirror copies and tubes.
+Not ported yet: the Pose brush, radial symmetry, dynamic topology, the gizmo
+on an SSphere and live mirror copies.
 The turntable and the timelapse are ported (see Turntable and Timelapse above);
 a 360 loop is saved as PNG pictures only, not yet as a video.
 
