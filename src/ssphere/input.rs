@@ -62,6 +62,10 @@ pub(super) enum DragKind {
     Rotate,
     Twist,
     Pose,
+    /// A handle of the transform gizmo on the selected sphere (see gizmo.rs).
+    /// The gizmo owns the pointer; the drag only holds what the undo step
+    /// goes back to.
+    Gizmo,
 }
 
 /// What each captured node does while a limb is posed.
@@ -80,7 +84,7 @@ enum PoseRole {
 #[derive(Default)]
 pub(super) struct Drag {
     pub(super) kind: DragKind,
-    node: Option<usize>,
+    pub(super) node: Option<usize>,
     parent: Option<usize>,
     /// The grab was on a reflection; cursor points are mapped back through
     /// the mirror before they reach the rig.
@@ -96,7 +100,7 @@ pub(super) struct Drag {
     /// surface normal there. It grows away from the contact.
     resting: Option<(Vec3, Vec3)>,
     nodes: Vec<usize>,
-    start_positions: Vec<Vec3>,
+    pub(super) start_positions: Vec<Vec3>,
     start_radii: Vec<f32>,
     // Pose: the two-bone chain root -> joint -> end (end = the grabbed
     // bone's child).
@@ -380,6 +384,16 @@ impl SSpheres {
 
     // ---- hover ------------------------------------------------------------
 
+    /// Whether the pointer is on a sphere's body (a reflection too), which
+    /// then keeps the press even where an arrow of the gizmo passes over it.
+    /// The arrows start at the selected sphere's centre, so without this
+    /// every grab of that sphere would be a one-axis drag: the sphere is the
+    /// sphere, and the arrows are the arrows only where they stick out past
+    /// it. Takes the world-space context.
+    pub fn claims_pointer(&mut self, cx: &Ctx, pos: Vec2) -> bool {
+        self.in_rig(cx, |tool, cx| tool.pick(cx, cx.view.ray(pos)).node.is_some())
+    }
+
     /// Tracks what the cursor is over between gestures. `blocked` means the
     /// pointer is not the viewport's to read (it is over a panel, or the
     /// camera has it).
@@ -592,7 +606,7 @@ impl SSpheres {
     pub fn wheel(&mut self, lines: f32) -> bool {
         let factor = 1.0 + lines.signum() * WHEEL_RESIZE_PER_NOTCH;
         if self.is_dragging() {
-            let sized = !matches!(self.drag.kind, DragKind::Scale | DragKind::PendingDraw);
+            let sized = !matches!(self.drag.kind, DragKind::Scale | DragKind::PendingDraw | DragKind::Gizmo);
             if let Some(node) = self.drag.node.filter(|_| sized)
                 && let Some(radius) = self.rig.get(node).map(|n| n.radius)
             {
@@ -719,18 +733,20 @@ impl SSpheres {
                 self.set_captured(|_, p| pivot + rotation * (p - pivot));
             }
             DragKind::Pose => self.update_pose(cx, ray),
+            // Worked out from the gizmo's own placements, not the pointer.
+            DragKind::Gizmo => {}
         }
     }
 
     /// The dragged node and its radius, if it is still alive.
-    fn drag_node(&self) -> Option<(usize, f32)> {
+    pub(super) fn drag_node(&self) -> Option<(usize, f32)> {
         let node = self.drag.node?;
         Some((node, self.rig.get(node)?.radius))
     }
 
     /// Records the nodes a drag will move (a node, or it and everything
     /// below it) with their positions and radii at the press.
-    fn capture(&mut self, node: usize, subtree: bool) {
+    pub(super) fn capture(&mut self, node: usize, subtree: bool) {
         self.drag.nodes.clear();
         if subtree {
             self.rig.collect_subtree(node, &mut self.drag.nodes);
@@ -744,7 +760,7 @@ impl SSpheres {
 
     /// Rewrites every captured node's position as a function of its slot and
     /// its position at the press.
-    fn set_captured(&mut self, f: impl Fn(usize, Vec3) -> Vec3) {
+    pub(super) fn set_captured(&mut self, f: impl Fn(usize, Vec3) -> Vec3) {
         for i in 0..self.drag.nodes.len() {
             self.rig.set_position(self.drag.nodes[i], f(i, self.drag.start_positions[i]));
         }

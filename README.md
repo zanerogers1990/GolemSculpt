@@ -140,6 +140,7 @@ shape before sculpting detail.
 | Click empty space (Draw) | Add a sphere to the selected one |
 | Drag a link (Draw) | Add a joint there and bend the limb |
 | Drag a sphere (Move) | Move it with everything below it; Shift moves it alone |
+| Drag an arrow (Move) | Move the selected sphere and everything below it along that axis |
 | Drag a link (Move) | Pose the limb: it bends at the joint above, keeping every length |
 | Drag (Scale) | Resize a sphere; Shift resizes its whole branch |
 | Drag (Rotate) | Swing a branch about its parent joint; Shift twists it |
@@ -153,6 +154,17 @@ shape before sculpting detail.
 | Space (hold) | SSphere wheel, with the size of the next sphere under it |
 | Z, Shift + Z | Undo, redo the spheres (they keep their own history) |
 | F F | Frame the spheres |
+
+In Move mode the selected sphere carries the Transform gizmo's arrows: drag one
+to slide the sphere, and everything below it, exactly along that axis of the
+world, for the times a limb has to go straight up or straight out. The mirrored
+twin follows, a sphere near the red plane sticks to it as it does for any
+other move, and each pull is one step in the spheres' own undo history (Esc
+cancels it). Pressing on a sphere itself, wherever an arrow runs over it, still
+moves that sphere freely. A sphere gets arrows only, no rings or cubes: it is
+round, and its size and turn are what the Scale and Rotate modes are for. The
+arrows go when the mode changes, when the sphere is deselected or deleted, in
+the solid preview, and when the tool is put away.
 
 Dragging on the background orbits, as everywhere else. The spheres mirror
 across X by default: one placed on the red plane is shared by both sides, one
@@ -623,7 +635,7 @@ sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden,
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
 sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
-sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play
+sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play | gizmo | gizmo-held | gizmo-play
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)

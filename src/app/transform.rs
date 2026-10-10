@@ -6,8 +6,9 @@
 //! The gizmo itself (`crate::gizmo`) only knows a list of targets. This file
 //! decides what they are and what a drag of them means: whole objects are
 //! placed, a lone object with a mask has the unmasked part of its surface
-//! reshaped instead (`masked.rs`), and a tool's target is the tool's to
-//! move, so it is told where the drag has put it.
+//! reshaped instead (`masked.rs`), a tool's target is the tool's to move, so
+//! it is told where the drag has put it, and the selected SSphere is moved
+//! by the spheres themselves (`ssphere/gizmo.rs`).
 
 use glam::{Quat, Vec2, Vec3};
 use sculpt_toolkit as kit;
@@ -34,6 +35,8 @@ enum Dragged {
     Surface { deform: Deform, stale: bool },
     /// The target of hosted tool `index`.
     Tool { index: usize },
+    /// The selected sphere of the SSphere rig, and its branch.
+    Spheres,
 }
 
 /// A handle drag under way.
@@ -45,9 +48,10 @@ pub(super) struct Dragging {
 #[derive(Default)]
 pub(super) struct State {
     dragging: Option<Dragging>,
-    /// Whether the pointer rests on a handle of the gizmo a hosted tool asked
-    /// for. A press there is the gizmo's, so the tool is told the pointer is
-    /// not free (`Env::hovering`) and keeps its ghosts and highlights back.
+    /// Whether the pointer rests on a handle of the gizmo a tool asked for (a
+    /// hosted tool, or the SSpheres). A press there is the gizmo's, so the
+    /// tool is told the pointer is not free (`Env::hovering`) and keeps its
+    /// ghosts and highlights back.
     pub(super) on_tool_handle: bool,
 }
 
@@ -57,6 +61,8 @@ enum Subject {
     Objects(Vec<u64>),
     /// The target this hosted tool offers.
     Tool(usize),
+    /// The selected sphere of the SSphere rig.
+    Spheres,
 }
 
 /// The gizmo as it stands with nothing being dragged.
@@ -163,7 +169,13 @@ impl Running {
             });
         }
         // A tool's target brings its own axes; the orientation setting is
-        // for the scene selection.
+        // for the scene selection. The SSpheres are the app's own tool, with
+        // arrows on the selected sphere (see ssphere/gizmo.rs).
+        if self.spheres_active() {
+            let (target, handles) = self.spheres_gizmo()?;
+            let orientation = Orientation::Auto;
+            return Some(Setup { subject: Subject::Spheres, targets: vec![target], handles, orientation });
+        }
         let (index, offer) = self.doc.tools.gizmo(self.doc.tool)?;
         let (target, handles) = tool_target(&offer);
         Some(Setup { subject: Subject::Tool(index), targets: vec![target], handles, orientation: Orientation::Auto })
@@ -174,7 +186,7 @@ impl Running {
         let frame = Frame::on(&setup.targets, setup.orientation, setup.handles, &self.view, ppp)?;
         Some(match setup.subject {
             // The middle of a tool's own target stays the tool's to press.
-            Subject::Tool(_) => frame.keeping_clear(setup.targets[0].radius, &self.view, ppp),
+            Subject::Tool(_) | Subject::Spheres => frame.keeping_clear(setup.targets[0].radius, &self.view, ppp),
             Subject::Objects(_) => frame,
         })
     }
@@ -189,6 +201,10 @@ impl Running {
         let Some(setup) = self.gizmo_setup() else { return false };
         let Some(frame) = self.gizmo_frame(&setup) else { return false };
         let Some(handle) = frame.pick(&self.view, pos, self.pixels_per_point()) else { return false };
+        // Where an arrow passes over a sphere, the sphere keeps the press.
+        if matches!(setup.subject, Subject::Spheres) && self.spheres_claims_pointer(pos) {
+            return false;
+        }
         let drag = gizmo::Drag::on(handle, frame, &setup.targets, &self.view, pos);
         let what = match setup.subject {
             Subject::Objects(ids) => {
@@ -213,6 +229,12 @@ impl Running {
                 // its own undo step goes back to.
                 self.tools_gizmo_event(index, tool_event(&drag, kit::GizmoPhase::Begin));
                 Dragged::Tool { index }
+            }
+            Subject::Spheres => {
+                if !self.doc.spheres.begin_gizmo_drag() {
+                    return false;
+                }
+                Dragged::Spheres
             }
         };
         self.transform.dragging = Some(Dragging { drag, what });
@@ -260,6 +282,7 @@ impl Running {
             Dragged::Objects { ids, .. } => place(&mut self.doc.scene, ids, d.drag.placements()),
             Dragged::Surface { stale, .. } => *stale = true,
             Dragged::Tool { index } => self.tools_gizmo_event(*index, tool_event(&d.drag, kit::GizmoPhase::Move)),
+            Dragged::Spheres => self.doc.spheres.gizmo_drag_to(d.drag.placements()[0].position),
         }
         self.transform.dragging = Some(d);
         true
@@ -312,8 +335,19 @@ impl Running {
                 }
             }
             Dragged::Tool { index } => self.tools_gizmo_event(index, tool_event(&d.drag, kit::GizmoPhase::End)),
+            // The spheres keep their own history: the drag is one step there.
+            Dragged::Spheres => self.doc.spheres.end_gizmo_drag(),
         }
         self.redraw = true;
+    }
+
+    /// Lets go of a sphere drag the spheres have already cancelled (Esc put
+    /// them back). The button stays down until it is released, but moves
+    /// nothing.
+    pub(super) fn transform_cancelled(&mut self) {
+        if matches!(&self.transform.dragging, Some(Dragging { what: Dragged::Spheres, .. })) {
+            self.transform.dragging = None;
+        }
     }
 
     /// Drops a drag without finishing it (the tool was put away mid-drag).
@@ -347,7 +381,12 @@ impl Running {
                     && self.doc.tools.radial.is_none()
                     && !self.over_ui();
                 let hot = frame.filter(|_| hovering).and_then(|f| f.pick(&self.view, self.input.pointer, ppp));
-                let tools = matches!(setup, Some(Setup { subject: Subject::Tool(_), .. }));
+                let tools = matches!(setup, Some(Setup { subject: Subject::Tool(_) | Subject::Spheres, .. }));
+                // A sphere under the pointer keeps it, whatever arrow is over it.
+                let hot = hot.filter(|_| {
+                    !matches!(setup, Some(Setup { subject: Subject::Spheres, .. }))
+                        || !self.spheres_claims_pointer(self.input.pointer)
+                });
                 self.transform.on_tool_handle = tools && hot.is_some();
                 (frame, hot)
             }
@@ -473,14 +512,14 @@ impl Running {
     }
 
     /// The gizmo as it stands now.
-    fn demo_frame(&self) -> Option<Frame> {
+    pub(super) fn demo_frame(&self) -> Option<Frame> {
         self.gizmo_frame(&self.gizmo_setup()?)
     }
 
     /// Presses at the first world point and drags through the rest, by way
     /// of the routines the window feeds. Returns whether the press took a
     /// handle. With `release` false the drag is left under way.
-    fn demo_drag(&mut self, path: &[Vec3], release: bool) -> bool {
+    pub(super) fn demo_drag(&mut self, path: &[Vec3], release: bool) -> bool {
         let px = |app: &Running, p: Vec3| app.view.project(p).unwrap_or(app.view.size * 0.5);
         let Some((&first, rest)) = path.split_first() else { return false };
         let from = px(self, first);
