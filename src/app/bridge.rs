@@ -25,7 +25,7 @@ use crate::doc::{Action, MaskOp, Options};
 use crate::io;
 use crate::mesh::bvh::Aabb;
 use crate::mesh::primitives::{self, Primitive};
-use crate::sculpt::{Brush, PointerSample};
+use crate::sculpt::{Brush, PointerSample, Radial, RadialAxis};
 use crate::ui::theme;
 
 /// How long a connection waits for the main thread. A remesh of a heavy mesh
@@ -338,6 +338,7 @@ impl Running {
             "accumulate": b.accumulate,
             "mask_mode": s.mask_mode,
             "mirror": { "x": s.symmetry[0], "y": s.symmetry[1], "z": s.symmetry[2] },
+            "radial": { "on": s.radial.on, "repeats": s.radial.count, "axis": point(s.radial.axis_vector()) },
         })
     }
 
@@ -440,6 +441,21 @@ impl Running {
             if let Some(on) = flag(args, name) {
                 s.symmetry[axis] = on;
             }
+        }
+        if let Some(repeats) = num(args, "radial") {
+            // Fewer than two is no repeat at all: off, with the count kept
+            // for when it is switched back on.
+            s.radial.on = repeats >= Radial::MIN_COUNT as f32;
+            if s.radial.on {
+                s.radial.count = (repeats as u32).clamp(Radial::MIN_COUNT, Radial::MAX_COUNT);
+            }
+        }
+        if let Some(name) = text(args, "radial_axis") {
+            let axis = [RadialAxis::X, RadialAxis::Y, RadialAxis::Z].into_iter().find(|a| key(a.name()) == key(name));
+            s.radial.axis = axis.ok_or("radial_axis is \"x\", \"y\" or \"z\". radial_custom_axis takes any other direction.")?;
+        }
+        if let Some(direction) = vec3(args, "radial_custom_axis")? {
+            s.radial.set_custom_axis(direction);
         }
         Ok(self.brush_state().to_string())
     }

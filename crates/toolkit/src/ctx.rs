@@ -3,8 +3,8 @@
 
 use std::ops::Deref;
 
-use glam::Vec2;
-use sculpt_geom::{Aabb, LengthUnit};
+use glam::{Vec2, Vec3};
+use sculpt_geom::{Aabb, LengthUnit, SymmetryGroup};
 
 use crate::jobs::{Job, JobCtx, Jobs};
 use crate::scene::{Command, Document, Hit, Receipt, Scene, apply};
@@ -36,6 +36,12 @@ pub struct Env {
     /// The mirror axes brushes are working with (X, Y, Z), in the selected
     /// object's own space.
     pub mirror: [bool; 3],
+    /// Radial symmetry, on top of the mirror axes: how many times brushes
+    /// repeat a stroke round `radial_axis` (1 when it is off), a direction
+    /// through the selected object's origin in its own space.
+    /// [`Env::symmetry`] makes the one list of copies out of all three.
+    pub radial_count: u32,
+    pub radial_axis: Vec3,
     /// The unit lengths are shown and typed in (see `sculpt_geom::units`).
     pub unit: LengthUnit,
     /// Whether tooltips are switched on. `theme::tip` takes this.
@@ -57,10 +63,21 @@ impl Env {
             dt: 1.0 / 60.0,
             active: true,
             mirror: [false; 3],
+            radial_count: 1,
+            radial_axis: Vec3::Y,
             unit: LengthUnit::default(),
             tips: true,
             clean_view: false,
         }
+    }
+
+    /// Every copy a brush stroke is made as under the symmetry that is on,
+    /// the stroke itself first: the mirror images, the turns round the radial
+    /// axis, and the two combined. What a tool that follows the brushes'
+    /// symmetry repeats its own work under, in the selected object's space.
+    pub fn symmetry(&self) -> SymmetryGroup {
+        let [x, y, z] = self.mirror;
+        SymmetryGroup::build(x, y, z, self.radial_count, self.radial_axis)
     }
 }
 

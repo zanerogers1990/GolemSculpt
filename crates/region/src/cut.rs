@@ -74,7 +74,7 @@ impl Snapshot {
             indices: mesh.indices.to_vec(),
             mask: masked.then(|| mesh.mask.to_vec()),
             views: cut_views(scene, object, view),
-            symmetry: symmetry(cx.mirror),
+            symmetry: symmetry(cx),
         })
     }
 

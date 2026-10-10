@@ -43,7 +43,7 @@ pub fn apply(
     let scene = cx.scene();
     let mesh = scene.mesh(object).ok_or("No object selected.")?;
     let projections: Vec<ScreenProjection> = cut_views(scene, object, view).iter().map(|v| v.projection).collect();
-    mark_vertices_in_region(mesh.positions, &projections, &symmetry(cx.mirror), region, outside, covered);
+    mark_vertices_in_region(mesh.positions, &projections, &symmetry(cx), region, outside, covered);
     // Hidden vertices are skipped: hiding is how a limb is got out of the
     // way, and a box over the torso masking the arm hidden behind it would
     // defeat that.

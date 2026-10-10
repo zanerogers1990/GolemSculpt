@@ -83,6 +83,7 @@ change things. Nothing is kept between calls; hold ids, not references.
 | `cx.pointer`, `cx.hovering`, `cx.pressure`, `cx.mods` | Pointer in pixels; whether it is free over the viewport (show ghosts and hover only then); pen pressure; shift / ctrl / alt |
 | `cx.time`, `cx.dt`, `cx.active` | Seconds; whether this tool is the one up |
 | `cx.mirror`, `cx.unit`, `cx.tips`, `cx.clean_view` | Brush mirror axes; mm or inches (`sculpt_geom::units` formats and parses); tooltips on; panels hidden (draw no handles) |
+| `cx.radial_count`, `cx.radial_axis`, `cx.symmetry()` | Radial symmetry (repeats round an axis; 1 is off); every copy a stroke is made as, mirrors and turns together, as a `SymmetryGroup` |
 | `cx.scene()` | `objects()`, `active()`, `selected()` (every selected object, the active one first), `info(id)` (name, visible, placement, mesh id, counts), `mesh(id)` (positions, normals, indices, mask, hidden-face flags **as slices**, object space), `raycast(&ray)`, `raycast_object(id, &ray)`, `bounds(id)` |
 | `cx.pick(px)` | The visible surface under a pixel: object, position, normal, distance |
 

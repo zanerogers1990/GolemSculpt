@@ -10,6 +10,7 @@ mod overlay;
 pub mod question;
 mod scene_graph;
 mod spheres;
+pub mod symmetry;
 pub mod theme;
 mod tools;
 
@@ -426,24 +427,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         });
     });
 
-    let names = ["X", "Y", "Z"];
-    let on: Vec<&str> = (0..3).filter(|&a| s.symmetry[a]).map(|a| names[a]).collect();
-    let summary = if on.is_empty() { "Off".to_owned() } else { on.join(" + ") };
-    theme::category(ui, "Symmetry", Color32::from_rgb(242, 115, 158), &summary, true, |ui| {
-        theme::heading(ui, "Mirror strokes across");
-        ui.horizontal(|ui| {
-            let w = theme::row_width(ui, 3, 6.0);
-            for a in 0..3 {
-                ui.allocate_ui(vec2(w, 22.0), |ui| {
-                    let r = theme::checkbox(ui, &mut s.symmetry[a], names[a], theme::AXIS[a]);
-                    if a == 0 {
-                        tip(r, tips, "Mirror left and right (X).");
-                    }
-                });
-            }
-        });
-        theme::checkbox(ui, &mut doc.opts.symmetry_guides, "Show Symmetry Guides", ACCENT);
-    });
+    symmetry::card(ui, doc);
 
     let summary = fmt_count(doc.mesh.triangle_count());
     theme::category(ui, "Remesh", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {

@@ -9,10 +9,10 @@
 //! builds it. Screen positions need no conversion: the pointer, the overlay
 //! and `sculpt_cut` all use viewport pixels with (0, 0) at the top-left.
 
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec4};
 use sculpt_cut::CutView;
-use sculpt_geom::{SymmetryGroup, SymmetryOp};
-use sculpt_toolkit::{ObjectId, Scene, View};
+use sculpt_geom::SymmetryOp;
+use sculpt_toolkit::{Env, ObjectId, Scene, View};
 
 /// World space into the camera's own: x right, y up, looking down -z, the
 /// eye at the origin. The app's own view matrix (see `src/camera.rs`).
@@ -50,15 +50,16 @@ pub fn cut_views(scene: &dyn Scene, object: ObjectId, view: &View) -> Vec<CutVie
     views
 }
 
-/// The brush mirror axes as the list of operations a gesture repeats under:
-/// the identity first, then each combination of the mirrors that are on.
-pub fn symmetry(mirror: [bool; 3]) -> Vec<SymmetryOp> {
-    SymmetryGroup::build(mirror[0], mirror[1], mirror[2], 1, Vec3::Y).ops().to_vec()
+/// The brushes' symmetry as the list of operations a gesture repeats under:
+/// the identity first, then every other copy a stroke would be made as, the
+/// mirror images and the turns round the radial axis alike.
+pub fn symmetry(env: &Env) -> Vec<SymmetryOp> {
+    env.symmetry().ops().to_vec()
 }
 
 #[cfg(test)]
 mod tests {
-    use glam::Quat;
+    use glam::{Quat, Vec3};
 
     use super::*;
 
@@ -107,11 +108,37 @@ mod tests {
 
     #[test]
     fn mirror_axes_become_the_flips_to_repeat_under() {
-        assert_eq!(symmetry([false; 3]), vec![SymmetryOp::IDENTITY]);
-        let x = symmetry([true, false, false]);
+        let mut env = Env::at_rest(views()[0]);
+        assert_eq!(symmetry(&env), vec![SymmetryOp::IDENTITY]);
+        env.mirror = [true, false, false];
+        let x = symmetry(&env);
         assert_eq!(x.len(), 2);
         assert!(x[0].is_identity());
         assert_eq!(x[1].sign(), Vec3::new(-1.0, 1.0, 1.0));
-        assert_eq!(symmetry([true, false, true]).len(), 4);
+        env.mirror = [true, false, true];
+        assert_eq!(symmetry(&env).len(), 4);
+    }
+
+    #[test]
+    fn radial_symmetry_adds_the_turns_to_repeat_under() {
+        let mut env = Env::at_rest(views()[0]);
+        (env.radial_count, env.radial_axis) = (6, Vec3::Z);
+        let turns = symmetry(&env);
+        assert_eq!(turns.len(), 6);
+        assert!(turns[0].is_identity());
+        let p = Vec3::new(0.4, 0.1, 0.3);
+        for (k, turn) in turns.iter().enumerate() {
+            let angle = std::f32::consts::TAU * k as f32 / 6.0;
+            let turned = Vec3::new(p.x * angle.cos() - p.y * angle.sin(), p.x * angle.sin() + p.y * angle.cos(), p.z);
+            assert!(turn.apply_point(p).distance(turned) < 1e-6, "turn {k}");
+        }
+        // With a mirror plane through the axis: each turn and its reflection.
+        env.mirror = [true, false, false];
+        assert_eq!(symmetry(&env).len(), 12);
+        // A count below 2 is no radial symmetry at all.
+        for count in [0, 1] {
+            env.radial_count = count;
+            assert_eq!(symmetry(&env).len(), 2);
+        }
     }
 }

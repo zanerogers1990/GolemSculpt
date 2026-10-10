@@ -625,7 +625,7 @@ pub mod slot {
     pub const LOOK: &str = "look";
     /// `camera::SavedView`.
     pub const CAMERA: &str = "camera";
-    /// [`super::Mirror`]: the brush mirror axes and their guides.
+    /// [`super::Mirror`]: the brush mirror axes, radial symmetry and their guides.
     pub const MIRROR: &str = "mirror";
 
     // Per object, for features that are still being ported: nothing writes
@@ -792,8 +792,11 @@ impl Shading {
     }
 }
 
-/// The brush mirror: which axes strokes are mirrored across, and whether the
-/// guide planes are drawn.
+/// The brush symmetry: which axes strokes are mirrored across, how they are
+/// repeated round an axis, and whether the guides are drawn.
+///
+/// `radial` came after the rest. A file from before it reads as radial
+/// symmetry switched off, with the count and axis the app starts with.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Mirror {
@@ -801,11 +804,12 @@ pub struct Mirror {
     pub y: bool,
     pub z: bool,
     pub guides: bool,
+    pub radial: crate::sculpt::Radial,
 }
 
 impl Default for Mirror {
     fn default() -> Self {
-        Self { x: false, y: false, z: false, guides: Options::default().symmetry_guides }
+        Self { x: false, y: false, z: false, guides: Options::default().symmetry_guides, radial: Default::default() }
     }
 }
 
@@ -1485,6 +1489,7 @@ mod tests {
     use crate::look::{Finish, Look, Tonemap};
     use crate::mesh::primitives::{self, Primitive};
     use crate::scene::Scene;
+    use crate::sculpt::{Radial, RadialAxis};
 
     /// A file path under the temp folder. Tests run side by side, so every
     /// test gives its files names of its own.
@@ -2196,7 +2201,8 @@ mod tests {
 
         let shading = Shading::of(&options, "Ben Simonds/MatCap_BS1".into());
         let view = SavedView { yaw: 132.5, pitch: -20.0, distance: 4.25, pivot: [0.1, 0.2, -0.3], ortho: true, fov_y: 45.0 };
-        let mirror = Mirror { x: true, y: false, z: true, guides: false };
+        let radial = Radial { on: true, count: 6, axis: RadialAxis::Custom, custom_axis: Vec3::new(0.6, 0.0, -0.8) };
+        let mirror = Mirror { x: true, y: false, z: true, guides: false, radial };
         let mut details = Details::default();
         details.set(slot::SHADING, &shading);
         details.set(slot::LOOK, &options.look);
@@ -2332,6 +2338,40 @@ mod tests {
         assert_eq!(look.brightness, 1.75);
         assert_eq!(look.aperture, Look::default().aperture);
         assert!(back.details.get::<Mirror>(slot::MIRROR).is_none(), "and a part that is not there is simply not there");
+    }
+
+    /// A file from before radial symmetry was kept has the mirror axes and
+    /// nothing else: it opens with them, and with radial symmetry off.
+    #[test]
+    fn mirror_settings_from_before_radial_symmetry_still_read() {
+        let mut details = Details::default();
+        details.set(slot::MIRROR, &json!({ "x": true, "y": false, "z": true, "guides": false }));
+        let usual = Mirror::default();
+        let mirror: Mirror = details.get_over(slot::MIRROR, &usual).unwrap();
+        assert_eq!((mirror.x, mirror.y, mirror.z, mirror.guides), (true, false, true, false));
+        assert_eq!(mirror.radial, Radial::default());
+        assert!(!mirror.radial.on && mirror.radial.count == 8 && mirror.radial.axis == RadialAxis::Y);
+
+        // As it is written now, and read back by name.
+        let radial = Radial { on: true, count: 12, axis: RadialAxis::Z, custom_axis: Vec3::new(0.0, 0.5, -0.75) };
+        details.set(slot::MIRROR, &Mirror { radial, ..usual });
+        let written: Value = details.get(slot::MIRROR).unwrap();
+        assert_eq!(written["radial"], json!({ "on": true, "count": 12, "axis": "z", "custom_axis": [0.0, 0.5, -0.75] }));
+        assert_eq!(details.get_over(slot::MIRROR, &usual), Some(Mirror { radial, ..usual }));
+
+        // An axis this version has never heard of, and a count that is not
+        // one, are passed over; what is beside them is still read.
+        details.set(slot::MIRROR, &json!({ "x": true, "radial": { "on": true, "count": "lots", "axis": "w" } }));
+        let mirror: Mirror = details.get_over(slot::MIRROR, &usual).unwrap();
+        assert!(mirror.x && mirror.radial.on);
+        assert_eq!((mirror.radial.count, mirror.radial.axis), (8, RadialAxis::Y));
+
+        // Numbers out of range are brought into it before they are used.
+        let wild = Radial { on: true, count: 0, axis: RadialAxis::Custom, custom_axis: Vec3::ZERO };
+        assert_eq!(wild.sanitized(), Radial { count: 2, custom_axis: Vec3::Y, ..wild });
+        assert_eq!(Radial { count: 500, ..wild }.sanitized().count, 32);
+        assert_eq!(Radial { custom_axis: Vec3::new(0.0, 0.0, -3.0), ..wild }.sanitized().custom_axis, Vec3::NEG_Z);
+        assert_eq!(Radial { custom_axis: Vec3::new(f32::NAN, 1.0, 0.0), ..wild }.sanitized().custom_axis, Vec3::Y);
     }
 
     #[test]

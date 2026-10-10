@@ -186,6 +186,8 @@ impl Tools {
         let mut env = doc.tools.env;
         env.active = doc.tools.active(doc.tool) == Some(index);
         env.mirror = doc.sculptor.settings.symmetry;
+        env.radial_count = doc.sculptor.settings.radial.repeats();
+        env.radial_axis = doc.sculptor.settings.radial.axis_vector();
         env.unit = doc.tools.unit;
         env.tips = doc.opts.tooltips;
         env.clean_view = doc.opts.clean_view;
@@ -604,9 +606,11 @@ impl Running {
             mods,
             time: self.time(),
             dt: tools.env.dt,
-            // The four below are filled in per tool by `Tools::call`.
+            // The rest are filled in per tool by `Tools::call`.
             active: false,
             mirror: [false; 3],
+            radial_count: 1,
+            radial_axis: glam::Vec3::Y,
             unit: tools.unit,
             tips: true,
             clean_view: false,

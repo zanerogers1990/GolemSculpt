@@ -1392,7 +1392,19 @@ impl Running {
             ambient_sky: lin([0.42, 0.44, 0.48]),
             ambient_equator: lin([0.30, 0.30, 0.31]),
             ambient_ground: lin([0.16, 0.15, 0.14]),
+            radial_axis: [0.0; 4],
+            radial_spoke: [0.0; 4],
         }
+    }
+
+    /// The radial symmetry guide for the viewport's own picture, when the
+    /// guides are showing. It is not part of `globals`: the pictures drawn on
+    /// the side (a file's tile, a recording) start from those and show no
+    /// guides.
+    fn radial_guide(&self) -> ([f32; 4], [f32; 4]) {
+        let o = &self.doc.opts;
+        let shown = o.symmetry_guides && !o.clean_view;
+        self.doc.sculptor.settings.radial.guide().filter(|_| shown).unwrap_or_default()
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
@@ -1548,7 +1560,8 @@ impl Running {
         self.transform_frame();
         self.recording_before_draw();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        let globals = self.globals();
+        let mut globals = self.globals();
+        (globals.radial_axis, globals.radial_spoke) = self.radial_guide();
         self.doc.opts.look.track_camera(self.view.forward, self.view.up);
         let look = self.recording_look(self.look_uniform());
         let scene = &self.doc.scene;
@@ -1707,6 +1720,19 @@ impl Running {
         self.doc.sculptor.settings.brush = Brush::Clay;
         self.doc.sculptor.settings.radius_px = 60.0;
         self.doc.sculptor.settings.demo_setup(true);
+        // Strokes repeated round an axis are looked at down that axis, where
+        // every repeat shows.
+        let radial = self.doc.sculptor.settings.radial;
+        let down_the_axis = match radial.axis {
+            crate::sculpt::RadialAxis::X => Some((-90.0, 0.0)),
+            crate::sculpt::RadialAxis::Y => Some((0.0, 90.0)),
+            crate::sculpt::RadialAxis::Z => Some((0.0, 0.0)),
+            crate::sculpt::RadialAxis::Custom => None,
+        };
+        if let Some((yaw, pitch)) = down_the_axis.filter(|_| radial.on) {
+            (self.doc.camera.yaw, self.doc.camera.pitch) = (yaw, pitch);
+            self.sync_view();
+        }
     }
 }
 

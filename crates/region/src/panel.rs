@@ -34,7 +34,9 @@ pub fn panel(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
         shape_row(tool, ui, cx);
         theme::hint(ui, tool.action.prompt(tool.shape));
 
-        if tool.action.cuts() && cx.mirror.iter().any(|&on| on) {
+        if tool.action.cuts() && cx.radial_count > 1 {
+            theme::line(ui, "Radial symmetry is on: the cut repeats all the way round.", theme::HINT);
+        } else if tool.action.cuts() && cx.mirror.iter().any(|&on| on) {
             theme::line(ui, "Mirror is on: the cut repeats on the other side.", theme::HINT);
         }
         match (&tool.job, &tool.last) {

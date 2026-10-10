@@ -145,8 +145,8 @@ impl BrushTuning {
 /// `of` and in `apply`.
 ///
 /// Left out on purpose: mask painting on or off (the app always starts
-/// sculpting) and the mirror axes (they belong to the sculpt, and are kept in
-/// its `.sclp` file).
+/// sculpting), and the mirror axes and radial symmetry (they belong to the
+/// sculpt, and are kept in its `.sclp` file).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BrushPrefs {

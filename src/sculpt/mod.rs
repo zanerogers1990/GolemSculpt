@@ -8,6 +8,10 @@
 mod falloff;
 mod input;
 mod kernels;
+mod radial;
+mod symmetry;
+#[cfg(test)]
+mod symmetry_tests;
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +24,7 @@ use crate::util::BitSet;
 pub use falloff::{Falloff, FalloffCurve, FalloffPreset, focal_k, shifted};
 use input::{LazyRope, PenPressure};
 use kernels::{CurvatureBase, Dab, Params, SymOp};
+pub use symmetry::{Radial, RadialAxis};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Brush {
@@ -165,7 +170,11 @@ pub struct Settings {
     world_per_pixel: f32,
     /// Move: grab only what is connected to the point under the pointer.
     pub move_connected: bool,
+    /// The mirror axes strokes are repeated across: X, Y, Z.
     pub symmetry: [bool; 3],
+    /// Strokes repeated round an axis, on top of the mirror axes (see
+    /// `symmetry.rs`, which makes the two into a stroke's list of copies).
+    pub radial: Radial,
     pub clay_depth: f32,
     pub clay_softness: f32,
     pub clay_relax: f32,
@@ -209,6 +218,7 @@ impl Default for Settings {
             world_per_pixel: 0.0,
             move_connected: false,
             symmetry: [false; 3],
+            radial: Radial::default(),
             clay_depth: 0.3,
             clay_softness: 0.6,
             clay_relax: 0.35,
@@ -294,7 +304,9 @@ impl Settings {
     /// sets the brushes up, for a look at what the strokes and the panel make
     /// of it. A comma-separated list of `focal=-0.8` (every brush's Focal
     /// Shift), `curve=plateau` (every brush's falloff curve, by the name of
-    /// the shape it starts from) and `fixed` (Screen-Space Size off).
+    /// the shape it starts from), `fixed` (Screen-Space Size off), `radial=6`
+    /// (radial symmetry with that many repeats), `axis=z` (the axis it goes
+    /// round: x, y or z) and `mirror=off` (the demo's Mirror X off).
     /// `strokes_done` is false before the scripted strokes and true after
     /// them: the fixed size waits until then, because they are sized in
     /// pixels.
@@ -310,21 +322,19 @@ impl Settings {
                     let shape = FalloffPreset::ALL.into_iter().find(|p| p.name().eq_ignore_ascii_case(name));
                     self.falloff.iter_mut().for_each(|slot| *slot = shape.map(FalloffCurve::preset));
                 }
+                Some(("radial", count)) if !strokes_done => {
+                    let count = count.parse().unwrap_or(self.radial.count);
+                    self.radial = Radial { on: true, count, ..self.radial }.sanitized();
+                }
+                Some(("axis", name)) if !strokes_done => {
+                    let axis = RadialAxis::ALL.into_iter().find(|a| a.name().eq_ignore_ascii_case(name));
+                    self.radial.axis = axis.unwrap_or(self.radial.axis);
+                }
+                Some(("mirror", "off")) if !strokes_done => self.symmetry = [false; 3],
                 None if strokes_done && word == "fixed" => self.screen_space_size = false,
                 _ => {}
             }
         }
-    }
-
-    fn ops(&self) -> Vec<SymOp> {
-        let mut ops = vec![SymOp::IDENTITY];
-        for axis in 0..3 {
-            if self.symmetry[axis] {
-                let mirrored: Vec<SymOp> = ops.iter().map(|o| o.mirrored(axis)).collect();
-                ops.extend(mirrored);
-            }
-        }
-        ops
     }
 }
 
@@ -352,15 +362,23 @@ struct Grab {
     origin: Vec3,
     /// In ascending order, which lets the drag move them on all threads.
     verts: Vec<u32>,
-    /// `ops.len()` weights per vertex.
+    /// `ops.len()` weights per vertex. Empty under radial symmetry, which
+    /// keeps `held` instead.
     weights: Vec<f32>,
+    /// Under radial symmetry: the copies that hold each vertex.
+    held: Option<radial::Held>,
     leaves: Vec<u32>,
     dirty: bool,
 }
 
 struct Stroke {
     params: Params,
+    /// Every copy the stroke is made as, the stroke itself first: the mirror
+    /// images and the turns round the radial axis (see `symmetry.rs`).
     ops: Vec<SymOp>,
+    /// The walk over those copies when there are turns among them. Without,
+    /// they are mirror images and `Sculptor::apply_symmetric` walks them.
+    radial: Option<radial::Walk>,
     knots: Vec<Knot>,
     /// Index of the last knot the dabs have reached.
     done: usize,
@@ -582,9 +600,11 @@ impl Sculptor {
         let lazy = self.settings.lazy_mouse && (mask || brush != Brush::Move);
         rope.advance(sample.pos, 0.0, true, lazy, self.settings.lazy_radius, self.settings.lazy_strength);
         mesh.begin_stroke();
+        let group = self.settings.symmetry_group();
         let mut stroke = Stroke {
             params,
-            ops: self.settings.ops(),
+            ops: symmetry::copies(&group),
+            radial: radial::Walk::new(group),
             knots: Vec::new(),
             done: 0,
             carry: 0.0,
@@ -651,6 +671,13 @@ impl Sculptor {
                 * kernels::facing(p.front_facing, mesh.normals[i], pos, cam);
             w.max(0.0)
         };
+        if stroke.radial.is_some() {
+            // Many copies, each reaching few of the vertices: kept by vertex
+            // as the copies that hold it, not as a weight for every copy.
+            let (verts, held) = radial::grab(mesh, &copies, r, connected, weight);
+            let leaves = mesh.leaves_of(&verts);
+            return Grab { origin: hit, verts, weights: Vec::new(), held: Some(held), leaves, dirty: false };
+        }
         // Every vertex some copy pulls on, then each copy's pull on it.
         let mut verts = kernels::collect(mesh, &leaves, |v| {
             copies.iter().any(|&copy| weight(v, copy) > 0.0).then_some(v)
@@ -668,7 +695,7 @@ impl Sculptor {
             keep_connected(mesh, &centres, &mut verts, &mut weights);
         }
         let leaves = mesh.leaves_of(&verts);
-        Grab { origin: hit, verts, weights, leaves, dirty: false }
+        Grab { origin: hit, verts, weights, held: None, leaves, dirty: false }
     }
 
     /// Feeds one pointer sample to the active stroke.
@@ -859,7 +886,7 @@ impl Sculptor {
         *count += 1;
     }
 
-    /// Applies a dab and its mirror images.
+    /// Applies a dab and its copies under the stroke's symmetry.
     ///
     /// Copies that are far apart cannot interact and are simply applied in
     /// turn. Copies that overlap (a dab near a mirror plane) would give a
@@ -867,6 +894,10 @@ impl Sculptor {
     /// visible drift of the centre line. So a pair is applied in both orders
     /// from the same starting state and averaged, which is symmetric by
     /// construction.
+    ///
+    /// That is the walk over mirror images. With turns round a radial axis
+    /// among the copies they overlap near the axis instead, many at a time,
+    /// and `radial::Walk` has the walk for that.
     fn apply_symmetric(mesh: &mut Mesh, stroke: &mut Stroke, dab: Dab) {
         let p = stroke.params;
         let reach = p.reach(&dab);
@@ -874,6 +905,9 @@ impl Sculptor {
             for &op in &stroke.ops {
                 stroke.frame_centres.push((op.apply_point(dab.center), op.apply_point(dab.cam)));
             }
+        }
+        if let Some(walk) = stroke.radial.as_mut() {
+            return walk.apply(mesh, &p, &dab, reach, &mut stroke.scratch);
         }
 
         let mut near = [false; 3];
@@ -984,14 +1018,18 @@ impl Sculptor {
             if denom.abs() > 1e-6 {
                 let t = (grab.origin - origin).dot(view.forward) / denom;
                 let delta = origin + dir * t - grab.origin;
-                let (ops, weights) = (&stroke.ops, &grab.weights);
-                let n_ops = ops.len();
+                // The pointer's motion as each copy makes it.
+                let pulls: Vec<Vec3> = stroke.ops.iter().map(|op| op.apply_dir(delta)).collect();
+                let (n_ops, weights, held) = (pulls.len(), &grab.weights, &grab.held);
                 mesh.move_listed(&grab.verts, |slot, vt| {
+                    if let Some(held) = held {
+                        return Some(vt.start + held.pull(slot, &pulls));
+                    }
                     let w = &weights[slot * n_ops..(slot + 1) * n_ops];
                     let mut disp = Vec3::ZERO;
                     let mut total = 0.0;
-                    for (k, op) in ops.iter().enumerate() {
-                        disp += op.apply_dir(delta) * w[k];
+                    for (k, &pull) in pulls.iter().enumerate() {
+                        disp += pull * w[k];
                         total += w[k];
                     }
                     // Where mirror copies overlap, share the pull so a vertex

@@ -207,6 +207,35 @@ fn a_mirror_axis_masks_both_sides() {
     assert!(masked.iter().any(|m| *m > 0.0) && points.iter().zip(&masked).all(|(p, m)| *m == 0.0 || p.x.abs() > 0.3));
 }
 
+/// Radial symmetry about the axis the camera looks along: a box over the
+/// right-hand edge of the ball takes the top, left and bottom edges with it.
+#[test]
+fn radial_symmetry_masks_every_sector() {
+    let (mut bench, mut tool, ball) = bench(Region::mask());
+    (bench.env.radial_count, bench.env.radial_axis) = (4, Vec3::Z);
+    let edge = bench.px(Vec3::new(0.5, 0.0, 0.0)).x;
+    bench.drag(&mut tool, Vec2::new(edge, 0.0), Vec2::new(800.0, 600.0));
+    let (points, masked) = (positions(&bench, ball), mask(&bench, ball));
+    // The box's edge is at x = 0.5 in the middle of the ball, and between 0.4
+    // and 0.6 across its depth (the camera is 5 away): past that on any of
+    // the four sides is masked, and nearer the axis than that is not.
+    let (mut inside, mut outside) = (0, 0);
+    for (p, m) in points.iter().zip(&masked) {
+        let from_axis = p.x.abs().max(p.y.abs());
+        if from_axis > 0.61 {
+            assert_eq!(*m, 1.0, "{p} is under a copy of the box");
+            inside += 1;
+        } else if from_axis < 0.39 {
+            assert_eq!(*m, 0.0, "{p} is under none");
+            outside += 1;
+        }
+    }
+    assert!(inside > 100 && outside > 100, "{inside} / {outside}");
+    for side in [Vec3::X, Vec3::Y, Vec3::NEG_X, Vec3::NEG_Y] {
+        assert!(points.iter().zip(&masked).any(|(p, m)| *m == 1.0 && p.dot(side) > 0.9), "nothing masked toward {side}");
+    }
+}
+
 // ------------------------------------------------------------------------ hide
 
 #[test]
@@ -419,6 +448,28 @@ fn a_mirrored_trim_cuts_both_sides() {
     // Each side loses the same amount.
     assert_near(whole - volume_of(&bench, ball), 2.0 * (whole - one_cut), 0.01);
     assert_eq!(bench.doc.undo_steps(), 1, "both sides in one step");
+    assert!(bench.undo(&mut tool));
+    assert_near(volume_of(&bench, ball), whole, 1e-9);
+}
+
+/// The same box under radial symmetry about the view axis cuts all four
+/// sides off, in one step.
+#[test]
+fn a_radial_trim_cuts_all_the_way_round() {
+    let (mut bench, mut tool, ball) = bench(trim_tool(Shape::Box));
+    let whole = volume_of(&bench, ball);
+    (bench.env.radial_count, bench.env.radial_axis) = (4, Vec3::Z);
+    let edge = bench.px(Vec3::new(0.5, 0.0, 0.0)).x;
+    bench.drag(&mut tool, Vec2::new(edge, 0.0), Vec2::new(800.0, 600.0));
+    assert_closed(&bench, ball);
+    let cut = bench.doc.bounds(ball);
+    for axis in 0..2 {
+        assert!(cut.max[axis] < 0.65 && cut.max[axis] > 0.35, "{cut:?}");
+        assert!((cut.min[axis] + cut.max[axis]).abs() < 1e-3, "{cut:?}");
+    }
+    assert!((cut.min.z + 1.0).abs() < 1e-4 && (cut.max.z - 1.0).abs() < 1e-4, "the cut runs along the view: {cut:?}");
+    assert!(volume_of(&bench, ball) < whole * 0.75);
+    assert_eq!(bench.doc.undo_steps(), 1, "every side in one step");
     assert!(bench.undo(&mut tool));
     assert_near(volume_of(&bench, ball), whole, 1e-9);
 }

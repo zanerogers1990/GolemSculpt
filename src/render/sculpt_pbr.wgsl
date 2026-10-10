@@ -1129,6 +1129,30 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             color = mix(color, axis_color[i], guide * 0.35);
         }
     }
+    // Radial symmetry guide: the same thin line along the edge of each
+    // sector, one spoke per repeat, meeting where the axis comes through
+    // the surface.
+    let across_x = dpdx(in.local);
+    let across_y = dpdy(in.local);
+    let spokes = g.radial_axis.w;
+    if (spokes > 1.5 && in.is_active > 0.5) {
+        let u = g.radial_spoke.xyz;
+        let v = cross(g.radial_axis.xyz, u);
+        let along = vec2<f32>(dot(in.local, u), dot(in.local, v));
+        // The nearest spoke, as an angle round the axis. On the axis itself
+        // every spoke is as near as any other.
+        let sector = TAU / spokes;
+        let off_axis = abs(along.x) + abs(along.y) > 0.0;
+        let turn = select(0.0, round(atan2(along.y, along.x) / sector) * sector, off_axis);
+        // How far this point is from that spoke's plane, in pixels.
+        let normal = cos(turn) * v - sin(turn) * u;
+        let per_pixel = abs(dot(across_x, normal)) + abs(dot(across_y, normal));
+        let d = abs(dot(in.local, normal)) / max(per_pixel, 1e-9);
+        let guide = 1.0 - smoothstep(0.4, 1.1, d);
+        var spoke_color = array<vec3<f32>, 4>(
+            axis_color[0], axis_color[1], axis_color[2], vec3<f32>(1.0, 0.6, 0.05));
+        color = mix(color, spoke_color[i32(g.radial_spoke.w)], guide * 0.35);
+    }
     return vec4<f32>(color, 1.0);
 }
 

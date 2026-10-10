@@ -76,6 +76,39 @@ them all.
 - Mask painting has **Mask Hardness** for its edge; the selected brush's
   falloff and Front Facing Only do not apply to it.
 
+## Symmetry
+
+The **Symmetry** card of the Sculpt panel makes every stroke in several
+places at once: on both sides of a plane, all the way round an axis, or both.
+
+- **Mirror strokes across** X, Y and Z, in any combination. **X** on the
+  keyboard is Mirror X.
+- **Radial** repeats every stroke evenly round an axis through the object's
+  centre. **Radial Repeats** is how many times the stroke is made, itself
+  included, from 2 to 32. **Radial Axis** is the object's own X, Y or Z (Y to
+  start with: the way up of a vase or a bust, and the axis a lathed object is
+  turned round), or **Custom**: a direction typed in as `x, y, z`, or taken
+  with **From View**, which points the axis straight down the view, so that
+  seen from where you are the repeats land evenly round the object's centre.
+- Mirrors and Radial combine. Mirror X with six repeats about Y makes each
+  repeat and its mirror image, twelve strokes in all; a mirror that the
+  repeats already make (Z on top of X with an even count about Y) is not
+  made twice.
+- Where copies of a stroke land on top of each other, on a mirror plane or
+  close to the radial axis, they are shared out rather than stacked: a stroke
+  straight through the axis builds up about as much as the same stroke with
+  no symmetry, however many repeats there are, and a Move there slides along
+  the axis instead of being pulled every way at once.
+- Every brush follows it, mask painting included, and so do the Mask, Hide,
+  Trim and Split tools.
+- **Show Symmetry Guides** draws a thin line on the model where each mirror
+  plane cuts it and along the edge of each radial sector, the spokes meeting
+  where the axis comes through the surface. They are in the axis's colour
+  (red, green, blue; amber for a custom axis), and Tab hides them.
+
+The settings are the scene's, in the selected object's own space: they move
+and turn with the object. They are saved in the `.sclp` file.
+
 ## Transform gizmo
 
 Press **G** (or the Transform button) to move, turn and resize the selected
@@ -286,9 +319,11 @@ While Mask, Trim or Split is up, a drag on the background draws a shape
 instead of orbiting, because a box or a cut line has to be able to start
 beside the model: orbit with Alt + drag, pan with the middle button. (With
 Extract up a drag orbits as usual.) A cut made with a mirror axis on repeats
-on the other side. Each mask, trim, split and extract is one undo step, and a
-mask is carried across a cut. On a large model a cut runs in the background:
-its progress shows at the bottom of the viewport, with a Cancel button.
+on the other side, and with radial symmetry on, all the way round; a box or
+lasso mask does the same. Each mask, trim, split and extract is one undo
+step, and a mask is carried across a cut. On a large model a cut runs in the
+background: its progress shows at the bottom of the viewport, with a Cancel
+button.
 
 ## Keys
 
@@ -328,9 +363,9 @@ pair; after that they can be moved apart and the joints stay on them.
 - **Save / Open** use `.sclp`, which keeps the whole sculpt: every object
   (its exact mesh and mask, hidden faces, quads, name, position and
   visibility; instances stay linked) and how it was left: the material and
-  finish, lighting, HDRI, background and effects, the camera view and the
-  mirror axes. Reopening a file puts all of it back. (An HDRI is kept as the
-  path of its picture, not the picture.)
+  finish, lighting, HDRI, background and effects, the camera view, the
+  mirror axes and radial symmetry. Reopening a file puts all of it back. (An
+  HDRI is kept as the path of its picture, not the picture.)
 - **Saving never harms the file already there.** The new file is written in
   full beside the old one and only then takes its place, so a full disk or a
   crash part-way leaves the old file as it was.
@@ -539,6 +574,7 @@ Left out on purpose: the Unity app's mold maker and hard-surface tool.
 cargo test --release          # engine tests
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
+SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
 sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)

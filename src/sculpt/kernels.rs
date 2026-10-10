@@ -13,6 +13,7 @@ use std::ops::Range;
 
 use glam::{DVec3, Vec3};
 use rayon::prelude::*;
+use sculpt_geom::SymmetryOp;
 
 use super::Brush;
 use super::falloff::Falloff;
@@ -30,33 +31,47 @@ const FOLD_RUN: usize = 64;
 const REF_RADIUS: f32 = 0.25;
 
 /// One copy of the brush under symmetry: the original, or its image in one or
-/// more of the mirror planes.
+/// more of the mirror planes, turned some steps round the radial axis, or
+/// both. The list a stroke keeps is built in `symmetry.rs`.
+///
+/// A mirror image is a per-axis sign flip and is applied as exactly that
+/// multiply (see `SymmetryOp`), so mirrored halves stay bit for bit equal.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct SymOp(Vec3);
+pub struct SymOp(SymmetryOp);
+
+impl Default for SymOp {
+    fn default() -> SymOp {
+        SymOp::IDENTITY
+    }
+}
 
 impl SymOp {
-    pub const IDENTITY: SymOp = SymOp(Vec3::ONE);
+    /// The stroke as it was made: the first copy of every list.
+    pub const IDENTITY: SymOp = SymOp(SymmetryOp::IDENTITY);
 
-    /// This copy mirrored once more, across the plane facing `axis`.
-    pub fn mirrored(self, axis: usize) -> SymOp {
-        let mut flip = Vec3::ONE;
-        flip[axis] = -1.0;
-        SymOp(self.0 * flip)
-    }
-
-    /// Whether this copy lies across the plane facing `axis`.
+    /// Whether this copy lies across the plane facing `axis`. Only asked of
+    /// the copies of a stroke with no radial symmetry, which are all plain
+    /// mirror images; a turned copy is on neither side of a plane.
     pub fn flips(self, axis: usize) -> bool {
-        self.0[axis] < 0.0
+        self.0.sign()[axis] < 0.0
     }
 
+    /// Symmetries here go through the object's origin, so a point and a
+    /// direction are mapped alike.
     #[inline]
     pub fn apply_point(self, p: Vec3) -> Vec3 {
-        p * self.0
+        self.0.apply(p)
     }
 
     #[inline]
     pub fn apply_dir(self, d: Vec3) -> Vec3 {
-        d * self.0
+        self.0.apply(d)
+    }
+}
+
+impl From<SymmetryOp> for SymOp {
+    fn from(op: SymmetryOp) -> SymOp {
+        SymOp(op)
     }
 }
 

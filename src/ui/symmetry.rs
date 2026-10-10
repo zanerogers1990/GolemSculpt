@@ -1,0 +1,152 @@
+//! The Symmetry card of the Sculpt panel: the mirror axes, radial symmetry
+//! and the guides, laid out as the Unity app's is.
+
+use egui::{Color32, vec2};
+use glam::Vec3;
+
+use super::theme::{self, ACCENT, ButtonStyle};
+use super::tip;
+use crate::doc::Doc;
+use crate::sculpt::{Radial, RadialAxis};
+
+/// The colour of a custom radial axis: none of the three axis colours, so it
+/// never reads as one of them. The viewport guide is drawn in the same.
+pub const CUSTOM_AXIS: Color32 = Color32::from_rgb(255, 204, 64);
+
+/// The colour radial symmetry about `axis` is shown in, on its button and in
+/// the viewport.
+pub fn axis_color(axis: RadialAxis) -> Color32 {
+    match axis {
+        RadialAxis::X => theme::AXIS[0],
+        RadialAxis::Y => theme::AXIS[1],
+        RadialAxis::Z => theme::AXIS[2],
+        RadialAxis::Custom => CUSTOM_AXIS,
+    }
+}
+
+pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
+    let tips = doc.opts.tooltips;
+    let summary = doc.sculptor.settings.symmetry_summary();
+    // Straight down the view, in the selected object's own space: what From
+    // View aims the custom axis along.
+    let down_the_view = doc.scene.active().rotation.inverse() * (doc.camera.rotation() * Vec3::NEG_Z);
+    theme::category(ui, "Symmetry", Color32::from_rgb(242, 115, 158), &summary, true, |ui| {
+        let s = &mut doc.sculptor.settings;
+        theme::heading(ui, "Mirror strokes across");
+        ui.horizontal(|ui| {
+            let w = theme::row_width(ui, 3, 6.0);
+            for (a, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+                ui.allocate_ui(vec2(w, 22.0), |ui| {
+                    let r = theme::checkbox(ui, &mut s.symmetry[a], name, theme::AXIS[a]);
+                    if a == 0 {
+                        tip(r, tips, "Mirror left and right (X).");
+                    }
+                });
+            }
+        });
+        radial(ui, &mut s.radial, tips, down_the_view);
+        let guides = theme::checkbox(ui, &mut doc.opts.symmetry_guides, "Show Symmetry Guides", ACCENT);
+        tip(guides, tips, "Draws the mirror planes and the radial sectors on the model.");
+    });
+}
+
+fn radial(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_view: Vec3) {
+    theme::heading(ui, "Radial Symmetry");
+    let on = theme::checkbox(ui, &mut radial.on, "Radial", axis_color(radial.axis));
+    tip(on, tips, "Repeats every stroke evenly around the axis below, through the object's centre. Combines with the mirror axes. Lathed objects are turned around Y.");
+
+    let mut count = radial.count as f32;
+    let range = Radial::MIN_COUNT as f32..=Radial::MAX_COUNT as f32;
+    let slider = theme::slider(ui, "Radial Repeats", &mut count, range, |v| format!("{:.0}", v.round()));
+    if tip(slider, tips, "How many times each stroke is repeated around the axis.").changed() {
+        radial.count = (count.round() as u32).clamp(Radial::MIN_COUNT, Radial::MAX_COUNT);
+    }
+
+    theme::hint(ui, "Radial Axis");
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 4, 6.0);
+        for axis in RadialAxis::ALL {
+            let style = ButtonStyle { active: (radial.axis == axis).then(|| axis_color(axis)), ..Default::default() };
+            let help = match axis {
+                RadialAxis::Custom => "Repeats strokes around an axis you set below: typed in, or taken from the view.".to_owned(),
+                _ => format!("Repeats strokes around the object's own {} axis.", axis.name()),
+            };
+            if tip(theme::button(ui, w, axis.name(), style), tips, &help).clicked() {
+                radial.axis = axis;
+            }
+        }
+    });
+    if radial.axis == RadialAxis::Custom {
+        custom_axis_row(ui, radial, tips, down_the_view);
+    }
+}
+
+/// The custom axis as text, with From View beside it.
+fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_view: Vec3) {
+    const BUTTON: f32 = 84.0;
+    ui.horizontal(|ui| {
+        // The text being typed lives here while the box has the keyboard;
+        // the rest of the time the box shows the axis itself.
+        let id = ui.id().with("radial_custom_axis");
+        let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| format_axis(radial.custom_axis));
+        let field = theme::text_field(ui, &mut text, ui.available_width() - BUTTON - 6.0);
+        if field.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // Text that is not a direction leaves the axis as it was.
+            if let Some(axis) = parse_axis(&text) {
+                radial.custom_axis = axis;
+            }
+        }
+        if field.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, text));
+        } else {
+            ui.data_mut(|d| d.remove::<String>(id));
+        }
+        let help = "Points the custom axis straight down the current view, through the object's centre: seen from here, the repeats land evenly around it.";
+        if tip(theme::button(ui, BUTTON, "From View", ButtonStyle::default()), tips, help).clicked() {
+            radial.set_custom_axis(down_the_view);
+        }
+    });
+}
+
+fn format_axis(axis: Vec3) -> String {
+    // Three decimals at most, without trailing zeros.
+    let part = |v: f32| ((v * 1000.0).round() / 1000.0 + 0.0).to_string();
+    format!("{}, {}, {}", part(axis.x), part(axis.y), part(axis.z))
+}
+
+/// "x, y, z", with commas, spaces or semicolons between. `None` when it does
+/// not read as a direction.
+fn parse_axis(text: &str) -> Option<Vec3> {
+    let parts: Vec<f32> =
+        text.split([',', ' ', ';']).filter(|p| !p.is_empty()).map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    let &[x, y, z] = parts.as_slice() else { return None };
+    let axis = Vec3::new(x, y, z);
+    (axis.is_finite() && axis.length_squared() > 1e-12).then(|| axis.normalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_typed_axis_reads_with_commas_spaces_or_semicolons() {
+        assert_eq!(parse_axis("0, 0, 2"), Some(Vec3::Z));
+        assert_eq!(parse_axis("  -3 0 0 "), Some(Vec3::NEG_X));
+        assert_eq!(parse_axis("0;1;0"), Some(Vec3::Y));
+        let tilted = parse_axis("1, 1, 0").unwrap();
+        assert!((tilted - Vec3::new(1.0, 1.0, 0.0).normalize()).length() < 1e-6, "{tilted}");
+        // Not a direction: the axis in use stays as it is.
+        for bad in ["", "1, 2", "1, 2, 3, 4", "up", "0, 0, 0", "1, nan, 0", "1, inf, 0"] {
+            assert_eq!(parse_axis(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_axis_is_shown_to_three_decimals_and_reads_back() {
+        assert_eq!(format_axis(Vec3::Y), "0, 1, 0");
+        assert_eq!(format_axis(Vec3::new(0.6, 0.0, -0.8)), "0.6, 0, -0.8");
+        assert_eq!(format_axis(Vec3::new(-0.00001, 0.57735026, 1.0)), "0, 0.577, 1");
+        let axis = Vec3::new(0.2, -0.5, 0.7).normalize();
+        assert!(parse_axis(&format_axis(axis)).unwrap().distance(axis) < 2e-3);
+    }
+}

@@ -42,7 +42,7 @@ pub fn plan(
     let object = scene.active();
     let mesh = scene.mesh(object).ok_or("No object selected.")?;
     let projections: Vec<ScreenProjection> = cut_views(scene, object, view).iter().map(|v| v.projection).collect();
-    mark_vertices_in_region(mesh.positions, &projections, &symmetry(cx.mirror), region, outside, covered);
+    mark_vertices_in_region(mesh.positions, &projections, &symmetry(cx), region, outside, covered);
     plan_hide(mesh.indices, covered, mesh.hidden_triangles, hide)
 }
 

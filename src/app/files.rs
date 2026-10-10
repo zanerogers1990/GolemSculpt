@@ -307,12 +307,13 @@ impl Running {
     fn details(&self) -> io::Details {
         let opts = &self.doc.opts;
         let matcap = self.ui.assets.matcaps.get(opts.matcap).map_or(String::new(), |m| format!("{}/{}", m.category, m.name));
-        let [x, y, z] = self.doc.sculptor.settings.symmetry;
+        let settings = &self.doc.sculptor.settings;
+        let ([x, y, z], radial) = (settings.symmetry, settings.radial);
         let mut details = io::Details::default();
         details.set(io::slot::SHADING, &io::Shading::of(opts, matcap));
         details.set(io::slot::LOOK, &opts.look);
         details.set(io::slot::CAMERA, &self.doc.camera.saved_view());
-        details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides });
+        details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides, radial });
         details
     }
 
@@ -333,8 +334,11 @@ impl Running {
         if let Some(look) = details.get_over(io::slot::LOOK, &Look::default()) {
             self.set_look(look);
         }
-        if let Some(mirror) = details.get::<io::Mirror>(io::slot::MIRROR) {
+        // Read over the settings a new scene has, so a file from before
+        // radial symmetry was kept opens with it switched off.
+        if let Some(mirror) = details.get_over(io::slot::MIRROR, &io::Mirror::default()) {
             self.doc.sculptor.settings.symmetry = [mirror.x, mirror.y, mirror.z];
+            self.doc.sculptor.settings.radial = mirror.radial.sanitized();
             self.doc.opts.symmetry_guides = mirror.guides;
         }
         let view = details.get::<SavedView>(io::slot::CAMERA);
@@ -701,6 +705,8 @@ impl Running {
         self.doc.opts.matcap_on = false;
         self.doc.opts.base_color = [0.8, 0.3, 0.1];
         self.doc.sculptor.settings.symmetry = [true, false, true];
+        let radial = crate::sculpt::Radial { on: true, count: 6, axis: crate::sculpt::RadialAxis::Z, custom_axis: Vec3::X };
+        self.doc.sculptor.settings.radial = radial;
         (self.doc.camera.yaw, self.doc.camera.pitch, self.doc.camera.ortho) = (140.0, -20.0, true);
         let saved_view = self.doc.camera.saved_view();
         let saved = self.save_scene(&first);
@@ -729,6 +735,7 @@ impl Running {
         look.depth_of_field = false;
         self.doc.opts.matcap_on = true;
         self.doc.sculptor.settings.symmetry = [false; 3];
+        self.doc.sculptor.settings.radial = Default::default();
         (self.doc.camera.yaw, self.doc.camera.ortho) = (10.0, false);
         self.load(first.clone(), true);
         let opts = &self.doc.opts;
@@ -743,6 +750,7 @@ impl Running {
         );
         say("and the material", !opts.matcap_on && opts.base_color == [0.8, 0.3, 0.1]);
         say("and the mirror axes", self.doc.sculptor.settings.symmetry == [true, false, true]);
+        say("and radial symmetry", self.doc.sculptor.settings.radial == radial);
         say("and the view", self.doc.camera.saved_view() == saved_view);
         say("the opened file is the document, and clean", self.doc.path.as_deref() == Some(first.as_path()) && !self.unsaved());
         say("it is the newest recent file again", self.ui.recent.paths().first().is_some_and(|p| p.ends_with("first.sclp")));
