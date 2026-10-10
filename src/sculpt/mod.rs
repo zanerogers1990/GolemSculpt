@@ -8,6 +8,7 @@
 mod falloff;
 mod input;
 mod kernels;
+mod pose;
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +21,7 @@ use crate::util::BitSet;
 pub use falloff::{Falloff, FalloffCurve, FalloffPreset, focal_k, shifted};
 use input::{LazyRope, PenPressure};
 use kernels::{CurvatureBase, Dab, Params, SymOp};
+pub use pose::{PoseMode, PoseSettings};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Brush {
@@ -29,19 +31,21 @@ pub enum Brush {
     Crease,
     Inflate,
     Flatten,
+    Pose,
     Standard,
     Layer,
     SnakeHook,
 }
 
 impl Brush {
-    pub const ALL: [Brush; 9] = [
+    pub const ALL: [Brush; 10] = [
         Brush::Move,
         Brush::Clay,
         Brush::Smooth,
         Brush::Crease,
         Brush::Inflate,
         Brush::Flatten,
+        Brush::Pose,
         Brush::Standard,
         Brush::Layer,
         Brush::SnakeHook,
@@ -59,6 +63,7 @@ impl Brush {
             Brush::Crease => "Crease",
             Brush::Inflate => "Inflate",
             Brush::Flatten => "Flatten",
+            Brush::Pose => "Pose",
             Brush::Standard => "Standard",
             Brush::Layer => "Layer",
             Brush::SnakeHook => "Snake Hook",
@@ -73,13 +78,14 @@ impl Brush {
             Brush::Crease => "Cut a sharp groove and pinch its edges together.",
             Brush::Inflate => "Swell the surface outward along its own normals.",
             Brush::Flatten => "Level the surface to the average plane under the ring.",
+            Brush::Pose => "Bend a limb at a joint the brush finds, like posing a figure.",
             Brush::Standard => "Raise a soft, rounded stroke.",
             Brush::Layer => "Raise an even step of fixed height.",
             Brush::SnakeHook => "Pull out long tendrils that follow the cursor.",
         }
     }
 
-    /// Same number keys as the Unity app (7 is reserved for Pose).
+    /// Same number keys as the Unity app.
     pub fn hotkey(self) -> char {
         match self {
             Brush::Move => '1',
@@ -88,6 +94,7 @@ impl Brush {
             Brush::Crease => '4',
             Brush::Inflate => '5',
             Brush::Flatten => '6',
+            Brush::Pose => '7',
             Brush::Standard => '8',
             Brush::Layer => '9',
             Brush::SnakeHook => '0',
@@ -102,6 +109,7 @@ impl Brush {
             Brush::Crease => "brush_crease",
             Brush::Inflate => "brush_inflate",
             Brush::Flatten => "brush_flatten",
+            Brush::Pose => "brush_pose",
             Brush::Standard => "brush_standard",
             Brush::Layer => "brush_layer",
             Brush::SnakeHook => "brush_snakehook",
@@ -110,7 +118,7 @@ impl Brush {
 
     /// Whether Ctrl / right button flips this brush.
     pub fn has_polarity(self) -> bool {
-        !matches!(self, Brush::Smooth | Brush::Move | Brush::SnakeHook)
+        !matches!(self, Brush::Smooth | Brush::Move | Brush::Pose | Brush::SnakeHook)
     }
 
     fn spacing(self) -> f32 {
@@ -140,9 +148,9 @@ pub struct BrushSettings {
 
 pub struct Settings {
     pub brush: Brush,
-    pub per_brush: [BrushSettings; 9],
+    pub per_brush: [BrushSettings; 10],
     /// Each brush's hand-drawn falloff, or `None` while it keeps its own.
-    pub falloff: [Option<FalloffCurve>; 9],
+    pub falloff: [Option<FalloffCurve>; 10],
     pub mask_mode: bool,
     pub mask_hardness: f32,
     /// Brush radius in screen pixels; shared by every brush on purpose, so
@@ -165,6 +173,8 @@ pub struct Settings {
     world_per_pixel: f32,
     /// Move: grab only what is connected to the point under the pointer.
     pub move_connected: bool,
+    /// The Pose brush's own settings.
+    pub pose: PoseSettings,
     pub symmetry: [bool; 3],
     pub clay_depth: f32,
     pub clay_softness: f32,
@@ -191,7 +201,7 @@ impl Default for Settings {
             focal_shift: 0.0,
             front_facing: false,
         };
-        let mut per_brush = [base; 9];
+        let mut per_brush = [base; 10];
         for b in [Brush::Clay, Brush::Inflate, Brush::Standard] {
             per_brush[b.index()].accumulate = true;
         }
@@ -208,6 +218,7 @@ impl Default for Settings {
             model_size: 1.0,
             world_per_pixel: 0.0,
             move_connected: false,
+            pose: PoseSettings::default(),
             symmetry: [false; 3],
             clay_depth: 0.3,
             clay_softness: 0.6,
@@ -400,6 +411,8 @@ pub struct Sculptor {
     /// The curvature baseline of the meshes Clay has worked on, by
     /// `Mesh::uid`, newest last.
     curvature: Vec<(u64, CurvatureBase)>,
+    /// The Pose brush's drag, and the preview of where it would bend.
+    pose: pose::State,
     /// Last point sculpted, in world space; the camera can orbit around it.
     pub last_hit: Option<Vec3>,
     pub dabs_applied: u64,
@@ -579,7 +592,7 @@ impl Sculptor {
         };
         // The rope starts under the pointer, not where the last stroke left it.
         let mut rope = LazyRope::default();
-        let lazy = self.settings.lazy_mouse && (mask || brush != Brush::Move);
+        let lazy = self.settings.lazy_mouse && (mask || !matches!(brush, Brush::Move | Brush::Pose));
         rope.advance(sample.pos, 0.0, true, lazy, self.settings.lazy_radius, self.settings.lazy_strength);
         mesh.begin_stroke();
         let mut stroke = Stroke {
@@ -612,8 +625,13 @@ impl Sculptor {
             let connected = self.settings.move_connected;
             stroke.grab = Some(Self::grab(mesh, &stroke, hit.pos, view.pos, connected));
         }
+        if !mask && brush == Brush::Pose {
+            // Ctrl or the right button: twist (or slide) instead.
+            let (pose, falloff) = (self.settings.pose, stroke.params.falloff);
+            self.pose.begin(mesh, &pose, falloff, &stroke.ops, hit.pos, radius, invert, view, sample.pos);
+        }
         self.stroke = Some(stroke);
-        if mask || !matches!(brush, Brush::Move | Brush::SnakeHook) {
+        if mask || !matches!(brush, Brush::Move | Brush::Pose | Brush::SnakeHook) {
             self.sample(mesh, view, sample);
         }
         true
@@ -681,9 +699,9 @@ impl Sculptor {
         stroke.pressure = pressure;
 
         let p = stroke.params;
-        let is_move = !p.mask && p.brush == Brush::Move;
+        let is_move = !p.mask && matches!(p.brush, Brush::Move | Brush::Pose);
         // Lazy mouse: the brush trails the pointer on a rope of fixed length.
-        // Not for Move, which follows the pointer 1:1 by design.
+        // Not for Move or Pose, which follow the pointer 1:1 by design.
         let px = stroke.rope.advance(sample.pos, dt, true, lazy.0 && !is_move, lazy.1, lazy.2);
         stroke.pointer = sample.pos;
         let (origin, dir) = view.ray(px);
@@ -693,6 +711,7 @@ impl Sculptor {
             if let Some(g) = stroke.grab.as_mut() {
                 g.dirty = true;
             }
+            self.pose.touch();
             return;
         }
 
@@ -1007,8 +1026,11 @@ impl Sculptor {
                 self.last_hit = Some(grab.origin + delta);
             }
         }
+        if let Some(tip) = self.pose.frame(mesh, &stroke.ops, view, stroke.pointer) {
+            self.last_hit = Some(tip);
+        }
 
-        let dab_brush = p.mask || !matches!(p.brush, Brush::Move | Brush::SnakeHook);
+        let dab_brush = p.mask || !matches!(p.brush, Brush::Move | Brush::Pose | Brush::SnakeHook);
         if dab_brush {
             // A short pause releases the segment that was waiting for a knot.
             if stroke.time - stroke.last_knot_time > 0.05 || dt > 0.05 {
@@ -1068,16 +1090,17 @@ impl Sculptor {
     pub fn end(&mut self, mesh: &mut Mesh, view: &View) -> Option<StrokeDelta> {
         if let Some(stroke) = self.stroke.as_mut() {
             let p = stroke.params;
-            if p.mask || !matches!(p.brush, Brush::Move | Brush::SnakeHook) {
+            if p.mask || !matches!(p.brush, Brush::Move | Brush::Pose | Brush::SnakeHook) {
                 Self::advance(mesh, stroke, true, view.pos, &mut self.dabs_applied);
             }
             if let Some(g) = stroke.grab.as_mut() {
                 g.dirty = true;
             }
+            self.pose.touch();
         }
         self.frame(mesh, view, 0.0);
         let stroke = self.stroke.take()?;
-        mesh.end_stroke(stroke.params.mask)
+        self.pose.end(mesh.end_stroke(stroke.params.mask))
     }
 }
 

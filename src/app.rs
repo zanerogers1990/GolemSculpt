@@ -34,6 +34,7 @@ mod faces;
 mod files;
 mod masked;
 mod mirror_copies;
+mod pose;
 mod selection;
 mod spheres;
 pub(crate) mod tools;
@@ -81,6 +82,9 @@ pub struct Args {
     /// Hide half of the active object's faces after the demo strokes (for
     /// visual checks of hidden faces).
     pub demo_hide: bool,
+    /// Stand a figure in the scene and pose it: `hover`, `bend`, `chain`...
+    /// (for visual checks of the Pose brush; see app/pose.rs).
+    pub demo_pose: Option<String>,
     /// Testing aid: keep treating the pointer as inside the window after the
     /// OS says it left, so input posted to the window by a script (while the
     /// real cursor is elsewhere) still gets hover behaviour.
@@ -425,6 +429,9 @@ impl Running {
         if running.args.demo {
             running.demo_strokes();
         }
+        if let Some(what) = running.args.demo_pose.clone() {
+            running.pose_demo(&what);
+        }
         if let Some(what) = running.args.demo_tool.clone() {
             running.tools_demo(&what);
         }
@@ -757,17 +764,6 @@ impl Running {
         if self.spheres_key_pressed(code) || self.tools_key_pressed(code) {
             return;
         }
-        let brush_key =|b: Brush| match b.hotkey() {
-            '1' => KeyCode::Digit1,
-            '2' => KeyCode::Digit2,
-            '3' => KeyCode::Digit3,
-            '4' => KeyCode::Digit4,
-            '5' => KeyCode::Digit5,
-            '6' => KeyCode::Digit6,
-            '8' => KeyCode::Digit8,
-            '9' => KeyCode::Digit9,
-            _ => KeyCode::Digit0,
-        };
         if let Some(&b) = Brush::ALL.iter().find(|&&b| brush_key(b) == code) {
             if idle && !ctrl {
                 self.doc.sculptor.settings.brush = b;
@@ -1466,6 +1462,7 @@ impl Running {
         // Interface.
         self.egui_ctx.set_zoom_factor(self.doc.opts.ui_scale);
         let cursor = self.cursor();
+        self.pose_frame();
         if cursor.visible || self.recording_hides_pointer() {
             self.egui_ctx.set_cursor_icon(egui::CursorIcon::None);
         }
@@ -1724,6 +1721,22 @@ impl Running {
         self.doc.sculptor.settings.brush = Brush::Clay;
         self.doc.sculptor.settings.radius_px = 60.0;
         self.doc.sculptor.settings.demo_setup(true);
+    }
+}
+
+/// The number key that picks a brush.
+fn brush_key(brush: Brush) -> KeyCode {
+    match brush.hotkey() {
+        '1' => KeyCode::Digit1,
+        '2' => KeyCode::Digit2,
+        '3' => KeyCode::Digit3,
+        '4' => KeyCode::Digit4,
+        '5' => KeyCode::Digit5,
+        '6' => KeyCode::Digit6,
+        '7' => KeyCode::Digit7,
+        '8' => KeyCode::Digit8,
+        '9' => KeyCode::Digit9,
+        _ => KeyCode::Digit0,
     }
 }
 

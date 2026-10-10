@@ -98,6 +98,8 @@ fn main() {
             "--demo-hide" => opts.demo_hide = true,
             // rig | preview | skin | back | again | play
             "--demo-spheres" => opts.demo_spheres = it.next().cloned(),
+            // A figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play
+            "--demo-pose" => opts.demo_pose = it.next().cloned(),
             // Saving, opening and the questions about unsaved work: recent | ask-exit | ask-open | ask-open-clean | play
             "--demo-files" => opts.demo_files = it.next().cloned(),
             "--flat" => opts.flat = true,
