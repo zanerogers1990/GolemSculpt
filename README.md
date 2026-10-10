@@ -368,6 +368,19 @@ there. Each mask, hide, trim, split and extract is one undo step, and a mask
 is carried across a cut. On a large model a cut runs in the background: its
 progress shows at the bottom of the viewport, with a Cancel button.
 
+Every place the selected object is drawn counts, as in the Unity app: a shape
+drawn over one of its **live mirror copies** (see Objects), or over an
+instance of it, or over a mirror copy of an instance, acts on the object
+through that place. A copy is the object's own mesh drawn again, so a box
+over the arm on the far side of a mirrored figure masks, hides, trims or
+splits the arm of the one mesh, and it goes on both sides at once. A shape
+that covers several places at once (a wide box, or a line, which has no end)
+acts through all of them. A split leaves the object where it was, with its
+mirror, cut; the new "Part" is a plain object in the object's own place with
+no mirror of its own, since a piece cut off is not a mirrored object (as in
+the Unity app; the mirror of the part is a Mirror tick away). The copies of an
+Array (the Array tool's, not the scene's) are not under these tools yet.
+
 ## Keys
 
 Press **J** (or the Keys button) to give two pieces of a split model joints
@@ -535,8 +548,9 @@ The **Objects** card at the top of the Scene panel is the scene graph.
   X"), exactly where they were shown. Each is one undo step. Mirrored objects
   are amber in the list. The copies are framed with the model, saved in `.sclp`
   files and written by the exports. A clone or an instance of a mirrored object
-  is not mirrored. Not here yet: a mask, trim or split shape drawn over a copy
-  (those see an object and its instances only).
+  is not mirrored. The Mask, Hide, Trim and Split tools see the copies too: a
+  box, lasso or line drawn over a copy acts on the object through that copy
+  (see the section on those tools below).
 - Copies start on top of the original; **Position** and **Scale** place the
   selected one by numbers, and the Transform gizmo by hand.
 - Every one of these is an undo step, a Join or a boolean included (one
@@ -556,7 +570,9 @@ any other surface. Nothing is cut away.
   three of its corners are under the shape, so a face on the edge stays.
   Ctrl + drag (or a right drag) shows what the shape covers instead, Shift +
   drag hides everything outside it (to isolate a limb), and a click shows
-  everything again. With a mirror axis on, the other side goes too. A drag
+  everything again. With a mirror axis on, the other side goes too, and a box
+  or lasso drawn over a live mirror copy of the object hides through that
+  copy. A drag
   that would hide the whole object is refused, with a line saying so. A box or
   lasso mask leaves hidden parts alone, so hide a limb first and a mask drawn
   over the body in front of it will not reach it.
@@ -659,6 +675,7 @@ sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | pre
 sculpt.exe --screenshot out.png --demo-mirror  # the sphere off centre, its live mirror on, strokes laid on the copy (SCULPT_DEMO_MIRROR=xz | gizmo | validate | front | back | play)
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
+sculpt.exe --screenshot out.png --demo-tool trim:mirror   # a shape drawn over the object's live mirror copy: also hide:mirror, mask:mirror, split:mirror
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes

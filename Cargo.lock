@@ -2571,6 +2571,7 @@ dependencies = [
  "egui",
  "glam",
  "sculpt-geom",
+ "sculpt-symmetry",
 ]
 
 [[package]]

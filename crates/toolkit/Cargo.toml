@@ -8,3 +8,4 @@ description = "What a tool sees of the app: the interface every tool crate is wr
 glam = { workspace = true }
 egui = { workspace = true }
 sculpt-geom = { path = "../geom" }
+sculpt-symmetry = { path = "../symmetry" }

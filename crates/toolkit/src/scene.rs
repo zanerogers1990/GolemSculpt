@@ -11,6 +11,7 @@ use std::fmt;
 
 use glam::{Mat4, Quat, Vec3};
 use sculpt_geom::{Aabb, TriMesh};
+use sculpt_symmetry::MirrorRepeater;
 
 use crate::view::Ray;
 
@@ -63,6 +64,12 @@ pub struct ObjectInfo<'a> {
     pub active: bool,
     pub mesh: MeshId,
     pub placement: Placement,
+    /// The object's live mirror copies (Nomad's Mirror), if it has any: its
+    /// own mesh drawn again, reflected across these world planes. They are
+    /// places the mesh is shown, not objects: a shape drawn over one is a
+    /// shape drawn over the object's geometry (see [`ObjectInfo::placements`]).
+    /// Not shared with instances.
+    pub mirror: Option<MirrorRepeater>,
     pub vertices: usize,
     pub triangles: usize,
 }
@@ -71,6 +78,21 @@ impl ObjectInfo<'_> {
     /// The object's own space into world space.
     pub fn matrix(&self) -> Mat4 {
         self.placement.matrix()
+    }
+
+    /// Every place the object's mesh is drawn through its own settings: the
+    /// object itself first, with flip mask 0, then each live mirror copy with
+    /// its flip mask (X = 1, Y = 2, Z = 4) and the matrix that puts the mesh
+    /// there. Instances are other objects and are not in it. A copy's matrix
+    /// is the world reflection after the object's own, so for a reflecting
+    /// copy (an odd number of axes) its determinant is negative.
+    pub fn placements(&self) -> Vec<(u8, Mat4)> {
+        let model = self.matrix();
+        let mut places = vec![(0, model)];
+        if let Some(mirror) = self.mirror {
+            places.extend(mirror.copies().into_iter().map(|copy| (copy.flip_mask, copy.matrix(&model, mirror.center))));
+        }
+        places
     }
 }
 
@@ -178,6 +200,16 @@ pub trait Scene {
     /// Where a world ray meets one object, shown or hidden.
     fn raycast_object(&self, id: ObjectId, ray: &Ray) -> Option<Hit>;
 
+    /// Where a world ray meets the mesh of object `id` drawn through `model`
+    /// (its own space into world space) in place of the object's own
+    /// placement: how a tool picks a copy of its own, such as one copy of an
+    /// array, or says which of an object's mirror copies a click landed on
+    /// (`ObjectInfo::placements`). Hidden faces are not hit. The hit is in
+    /// world space and names `id`. A scene that cannot say returns `None`.
+    fn raycast_placed(&self, _id: ObjectId, _model: &Mat4, _ray: &Ray) -> Option<Hit> {
+        None
+    }
+
     /// A world-space box around an object. Quick (no pass over the
     /// vertices), and exact for an object that is not turned; for a turned
     /// one it is the box around its own box, so loose by up to 40%. Measure
@@ -263,11 +295,28 @@ pub struct NewObject {
     /// Whether it becomes the selected object. On by default: something just
     /// made is nearly always what is worked on next.
     pub select: bool,
+    /// Live mirror copies the object starts with. None by default: a copy,
+    /// a piece or a clone of a mirrored object is not mirrored unless the
+    /// tool that makes it says so.
+    pub mirror: Option<MirrorRepeater>,
 }
 
 impl NewObject {
     pub fn new(name: impl Into<String>, mesh: impl Into<MeshData>) -> NewObject {
-        NewObject { name: name.into(), mesh: mesh.into(), placement: Placement::IDENTITY, visible: true, select: true }
+        NewObject {
+            name: name.into(),
+            mesh: mesh.into(),
+            placement: Placement::IDENTITY,
+            visible: true,
+            select: true,
+            mirror: None,
+        }
+    }
+
+    /// Starts with these live mirror copies (`None` leaves it without).
+    pub fn mirrored(mut self, mirror: Option<MirrorRepeater>) -> NewObject {
+        self.mirror = mirror;
+        self
     }
 
     pub fn placed(mut self, placement: Placement) -> NewObject {
@@ -296,6 +345,12 @@ pub enum Command {
     Replace { object: ObjectId, mesh: MeshData },
     /// Move, turn or resize an object.
     Place { object: ObjectId, placement: Placement },
+    /// Give an object live mirror copies of itself across these world
+    /// planes (through the point the repeater names), replacing any it had,
+    /// or with `None` take them away. Part of the same undo step as the rest
+    /// of the commit. Counted as failed when the object already has exactly
+    /// that.
+    Mirror { object: ObjectId, mirror: Option<MirrorRepeater> },
     /// Show or hide an object.
     Show { object: ObjectId, visible: bool },
     Rename { object: ObjectId, name: String },
@@ -354,6 +409,12 @@ pub trait Document: Scene {
     fn add(&mut self, object: NewObject) -> Option<ObjectId>;
     fn replace(&mut self, object: ObjectId, mesh: MeshData) -> bool;
     fn place(&mut self, object: ObjectId, placement: Placement) -> bool;
+    /// Gives an object these live mirror copies, or none. False, and nothing
+    /// changes, if it has exactly that already. A document without live
+    /// mirrors changes nothing.
+    fn set_mirror(&mut self, _object: ObjectId, _mirror: Option<MirrorRepeater>) -> bool {
+        false
+    }
     fn show(&mut self, object: ObjectId, visible: bool) -> bool;
     fn rename(&mut self, object: ObjectId, name: String) -> bool;
     fn delete(&mut self, object: ObjectId) -> bool;
@@ -387,7 +448,7 @@ pub trait Document: Scene {
 
 /// Carries out `commands` on a document, in order.
 ///
-/// Everything that changes the object list (add, replace, place, show,
+/// Everything that changes the object list (add, replace, place, mirror, show,
 /// rename, delete, select) happens inside one `begin`/`end` pair, so however
 /// many objects a tool touches, Z takes it all back at once. Masks and
 /// hidden faces are set after that, each as its own step, in the order given:
@@ -420,6 +481,7 @@ pub fn apply(doc: &mut dyn Document, label: &str, commands: Vec<Command>) -> Rec
             },
             Command::Replace { object, mesh } => doc.replace(object, mesh),
             Command::Place { object, placement } => doc.place(object, placement),
+            Command::Mirror { object, mirror } => doc.set_mirror(object, mirror),
             Command::Show { object, visible } => doc.show(object, visible),
             Command::Rename { object, name } => doc.rename(object, name),
             Command::Delete { object } => doc.delete(object),
