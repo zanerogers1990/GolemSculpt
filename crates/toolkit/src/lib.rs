@@ -19,7 +19,7 @@ pub mod theme;
 pub mod tool;
 pub mod view;
 
-pub use ctx::{Ctx, Env, Outbox};
+pub use ctx::{Ctx, Env, Outbox, RadialChange};
 pub use draw::{Draw, Label, Look, Overlay, Preview, PreviewData, PreviewDraw, Run, Shape, Style};
 pub use jobs::{Baker, Job, JobCtx, Jobs};
 pub use scene::{

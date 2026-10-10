@@ -14,9 +14,9 @@
 use std::collections::HashMap;
 
 use glam::{Mat3, Mat4, Vec2, Vec3};
-use sculpt_geom::{Aabb, TriMesh, tri};
+use sculpt_geom::{Aabb, SymmetryGroup, TriMesh, tri};
 
-use crate::ctx::{Ctx, Env, Outbox};
+use crate::ctx::{Ctx, Env, Outbox, RadialChange};
 use crate::draw::{Draw, smooth_normals};
 use crate::jobs::Jobs;
 use sculpt_symmetry::MirrorRepeater;
@@ -551,6 +551,19 @@ impl Bench {
         self.env.view.project(world).expect("the point is in front of the camera")
     }
 
+    /// Takes in a request for radial symmetry as the app does. The repeat
+    /// count the Symmetry card keeps while radial symmetry is off is 8 here.
+    fn take_radial(&mut self, change: RadialChange) {
+        let was_on = self.env.radial_count > 1;
+        let on = change.on.unwrap_or(was_on);
+        let kept = if was_on { self.env.radial_count } else { 8 };
+        let count = change.count.map_or(kept, |c| c.clamp(SymmetryGroup::MIN_RADIAL_COUNT, SymmetryGroup::MAX_RADIAL_COUNT));
+        self.env.radial_count = if on { count } else { 1 };
+        if let Some(axis) = change.axis.filter(|axis| axis.length_squared() > 1e-12) {
+            self.env.radial_axis = axis.normalize();
+        }
+    }
+
     /// Runs `f` with a context, then takes in what the tool asked for.
     pub fn call<R>(&mut self, f: impl FnOnce(&mut Ctx) -> R) -> R {
         let mut out = Outbox::default();
@@ -567,6 +580,9 @@ impl Bench {
         }
         if let Some(mirror) = out.mirror {
             self.env.mirror = mirror;
+        }
+        if let Some(change) = out.radial {
+            self.take_radial(change);
         }
         if out.frame.is_some() {
             self.framed = out.frame;
@@ -1123,5 +1139,36 @@ mod tests {
         assert_eq!(bench.env.unit, sculpt_geom::LengthUnit::Inches);
         assert_eq!(bench.env.mirror, [true, false, false]);
         assert!(bench.finished && bench.framed.is_some());
+    }
+
+    #[test]
+    fn radial_symmetry_is_switched_on_round_an_axis_and_off_again_through_the_context() {
+        let mut bench = Bench::new();
+        assert_eq!((bench.env.radial_count, bench.env.radial_axis), (1, Vec3::Y));
+        // On, round X, with the count the Symmetry card keeps.
+        bench.call(|cx| {
+            cx.set_radial(RadialChange { on: Some(true), axis: Some(Vec3::X * 3.0), ..Default::default() });
+            assert_eq!(cx.radial_axis, Vec3::X, "the axis is a unit direction, at once");
+        });
+        assert_eq!((bench.env.radial_count, bench.env.radial_axis), (8, Vec3::X));
+        // A count alone changes it while it is on, and leaves the axis.
+        bench.call(|cx| {
+            cx.set_radial(RadialChange { count: Some(6), ..Default::default() });
+            assert_eq!(cx.radial_count, 6);
+        });
+        assert_eq!((bench.env.radial_count, bench.env.radial_axis), (6, Vec3::X));
+        // Off is 1 repeat, whatever else is asked.
+        bench.call(|cx| cx.set_radial(RadialChange { on: Some(false), count: Some(3), axis: Some(Vec3::Z) }));
+        assert_eq!((bench.env.radial_count, bench.env.radial_axis), (1, Vec3::Z));
+        // A count alone does not switch it on, and one out of range is brought in.
+        bench.call(|cx| cx.set_radial(RadialChange { count: Some(5), ..Default::default() }));
+        assert_eq!(bench.env.radial_count, 1);
+        bench.call(|cx| cx.set_radial(RadialChange { on: Some(true), count: Some(99), ..Default::default() }));
+        assert_eq!(bench.env.radial_count, SymmetryGroup::MAX_RADIAL_COUNT);
+        bench.call(|cx| cx.set_radial(RadialChange { count: Some(0), ..Default::default() }));
+        assert_eq!(bench.env.radial_count, SymmetryGroup::MIN_RADIAL_COUNT, "the lowest count is two, not nothing");
+        // A direction with no length is not an axis.
+        bench.call(|cx| cx.set_radial(RadialChange { axis: Some(Vec3::ZERO), ..Default::default() }));
+        assert_eq!(bench.env.radial_axis, Vec3::Z);
     }
 }

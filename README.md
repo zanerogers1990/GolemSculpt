@@ -151,7 +151,7 @@ places at once: on both sides of a plane, all the way round an axis, or both.
   no symmetry, however many repeats there are, and a Move there slides along
   the axis instead of being pulled every way at once.
 - Every brush follows it, mask painting included, and so do the Mask, Hide,
-  Trim and Split tools.
+  Trim and Split tools, and the Tube tool (it draws a tube for each copy).
 - **Show Symmetry Guides** draws a thin line on the model where each mirror
   plane cuts it and along the edge of each radial sector, the spokes meeting
   where the axis comes through the surface. They are in the axis's colour
@@ -403,10 +403,20 @@ variation.
 | Esc | Cancel the drag, then deselect, then put the tool away |
 
 The panel starts from a preset (vase, bowl, cup, bottle, egg, ring) and holds
-closed loop, cap open ends, even triangles, and the Density, Radius, Height and
-Scale sliders; the preview is drawn at up to 256 around and Create always uses
-the full Density. Dragging on the background orbits. The profile is a scaffold:
-not saved, with its own Z while the tool is up.
+closed loop, cap open ends, even triangles, **Radial Symmetry on Create**, and
+the Density, Radius, Height and Scale sliders; the preview is drawn at up to
+256 around and Create always uses the full Density. Dragging on the
+background orbits. The profile is a scaffold: not saved, with its own Z while
+the tool is up.
+
+**Radial Symmetry on Create** (off to start with) turns radial symmetry on
+when the object is made, round the axis it was turned about (its own Y, which
+runs through its middle), so every stroke you make on it is repeated all the
+way round. The number of repeats is the Symmetry card's; its mirror axes are
+left as they are. Unticked, Create leaves the Symmetry card alone. In the Unity
+app the symmetry belonged to the object; here it is the scene's, as the
+Symmetry card describes, so Z right after Create puts it back as it was
+(unless you have changed it since) and Shift + Z turns it on again.
 
 ## Tube
 
@@ -420,9 +430,14 @@ its own.
    on a plane facing you through the spot where it began, so the tube grows
    out of that spot. **On Surface** lays it along the model instead, half sunk
    into it (a vein, a ridge, a tail draped along a body). The ring at the
-   pointer shows how thick the next tube will be. With a mirror axis on, one
-   stroke makes both: the twin's curve and points are drawn fainter, and
-   grabbing one of its points edits the tube through the mirror.
+   pointer shows how thick the next tube will be. A tube follows the
+   **Symmetry** card of the Sculpt panel, as the brushes do, in the space of the
+   object it grows from: with a mirror axis on, one stroke makes both arms; with
+   **Radial** on, it makes one tube for each repeat evenly round the radial
+   axis (a ring of horns), and twice as many with a mirror as well. The copies'
+   curves and points are drawn fainter, and grabbing one of their points edits
+   the tube through the mirror or the turn. Change the symmetry and the copies
+   change with it; the Tube panel says what it is.
 2. Shape it by its points, the dots along its orange curve; press one to
    select it (it turns orange). Drag a point, click the curve to add one,
    double-click a point to make it a sharp corner (it turns square) or smooth
@@ -435,11 +450,17 @@ its own.
    and the next one you draw.
 3. **Merge** (Enter) fuses every live tube into the object it was drawn on, as
    one surface with a soft join; **Blend** sets how soft (0 is a crisp seam).
-   The object is rebuilt at its current density, as a remesh does, so it
-   starts with a clear mask and everything showing. The work runs in the
-   background, with its progress and a Cancel button (or Esc) while it does.
-   **Keep Separate** makes each tube an object of its own to sculpt, placed
-   with the object it was drawn on. Either is one undo step.
+   The object is rebuilt at its current density, as a remesh does (and as it
+   was in the Unity app), so it starts with a clear mask and everything
+   showing; undo brings the old mask and hidden parts back with the old model.
+   Every copy under the symmetry is fused in the one merge: across a mirror
+   plane the result is exactly symmetric, and round the radial axis it is the
+   same all the way round to within a fraction of one cell of the rebuilt
+   model. The work runs in the background, with its progress and a Cancel
+   button (or Esc) while it does. **Keep Separate** makes each tube (all its
+   copies together) an object of its own to sculpt, placed with the object it
+   was drawn on, and leaves that object, its mask and its hidden parts as they
+   were. Either is one undo step.
 
 | Input (Tube up) | Action |
 | --- | --- |
@@ -461,7 +482,9 @@ its own.
 Dragging on the background orbits, as everywhere else (the Unity app drew a
 tube there; here that is Ctrl + drag). Live tubes are a scaffold: not saved in
 `.sclp` files, and drawn only while the tool is up. Put it away and they wait,
-out of sight, until it is brought back. While the tool is up Z steps the
+out of sight, until it is brought back (the Unity app hid them too, and so do
+the tool's handles: to see a tube among the rest of the model, merge it or
+keep it separate). While the tool is up Z steps the
 tubes' own edits first (a point moved, a slider changed), then the scene's.
 Merge and Keep Separate are steps of the scene's history: Z right after one
 gives the tubes back live, with the tool brought up if it was put away, and
@@ -821,8 +844,6 @@ Not ported yet:
 - Mask, Hide, Trim and Split do not act through an array's copies (they do
   through instances and live mirror copies).
 - The gizmo's arrows on a selected point of an array's path.
-- A tube repeated round the radial axis, and **Radial Symmetry on Create**
-  in the Lathe.
 
 SSpheres, arrays, unmerged tubes, rulers and planned keys are scaffolds: they
 are not kept in `.sclp` files, so make the skin, finish the array or merge the
@@ -850,6 +871,8 @@ sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (S
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo-tool trim:mirror   # a shape drawn over the object's live mirror copy: also hide:mirror, mask:mirror, split:mirror
 sculpt.exe --screenshot out.png --demo-tool array:mirror  # a mirrored column of copies; array:copy picks one (the gizmo on it), array:posed moves and turns it, array:onpath puts the move back
+sculpt.exe --screenshot out.png --demo-tool tube:radial   # a horn repeated six times round Y; also tube:mirror, tube:radial-mirror (three repeats and a mirror), tube:surface, tube:object (kept separate), tube:merged, tube:radial-merged
+sculpt.exe --screenshot out.png --demo-tool lathe:radial  # Create with Radial Symmetry on Create ticked (the vase gets the radial guides); also lathe:created, lathe:edit, lathe:bowl, lathe:ring, lathe:sketch
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
 sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a name ending in .mp4): then reads the file back and checks its frames, size, frame rate and length

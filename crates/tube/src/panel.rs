@@ -4,8 +4,8 @@
 
 use egui::Color32;
 use sculpt_geom::units;
-use sculpt_toolkit::Ctx;
 use sculpt_toolkit::theme::{self, ACCENT, ButtonStyle};
+use sculpt_toolkit::{Ctx, Env};
 
 use crate::tool::TubeTool;
 use crate::types::{CapStyle, TubeSettings};
@@ -18,6 +18,36 @@ const MAX_LOG_RADIUS: f32 = 1.1;
 
 fn plural(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
+}
+
+/// What the brushes' symmetry is, as the Symmetry card says it ("X + Z + Radial 8"); `None` while it is off.
+fn symmetry_summary(env: &Env) -> Option<String> {
+    let mut parts: Vec<String> =
+        ["X", "Y", "Z"].into_iter().zip(env.mirror).filter(|&(_, on)| on).map(|(name, _)| name.to_owned()).collect();
+    if env.radial_count > 1 {
+        parts.push(format!("Radial {}", env.radial_count));
+    }
+    (!parts.is_empty()).then(|| parts.join(" + "))
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::Vec3;
+    use sculpt_toolkit::testing::Bench;
+
+    use super::symmetry_summary;
+
+    #[test]
+    fn the_panel_says_what_symmetry_the_tubes_are_made_under() {
+        let mut env = Bench::new().env;
+        assert_eq!(symmetry_summary(&env), None);
+        env.mirror = [true, false, true];
+        assert_eq!(symmetry_summary(&env).as_deref(), Some("X + Z"));
+        (env.radial_count, env.radial_axis) = (6, Vec3::X);
+        assert_eq!(symmetry_summary(&env).as_deref(), Some("X + Z + Radial 6"));
+        env.mirror = [false; 3];
+        assert_eq!(symmetry_summary(&env).as_deref(), Some("Radial 6"));
+    }
 }
 
 /// Two buttons side by side, the one that is on lit. Returns which was
@@ -120,6 +150,9 @@ impl TubeTool {
             _ => format!("{count} live tube{}.", plural(count)),
         };
         theme::line(ui, &line, theme::HINT);
+        if let Some(symmetry) = symmetry_summary(cx) {
+            theme::hint(ui, &format!("Symmetry: {symmetry}. Each tube is made under it (the Symmetry card of the Sculpt panel)."));
+        }
     }
 
     /// Placement, ends and the whole-tube sliders. They edit the selected

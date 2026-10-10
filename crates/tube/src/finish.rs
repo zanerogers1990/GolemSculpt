@@ -95,6 +95,7 @@ struct Work {
     field: TubeField,
     plan: MergePlan,
     blend: f32,
+    /// The coordinate planes the tubes are exactly symmetric across.
     mirror: [bool; 3],
 }
 
@@ -206,7 +207,7 @@ impl TubeTool {
             // Every tube in the group shares the anchor, so they share its
             // frame and symmetry.
             let first = &self.tubes[tubes[0]];
-            let (to_field, mirror) = (first.frame.local_to_frame(), first.mirror);
+            let (to_field, mirror) = (first.frame.local_to_frame(), first.symmetry.exact_planes());
             let mut field = TubeField::new();
             let (mut blend, mut max_radius, mut thinnest) = (0.0f32, 0.0f32, f32::MAX);
             for &index in &tubes {
@@ -398,7 +399,8 @@ impl TubeTool {
             if field.is_empty() {
                 continue;
             }
-            let Ok(built) = field.voxelize(self.separate_cell(cx, tube, &field), tube.mirror, MAX_VOXEL_SAMPLES) else {
+            let planes = tube.symmetry.exact_planes();
+            let Ok(built) = field.voxelize(self.separate_cell(cx, tube, &field), planes, MAX_VOXEL_SAMPLES) else {
                 continue;
             };
             let mut mesh = built.surface.into_mesh();

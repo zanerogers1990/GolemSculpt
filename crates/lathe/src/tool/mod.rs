@@ -10,6 +10,11 @@
 //! keeps its own undo history ([`crate::history`]). Create is where the work becomes real geometry, and
 //! Create is one step on the scene's history. Undoing it hands the scaffold back.
 //!
+//! With Radial Symmetry on Create ticked, Create also turns the brushes' radial symmetry on round the new
+//! object's own Y, the axis it was turned about, so every stroke on it is repeated all the way round. The
+//! Unity app gave the object that symmetry itself; here it is the scene's, so undoing the Create puts it
+//! back as it was and redoing the Create turns it on again.
+//!
 //! | Input | Action |
 //! | --- | --- |
 //! | Drag a handle | Move that point (Shift: only along the dominant direction) |
@@ -39,7 +44,7 @@ use glam::{Vec2, Vec3};
 use sculpt_geom::Aabb;
 use sculpt_toolkit::{
     Button, Color32, Command, Ctx, Draw, Event, Info, Job, Key, MeshData, NewObject, ObjectId, Placement, Preview,
-    PreviewData, Style, Tool, View,
+    PreviewData, RadialChange, Style, Tool, View,
 };
 
 use crate::history::{COALESCE_SECONDS, History};
@@ -125,17 +130,30 @@ struct Made {
     watertight: bool,
 }
 
+/// Radial symmetry as it stood before Create turned it on, to put back when Create is undone: the Unity
+/// app kept the symmetry with the object it made, so taking the object away took the symmetry with it.
+#[derive(Clone, Copy)]
+struct SymmetryBefore {
+    on: bool,
+    axis: Vec3,
+}
+
 /// The object Create made, to notice when it is undone.
 #[derive(Clone, Copy)]
 struct Created {
     id: ObjectId,
     alive: bool,
+    /// Set when Create turned radial symmetry on.
+    symmetry: Option<SymmetryBefore>,
 }
 
 pub struct Lathe {
     profile: LatheProfile,
     plane: Plane,
     settings: LatheSettings,
+    /// Create turns radial symmetry on round the axis the object was turned about. Not a mesh setting, so
+    /// the build is unaffected; and not part of the profile, so not an undo step.
+    radial_on_create: bool,
     history: History,
     selected: Option<usize>,
     /// The first visit seats a starting shape beside the scene; later ones pick up where it was left.
@@ -209,12 +227,26 @@ fn wants_draft(dragging: bool, last_milliseconds: f64) -> bool {
     dragging && last_milliseconds > DRAFT_MILLISECONDS
 }
 
+/// Turns radial symmetry on round the object's own Y, which is the axis the lathe turned it about (the new
+/// object stands upright, with its origin on the axis). The repeat count is whatever the Symmetry card has.
+/// Returns what it was before.
+fn turn_radial_on(cx: &mut Ctx) -> SymmetryBefore {
+    let before = SymmetryBefore { on: cx.radial_count > 1, axis: cx.radial_axis };
+    cx.set_radial(RadialChange { on: Some(true), axis: Some(Vec3::Y), count: None });
+    before
+}
+
+fn radial_is_as_create_left_it(cx: &Ctx) -> bool {
+    cx.radial_count > 1 && cx.radial_axis.abs_diff_eq(Vec3::Y, 1e-6)
+}
+
 impl Lathe {
     pub fn new() -> Lathe {
         Lathe {
             profile: LatheProfile::new(),
             plane: Plane::new(Vec3::ZERO),
             settings: LatheSettings::default(),
+            radial_on_create: false,
             history: History::default(),
             selected: None,
             placed: false,
@@ -240,6 +272,15 @@ impl Lathe {
 
     pub fn settings(&self) -> LatheSettings {
         self.settings
+    }
+
+    /// Whether Create turns radial symmetry on for the object it makes.
+    pub fn radial_on_create(&self) -> bool {
+        self.radial_on_create
+    }
+
+    pub fn set_radial_on_create(&mut self, on: bool) {
+        self.radial_on_create = on;
     }
 
     /// Where the lathe stands and how big it is.
@@ -643,12 +684,17 @@ impl Lathe {
         let Some(&id) = receipt.added.first() else {
             return cx.status("The lathe could not be added to the scene.", false);
         };
-        self.created = Some(Created { id, alive: true });
+        let symmetry = if self.radial_on_create { Some(turn_radial_on(cx)) } else { None };
+        self.created = Some(Created { id, alive: true, symmetry });
         self.reseat = true;
         let name = cx.scene().info(id).map_or_else(|| "Lathe".to_owned(), |info| info.name.to_owned());
         let closure = if made.watertight { "closed solid" } else { "open surface" };
+        let radial = if symmetry.is_some() { " Radial symmetry is on round its axis." } else { "" };
         cx.status(
-            format!("Created {name} ({} tris, {closure}). The profile is kept for another.", panel::grouped(made.triangles)),
+            format!(
+                "Created {name} ({} tris, {closure}).{radial} The profile is kept for another.",
+                panel::grouped(made.triangles)
+            ),
             true,
         );
         cx.finish();
@@ -656,15 +702,25 @@ impl Lathe {
 
     /// Notices that Z took the created object away again, and hands the scaffold back: the profile is
     /// kept, so the tool simply comes back up. A redo that returns the object puts the tool away again.
+    ///
+    /// The radial symmetry Create turned on goes and comes with the object, as it did in the Unity app, where
+    /// it was the object's own. Undone, it is put back as it was, unless it has been changed since: the switch
+    /// and the axis are only touched while they are still as Create left them.
     fn watch_created(&mut self, cx: &mut Ctx) {
         let Some(created) = &mut self.created else { return };
         let exists = cx.scene().exists(created.id);
         if created.alive && !exists {
             created.alive = false;
+            if let Some(before) = created.symmetry.filter(|_| radial_is_as_create_left_it(cx)) {
+                cx.set_radial(RadialChange { on: Some(before.on), axis: Some(before.axis), count: None });
+            }
             cx.start();
             cx.status("Create undone: the profile is back to shape.", true);
         } else if !created.alive && exists {
             created.alive = true;
+            if created.symmetry.is_some() {
+                turn_radial_on(cx);
+            }
             cx.finish();
         }
     }
@@ -762,7 +818,8 @@ impl Tool for Lathe {
 
     /// The lathe in states worth a look. With nothing after the colon: the starting vase. `edit`: a
     /// point of it pulled out and left selected. `bowl`, `ring`: those presets. `sketch`: a goblet
-    /// drawn in one Ctrl-stroke. `created`: Create done, the object standing beside the model.
+    /// drawn in one Ctrl-stroke. `created`: Create done, the object standing beside the model. `radial`: the
+    /// same with Radial Symmetry on Create ticked.
     fn demo(&mut self, cx: &mut Ctx, what: &str) {
         self.run_demo(cx, what);
     }

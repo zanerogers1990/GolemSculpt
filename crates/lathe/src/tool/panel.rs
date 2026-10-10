@@ -159,6 +159,13 @@ impl Lathe {
         if theme::tip(r, cx.tips, help).changed() {
             self.set_even_triangles(even);
         }
+
+        let mut radial = self.radial_on_create;
+        let r = theme::checkbox(ui, &mut radial, "Radial Symmetry on Create", ACCENT_LATHE);
+        let help = "Turns on radial symmetry round the lathe's axis when the object is created, so every stroke on it is repeated all the way round. Set how many repeats under Symmetry in the sculpting panel. Undoing the Create puts the symmetry back as it was.";
+        if theme::tip(r, cx.tips, help).changed() {
+            self.set_radial_on_create(radial);
+        }
     }
 
     fn sliders(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
