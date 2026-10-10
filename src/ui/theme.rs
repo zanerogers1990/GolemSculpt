@@ -10,7 +10,8 @@ pub use sculpt_toolkit::theme::*;
 /// The toolkit's card, with the one thing only the app can add: whether the
 /// card is open is remembered between runs (see `crate::prefs::cards`). The
 /// app's own panels get this one, since it has the same name; cards a hosted
-/// tool draws straight from the toolkit are not remembered.
+/// tool draws straight from the toolkit are not remembered. (Which cards
+/// float is remembered for both: that is the toolkit's own doing.)
 pub fn category(
     ui: &mut egui::Ui,
     title: &str,
@@ -19,7 +20,26 @@ pub fn category(
     default_open: bool,
     body: impl FnOnce(&mut egui::Ui),
 ) {
+    category_as(ui, title, title, accent, summary, default_open, body);
+}
+
+/// A [`category`] whose title changes with what it shows: `key` is the one
+/// name it floats under (see `sculpt_toolkit::theme::category_as`).
+pub fn category_as(
+    ui: &mut egui::Ui,
+    key: &str,
+    title: &str,
+    accent: egui::Color32,
+    summary: &str,
+    default_open: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    // A folded panel run for its floating cards alone is not the panel the
+    // open and closed states are kept under: leave those for the real one.
+    if sculpt_toolkit::floating::hidden(ui) {
+        return sculpt_toolkit::theme::category_as(ui, key, title, accent, summary, default_open, body);
+    }
     let id = crate::prefs::cards::before(ui, title);
-    sculpt_toolkit::theme::category(ui, title, accent, summary, default_open, body);
+    sculpt_toolkit::theme::category_as(ui, key, title, accent, summary, default_open, body);
     crate::prefs::cards::after(ui, id, title, default_open);
 }

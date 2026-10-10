@@ -1,12 +1,15 @@
 //! Looks and self-checks of the interface's own furniture, for runs made
 //! without a person at the tablet (`--demo-ui`): the strength bar under the
-//! brush wheel, and the tabs that fold the panels away.
+//! brush wheel, the tabs that fold the panels away, and cards pulled out of
+//! their panel to float.
 //!
 //! `--demo-ui` takes a list, `key` or `key=value` with commas between:
 //! `size=1.5` (interface size), `brush=Clay`, `mask`, `strength=0.3`,
 //! `wheel` (the brush wheel in the middle of the window; `wheel=low` near
 //! the bottom, where its bar goes above it), `fold=left`, `fold=right` or
-//! `fold=both` (panels folded away) and `play`.
+//! `fold=both` (panels folded away), `float=Brushes@300:200` (that card
+//! floating with its top-left corner there, in the interface's points; as
+//! many as wanted) and `play`.
 //!
 //! `play` works the interface the way a pen would, through the same routines
 //! real input goes through, prints a line per check and closes the app. The
@@ -19,7 +22,9 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::KeyCode;
 
 use super::{Drag, Running};
+use crate::doc::Tool;
 use crate::sculpt::Brush;
+use sculpt_toolkit::floating;
 
 /// Frames between the steps of `play`: the interface answers a press with
 /// the layout of the frame before, and an area takes a frame to size itself.
@@ -30,6 +35,10 @@ const LEAD_IN: u32 = 12;
 #[derive(Default)]
 pub(super) struct State {
     play: Option<Play>,
+    /// What `play` noted in one step to compare with in a later one: the
+    /// brush size and the camera's distance, and where a window was.
+    kept: (f32, f32),
+    at: Option<Pos2>,
 }
 
 /// Where `play` has got to.
@@ -63,12 +72,25 @@ impl Running {
                 ("strength", strength) => s.current_mut().strength = strength.parse().unwrap_or(0.5),
                 ("wheel", place) => wheel = Some(place.to_owned()),
                 ("fold", which) => self.doc.opts.folded = [which != "right", which != "left"],
+                ("float", card) => self.ui_demo_float(card),
                 ("play", _) => self.ui_demo.play = Some(Play { step: 0, wait: LEAD_IN, failed: 0 }),
                 (other, _) => eprintln!("--demo-ui: unknown item {other}"),
             }
         }
         if let Some(place) = wheel {
             self.ui_demo_wheel(if place == "low" { 0.92 } else { 0.5 });
+        }
+    }
+
+    /// Floats a card: `name@x:y`, the top-left corner of its window.
+    fn ui_demo_float(&mut self, card: &str) {
+        let place = card.split_once('@').and_then(|(name, at)| {
+            let (x, y) = at.split_once(':')?;
+            Some((name, pos2(x.parse().ok()?, y.parse().ok()?)))
+        });
+        match place {
+            Some((name, at)) => floating::float(&self.egui_ctx, name, at),
+            None => eprintln!("--demo-ui: float wants a card and a place, as in float=Brushes@300:200"),
         }
     }
 
@@ -312,6 +334,139 @@ impl Running {
             13 => {
                 expect("a tap on the tab at the edge brings the Sculpt panel back", folded == [false, true] && panel(self, "sculpt_panel").is_some());
                 self.doc.opts.folded = [false; 2];
+            }
+            _ => return self.ui_demo_float_step(step - 14, expect),
+        }
+        false
+    }
+
+    /// The steps of `play` that pull a card out of its panel, move it, keep
+    /// it through folded panels, the clean view and a larger interface, and
+    /// put it back.
+    fn ui_demo_float_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        let ctx = self.egui_ctx.clone();
+        let window = floating::window(&ctx, "Brushes");
+        let button = floating::button(&ctx, "Brushes").map(|rect| rect.center());
+        let panel = self.ui_demo_area("sculpt_panel", Order::Middle);
+        let screen = ctx.content_rect();
+        // By its title, clear of the button in its corner.
+        let grip = window.map(|rect| rect.min + vec2(70.0, 16.0));
+        let near = |a: Pos2, b: Pos2| (a - b).length() < 8.0;
+        let ppp = ctx.pixels_per_point();
+        let here = pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp);
+        let settings = &self.doc.sculptor.settings;
+        let (size, zoom) = (settings.size(), self.doc.camera.distance);
+        match step {
+            0 => {
+                self.doc.sculptor.settings.brush = Brush::Clay;
+                expect("the Brushes card has a button in its header", button.zip(panel).is_some_and(|(at, panel)| panel.contains(at)));
+                if let Some(at) = button {
+                    self.ui_demo_button(at, true);
+                }
+            }
+            1 => self.ui_demo_button(here, false),
+            2 => {
+                expect("a tap on it pulls the card out into a window of its own", floating::is_floating(&ctx, "Brushes") && window.is_some());
+                let beside = window.zip(panel).is_some_and(|(window, panel)| !window.intersects(panel));
+                expect("which appears beside the panel, not over it", beside);
+                if let Some(at) = grip {
+                    self.ui_demo_button(at, true);
+                }
+            }
+            3 => {
+                expect("a press on its title is not a stroke or an orbit", self.input.drag == Drag::Ui);
+                // Over the middle of the model.
+                let to = screen.center() - vec2(60.0, 120.0) + vec2(70.0, 16.0);
+                self.ui_demo_move(here.lerp(to, 0.5));
+                self.ui_demo_move(to);
+            }
+            4 => {
+                self.ui_demo_button(here, false);
+            }
+            5 => {
+                let over_model = window.is_some_and(|rect| near(rect.min, screen.center() - vec2(60.0, 120.0)));
+                expect("dragged by its title it goes where the pen goes", over_model);
+                // A tile of the card, with the model right behind it.
+                if let Some(rect) = window {
+                    self.ui_demo_button(rect.min + vec2(40.0, 70.0), true);
+                }
+            }
+            6 => {
+                expect("the pointer on the floating card is over the interface", self.over_ui());
+                expect("a press on it does not reach the model behind", self.input.drag == Drag::Ui && !self.doc.sculptor.is_active());
+                self.ui_demo_button(here, false);
+            }
+            7 => {
+                expect("but it is the card's own: the tap picked the brush under it", self.doc.sculptor.settings.brush == Brush::Move);
+                self.ui_demo.kept = (size, zoom);
+                self.wheel(1.0);
+                self.wheel(-3.0);
+            }
+            8 => {
+                let (was_size, was_zoom) = self.ui_demo.kept;
+                expect("the scroll wheel over it neither sizes the brush nor zooms", size == was_size && zoom == was_zoom);
+                self.doc.opts.folded = [true; 2];
+                self.ui_demo.at = window.map(|rect| rect.min);
+            }
+            9 => {
+                let stayed = window.map(|rect| rect.min) == self.ui_demo.at && window.is_some();
+                expect("with both panels folded away the floating card stays", stayed && panel.is_none());
+                crate::turntable::set_clean_view(&mut self.doc, true);
+            }
+            10 => {
+                expect("the clean view (Tab) takes it away with everything else", window.is_none() && floating::is_floating(&ctx, "Brushes"));
+                crate::turntable::set_clean_view(&mut self.doc, false);
+            }
+            11 => {
+                expect("and brings it back where it was", window.map(|rect| rect.min) == self.ui_demo.at && window.is_some());
+                floating::float(&ctx, "Brushes", screen.max - vec2(120.0, 60.0));
+            }
+            12 => {
+                expect("left hanging off the corner it is drawn back inside the window", window.is_some_and(|rect| screen.contains_rect(rect.shrink(1.0))));
+                // A place that is on the window now, and off it at twice the size.
+                let place = pos2((screen.width() * 0.65).round(), 300.0);
+                floating::float(&ctx, "Brushes", place);
+                self.ui_demo.at = Some(place);
+                self.doc.opts.ui_scale = 2.0;
+            }
+            13 => {
+                let inside = window.is_some_and(|rect| screen.contains_rect(rect.shrink(1.0)));
+                let off = self.ui_demo.at.is_some_and(|place| place.x > screen.width() - 100.0);
+                expect("at twice the interface size, where its place is off the window, it is inside too", inside && off);
+                self.doc.opts.ui_scale = 1.0;
+            }
+            14 => {
+                let place = self.ui_demo.at.unwrap_or_default();
+                expect("and goes back out when the interface is small again", window.is_some_and(|rect| near(rect.min, place)));
+                let kept = self.prefs_now().floating_cards;
+                expect("the settings remember it and where", kept.get("Brushes") == Some(&[place.x, place.y]) && kept.len() == 1);
+                self.set_tool(Tool::SSpheres);
+            }
+            15 => {
+                expect("with another tool's panel up the Brushes card is away", window.is_none() && floating::is_floating(&ctx, "Brushes"));
+                floating::float(&ctx, "Spheres", pos2(400.0, 80.0));
+            }
+            16 => {
+                expect("and a card of that tool's floats while the tool is up", floating::window(&ctx, "Spheres").is_some());
+                self.set_tool(Tool::Sculpt);
+            }
+            17 => {
+                let swapped = window.is_some() && floating::window(&ctx, "Spheres").is_none();
+                expect("back in Sculpt the tool's card has gone and Brushes is back", swapped && floating::is_floating(&ctx, "Spheres"));
+                floating::dock(&ctx, "Spheres");
+                if let Some(at) = button {
+                    self.ui_demo_button(at, true);
+                }
+            }
+            18 => self.ui_demo_button(here, false),
+            19 => {
+                expect("the button in its corner puts it back, with its panel still folded", !floating::is_floating(&ctx, "Brushes") && window.is_none());
+                expect("and the settings forget it", self.prefs_now().floating_cards.is_empty());
+                self.doc.opts.folded = [false; 2];
+            }
+            20 => {
+                let back = button.zip(panel).is_some_and(|(at, panel)| panel.contains(at));
+                expect("unfolded, the card is in the Sculpt panel again", back);
             }
             _ => return true,
         }

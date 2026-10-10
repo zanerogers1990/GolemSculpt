@@ -501,6 +501,18 @@ HINT)`, `button(ui, width, text, ButtonStyle { icon, active, badge, height })`,
 text)`, `count(n)`, and the colours (`ACCENT`, `TEXT`, `HINT`, `OK`, `ERROR`,
 `MASK`, `AXIS`...). `open_category` opens a card from code.
 
+Every `category` card has a button in its header that pulls it out of the
+panel to float over the viewport, and one to put it back
+(`sculpt_toolkit::floating`). Your panel does nothing for this: `category`
+draws the card in the panel or in its window, with the same `body` either
+way, and the app remembers which cards float and where. A floating card shows
+exactly when your code draws it, so a card of your `panel` floats while your
+tool is up and is away with it. Two things follow. Give each card a title of
+its own (the title is the name it floats under; use `category_as(ui, key,
+title, ..)` for a card whose title changes). And do not count on your cards
+being drawn one under the other in the panel's `ui`, or on that `ui` being
+visible: draw everything a card needs inside its `body`.
+
 `panel` replaces the brush settings while the tool is up. `card` is for the
 few tools with something worth having to hand in any mode.
 

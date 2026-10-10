@@ -202,6 +202,7 @@ impl Running {
         self.doc.tools.unit = kept.length_unit();
         kept.brush.apply(&mut self.doc.sculptor.settings);
         prefs::cards::restore(&self.egui_ctx, &kept.cards);
+        sculpt_toolkit::floating::restore(&self.egui_ctx, &kept.floating_cards);
         self.ui.recent.restore(kept.recent.clone(), self.files.home.pictures());
         // Not for a run that was given a window size: it asked for a window.
         if kept.fullscreen && self.args.screenshot.is_none() && self.args.size.is_none() {
@@ -220,6 +221,7 @@ impl Running {
             cards: prefs::cards::snapshot(&self.egui_ctx),
             left_panel_folded: opts.folded[0],
             right_panel_folded: opts.folded[1],
+            floating_cards: sculpt_toolkit::floating::snapshot(&self.egui_ctx),
             brush: BrushPrefs::of(&self.doc.sculptor.settings),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,

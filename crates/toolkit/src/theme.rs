@@ -6,7 +6,9 @@
 //! another name. A panel is a stack of [`category`] cards holding [`button`]s,
 //! [`tile`]s, [`slider`]s, [`checkbox`]es, [`heading`]s, [`hint`]s and
 //! [`line`]s. Use these rather than egui's stock widgets, which look like
-//! another program.
+//! another program. Any card can be pulled out of its panel to float over
+//! the viewport: that is `category`'s doing (see [`crate::floating`]), and a
+//! panel's code is the same either way.
 
 use std::sync::Arc;
 
@@ -112,6 +114,10 @@ fn hover_overlay(ui: &Ui, rect: Rect, radius: f32, response: &Response) {
 }
 
 /// Collapsible card with a coloured pill, like the Unity panels' categories.
+///
+/// The small button beside the chevron pulls the card out of its panel to
+/// float over the viewport, where the same `body` draws it in a window of
+/// its own (see [`crate::floating`]).
 pub fn category(
     ui: &mut Ui,
     title: &str,
@@ -120,32 +126,119 @@ pub fn category(
     default_open: bool,
     body: impl FnOnce(&mut Ui),
 ) {
+    category_as(ui, title, title, accent, summary, default_open, body);
+}
+
+/// A [`category`] whose title changes with what it shows (the settings of
+/// the brush in hand, say). `key` is the one name it floats under, so it
+/// stays out of its panel when its title changes.
+pub fn category_as(
+    ui: &mut Ui,
+    key: &str,
+    title: &str,
+    accent: Color32,
+    summary: &str,
+    default_open: bool,
+    body: impl FnOnce(&mut Ui),
+) {
     let id = ui.make_persistent_id(("category", title));
+    let header = CardHeader { title, accent, summary };
+    if crate::floating::is_floating(ui.ctx(), key) {
+        return crate::floating::show(ui, key, &header, id, body);
+    }
+    if crate::floating::hidden(ui) {
+        return;
+    }
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open));
     let width = ui.available_width();
+    let mut pulled_out = None;
     egui::Frame::new().fill(CARD).corner_radius(7.0).show(ui, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing.y = 0.0;
-        let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
-        if response.clicked() {
+        let (rect, response) = ui.allocate_exact_size(vec2(width, CARD_HEADER_HEIGHT), Sense::click());
+        let button = ui.interact(Corner::Chevron(open).button(rect), id.with("float"), Sense::click());
+        crate::floating::note_button(ui.ctx(), key, button.rect);
+        if button.clicked() {
+            pulled_out = Some(rect);
+        } else if response.clicked() {
             open = !open;
             ui.data_mut(|d| d.insert_persisted(id, open));
         }
-        let fill = if open { mix(HEADER, accent, 0.10) } else { HEADER };
-        let rounding = if open {
-            CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }
-        } else {
-            CornerRadius::same(7)
+        paint_card_header(ui, rect, &header, Corner::Chevron(open), &response, &button);
+        button.on_hover_text("Float this card over the view. Drag it by its title; the same button puts it back.");
+        if open {
+            card_body(ui, body);
+        }
+    });
+    if let Some(header) = pulled_out {
+        crate::floating::pull_out(ui.ctx(), key, header);
+    }
+}
+
+/// The height of a card's header: its title bar when it floats.
+pub(crate) const CARD_HEADER_HEIGHT: f32 = 32.0;
+
+/// What a card's header says.
+pub(crate) struct CardHeader<'a> {
+    pub title: &'a str,
+    pub accent: Color32,
+    pub summary: &'a str,
+}
+
+/// What sits at the right end of a card's header.
+#[derive(Clone, Copy)]
+pub(crate) enum Corner {
+    /// In its panel: the chevron (down when the card is open), with the
+    /// button that floats the card beside it.
+    Chevron(bool),
+    /// Floating: the button that puts the card back in its panel.
+    Dock,
+}
+
+impl Corner {
+    /// The part of the header at `rect` that is the float or dock button.
+    /// As tall as the header and wider than its picture, for a pen.
+    pub(crate) fn button(self, rect: Rect) -> Rect {
+        let (centre, width) = match self {
+            Corner::Chevron(_) => (rect.right() - 38.0, 24.0),
+            Corner::Dock => (rect.right() - 17.0, 30.0),
         };
-        let p = ui.painter();
-        p.rect_filled(rect, rounding, fill);
-        hover_overlay(ui, rect, 7.0, &response);
-        p.rect_filled(
-            Rect::from_min_size(pos2(rect.left() + 7.0, rect.center().y - 8.0), vec2(3.0, 16.0)),
-            1.5,
-            accent,
-        );
-        p.text(pos2(rect.left() + 17.0, rect.center().y), Align2::LEFT_CENTER, title, bold(13.0), TEXT);
+        Rect::from_center_size(pos2(centre, rect.center().y), vec2(width, rect.height()))
+    }
+
+    /// Whether the header is tinted and square-bottomed, for a body under it.
+    fn open(self) -> bool {
+        !matches!(self, Corner::Chevron(false))
+    }
+}
+
+/// Paints a card's header in `rect`: the pill, the title, the summary and
+/// what its corner holds. `response` is the header's own and `button` the
+/// float or dock button's, for their hover looks.
+pub(crate) fn paint_card_header(
+    ui: &Ui,
+    rect: Rect,
+    header: &CardHeader,
+    corner: Corner,
+    response: &Response,
+    button: &Response,
+) {
+    let CardHeader { title, accent, summary } = *header;
+    let fill = if corner.open() { mix(HEADER, accent, 0.10) } else { HEADER };
+    let rounding = if corner.open() { CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 } } else { CornerRadius::same(7) };
+    let p = ui.painter();
+    p.rect_filled(rect, rounding, fill);
+    hover_overlay(ui, rect, 7.0, response);
+    p.rect_filled(
+        Rect::from_min_size(pos2(rect.left() + 7.0, rect.center().y - 8.0), vec2(3.0, 16.0)),
+        1.5,
+        accent,
+    );
+    let title = p.layout_no_wrap(title.to_owned(), bold(13.0), TEXT);
+    let title_end = rect.left() + 17.0 + title.size().x;
+    p.galley(pos2(rect.left() + 17.0, rect.center().y - title.size().y * 0.5), title, TEXT);
+    let button_rect = corner.button(rect);
+    if let Corner::Chevron(open) = corner {
         // Chevron: right when closed, down when open.
         let c = pos2(rect.right() - 14.0, rect.center().y);
         let chevron = Stroke::new(1.5, Color32::from_white_alpha(140));
@@ -154,23 +247,50 @@ pub fn category(
         } else {
             p.line(vec![c + vec2(-2.0, -4.0), c + vec2(2.0, 0.0), c + vec2(-2.0, 4.0)], chevron);
         }
-        if !summary.is_empty() {
-            p.text(
-                pos2(rect.right() - 28.0, rect.center().y),
-                Align2::RIGHT_CENTER,
-                summary,
-                font(11.0),
-                accent.gamma_multiply(0.9),
-            );
-        }
-        if open {
-            egui::Frame::new()
-                .inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 12 })
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                    body(ui);
-                });
-        }
+    }
+    paint_window_button(ui, button_rect, matches!(corner, Corner::Dock), button);
+    if !summary.is_empty() {
+        // Cut short with an ellipsis rather than run over the title.
+        let end = button_rect.left() - 2.0;
+        let tint = accent.gamma_multiply(0.9);
+        let mut job = egui::text::LayoutJob::simple_singleline(summary.to_owned(), font(11.0), tint);
+        job.wrap = egui::text::TextWrapping {
+            max_width: (end - title_end - 10.0).max(0.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('\u{2026}'),
+        };
+        let summary = p.layout_job(job);
+        let at = Align2::RIGHT_CENTER.anchor_size(pos2(end, rect.center().y), summary.size());
+        p.galley(at.min, summary, tint);
+    }
+}
+
+/// The picture on the float button (a window with an arrow leaving it) or,
+/// with `dock`, on the button that puts a floating card back (the arrow
+/// going in).
+fn paint_window_button(ui: &Ui, rect: Rect, dock: bool, response: &Response) {
+    let hovered = response.hovered() && ui.is_enabled();
+    let p = ui.painter();
+    let c = rect.center();
+    if hovered {
+        p.rect_filled(Rect::from_center_size(c, Vec2::splat(22.0)), 5.0, Color32::from_white_alpha(28));
+    }
+    let ink = Stroke::new(1.5, Color32::from_white_alpha(if hovered { 235 } else { 130 }));
+    // The window, open at its top-right corner where the arrow passes.
+    let frame = [vec2(-0.5, -4.5), vec2(-5.0, -4.5), vec2(-5.0, 5.0), vec2(4.5, 5.0), vec2(4.5, 0.5)];
+    p.line(frame.iter().map(|&offset| c + offset).collect(), ink);
+    let (inside, outside) = (c, c + vec2(5.5, -5.5));
+    let (tail, head, back) = if dock { (outside, inside, 1.0) } else { (inside, outside, -1.0) };
+    p.line_segment([tail, head], ink);
+    p.line(vec![head + vec2(4.0 * back, 0.0), head, head + vec2(0.0, -4.0 * back)], ink);
+}
+
+/// A card's contents under its header, with the card's margins.
+pub(crate) fn card_body(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
+    egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 12 }).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        body(ui);
     });
 }
 

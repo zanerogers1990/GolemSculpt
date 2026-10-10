@@ -1,8 +1,9 @@
 //! What the app remembers between runs: interface size, tooltips, which
-//! cards are open, which panels are folded away, fullscreen, the measurement unit, every brush's tuning and
-//! the recent files. One small JSON file, `settings.json`, in the user's
-//! config folder (`%APPDATA%\Sculpt` on Windows). The Unity app kept the same
-//! things in PlayerPrefs.
+//! cards are open, which float and where, which panels are folded away,
+//! fullscreen, the measurement unit, every brush's tuning and the recent
+//! files. One small JSON file, `settings.json`, in the user's config folder
+//! (`%APPDATA%\Sculpt` on Windows). The Unity app kept the same things in
+//! PlayerPrefs.
 //!
 //! The file is forgiving in both directions. A setting it does not mention
 //! keeps its built-in value, one this version does not know is ignored, and
@@ -367,6 +368,10 @@ pub struct Prefs {
     /// tab at the edge of the screen.
     pub left_panel_folded: bool,
     pub right_panel_folded: bool,
+    /// Cards pulled out of their panel to float over the viewport, by name:
+    /// the left and top of each one's window, in the interface's points. A
+    /// card that is not here is in its panel (see `sculpt_toolkit::floating`).
+    pub floating_cards: BTreeMap<String, [f32; 2]>,
     pub brush: BrushPrefs,
     /// Voxels along the longest side for a voxel remesh.
     pub remesh_resolution: f32,
@@ -394,6 +399,7 @@ impl Default for Prefs {
             cards: BTreeMap::new(),
             left_panel_folded: opts.folded[0],
             right_panel_folded: opts.folded[1],
+            floating_cards: BTreeMap::new(),
             brush: BrushPrefs::default(),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
@@ -533,6 +539,7 @@ mod tests {
         prefs.unit = "in".into();
         prefs.cards.insert("Stroke".into(), true);
         prefs.right_panel_folded = true;
+        prefs.floating_cards.insert("Brushes".into(), [640.0, 120.0]);
         prefs.brush.brush = "Clay".into();
         prefs.brush.radius_px = 84.0;
         prefs.brush.brushes.get_mut("Crease").unwrap().strength = 0.75;
@@ -659,6 +666,87 @@ mod tests {
         let odd = r#"{ "left_panel_folded": 1, "right_panel_folded": null, "tooltips": false }"#;
         let prefs = Prefs::parse(odd);
         assert!(!prefs.left_panel_folded && !prefs.right_panel_folded && !prefs.tooltips);
+    }
+
+    /// Which cards float, and where. A file from before cards could float
+    /// has none; each entry that is not two numbers costs only itself; and a
+    /// place that is numbers but nowhere near a screen is not handed to the
+    /// interface, so that card comes back in its panel.
+    #[test]
+    fn floating_cards_are_remembered_and_nonsense_comes_back_docked() {
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        assert!(older.as_object_mut().unwrap().remove("floating_cards").is_some());
+        older["interface_size"] = 1.25.into();
+        let prefs = Prefs::parse(&older.to_string());
+        assert!(prefs.floating_cards.is_empty() && prefs.interface_size == 1.25);
+
+        let (home, _) = settings_in("floating");
+        let mut floating = Prefs::default();
+        floating.floating_cards.insert("Brushes".into(), [320.5, 96.0]);
+        floating.floating_cards.insert("Measure & Size".into(), [-12.0, 2000.0]);
+        home.save(&floating).unwrap();
+        assert_eq!(home.load(), floating);
+
+        let odd = r#"{
+            "floating_cards": {
+                "Brushes": [300, 200],
+                "Masking": "over there",
+                "Remesh": [1, 2, 3],
+                "File": [10],
+                "Objects": { "x": 1, "y": 2 },
+                "Material": [null, 4],
+                "Lighting": [1e30, 5],
+                "Stroke": [true, 6]
+            },
+            "tooltips": false
+        }"#;
+        let prefs = Prefs::parse(odd);
+        assert!(!prefs.tooltips, "the settings beside it are still read");
+        let read: Vec<&str> = prefs.floating_cards.keys().map(String::as_str).collect();
+        assert_eq!(read, ["Brushes", "Lighting"], "only the entries that are two numbers");
+        assert_eq!(prefs.floating_cards["Brushes"], [300.0, 200.0]);
+        // And what the interface is handed leaves out the place that is nowhere.
+        let ctx = egui::Context::default();
+        sculpt_toolkit::floating::restore(&ctx, &prefs.floating_cards);
+        assert_eq!(sculpt_toolkit::floating::snapshot(&ctx), BTreeMap::from([("Brushes".to_owned(), [300.0, 200.0])]));
+        // The whole map being something else costs nothing but itself either.
+        let prefs = Prefs::parse(r#"{ "floating_cards": [1, 2], "right_panel_folded": true }"#);
+        assert!(prefs.floating_cards.is_empty() && prefs.right_panel_folded);
+    }
+
+    /// A settings file written by this version, read the way the version
+    /// before cards could float and panels could fold read it: the fields it
+    /// has never heard of are stepped over and everything else is kept.
+    #[test]
+    fn a_version_without_floating_cards_reads_this_versions_file() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(default)]
+        struct Before {
+            interface_size: f32,
+            tooltips: bool,
+            cards: BTreeMap<String, bool>,
+            brush: BrushPrefs,
+            recent: Vec<PathBuf>,
+        }
+        impl Default for Before {
+            fn default() -> Self {
+                let now = Prefs::default();
+                Before { interface_size: 1.0, tooltips: true, cards: BTreeMap::new(), brush: now.brush, recent: Vec::new() }
+            }
+        }
+        let mut now = Prefs::default();
+        now.interface_size = 1.5;
+        now.tooltips = false;
+        now.left_panel_folded = true;
+        now.floating_cards.insert("Brushes".into(), [640.0, 120.0]);
+        now.cards.insert("Stroke".into(), true);
+        now.brush.radius_px = 91.0;
+        let written: serde_json::Value = serde_json::from_str(&serde_json::to_string_pretty(&now).unwrap()).unwrap();
+        assert!(written["floating_cards"]["Brushes"].is_array() && written["left_panel_folded"] == true);
+        // `Prefs::parse` is this same call, and was before these fields.
+        let read = crate::io::read_over(&Before::default(), &written).expect("the older version reads it");
+        assert_eq!((read.interface_size, read.tooltips, read.brush.radius_px), (1.5, false, 91.0));
+        assert_eq!(read.cards, now.cards);
     }
 
     #[test]

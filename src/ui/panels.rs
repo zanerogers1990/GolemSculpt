@@ -6,7 +6,8 @@
 //! (this is not the Tab clean view, which is for looking and switches
 //! strokes off). Each side folds on its own and is remembered between runs
 //! (`crate::prefs`). The view gizmo and the bottom bar sit beside the panels,
-//! so they move out to the screen edge with them.
+//! so they move out to the screen edge with them. Cards pulled out of a
+//! panel to float (`sculpt_toolkit::floating`) stay up when it is folded.
 
 use egui::{Color32, Id, Order, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
@@ -102,6 +103,14 @@ fn tab_reach(side: Side, tab: Rect) -> Rect {
     reach
 }
 
+/// The part of the screen floating cards are kept inside: all of it but the
+/// strip a folded panel's tab hangs in, so that no card can be left (or
+/// brought back from a smaller window) on top of the way to get a panel back.
+pub fn room_for_cards(screen: Rect, folded: [bool; 2]) -> Rect {
+    let strip = |away: bool| if away { TAB_OUT_FOLDED } else { 0.0 };
+    Rect::from_min_max(screen.min + vec2(strip(folded[0]), 0.0), screen.max - vec2(strip(folded[1]), 0.0))
+}
+
 /// Where the view gizmo goes: beside the right panel, or beside that
 /// panel's tab at the screen edge when it is folded away.
 pub fn gizmo_origin(screen: Rect, right_folded: bool) -> Pos2 {
@@ -114,19 +123,22 @@ pub fn bottom_bar_origin(screen: Rect, left_folded: bool) -> Pos2 {
 }
 
 /// One panel: `body` in a frame down its side of the window, scrolling when
-/// it is taller than the window. Nothing at all when it is folded away.
-pub fn panel(ctx: &egui::Context, side: Side, folded: bool, body: &mut dyn FnMut(&mut egui::Ui)) {
+/// it is taller than the window. Folded away, nothing of it shows but the
+/// cards that float: `body` is then run out of sight, for those alone.
+/// `root` is the interface's own `Ui`, which that needs.
+pub fn panel(root: &mut egui::Ui, side: Side, folded: bool, body: &mut dyn FnMut(&mut egui::Ui)) {
+    let ctx = root.ctx().clone();
+    let width = side.width();
     if folded {
-        return;
+        return sculpt_toolkit::floating::only(root, side.name(), width - 20.0, body);
     }
     let screen = ctx.content_rect();
-    let width = side.width();
     let max_height = (screen.height() - 2.0 * MARGIN).max(300.0);
     let id = match side {
         Side::Left => "sculpt_panel",
         Side::Right => "scene_panel",
     };
-    egui::Area::new(Id::new(id)).order(Order::Middle).fade_in(false).fixed_pos(panel_origin(side, screen)).show(ctx, |ui| {
+    egui::Area::new(Id::new(id)).order(Order::Middle).fade_in(false).fixed_pos(panel_origin(side, screen)).show(&ctx, |ui| {
         // A floating area only offers its previous size; ask for the full
         // window height so the panel can grow with its content.
         ui.set_max_height(max_height);
@@ -265,6 +277,22 @@ mod tests {
         assert!(gizmo(s, true).left() > gizmo(s, false).left() + 200.0);
         assert!(bottom_bar_origin(s, true).x >= tab_rect(Side::Left, true, s).right());
         assert!(bottom_bar_origin(s, true).x < 50.0);
+    }
+
+    /// Floating cards are kept off a folded panel's tab, and have the whole
+    /// screen when no panel is folded.
+    #[test]
+    fn floating_cards_are_kept_off_the_folded_tabs() {
+        let s = screen(1600.0, 900.0);
+        assert_eq!(room_for_cards(s, [false, false]), s);
+        for folded in [[true, false], [false, true], [true, true]] {
+            let room = room_for_cards(s, folded);
+            for side in [Side::Left, Side::Right] {
+                let tab = tab_rect(side, folded[side.index()], s);
+                assert_eq!(room.intersects(tab.shrink(0.01)), !folded[side.index()], "{folded:?} {side:?}");
+            }
+            assert!(s.contains_rect(room) && room.width() >= 1600.0 - 2.0 * TAB_OUT_FOLDED);
+        }
     }
 
     /// A window too short for the tab's usual height still shows all of it,

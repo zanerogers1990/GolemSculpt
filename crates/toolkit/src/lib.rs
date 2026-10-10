@@ -12,6 +12,7 @@
 pub mod ctx;
 pub mod draw;
 pub mod example;
+pub mod floating;
 pub mod jobs;
 pub mod saved;
 pub mod scene;

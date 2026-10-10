@@ -52,6 +52,7 @@ pen last had (a mouse has no pressure and always sculpts at full strength).
 | Ctrl + N | New scene (asks first if anything would be lost) |
 | Tab | Clean view: nothing on screen but the model (Tab or Esc brings the panels back) |
 | (Arrow tab on a panel's inner edge) | Fold that panel away to the edge of the screen, or bring it back; sculpting carries on |
+| (Small window button in a card's header) | Float that card over the view; drag it by its title; the same button puts it back |
 | O | Spin the view round the model (turntable) |
 | F11 | Fullscreen |
 | Ctrl + = / Ctrl + - | Interface size |
@@ -953,9 +954,9 @@ pair; after that they can be moved apart and the joints stay on them.
   looks the object over first, and asks before writing one with holes in it
   (see Checking a model for printing).
 - **The app remembers how you left it**: interface size, tooltips on or off,
-  which cards are open, which panels are folded away, fullscreen, millimetres
-  or inches, the remesh settings, dynamic topology and every brush's tuning.
-  They are kept in
+  which cards are open, which float over the view and where, which panels
+  are folded away, fullscreen, millimetres or inches, the remesh settings,
+  dynamic topology and every brush's tuning. They are kept in
   `%APPDATA%\Sculpt\settings.json`, with the recent files; deleting that file
   puts everything back to how the app first starts.
 - **A crash does not take the session with it.** While the scene has changes
@@ -1342,7 +1343,7 @@ its wheel has no bar. (The Unity app's wheel had a Size slider there as well;
 this one has Strength only.)
 
 **Either panel folds away.** Each panel has a small arrow tab on its inner
-edge, level with the bottom of the view gizmo. Tap it and the whole panel
+edge, just under the view gizmo's buttons. Tap it and the whole panel
 goes, leaving only a slim tab at the edge of the screen; tap that and the
 panel is back as it was, cards and scrolling included. The two sides fold
 separately. Everything else stays: the view gizmo and the Tooltips / Flat
@@ -1353,6 +1354,38 @@ still hides everything, tabs included, and brings the panels back folded or
 not as they were. Which panels are folded is remembered between runs. There is
 no key for it. A tool whose panel is folded away still works from the
 viewport, its wheel and its keys; its settings are a tap on the tab away.
+
+**Any card floats.** Every card of both panels (Brushes, the brush's own
+settings, Stroke, Masking, Hidden Parts, Symmetry, Remesh, Objects, File,
+Material, Lighting and the rest), and every card of a tool's panel (Measure,
+Tube, Array, Lathe, Keys, the region tools, the SSphere cards, Measure &
+Size), has a small window button in its header, beside the arrow that opens
+and closes it. Tap it and the card leaves its panel for a window of its own
+beside it. It is the same card, not a copy: everything in it works as it did.
+
+- **Move it** by dragging its title with the pen. The window last touched is
+  on top, and floating cards always sit over the panels.
+- **Put it back** with the button in its top-right corner (the same picture,
+  with the arrow going in). It goes back to its place in its panel.
+- **It stays when its panel is folded away**: fold both panels and keep just
+  the two or three cards in use. Tab (the clean view) hides the floating
+  cards with everything else, and brings them back where they were.
+- **Nothing gets through it**: a press, a drag or the scroll wheel on a
+  floating card never reaches the model behind it.
+- **It cannot be lost.** A window is always drawn whole inside the app's
+  window, clear of a folded panel's tab. Make the app's window small, or the
+  interface large, and the card comes in with the edge; make room again and
+  it goes back to where you left it. A card taller than the window scrolls.
+- **It is remembered**: which cards float, and where, are kept in the
+  settings file with the rest. An entry there that makes no sense is skipped
+  and that card starts in its panel.
+- **A card shows when its panel would show it.** Brushes floats while you
+  sculpt and steps aside while a tool's panel is up; a tool's card (Tube,
+  say) floats while that tool is up, goes when the tool is put away and is
+  back in the same place the next time. Measure & Size and the other Scene
+  cards are there whatever tool is up. The settings card of the brush in
+  hand is one card whichever brush that is, and the two Symmetry cards (the
+  sculpt one and the SSphere one) share a place.
 
 ## What is here, and what is not yet
 
@@ -1373,8 +1406,9 @@ Ported from the Unity app, each described in its own section above:
   recent files, the turntable with its 360 loop as a video or as pictures,
   and the timelapse. Recovery copies against a crash are this app's own: the
   Unity app has none.
-- **Interface**: the two panels and the tabs that fold them away, the brush
-  wheel with its strength bar, the clean view, tooltips and interface size.
+- **Interface**: the two panels and the tabs that fold them away, cards that
+  float over the view, the brush wheel with its strength bar, the clean view,
+  tooltips and interface size.
 
 A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
 each start with a clear mask and everything showing.
@@ -1435,8 +1469,9 @@ sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-new   #
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)
-sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5> | fold=left / right / both (panels folded away)
-sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel, the panels' fold tabs), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window
+sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5> | fold=left / right / both (panels folded away) | float=<card>@<x>:<y> (that card floating, its corner there in the interface's points; as many as wanted)
+sculpt.exe --screenshot out.png --demo --demo-ui "fold=both,float=Brushes@60:40,float=Objects@700:60"   # two cards floating with both panels folded away (add --size 700x420 to see them follow a small window in)
+sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel, the panels' fold tabs, a card pulled out, dragged, kept through folded panels and put back), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
 SCULPT_UNDO_BYTES=1 sculpt.exe --screenshot out.png --demo   # undo's memory limit set in bytes (here to nothing): the second stroke lets the first go, and the line that says so is showing

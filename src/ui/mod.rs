@@ -100,8 +100,9 @@ pub fn build(
     if !doc.opts.clean_view {
         // Each panel, unless it is folded away, and the tab that folds it.
         let (tips, mut folded) = (doc.opts.tooltips, doc.opts.folded);
-        panels::panel(&ctx, Side::Left, folded[0], &mut |ui| sculpt_panel(ui, doc, state, &mut actions));
-        panels::panel(&ctx, Side::Right, folded[1], &mut |ui| scene_panel(ui, doc, state, &mut actions));
+        sculpt_toolkit::floating::set_room(&ctx, panels::room_for_cards(screen, folded));
+        panels::panel(ui, Side::Left, folded[0], &mut |ui| sculpt_panel(ui, doc, state, &mut actions));
+        panels::panel(ui, Side::Right, folded[1], &mut |ui| scene_panel(ui, doc, state, &mut actions));
         for side in [Side::Left, Side::Right] {
             let away = &mut folded[side.index()];
             *away ^= panels::tab(&ctx, side, *away, tips);
@@ -285,7 +286,8 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
     });
 
     let title = if s.mask_mode { "Mask Settings".to_owned() } else { format!("{} Settings", brush.name()) };
-    theme::category(ui, &title, Color32::from_rgb(89, 209, 230), "", true, |ui| {
+    // One card whatever brush is in hand: it floats under one name.
+    theme::category_as(ui, "Brush Settings", &title, Color32::from_rgb(89, 209, 230), "", true, |ui| {
         if s.mask_mode {
             theme::slider(ui, "Mask Hardness", &mut s.mask_hardness, 0.0..=1.0, |v| format!("{v:.2}"));
             theme::hint(ui, "Paint to protect. Ctrl or the right button erases.");
