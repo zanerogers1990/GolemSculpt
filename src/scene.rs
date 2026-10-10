@@ -23,8 +23,10 @@ use crate::mesh::bvh::Aabb;
 use crate::mesh::{Mesh, StrokeDelta};
 
 mod mirror;
+mod symmetry;
 
 pub use mirror::{MirrorCommand, saved_mirror};
+pub use symmetry::{Guides, Space, Symmetry, saved_symmetry};
 
 /// New shapes are this fraction of the top object's average half-size, as in
 /// the Unity app: on a par with what is there without being its twin.
@@ -135,6 +137,11 @@ pub struct Scene {
     /// By mesh. Only meshes that have been sculpted since they were built
     /// have one: until its first stroke a mesh is its own resting shape.
     baselines: HashMap<u64, Baseline>,
+    /// Each object's own symmetry settings, by object (see `symmetry.rs`,
+    /// which also says why they are here and not in `Object`). An object
+    /// without an entry has none set. An entry outlives its object, because
+    /// undo can bring the object back and it is a few bytes.
+    symmetry: HashMap<u64, Symmetry>,
 }
 
 fn duplicate(mesh: &Mesh) -> Mesh {
@@ -168,6 +175,7 @@ impl Scene {
             // The object the scene starts with counts as the first of its name.
             spawned: HashMap::from([(name.to_owned(), 1)]),
             baselines: HashMap::new(),
+            symmetry: HashMap::new(),
         }
     }
 
@@ -381,11 +389,13 @@ impl Scene {
         id
     }
 
-    /// An independent copy of the active object, on top of it.
+    /// An independent copy of the active object, on top of it, sculpted
+    /// under the same symmetry.
     pub fn clone_active(&mut self, slot: &mut Mesh) -> u64 {
         let source = self.active().clone();
         let id = self.add(&format!("{} Copy", source.name), duplicate(slot), slot);
         self.place_after(id, &source);
+        self.inherit_symmetry(source.id, id);
         id
     }
 
@@ -403,6 +413,8 @@ impl Scene {
         self.selected = vec![id];
         (self.brush, self.stroked) = (None, None);
         self.place_after(id, &source);
+        // The symmetry is the mesh's, whichever of its objects is selected.
+        self.inherit_symmetry(source.id, id);
         id
     }
 

@@ -129,6 +129,11 @@ impl Scene {
             }
             let row = self.index_of(source.id).map_or(self.objects.len(), |row| row + 1);
             self.move_to(new, row + made.len());
+            // Its own space is the object's reflected, and every mirror plane
+            // and X, Y or Z radial axis runs along an axis the reflection only
+            // negates: the same settings describe the same symmetry.
+            let symmetry = self.symmetry(source.id).reflected(bake.copy.signs);
+            self.place_symmetry(new, symmetry);
             made.push(new);
         }
         if let Some(object) = self.get_mut(id) {

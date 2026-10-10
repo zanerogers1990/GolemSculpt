@@ -49,18 +49,27 @@ impl SymOp {
     /// The stroke as it was made: the first copy of every list.
     pub const IDENTITY: SymOp = SymOp(SymmetryOp::IDENTITY);
 
-    /// Whether this copy lies across the plane facing `axis`. Only asked of
-    /// the copies of a stroke with no radial symmetry, which are all plain
-    /// mirror images; a turned copy is on neither side of a plane.
+    /// Whether this copy lies across the object's own plane facing `axis`.
+    /// Only asked of copies that are plain mirror images across those planes
+    /// (see [`Self::is_own_flip`]); a turned copy is on neither side of a
+    /// plane, and the planes of a symmetry fixed in the world are asked after
+    /// in `symmetry::Mirrors`.
     pub fn flips(self, axis: usize) -> bool {
         self.0.sign()[axis] < 0.0
     }
 
-    /// Symmetries here go through the object's origin, so a point and a
-    /// direction are mapped alike.
+    /// A mirror image across the object's own planes, through its own
+    /// origin: a per-axis sign flip and nothing else.
+    pub fn is_own_flip(self) -> bool {
+        self.0.diagonal && !self.0.has_offset()
+    }
+
+    /// A point of the mesh. A symmetry through the object's origin maps it
+    /// as it maps a direction; one fixed in the world also carries a shift,
+    /// which only points take (see `SymmetryOp::offset`).
     #[inline]
     pub fn apply_point(self, p: Vec3) -> Vec3 {
-        self.0.apply(p)
+        self.0.apply_point(p)
     }
 
     #[inline]

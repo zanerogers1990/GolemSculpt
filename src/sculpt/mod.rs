@@ -186,6 +186,11 @@ pub struct Settings {
     /// Strokes repeated round an axis, on top of the mirror axes (see
     /// `symmetry.rs`, which makes the two into a stroke's list of copies).
     pub radial: Radial,
+    /// `None` while the mirror planes and the radial axis are the sculpted
+    /// object's own, through its origin. When they are the world's instead
+    /// (its origin, its axes), this is where the object stands in it, which
+    /// is what carries them into the mesh's space.
+    pub symmetry_world: Option<sculpt_symmetry::Placement>,
     pub clay_depth: f32,
     pub clay_softness: f32,
     pub clay_relax: f32,
@@ -231,6 +236,7 @@ impl Default for Settings {
             pose: PoseSettings::default(),
             symmetry: [false; 3],
             radial: Radial::default(),
+            symmetry_world: None,
             clay_depth: 0.3,
             clay_softness: 0.6,
             clay_relax: 0.35,
@@ -391,6 +397,8 @@ struct Stroke {
     /// The walk over those copies when there are turns among them. Without,
     /// they are mirror images and `Sculptor::apply_symmetric` walks them.
     radial: Option<radial::Walk>,
+    /// The planes those mirror images lie across.
+    mirrors: symmetry::Mirrors,
     knots: Vec<Knot>,
     /// Index of the last knot the dabs have reached.
     done: usize,
@@ -618,9 +626,11 @@ impl Sculptor {
         rope.advance(sample.pos, 0.0, true, lazy, self.settings.lazy_radius, self.settings.lazy_strength);
         mesh.begin_stroke();
         let group = self.settings.symmetry_group();
+        let ops = symmetry::copies(&group);
         let mut stroke = Stroke {
             params,
-            ops: symmetry::copies(&group),
+            mirrors: symmetry::Mirrors::of(&self.settings, &ops),
+            ops,
             radial: radial::Walk::new(group),
             knots: Vec::new(),
             done: 0,
@@ -924,9 +934,11 @@ impl Sculptor {
     /// from the same starting state and averaged, which is symmetric by
     /// construction.
     ///
-    /// That is the walk over mirror images. With turns round a radial axis
-    /// among the copies they overlap near the axis instead, many at a time,
-    /// and `radial::Walk` has the walk for that.
+    /// That is the walk over mirror images, the same whether the planes are
+    /// the object's own or the world's (`symmetry::Mirrors` says which copy
+    /// lies across which plane, and how near a dab is to each). With turns
+    /// round a radial axis among the copies they overlap near the axis
+    /// instead, many at a time, and `radial::Walk` has the walk for that.
     fn apply_symmetric(mesh: &mut Mesh, stroke: &mut Stroke, dab: Dab) {
         let p = stroke.params;
         let reach = p.reach(&dab);
@@ -939,11 +951,8 @@ impl Sculptor {
             return walk.apply(mesh, &p, &dab, reach, &mut stroke.scratch);
         }
 
-        let mut near = [false; 3];
-        for axis in 0..3 {
-            let mirrored = stroke.ops.iter().any(|o| o.flips(axis));
-            near[axis] = mirrored && dab.center[axis].abs() < 1.5 * reach;
-        }
+        let mirrors = &stroke.mirrors;
+        let near = mirrors.near(dab.center, 1.5 * reach);
 
         let mut leaves: Vec<u32> = Vec::new();
         let mut handled = vec![false; stroke.ops.len()];
@@ -956,8 +965,8 @@ impl Sculptor {
                 .ops
                 .iter()
                 .enumerate()
-                .filter(|&(j, o)| {
-                    let same = (0..3).all(|a| near[a] || o.flips(a) == stroke.ops[i].flips(a));
+                .filter(|&(j, _)| {
+                    let same = (mirrors.across(j) ^ mirrors.across(i)) & !near == 0;
                     if same {
                         handled[j] = true;
                     }

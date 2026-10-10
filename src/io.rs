@@ -628,12 +628,12 @@ pub mod slot {
     /// [`super::Mirror`]: the brush mirror axes, radial symmetry and their guides.
     pub const MIRROR: &str = "mirror";
 
-    // Per object, under its row of the object list. `MIRROR_COPIES` is
-    // written and read by `scene/mirror.rs`; the others are for features that
-    // are still being ported: nothing writes them yet, the names are only
-    // spoken for.
-    /// An object's own symmetry settings (mirror axes, radial count, space).
-    #[allow(dead_code)]
+    // Per object, under its row of the object list. `SYMMETRY` is written and
+    // read by `scene/symmetry.rs` and `MIRROR_COPIES` by `scene/mirror.rs`;
+    // `ARRAY` is for a feature that is still being ported: nothing writes it
+    // yet, the name is only spoken for.
+    /// `scene::Symmetry`: an object's own mirror axes, radial symmetry and
+    /// whether they sit in its own space or the world's.
     pub const SYMMETRY: &str = "symmetry";
     /// A live array of the object: kind, count, handle points.
     #[allow(dead_code)]
@@ -706,6 +706,12 @@ impl Details {
     #[allow(dead_code)]
     pub fn get_object<T: DeserializeOwned>(&self, object: usize, slot: &str) -> Option<T> {
         T::deserialize(self.objects.get(object)?.get(slot)?).ok()
+    }
+
+    /// The same, with whatever the file lacks, or this version cannot read,
+    /// filled in from `base` (see [`read_over`]).
+    pub fn get_object_over<T: Serialize + DeserializeOwned>(&self, object: usize, slot: &str, base: &T) -> Option<T> {
+        read_over(base, self.objects.get(object)?.get(slot)?)
     }
 
     /// The JSON section of a file: the objects, then every part kept here.

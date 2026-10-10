@@ -20,13 +20,23 @@
 //! place. A custom axis tilted against a mirror plane makes a list that is
 //! not a closed group, and its copies are then applied one after another.
 //!
-//! All of it is in the sculpted object's own space, through its origin, as
-//! the mirror planes are. (The Unity app keeps these settings per object and
-//! can fix them in the world instead; here they are the scene's, like the
-//! mirror axes they sit beside.)
+//! The settings here are the sculptor's working copy. They belong to the
+//! object being sculpted (`scene::Symmetry`), and the scene hands them over
+//! before a stroke (`Scene::hand_symmetry_to`), so nothing in this module
+//! knows which object it is working on.
+//!
+//! The copies are always in the sculpted mesh's own space. A symmetry of the
+//! object's own (Local) goes through its origin along its axes, and a mirror
+//! image is then an exact sign flip. One fixed in the world (World,
+//! `Settings::symmetry_world`) is the same list built about the world's
+//! origin and axes and carried into the mesh's space through where the object
+//! stands (`SymmetryGroup::in_object_frame`): each copy then also shifts
+//! points, and on an object that is turned its mirror images are general
+//! reflections, equal to rounding rather than to the bit.
 
 use glam::Vec3;
 use sculpt_geom::SymmetryGroup;
+use sculpt_symmetry::Placement;
 use serde::{Deserialize, Serialize};
 
 use super::Settings;
@@ -150,6 +160,76 @@ pub(super) fn copies(group: &SymmetryGroup) -> Vec<SymOp> {
     group.iter().map(|&op| SymOp::from(op)).collect()
 }
 
+/// The mirror planes of a stroke with no turns in its symmetry, as the walk
+/// over mirrored copies needs them (`Sculptor::apply_symmetric`): which
+/// planes each copy lies across, and how far a dab is from each plane.
+///
+/// For the object's own planes that is read off the copies, which are sign
+/// flips, and the distance is a coordinate of the dab. The planes of a
+/// symmetry fixed in the world lie anywhere in the mesh's space once the
+/// object has been moved or turned, so there the copies' order says which
+/// plane is which (carrying a symmetry into an object's space keeps it), and
+/// the distance to a plane is half the way to the dab's image across it.
+#[derive(Default)]
+pub(super) struct Mirrors {
+    /// For each copy, in the order of `Stroke::ops`, the planes it lies
+    /// across from the stroke itself: X = 1, Y = 2, Z = 4.
+    across: Vec<u8>,
+    /// The copy across each plane alone, where the planes are not the
+    /// object's own.
+    placed: Option<[Option<SymOp>; 3]>,
+}
+
+impl Mirrors {
+    /// The planes behind `ops`, the copies of a stroke under `settings`.
+    /// Empty when there are turns among the copies: `radial::Walk` has those.
+    pub fn of(settings: &Settings, ops: &[SymOp]) -> Mirrors {
+        if settings.radial.repeats() >= Radial::MIN_COUNT {
+            return Mirrors::default();
+        }
+        let mask = |flips: [bool; 3]| flips[0] as u8 | (flips[1] as u8) << 1 | (flips[2] as u8) << 2;
+        if ops.iter().all(|op| op.is_own_flip()) {
+            let across = ops.iter().map(|op| mask([0, 1, 2].map(|axis| op.flips(axis)))).collect();
+            return Mirrors { across, placed: None };
+        }
+        // The same planes where they were built, about the world's origin:
+        // sign flips, in the order the copies in the mesh's space kept.
+        let [x, y, z] = settings.symmetry;
+        let world = SymmetryGroup::build(x, y, z, 1, Vec3::Y);
+        let across: Vec<u8> = world.iter().map(|op| mask([0, 1, 2].map(|axis| op.sign()[axis] < 0.0))).collect();
+        debug_assert_eq!(across.len(), ops.len());
+        let plane = |axis: usize| across.iter().position(|&m| m == 1 << axis).and_then(|k| ops.get(k).copied());
+        Mirrors { placed: Some([0, 1, 2].map(plane)), across }
+    }
+
+    /// The planes copy `k` lies across from the stroke itself.
+    #[inline]
+    pub fn across(&self, k: usize) -> u8 {
+        self.across[k]
+    }
+
+    /// The planes a dab at `centre` is closer to than `within`: its copies
+    /// across those can reach its own footprint.
+    pub fn near(&self, centre: Vec3, within: f32) -> u8 {
+        let mut near = 0;
+        for axis in 0..3 {
+            let bit = 1 << axis;
+            let from_plane = match &self.placed {
+                None if self.across.iter().any(|&m| m & bit != 0) => centre[axis].abs(),
+                Some(planes) => match planes[axis] {
+                    Some(op) => 0.5 * centre.distance(op.apply_point(centre)),
+                    None => continue,
+                },
+                None => continue,
+            };
+            if from_plane < within {
+                near |= bit;
+            }
+        }
+        near
+    }
+}
+
 /// `v` as a unit vector, or Y if it has no direction.
 fn unit_or_y(v: Vec3) -> Vec3 {
     if v.is_finite() && v.length_squared() > 1e-12 { v.normalize() } else { Vec3::Y }
@@ -157,10 +237,22 @@ fn unit_or_y(v: Vec3) -> Vec3 {
 
 impl Settings {
     /// Every copy a stroke is repeated as under the settings as they stand,
-    /// the stroke itself first.
+    /// the stroke itself first, in the sculpted mesh's own space.
     pub fn symmetry_group(&self) -> SymmetryGroup {
         let [x, y, z] = self.symmetry;
-        SymmetryGroup::build(x, y, z, self.radial.repeats(), self.radial.axis_vector())
+        let group = SymmetryGroup::build(x, y, z, self.radial.repeats(), self.radial.axis_vector());
+        match self.symmetry_world {
+            // One copy is the stroke itself, wherever the planes are.
+            Some(at) if group.len() > 1 => group.in_object_frame(at.rotation, at.position, &at.matrix().inverse()),
+            _ => group,
+        }
+    }
+
+    /// Takes on an object's symmetry: its mirror axes and radial symmetry,
+    /// and with `world` the place the object stands when those are the
+    /// world's rather than its own.
+    pub fn set_symmetry(&mut self, mirror: [bool; 3], radial: Radial, world: Option<Placement>) {
+        (self.symmetry, self.radial, self.symmetry_world) = (mirror, radial, world);
     }
 
     /// The same as the list a stroke keeps: what a stroke begun now would be
