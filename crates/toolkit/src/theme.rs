@@ -298,15 +298,46 @@ pub fn slider(
     readout: impl Fn(f32) -> String,
 ) -> Response {
     let width = ui.available_width();
-    let (rect, mut response) = ui.allocate_exact_size(vec2(width, 38.0), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, SLIDER_HEIGHT), Sense::click_and_drag());
+    slider_in(ui, rect, response, label, value, range, readout)
+}
+
+/// The height of a [`slider`]: its caption row and its track.
+pub const SLIDER_HEIGHT: f32 = 38.0;
+
+/// How far inside its rectangle a slider's track starts and ends, so the
+/// thumb never hangs over the edge.
+const SLIDER_INSET: f32 = 7.0;
+
+/// The value a slider takes for a pointer at `x`, on a track that runs from
+/// `left` to `right`: `min` at the left end and anywhere before it, `max` at
+/// the right end and anywhere past it. A track with no length gives `min`.
+pub fn slider_value(x: f32, left: f32, right: f32, min: f32, max: f32) -> f32 {
+    let span = right - left;
+    let t = if span > 0.0 && x.is_finite() { ((x - left) / span).clamp(0.0, 1.0) } else { 0.0 };
+    min + (max - min) * t
+}
+
+/// The [`slider`] painted in `rect`, moved by a `response` the caller
+/// allocated: for a slider that should answer a press anywhere on a larger
+/// plate around it, so a pen does not have to land on the thin track (the
+/// bars under the hold-Space wheels).
+pub fn slider_in(
+    ui: &Ui,
+    rect: Rect,
+    mut response: Response,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    readout: impl Fn(f32) -> String,
+) -> Response {
     let (min, max) = (*range.start(), *range.end());
     let track_y = rect.bottom() - 10.0;
-    let left = rect.left() + 7.0;
-    let right = rect.right() - 7.0;
+    let left = rect.left() + SLIDER_INSET;
+    let right = rect.right() - SLIDER_INSET;
     if let Some(pos) = response.interact_pointer_pos() {
         if response.is_pointer_button_down_on() {
-            let t = ((pos.x - left) / (right - left)).clamp(0.0, 1.0);
-            let new = min + (max - min) * t;
+            let new = slider_value(pos.x, left, right, min, max);
             if new != *value {
                 *value = new;
                 response.mark_changed();
@@ -418,5 +449,33 @@ pub fn count(n: usize) -> String {
         0..1_000 => n.to_string(),
         1_000..1_000_000 => format!("{:.0}k", n as f64 / 1e3),
         _ => format!("{:.2}M", n as f64 / 1e6),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The track's ends give the range's ends exactly, anywhere past an end
+    /// gives that end, and nothing a pointer can report gives a value that
+    /// is not a number.
+    #[test]
+    fn a_slider_maps_the_pointer_onto_its_range_and_stops_at_the_ends() {
+        let (left, right) = (100.0, 300.0);
+        let at = |x: f32| slider_value(x, left, right, 0.01, 1.0);
+        assert_eq!(at(left), 0.01);
+        assert_eq!(at(right), 1.0);
+        assert!((at(200.0) - 0.505).abs() < 1e-6);
+        assert!((at(250.0) - 0.7525).abs() < 1e-6);
+        assert_eq!(at(-5000.0), 0.01, "left of the track is the lowest value");
+        assert_eq!(at(5000.0), 1.0, "right of it is the highest");
+        assert_eq!(at(f32::NEG_INFINITY), 0.01);
+        assert_eq!(at(f32::NAN), 0.01, "a position that is not a number moves nothing above the lowest value");
+        // A range that runs the other way, or below zero, maps the same way.
+        assert_eq!(slider_value(150.0, left, right, -1.0, 1.0), -0.5);
+        assert_eq!(slider_value(150.0, left, right, 1.0, 0.0), 0.75);
+        // A track with no length, or one turned inside out, gives the lowest.
+        assert_eq!(slider_value(100.0, 100.0, 100.0, 0.01, 1.0), 0.01);
+        assert_eq!(slider_value(100.0, 300.0, 100.0, 0.01, 1.0), 0.01);
     }
 }

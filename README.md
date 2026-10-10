@@ -34,7 +34,7 @@ pen last had (a mouse has no pressure and always sculpts at full strength).
 | Delete | Delete the selected object (asks first) |
 | 1 2 3 4 5 6 7 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook |
 | S / F / D + drag | Brush size / strength / focal shift |
-| Space (hold) | Brush wheel |
+| Space (hold) | Brush wheel, with the brush's Strength on a bar under it |
 | M | Mask painting |
 | X | Mirror X |
 | R | Voxel remesh |
@@ -1323,6 +1323,22 @@ if that ever falls behind, a frame is dropped. Closing the app while recording
 still leaves a finished video. Needs Windows (it uses the video encoder
 Windows comes with).
 
+## The wheel, the panels and their cards
+
+**The brush wheel has a Strength bar under it.** Hold Space and the wheel
+comes up with a bar beneath it (above it, when the wheel is at the bottom of
+the window), the same as the size bar under the SSphere wheel. Press anywhere
+on the bar and drag along it: it sets the Strength of the brush in hand, the
+same Strength as the slider in the Sculpt panel and F + drag, remembered with
+that brush. The bar is named after the brush it belongs to ("Clay Strength"),
+and that is always the brush in hand, never the tile the pen happens to be
+over. A drag that starts on the bar never picks a tile, wherever it ends, and
+letting go of Space over the bar only closes the wheel. While painting a mask
+it reads "Mask Strength": a mask is painted at the strength of the brush under
+it, so that is the value it sets. The Pose brush makes no use of Strength, so
+its wheel has no bar. (The Unity app's wheel had a Size slider there as well;
+this one has Strength only.)
+
 ## What is here, and what is not yet
 
 Ported from the Unity app, each described in its own section above:
@@ -1342,8 +1358,8 @@ Ported from the Unity app, each described in its own section above:
   recent files, the turntable with its 360 loop as a video or as pictures,
   and the timelapse. Recovery copies against a crash are this app's own: the
   Unity app has none.
-- **Interface**: the two panels, the brush wheel, the clean view, tooltips
-  and interface size.
+- **Interface**: the two panels, the brush wheel with its strength bar, the
+  clean view, tooltips and interface size.
 
 A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
 each start with a clear mask and everything showing.
@@ -1404,6 +1420,8 @@ sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-new   #
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)
+sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5>
+sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
 SCULPT_UNDO_BYTES=1 sculpt.exe --screenshot out.png --demo   # undo's memory limit set in bytes (here to nothing): the second stroke lets the first go, and the line that says so is showing

@@ -1,5 +1,5 @@
 //! Things drawn over the viewport: the brush cursor, the view gizmo, the
-//! radial brush menu and the action toast.
+//! radial brush menu with the bar under it, and the action toast.
 
 use egui::{
     Align2, Color32, Id, LayerId, Order, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2,
@@ -224,6 +224,8 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
 
 /// Hold-Space wheel: the brushes when sculpting, the edit modes while the
 /// SSphere tool is up. Tiles are clicked; letting go of Space closes it.
+/// Under it is a bar for the one value worth setting from here: the brush's
+/// strength, or the next sphere's size.
 pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
     let Some(anchor) = state.radial else { return };
     let screen = ctx.content_rect();
@@ -319,7 +321,9 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
         });
     if spheres {
         // The size of the next sphere, set from under the wheel.
-        super::spheres::radial_slider(ctx, doc, center, 140.0, open);
+        super::spheres::radial_slider(ctx, doc, center, half, open);
+    } else {
+        strength_bar(ctx, &mut doc.sculptor.settings, center, half, open);
     }
     if let Some(i) = clicked {
         if spheres {
@@ -336,6 +340,83 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
         }
         state.radial = None;
     }
+}
+
+/// The size of the plate a wheel's bar sits on, and the gap between it and
+/// the wheel.
+const BAR_SIZE: Vec2 = vec2(236.0, theme::SLIDER_HEIGHT + 14.0);
+const BAR_GAP: f32 = 6.0;
+
+/// Where the bar that goes with a wheel sits: under the wheel, or above it
+/// when the wheel is too near the bottom of the window for the bar to fit.
+/// `center` is the wheel's centre and `radius` its outer radius.
+fn wheel_bar_rect(center: Pos2, radius: f32, screen: Rect) -> Rect {
+    let below = center.y + radius + BAR_GAP;
+    let top = if below + BAR_SIZE.y <= screen.bottom() { below } else { center.y - radius - BAR_GAP - BAR_SIZE.y };
+    Rect::from_min_size(pos2(center.x - BAR_SIZE.x * 0.5, top), BAR_SIZE)
+}
+
+/// The part of a wheel bar's plate the slider is painted in. The whole plate
+/// takes the press; the track runs a little inside this.
+fn wheel_bar_slider(plate: Rect) -> Rect {
+    Rect::from_min_max(plate.min + vec2(12.0, 6.0), plate.max - vec2(12.0, 8.0))
+}
+
+/// A slider that goes with a hold-Space wheel, so one value can be set
+/// without a trip to the panel: the next sphere's size under the SSphere
+/// wheel, the brush's strength under the brush wheel. A press anywhere on
+/// its plate sets the value and a drag follows the pointer, so a pen need
+/// not land on the thin track. `open` is how far the wheel has faded in
+/// (0 to 1). Returns whether the value changed.
+pub fn wheel_bar(
+    ctx: &egui::Context,
+    id: &str,
+    (center, radius, open): (Pos2, f32, f32),
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    readout: impl Fn(f32) -> String,
+) -> bool {
+    let plate = wheel_bar_rect(center, radius, ctx.content_rect());
+    let mut changed = false;
+    egui::Area::new(Id::new(id)).order(Order::Foreground).fixed_pos(plate.min).show(ctx, |ui| {
+        ui.multiply_opacity(open);
+        let (rect, response) = ui.allocate_exact_size(plate.size(), Sense::click_and_drag());
+        // The card colour of the panels, so the unfilled part of the track
+        // shows against it as it does there.
+        ui.painter().rect_filled(rect, 10.0, theme::CARD);
+        changed = theme::slider_in(ui, wheel_bar_slider(rect), response, label, value, range, readout).changed();
+    });
+    changed
+}
+
+/// The lowest and highest Strength a brush can have: the ends of the Sculpt
+/// panel's slider, of F + drag and of the bar under the wheel.
+const STRENGTH_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
+
+/// What the strength bar under the brush wheel is labelled, or `None` when
+/// there is nothing for it to set. The bar always belongs to the brush in
+/// hand, never to the tile the pointer happens to be over, so its label
+/// names that brush. Mask painting works at the strength of the brush under
+/// it, so the bar stays up for it. Pose alone makes no use of Strength, and
+/// a control that does nothing is not shown.
+fn strength_bar_label(s: &crate::sculpt::Settings) -> Option<String> {
+    if s.mask_mode {
+        Some("Mask Strength".to_owned())
+    } else if s.brush == Brush::Pose {
+        None
+    } else {
+        Some(format!("{} Strength", s.brush.name()))
+    }
+}
+
+/// The Strength bar under the brush wheel: the Strength of the brush in
+/// hand, the same value the Sculpt panel's slider and F + drag change.
+fn strength_bar(ctx: &egui::Context, s: &mut crate::sculpt::Settings, center: Pos2, radius: f32, open: f32) {
+    let Some(label) = strength_bar_label(s) else { return };
+    let strength = &mut s.current_mut().strength;
+    let percent = |v: f32| format!("{:.0}%", v * 100.0);
+    wheel_bar(ctx, "radial_strength", (center, radius, open), &label, strength, STRENGTH_RANGE, percent);
 }
 
 pub fn toast(ctx: &egui::Context, state: &mut UiState, time: f64) {
@@ -368,4 +449,107 @@ pub fn clean_hint(ctx: &egui::Context, text: &str, alpha: f32) {
     p.rect_filled(rect, 6.0, Color32::from_black_alpha((140.0 * alpha) as u8));
     p.text(rect.center(), Align2::CENTER_CENTER, text, theme::font(14.0), Color32::from_white_alpha((230.0 * alpha) as u8));
     ctx.request_repaint();
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Event, Modifiers, PointerButton};
+
+    use super::*;
+    use crate::sculpt::Settings;
+
+    const SCREEN: Rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1600.0, 900.0));
+
+    /// One frame of an interface with nothing in it but `ui`, fed `events`.
+    fn frame(ctx: &egui::Context, events: Vec<Event>, mut ui: impl FnMut(&egui::Context)) {
+        let input = egui::RawInput { screen_rect: Some(SCREEN), events, ..Default::default() };
+        ctx.run_ui(input, |root| ui(root.ctx())).drop_without_applying_deltas();
+    }
+
+    fn button(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::default() }
+    }
+
+    #[test]
+    fn the_strength_bar_belongs_to_the_brush_in_hand() {
+        let mut s = Settings::default();
+        s.brush = Brush::Clay;
+        assert_eq!(strength_bar_label(&s).as_deref(), Some("Clay Strength"));
+        s.brush = Brush::SnakeHook;
+        assert_eq!(strength_bar_label(&s).as_deref(), Some("Snake Hook Strength"));
+        // Pose makes no use of Strength: no bar that does nothing.
+        s.brush = Brush::Pose;
+        assert_eq!(strength_bar_label(&s), None);
+        // Mask painting works at the strength of the brush under it, Pose included.
+        s.mask_mode = true;
+        assert_eq!(strength_bar_label(&s).as_deref(), Some("Mask Strength"));
+        // The bar's ends are the ends a settings file is held to.
+        let mut kept = crate::prefs::BrushPrefs::of(&s);
+        for (written, read) in [(-3.0, *STRENGTH_RANGE.start()), (40.0, *STRENGTH_RANGE.end())] {
+            kept.brushes.get_mut("Clay").unwrap().strength = written;
+            kept.apply(&mut s);
+            assert_eq!(s.per_brush[Brush::Clay.index()].strength, read);
+        }
+    }
+
+    #[test]
+    fn a_wheel_bar_sits_under_its_wheel_or_above_it_at_the_bottom_of_the_window() {
+        let under = wheel_bar_rect(pos2(800.0, 400.0), 152.0, SCREEN);
+        assert_eq!(under.top(), 400.0 + 152.0 + BAR_GAP);
+        assert_eq!(under.center().x, 800.0);
+        assert_eq!(under.size(), BAR_SIZE);
+        // The wheel as low as it can open: the bar would hang off the window.
+        let above = wheel_bar_rect(pos2(800.0, 900.0 - 152.0), 152.0, SCREEN);
+        assert_eq!(above.bottom(), 900.0 - 304.0 - BAR_GAP);
+        // And the last place it still fits under.
+        let fits = wheel_bar_rect(pos2(800.0, 900.0 - 152.0 - BAR_GAP - BAR_SIZE.y), 152.0, SCREEN);
+        assert_eq!(fits.bottom(), 900.0);
+    }
+
+    /// A pen pressed anywhere on the bar's plate sets the value from where
+    /// it is along the track, a drag follows it past either end and no
+    /// further, and letting go changes nothing.
+    #[test]
+    fn a_press_and_drag_along_a_wheel_bar_sets_its_value() {
+        let ctx = egui::Context::default();
+        let wheel = (pos2(800.0, 400.0), 152.0, 1.0);
+        let plate = wheel_bar_rect(wheel.0, wheel.1, SCREEN);
+        let track = wheel_bar_slider(plate).shrink2(vec2(7.0, 0.0));
+        let mut value = 0.5;
+        // A frame of the bar alone; true when the bar says its value changed.
+        let run = |events: Vec<Event>, value: &mut f32| {
+            let mut changed = false;
+            frame(&ctx, events, |ctx| {
+                changed |= wheel_bar(ctx, "bar", wheel, "Strength", value, STRENGTH_RANGE, |v| format!("{v}"));
+            });
+            changed
+        };
+        // The bar takes a frame to size itself and one to be laid out.
+        assert!(!run(vec![], &mut value) && !run(vec![], &mut value));
+        assert_eq!(value, 0.5, "showing the bar changes nothing");
+
+        // Pressed on the plate's top edge, well off the thin track.
+        let press = pos2(track.left() + track.width() * 0.75, plate.top() + 1.0);
+        let pressed = run(vec![Event::PointerMoved(press), button(press, true)], &mut value);
+        assert!(pressed | run(vec![], &mut value));
+        assert!((value - 0.7525).abs() < 1e-4, "{value}");
+        let quarter = pos2(track.left() + track.width() * 0.25, plate.center().y);
+        assert!(run(vec![Event::PointerMoved(quarter)], &mut value));
+        assert!((value - 0.2575).abs() < 1e-4, "{value}");
+        // Off the plate altogether, still held: the ends hold.
+        run(vec![Event::PointerMoved(pos2(-50.0, 10.0))], &mut value);
+        assert_eq!(value, 0.01);
+        let far = pos2(1590.0, 890.0);
+        run(vec![Event::PointerMoved(far)], &mut value);
+        assert_eq!(value, 1.0);
+        let let_go = run(vec![button(far, false)], &mut value);
+        let moved = run(vec![Event::PointerMoved(quarter)], &mut value);
+        assert!(!let_go && !moved && value == 1.0, "nothing moves it once the pen is up");
+
+        // A press beside the plate is not the bar's.
+        let beside = pos2(plate.right() + 4.0, plate.center().y);
+        let pressed = run(vec![Event::PointerMoved(beside), button(beside, true)], &mut value);
+        let released = run(vec![button(beside, false)], &mut value);
+        assert!(!pressed && !released && value == 1.0);
+    }
 }

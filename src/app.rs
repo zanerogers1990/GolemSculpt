@@ -51,6 +51,7 @@ mod symmetry;
 pub(crate) mod tools;
 mod transform;
 mod undo;
+mod ui_demo;
 mod unity;
 mod unsaved;
 mod visibility;
@@ -132,6 +133,9 @@ pub struct Args {
     /// it: `check`, `closed`, `export`, `remesh`, `quads`, `damaged` or
     /// `play` (for visual checks; see app/print_check.rs).
     pub demo_print: Option<String>,
+    /// Set the interface up for a look, or work it and print a line per check:
+    /// a list such as `wheel,brush=Clay` or `play` (see app/ui_demo.rs).
+    pub demo_ui: Option<String>,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -143,7 +147,7 @@ impl Args {
     /// it must not take the keyboard from whoever is at the machine, nor the
     /// Claude bridge's port from the real app.
     fn records(&self) -> bool {
-        self.record_loop.is_some() || self.demo_timelapse.is_some()
+        self.record_loop.is_some() || self.demo_timelapse.is_some() || ui_demo::plays(self.demo_ui.as_deref())
     }
 }
 
@@ -235,6 +239,8 @@ struct Running {
     files: files::State,
     /// The copies kept against a crash (see app/recovery.rs).
     recovery: recovery::State,
+    /// The interface's self-check, while one runs (see app/ui_demo.rs).
+    ui_demo: ui_demo::State,
     args: Args,
 }
 
@@ -507,6 +513,7 @@ impl Running {
             recording: Default::default(),
             files: files::State::new(args.screenshot.is_some()),
             recovery,
+            ui_demo: Default::default(),
             args,
         };
         running.scene_changed();
@@ -573,6 +580,9 @@ impl Running {
         }
         if let Some(what) = running.args.demo_files.clone() {
             running.files_demo(&what);
+        }
+        if let Some(what) = running.args.demo_ui.clone() {
+            running.ui_demo(&what);
         }
         if let Some((yaw, pitch)) = running.args.view {
             // Every object in the picture, from the side asked for.
@@ -1656,6 +1666,7 @@ impl Running {
         self.tools_frame();
 
         // Interface.
+        self.ui_demo_frame(event_loop);
         self.egui_ctx.set_zoom_factor(self.doc.opts.ui_scale);
         let cursor = self.cursor();
         self.pose_frame();

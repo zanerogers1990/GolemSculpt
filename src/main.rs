@@ -180,6 +180,9 @@ fn window_options(args: &[String]) -> app::Args {
             "--demo-matcap" => opts.demo_matcap = it.next().map(PathBuf::from),
             // The printing check on a damaged object: check | closed | export | remesh | quads | damaged | play
             "--demo-print" => opts.demo_print = it.next().cloned(),
+            // The interface's own furniture, set up for a look or worked and checked:
+            // wheel | wheel=low | brush=<name> | mask | strength=<0..1> | size=<1.5> | play, with commas between.
+            "--demo-ui" => opts.demo_ui = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

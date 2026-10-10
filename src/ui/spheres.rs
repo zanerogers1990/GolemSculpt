@@ -373,30 +373,13 @@ pub fn radial_current(doc: &Doc) -> &'static str {
 /// to the panel. `center` is the wheel's centre, `radius` its outer radius
 /// and `open` how far it has faded in (0 to 1).
 pub fn radial_slider(ctx: &egui::Context, doc: &mut Doc, center: egui::Pos2, radius: f32, open: f32) {
-    const WIDTH: f32 = 236.0;
-    const HEIGHT: f32 = 38.0 + 14.0;
-    const GAP: f32 = 6.0;
-    // Under the wheel, or above it when the wheel is too near the bottom of
-    // the window for the slider to fit.
-    let below = center.y + radius + GAP;
-    let top = if below + HEIGHT <= ctx.content_rect().bottom() { below } else { center.y - radius - GAP - HEIGHT };
     let s = &mut doc.spheres;
-    egui::Area::new(egui::Id::new("radial_sphere_size"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(egui::pos2(center.x - WIDTH * 0.5, top))
-        .show(ctx, |ui| {
-            ui.multiply_opacity(open);
-            // The card colour of the panels, so the unfilled part of the
-            // track shows against it as it does there.
-            egui::Frame::new()
-                .fill(theme::CARD)
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 8 })
-                .show(ui, |ui| {
-                    ui.set_width(WIDTH - 24.0);
-                    if let Some(radius) = radius_slider(ui, "Next Sphere Size", s.next_radius()) {
-                        s.set_next_radius(radius);
-                    }
-                });
-        });
+    // As `radius_slider`: equal travel is an equal proportional change.
+    let mut log = s.next_radius().log2();
+    let range = MIN_NODE_RADIUS.log2()..=SLIDER_MAX_RADIUS.log2();
+    let readout = |v: f32| format!("{:.3}", v.exp2());
+    let wheel = (center, radius, open);
+    if super::overlay::wheel_bar(ctx, "radial_sphere_size", wheel, "Next Sphere Size", &mut log, range, readout) {
+        s.set_next_radius(log.exp2());
+    }
 }
