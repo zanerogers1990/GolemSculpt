@@ -628,8 +628,10 @@ pub mod slot {
     /// [`super::Mirror`]: the brush mirror axes and their guides.
     pub const MIRROR: &str = "mirror";
 
-    // Per object, for features that are still being ported: nothing writes
-    // these yet, the names are only spoken for.
+    // Per object, under its row of the object list. `MIRROR_COPIES` is
+    // written and read by `scene/mirror.rs`; the others are for features that
+    // are still being ported: nothing writes them yet, the names are only
+    // spoken for.
     /// An object's own symmetry settings (mirror axes, radial count, space).
     #[allow(dead_code)]
     pub const SYMMETRY: &str = "symmetry";
@@ -637,7 +639,6 @@ pub mod slot {
     #[allow(dead_code)]
     pub const ARRAY: &str = "array";
     /// Live mirror copies: axes, and the point their planes pass through.
-    #[allow(dead_code)]
     pub const MIRROR_COPIES: &str = "mirror_copies";
 }
 
@@ -1325,14 +1326,38 @@ fn nothing_to_export(mesh: &Mesh) -> Result<()> {
 /// own units (OBJ carries none) and the axes are left alone, because OBJ is
 /// right-handed with Y up, like this app. A quad-remeshed mesh goes out as its
 /// quads.
+#[allow(dead_code)] // the app writes placed copies (`export_obj_placed`); this is the one-place form
 pub fn export_obj(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
+    export_obj_placed(mesh, &[("", model)], path)
+}
+
+/// [`export_obj`] for a mesh drawn in several places at once (an object and
+/// its live mirror copies): one `o` block of its own for each, under the name
+/// it is given, so what reaches the other program is what is on screen. A
+/// single place is written as `export_obj` does, with no `o` line.
+pub fn export_obj_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> Result<()> {
     nothing_to_export(mesh)?;
     let io = |e: std::io::Error| format!("Could not write {}: {e}", path.display());
     let mut w = BufWriter::with_capacity(1 << 20, File::create(path).map_err(io)?);
     writeln!(w, "# Exported from Sculpt").map_err(io)?;
+    // OBJ numbers its vertices through the whole file, so each place carries
+    // on from the last.
+    let mut base = 0;
+    for &(name, model) in places {
+        if places.len() > 1 {
+            writeln!(w, "o {name}").map_err(io)?;
+        }
+        write_object(&mut w, mesh, model, base).map_err(io)?;
+        base += mesh.positions.len() as u32;
+    }
+    w.flush().map_err(io)
+}
+
+/// The vertices, normals and faces of `mesh` placed by `model`, numbered from `base`.
+fn write_object(w: &mut impl Write, mesh: &Mesh, model: Mat4, base: u32) -> std::io::Result<()> {
     for p in &mesh.positions {
         let q = model.transform_point3(*p);
-        writeln!(w, "v {} {} {}", q.x, q.y, q.z).map_err(io)?;
+        writeln!(w, "v {} {} {}", q.x, q.y, q.z)?;
     }
     // Normals go through the inverse transpose: a plain rotation would leave
     // them skewed against a surface that has been stretched.
@@ -1343,7 +1368,7 @@ pub fn export_obj(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
     if with_normals {
         for n in &mesh.normals {
             let q = (normal_matrix * *n).normalize_or_zero();
-            writeln!(w, "vn {:.5} {:.5} {:.5}", q.x, q.y, q.z).map_err(io)?;
+            writeln!(w, "vn {:.5} {:.5} {:.5}", q.x, q.y, q.z)?;
         }
     }
     // A negative scale mirrors the model and turns every face inside out.
@@ -1351,19 +1376,22 @@ pub fn export_obj(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
     if let Some(polys) = &mesh.polys {
         // A quad-remeshed mesh goes out as its quads, not as their halves.
         for f in polys.start.windows(2) {
-            write_face(&mut w, &polys.indices[f[0] as usize..f[1] as usize], mirrored, with_normals).map_err(io)?;
+            write_face(w, &polys.indices[f[0] as usize..f[1] as usize], mirrored, with_normals, base)?;
         }
     } else {
         for t in mesh.indices.chunks_exact(3) {
-            write_face(&mut w, t, mirrored, with_normals).map_err(io)?;
+            write_face(w, t, mirrored, with_normals, base)?;
         }
     }
-    w.flush().map_err(io)
+    Ok(())
 }
 
-fn write_face(w: &mut impl Write, corners: &[u32], reversed: bool, with_normals: bool) -> std::io::Result<()> {
+fn write_face(w: &mut impl Write, corners: &[u32], reversed: bool, with_normals: bool, base: u32) -> std::io::Result<()> {
     write!(w, "f")?;
-    let mut put = |i: u32| if with_normals { write!(w, " {0}//{0}", i + 1) } else { write!(w, " {}", i + 1) };
+    let mut put = |i: u32| {
+        let i = i + base + 1;
+        if with_normals { write!(w, " {i}//{i}") } else { write!(w, " {i}") }
+    };
     if reversed {
         for &i in corners.iter().rev() {
             put(i)?;
@@ -1381,34 +1409,44 @@ fn write_face(w: &mut impl Write, corners: &[u32], reversed: bool, with_normals:
 /// `sculpt_geom::units`, and turned from the app's Y up to STL's Z up (see the
 /// top of this file). Triangles keep their winding, so the surface stays
 /// outward-facing.
+#[allow(dead_code)] // as `export_obj`
 pub fn export_stl(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
+    export_stl_placed(mesh, &[model], path)
+}
+
+/// [`export_stl`] for a mesh drawn in several places at once (an object and
+/// its live mirror copies), all in the one file, as the model on screen.
+pub fn export_stl_placed(mesh: &Mesh, models: &[Mat4], path: &Path) -> Result<()> {
     nothing_to_export(mesh)?;
     let io = |e: std::io::Error| format!("Could not write {}: {e}", path.display());
     let mut w = BufWriter::with_capacity(1 << 20, File::create(path).map_err(io)?);
-    let points: Vec<Vec3> = mesh.positions.iter().map(|&p| to_stl(model.transform_point3(p))).collect();
-    let mirrored = Mat3::from_mat4(model).determinant() < 0.0;
     // Must not start with "solid", or readers that sniff the format by that
     // word take this binary file for an ASCII one.
     let mut header = [0u8; STL_HEADER];
     let note = b"Exported from Sculpt (millimetres, Z up)";
     header[..note.len()].copy_from_slice(note);
     w.write_all(&header).map_err(io)?;
-    w.write_all(&(mesh.triangle_count() as u32).to_le_bytes()).map_err(io)?;
-    for t in mesh.indices.chunks_exact(3) {
-        let (a, mut b, mut c) = (points[t[0] as usize], points[t[1] as usize], points[t[2] as usize]);
-        if mirrored {
-            (b, c) = (c, b);
-        }
-        // From the corners as written, so it cannot disagree with their order.
-        let normal = (b - a).cross(c - a).normalize_or_zero();
-        let mut facet = [0u8; STL_FACET];
-        for (slot, v) in [normal, a, b, c].iter().enumerate() {
-            for (axis, value) in v.to_array().iter().enumerate() {
-                let at = slot * 12 + axis * 4;
-                facet[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    let triangles = mesh.triangle_count() * models.len();
+    w.write_all(&(triangles as u32).to_le_bytes()).map_err(io)?;
+    for model in models {
+        let points: Vec<Vec3> = mesh.positions.iter().map(|&p| to_stl(model.transform_point3(p))).collect();
+        let mirrored = Mat3::from_mat4(*model).determinant() < 0.0;
+        for t in mesh.indices.chunks_exact(3) {
+            let (a, mut b, mut c) = (points[t[0] as usize], points[t[1] as usize], points[t[2] as usize]);
+            if mirrored {
+                (b, c) = (c, b);
             }
+            // From the corners as written, so it cannot disagree with their order.
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            let mut facet = [0u8; STL_FACET];
+            for (slot, v) in [normal, a, b, c].iter().enumerate() {
+                for (axis, value) in v.to_array().iter().enumerate() {
+                    let at = slot * 12 + axis * 4;
+                    facet[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            w.write_all(&facet).map_err(io)?;
         }
-        w.write_all(&facet).map_err(io)?;
     }
     w.flush().map_err(io)
 }

@@ -6,6 +6,7 @@ pub mod assets;
 mod brush_size;
 mod falloff;
 mod look;
+mod mirror_copies;
 mod overlay;
 pub mod question;
 mod scene_graph;

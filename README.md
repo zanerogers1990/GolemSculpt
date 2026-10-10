@@ -405,7 +405,7 @@ pair; after that they can be moved apart and the joints stay on them.
 
 - **Save / Open** use `.sclp`, which keeps the whole sculpt: every object
   (its exact mesh and mask, hidden faces, quads, name, position and
-  visibility; instances stay linked) and how it was left: the material and
+  visibility; instances stay linked; live mirrors stay on) and how it was left: the material and
   finish, lighting, HDRI, background and effects, the camera view and the
   mirror axes. Reopening a file puts all of it back. (An HDRI is kept as the
   path of its picture, not the picture.)
@@ -433,7 +433,10 @@ pair; after that they can be moved apart and the joints stay on them.
   instance exports as its own placed copy. The STL is binary, in millimetres,
   turned upright for a slicer (the model's up is the bed's Z, its front faces
   the front of the bed, nothing mirrored). The OBJ keeps the app's own units
-  and axes, and a quad-remeshed object goes out as its quads. The save box
+  and axes, and a quad-remeshed object goes out as its quads. The live mirror
+  copies of an object are part of the model on screen and go out with it: the
+  STL holds them all in one file, the OBJ writes each as an object of its own
+  ("Cube_MirrorX"). The save box
   offers `<object name>_<date>_<time>` as the file name. The size conversion
   lives in one place, `crates/geom/src/units.rs`.
 - **The app remembers how you left it**: interface size, tooltips on or off,
@@ -517,6 +520,23 @@ The **Objects** card at the top of the Scene panel is the scene graph.
 - **Clone** makes an independent copy. **Instance** makes a linked copy that
   shares the mesh (shown in blue): sculpt one and all change. **Make Unique**
   unlinks one.
+- **Mirror** (its own section, under Selected Object) gives the selected
+  object live copies of itself across the world's planes, through the world's
+  centre: tick X, Y and / or Z and press **Mirror**. There is one copy for each
+  combination of the ticked axes (X and Z make three: X, Z and XZ). A copy is
+  the object's own mesh drawn again, so every stroke, remesh or cut shows on
+  all of them, and moving, turning or resizing the object carries them with
+  it. Either side can be worked on: sculpt through whichever copy is under the
+  pointer, and with the Transform tool a click on a copy (or one of the
+  buttons under **The Transform gizmo is on**) puts the gizmo on that copy,
+  where dragging it moves the original the other way. A tick on an object that
+  is already mirrored changes its mirror at once, **Remove** takes the copies
+  away, and **Validate** turns them into objects of their own ("Cube Mirror
+  X"), exactly where they were shown. Each is one undo step. Mirrored objects
+  are amber in the list. The copies are framed with the model, saved in `.sclp`
+  files and written by the exports. A clone or an instance of a mirrored object
+  is not mirrored. Not here yet: a mask, trim or split shape drawn over a copy
+  (those see an object and its instances only).
 - Copies start on top of the original; **Position** and **Scale** place the
   selected one by numbers, and the Transform gizmo by hand.
 - Every one of these is an undo step, a Join or a boolean included (one
@@ -636,6 +656,7 @@ sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
 sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
 sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play | gizmo | gizmo-held | gizmo-play
+sculpt.exe --screenshot out.png --demo-mirror  # the sphere off centre, its live mirror on, strokes laid on the copy (SCULPT_DEMO_MIRROR=xz | gizmo | validate | front | back | play)
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)

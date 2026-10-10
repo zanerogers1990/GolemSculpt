@@ -92,6 +92,8 @@ fn main() {
             "--demo-tool" => opts.demo_tool = it.next().cloned(),
             // The blue selection flash, held at half strength on the active object.
             "--demo-flash" => opts.demo_flash = true,
+            // The sphere off the middle with its live mirror on and strokes on the copy.
+            "--demo-mirror" => opts.demo_mirror = true,
             // Half of the active object's faces hidden, cut on a slant.
             "--demo-hide" => opts.demo_hide = true,
             // rig | preview | skin | back | again | play

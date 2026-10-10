@@ -109,15 +109,31 @@ fn vs_mesh(in: VsIn) -> VsOut {
     out.local = in.position;
     out.is_active = in.model_w.w;
     // Normals go through the cofactors, so an unevenly scaled object still
-    // shades as the shape it now is.
+    // shades as the shape it now is. The cofactors carry the sign of the
+    // matrix's determinant: a mirror copy's, which is negative, would turn
+    // every normal inward.
     let n = in.normal;
-    out.normal = cross(y, z) * n.x + cross(z, x) * n.y + cross(x, y) * n.z;
+    out.normal = (cross(y, z) * n.x + cross(z, x) * n.y + cross(x, y) * n.z) * handedness(x, y, z);
     out.mask = in.mask;
     out.curv = in.curv;
     out.model_x = x;
     out.model_y = y;
     out.model_z = z;
     return out;
+}
+
+// +1 for an ordinary placement, -1 for one that mirrors (a live mirror copy
+// of an object is its mesh drawn through a reflection).
+fn handedness(x: vec3<f32>, y: vec3<f32>, z: vec3<f32>) -> f32 {
+    return select(1.0, -1.0, dot(x, cross(y, z)) < 0.0);
+}
+
+// Whether this fragment is on the outside of the surface. The hardware calls a
+// face "front" by the order its corners land on the screen, and a mirroring
+// matrix reverses that order for every face: the outer side of a mirror copy
+// would be taken for its inside. Undone here, from the matrix.
+fn is_front(in: VsOut, facing: bool) -> bool {
+    return facing == (handedness(in.model_x, in.model_y, in.model_z) > 0.0);
 }
 
 fn shading_normal(in: VsOut, front: bool) -> vec3<f32> {
@@ -132,8 +148,8 @@ fn shading_normal(in: VsOut, front: bool) -> vec3<f32> {
 
 // View-space normal + eye depth, read back by the cavity term.
 @fragment
-fn fs_prepass(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let n = shading_normal(in, front);
+fn fs_prepass(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
+    let n = shading_normal(in, is_front(in, facing));
     let vn = (g.view * vec4<f32>(n, 0.0)).xyz;
     let depth = dot(in.world - g.cam_pos.xyz, g.cam_forward.xyz);
     return vec4<f32>(vn, max(depth, 1e-6));

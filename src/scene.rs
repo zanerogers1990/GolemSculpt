@@ -1,6 +1,7 @@
 //! The scene: an ordered list of named objects. Each object is a placement of
 //! a mesh; instances are simply objects that share one mesh, so sculpting any
-//! of them changes all.
+//! of them changes all. An object can also have live mirror copies of itself:
+//! not objects, but its own mesh drawn again (see `mirror.rs`).
 //!
 //! The mesh of the active object does not live here. It is `Doc::mesh`, so
 //! the sculpting code always has the mesh it works on to hand. Every other
@@ -16,9 +17,14 @@ use std::collections::HashMap;
 
 use glam::{Mat3, Mat4, Quat, Vec3};
 use sculpt_geom::TriMesh;
+use sculpt_symmetry::MirrorRepeater;
 
 use crate::mesh::bvh::Aabb;
 use crate::mesh::{Mesh, StrokeDelta};
+
+mod mirror;
+
+pub use mirror::{MirrorCommand, saved_mirror};
 
 /// New shapes are this fraction of the top object's average half-size, as in
 /// the Unity app: on a par with what is there without being its twin.
@@ -37,6 +43,9 @@ pub struct Object {
     pub rotation: Quat,
     /// Size along the object's own axes.
     pub scale: Vec3,
+    /// Live mirror copies of the object across the world's planes, drawn from
+    /// its own mesh (see `scene/mirror.rs`). Not shared with instances.
+    pub mirror: Option<MirrorRepeater>,
 }
 
 impl Object {
@@ -64,6 +73,9 @@ pub struct Picked {
     /// Surface normal, facing the ray origin.
     #[allow(dead_code)]
     pub normal: Vec3,
+    /// Which of the object's live mirror copies the ray met, as its flip mask
+    /// (X = 1, Y = 2, Z = 4); 0 for the object itself.
+    pub copy: u8,
 }
 
 /// What becomes of the other selected objects once the active one has taken
@@ -103,11 +115,16 @@ pub struct Scene {
     /// Every mesh except the active object's.
     parked: HashMap<u64, Mesh>,
     next_id: u64,
-    /// The instance of the active mesh a stroke is going through, when that
-    /// is not the active object itself.
-    brush: Option<u64>,
+    /// The placement of the active mesh a stroke is going through, when that
+    /// is not the active object itself: an instance of it, or a live mirror
+    /// copy (the second number is the copy's flip mask, 0 for the object).
+    brush: Option<(u64, u8)>,
     /// The same for the last stroke, which the orbit pivot is measured from.
-    stroked: Option<u64>,
+    stroked: Option<(u64, u8)>,
+    /// Which side of the active object is selected when it is mirrored: the
+    /// flip mask of the live copy the gizmo is on, with the object it was
+    /// chosen for. Not an undo step; see `selected_side`.
+    side: Option<(u64, u8)>,
     local_view: Option<LocalView>,
     /// Visibility set with the hide keys or Local View. Those are not undo
     /// steps, so stepping across an older edit must not bring the old
@@ -135,6 +152,7 @@ impl Scene {
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
+            mirror: None,
         };
         Scene {
             objects: vec![first],
@@ -144,6 +162,7 @@ impl Scene {
             next_id: 3,
             brush: None,
             stroked: None,
+            side: None,
             local_view: None,
             shown: HashMap::new(),
             // The object the scene starts with counts as the first of its name.
@@ -269,6 +288,7 @@ impl Scene {
         }
         self.activate(id, slot);
         self.selected = vec![id];
+        self.side = None;
     }
 
     /// Every selected object, in the order they were picked. Never empty: the
@@ -323,12 +343,12 @@ impl Scene {
         }
     }
 
-    /// World bounds of everything selected.
+    /// World bounds of everything selected, live mirror copies included.
     pub fn selection_bounds(&self, slot: &Mesh) -> Aabb {
         self.selected
             .iter()
             .filter_map(|&id| self.get(id))
-            .fold(Aabb::EMPTY, |all, o| Aabb::union(all, self.bounds_of(o, slot)))
+            .fold(Aabb::EMPTY, |all, o| Aabb::union(all, self.shown_bounds_of(o, slot)))
     }
 
     /// Makes sure `mesh` is the one in the slot, selecting an object that
@@ -355,6 +375,7 @@ impl Scene {
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
+            mirror: None,
         });
         self.select(id, slot);
         id
@@ -376,7 +397,8 @@ impl Scene {
         // An instance of an instance is named after the original.
         let base = source.name.split(" Instance").next().unwrap_or(&source.name);
         let name = self.unique_name(&format!("{base} Instance"));
-        self.objects.push(Object { id, name, visible: true, ..source.clone() });
+        // The live mirror belongs to the object it was made for, not to its instances.
+        self.objects.push(Object { id, name, visible: true, mirror: None, ..source.clone() });
         self.active = id;
         self.selected = vec![id];
         (self.brush, self.stroked) = (None, None);
@@ -778,35 +800,66 @@ impl Scene {
         self.get(id).is_some_and(|o| o.mesh == self.active_mesh())
     }
 
-    fn placement(&self, id: Option<u64>) -> &Object {
+    /// Where a stroke is aimed, made safe: the object and which of its
+    /// placements (0, or the flip mask of one of its live mirror copies). An
+    /// aim that is no longer a placement of the active mesh is the active
+    /// object's own.
+    fn placement(&self, at: Option<(u64, u8)>) -> (&Object, u8) {
         let active = self.active();
-        id.and_then(|id| self.get(id)).filter(|o| o.mesh == active.mesh).unwrap_or(active)
+        let found = at.and_then(|(id, copy)| Some((self.get(id)?, copy)));
+        match found {
+            Some((o, copy)) if o.mesh == active.mesh && (copy == 0 || o.has_copy(copy)) => (o, copy),
+            _ => (active, 0),
+        }
     }
 
-    /// The placement a stroke under way maps the pointer through: the active
-    /// object, or the instance of it the stroke began on. An instance draws
+    /// The object a stroke under way maps the pointer through: the active
+    /// object, or the instance of it the stroke began on. (A live mirror copy
+    /// is a placement of its object: see `brush_matrix`.) An instance draws
     /// the very same mesh through its own placement, so sculpting through
     /// that placement edits exactly the vertices seen under the pointer.
     pub fn brush_object(&self) -> &Object {
-        self.placement(self.brush)
+        self.placement(self.brush).0
     }
 
-    /// The placement the last stroke went through.
+    /// The object the last stroke went through.
     pub fn stroke_object(&self) -> &Object {
-        self.placement(self.stroked)
+        self.placement(self.stroked).0
+    }
+
+    /// The matrix the stroke under way maps the pointer through: the
+    /// placement of the object it began on, mirror copies included.
+    pub fn brush_matrix(&self) -> Mat4 {
+        let (object, copy) = self.placement(self.brush);
+        object.placed_matrix(copy)
+    }
+
+    /// Which placement of `brush_object` the stroke under way is on: the flip
+    /// mask of its live mirror copy, 0 for the object itself.
+    pub fn brush_copy(&self) -> u8 {
+        self.placement(self.brush).1
+    }
+
+    /// The same for the last stroke, which the orbit pivot is measured from.
+    pub fn stroke_matrix(&self) -> Mat4 {
+        let (object, copy) = self.placement(self.stroked);
+        object.placed_matrix(copy)
     }
 
     /// Sends the stroke about to begin through `id`, a placement of the
     /// active mesh. It stays there until `release_brush`: an instance and its
     /// original can touch, and a stroke that crossed from one to the other
     /// must not change placement half way.
-    pub fn aim_brush(&mut self, id: u64) {
-        self.brush = (id != self.active && self.shows_active_mesh(id)).then_some(id);
+    /// `copy` is the flip mask of one of the object's live mirror copies, or 0
+    /// for the object itself.
+    pub fn aim_brush(&mut self, id: u64, copy: u8) {
+        let own = id == self.active && copy == 0;
+        self.brush = (!own && self.shows_active_mesh(id)).then_some((id, copy));
         self.stroked = self.brush;
     }
 
     /// The stroke is over: back to the active object's own placement. True
-    /// if it had been going through an instance.
+    /// if it had been going through an instance or a mirror copy.
     pub fn release_brush(&mut self) -> bool {
         self.brush.take().is_some()
     }
@@ -821,21 +874,15 @@ impl Scene {
             return b;
         }
         // The box around the mesh's own box, once that is turned and scaled.
-        let model = object.matrix();
-        let mut bounds = Aabb::EMPTY;
-        for corner in 0..8 {
-            let pick = |bit: usize, axis: usize| if corner >> bit & 1 == 0 { b.min[axis] } else { b.max[axis] };
-            bounds.grow(model.transform_point3(Vec3::new(pick(0, 0), pick(1, 1), pick(2, 2))));
-        }
-        bounds
+        mirror::box_through(b, &object.matrix())
     }
 
-    /// World bounds of everything shown.
+    /// World bounds of everything shown, live mirror copies included.
     pub fn bounds(&self, slot: &Mesh) -> Aabb {
         self.objects
             .iter()
             .filter(|o| o.visible)
-            .fold(Aabb::EMPTY, |all, o| Aabb::union(all, self.bounds_of(o, slot)))
+            .fold(Aabb::EMPTY, |all, o| Aabb::union(all, self.shown_bounds_of(o, slot)))
     }
 
     /// The nearest shown object along a world ray, and where the ray meets it.
@@ -853,16 +900,18 @@ impl Scene {
         let mut best: Option<(Picked, f32)> = None;
         for o in self.objects.iter().filter(|o| o.visible && wanted(o)) {
             let Some(mesh) = self.mesh(o.mesh, slot) else { continue };
-            // The ray in the object's own space, and the hit back out of it.
-            let model = o.matrix();
-            let inverse = model.inverse();
-            let local_dir = inverse.transform_vector3(dir).normalize_or(dir);
-            if let Some(hit) = mesh.raycast(inverse.transform_point3(origin), local_dir) {
-                let pos = model.transform_point3(hit.pos);
-                let along = (pos - origin).dot(dir);
-                if best.is_none_or(|(_, d)| along < d) {
-                    let normal = (Mat3::from_mat4(inverse).transpose() * hit.normal).normalize_or(hit.normal);
-                    best = Some((Picked { id: o.id, pos, normal }, along));
+            // The object itself, then each of its live mirror copies.
+            for (copy, model) in o.placements() {
+                // The ray in the placement's own space, and the hit back out of it.
+                let inverse = model.inverse();
+                let local_dir = inverse.transform_vector3(dir).normalize_or(dir);
+                if let Some(hit) = mesh.raycast(inverse.transform_point3(origin), local_dir) {
+                    let pos = model.transform_point3(hit.pos);
+                    let along = (pos - origin).dot(dir);
+                    if best.is_none_or(|(_, d)| along < d) {
+                        let normal = (Mat3::from_mat4(inverse).transpose() * hit.normal).normalize_or(hit.normal);
+                        best = Some((Picked { id: o.id, pos, normal, copy }, along));
+                    }
                 }
             }
         }
@@ -1236,12 +1285,12 @@ mod tests {
         // A stroke that begins on the instance goes through its placement,
         // and so does the pivot afterwards; the next press starts afresh.
         assert_eq!(scene.brush_object().id, a);
-        scene.aim_brush(twin);
+        scene.aim_brush(twin, 0);
         assert_eq!((scene.brush_object().id, scene.stroke_object().id), (twin, twin));
         scene.release_brush();
         assert_eq!((scene.brush_object().id, scene.stroke_object().id), (a, twin));
         // Another object is never a placement of this mesh.
-        scene.aim_brush(b);
+        scene.aim_brush(b, 0);
         assert_eq!((scene.brush_object().id, scene.stroke_object().id), (a, a));
     }
 

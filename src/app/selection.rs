@@ -310,16 +310,18 @@ impl Running {
     }
 
     /// Whether a press at `pos` is a stroke on the active mesh, given the
-    /// object under the pointer. If it is, the stroke is sent through the
-    /// placement of the mesh that was pressed: the active object or any
-    /// instance of it, which shows the same mesh somewhere else.
-    pub(super) fn press_on_active(&mut self, picked: Option<u64>, pos: Vec2) -> bool {
+    /// placement under the pointer (an object and which of its live mirror
+    /// copies, 0 for the object itself). If it is, the stroke is sent through
+    /// the placement of the mesh that was pressed: the active object, any
+    /// instance of it, or a mirror copy of either, which show the same mesh
+    /// somewhere else.
+    pub(super) fn press_on_active(&mut self, picked: Option<(u64, u8)>, pos: Vec2) -> bool {
         self.doc.scene.release_brush();
-        let on = |id: u64| self.doc.scene.shows_active_mesh(id).then_some(id);
-        let Some(target) = picked.and_then(|id| on(id).or_else(|| self.reach_past(pos))) else { return false };
+        let on = |at: (u64, u8)| self.doc.scene.shows_active_mesh(at.0).then_some(at);
+        let Some((target, copy)) = picked.and_then(|at| on(at).or_else(|| self.reach_past(pos))) else { return false };
         let doc = &mut self.doc;
-        doc.scene.aim_brush(target);
-        self.local = self.view.local_to(doc.scene.brush_object().matrix());
+        doc.scene.aim_brush(target, copy);
+        self.local = self.view.local_to(doc.scene.brush_matrix());
         // The shape Reset Shape goes back to is the one before this stroke.
         // Mask strokes move nothing.
         if !doc.sculptor.settings.mask_mode {
@@ -336,7 +338,7 @@ impl Running {
     /// counts when the mesh lies no more than a brush radius behind and shows
     /// through somewhere inside the brush ring. Returns the placement of the
     /// mesh the stroke should go through. The Unity app's rule.
-    fn reach_past(&self, pos: Vec2) -> Option<u64> {
+    fn reach_past(&self, pos: Vec2) -> Option<(u64, u8)> {
         let doc = &self.doc;
         let (scene, mesh) = (&doc.scene, doc.scene.active_mesh());
         let (origin, dir) = self.view.ray(pos);
@@ -353,28 +355,31 @@ impl Running {
             let at = pos + Vec2::new(angle.cos(), angle.sin()) * (ring * ring_no as f32 * 0.5);
             let (origin, dir) = self.view.ray(at);
             let seen = scene.pick(origin, dir, &doc.mesh)?;
-            scene.shows_active_mesh(seen.id).then_some(own.id)
+            scene.shows_active_mesh(seen.id).then_some((own.id, own.copy))
         })
     }
 
-    /// Whether the pointer is over the active mesh: the active object, or an
-    /// instance of it. Over an instance the brush cursor is worked out in
-    /// that instance's space until the view is next rebuilt, so the ring sits
-    /// on what is under the pointer. Runs each frame.
+    /// Whether the pointer is over the active mesh: the active object, an
+    /// instance of it, or a live mirror copy of either. Over one of those the
+    /// brush cursor is worked out in that placement's space until the view is
+    /// next rebuilt, so the ring sits on what is under the pointer. Runs each
+    /// frame.
     pub(super) fn hover_on_active(&mut self) -> bool {
-        let picked = self.pick(self.input.pointer);
+        let picked = self.pick_placed(self.input.pointer);
         if self.doc.sculptor.is_active() {
             // A stroke stays on the placement it began on.
-            return picked == Some(self.doc.scene.brush_object().id);
+            let scene = &self.doc.scene;
+            return picked == Some((scene.brush_object().id, scene.brush_copy()));
         }
         if self.doc.scene.release_brush() {
             self.local = self.view.local_to(self.doc.scene.active().matrix());
         }
         let scene = &self.doc.scene;
         let mesh = scene.active_mesh();
-        let Some(under) = picked.and_then(|id| scene.get(id)).filter(|o| o.mesh == mesh) else { return false };
-        if under.id != scene.active_id() {
-            self.local = self.view.local_to(under.matrix());
+        let Some((id, copy)) = picked else { return false };
+        let Some(under) = scene.get(id).filter(|o| o.mesh == mesh) else { return false };
+        if (id, copy) != (scene.active_id(), 0) {
+            self.local = self.view.local_to(under.placed_matrix(copy));
         }
         true
     }

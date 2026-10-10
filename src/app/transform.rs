@@ -16,6 +16,7 @@ use winit::event::MouseButton;
 use winit::keyboard::ModifiersState;
 
 use super::masked::Deform;
+use super::mirror_copies::{place_shown, shown_target};
 use super::{Drag, Running};
 use crate::doc::{Action, Tool};
 use crate::gizmo::{self, Frame, Handles, Orientation, Placement, Target};
@@ -84,7 +85,7 @@ pub(super) fn selection_targets(scene: &Scene, slot: &Mesh) -> (Vec<u64>, Vec<Ta
         .map(|o| {
             let bounds = scene.bounds_of(o, slot);
             let radius = if bounds.is_empty() { 0.5 } else { bounds.size().length() * 0.5 };
-            (o.id, Target::object(o, radius))
+            (o.id, shown_target(scene, o, radius))
         })
         .unzip()
 }
@@ -92,9 +93,7 @@ pub(super) fn selection_targets(scene: &Scene, slot: &Mesh) -> (Vec<u64>, Vec<Ta
 /// Puts each object where a drag has it. Ids that are gone are passed over.
 pub(super) fn place(scene: &mut Scene, ids: &[u64], placements: &[Placement]) {
     for (&id, placement) in ids.iter().zip(placements) {
-        if let Some(object) = scene.get_mut(id) {
-            placement.apply(object);
-        }
+        place_shown(scene, id, placement);
     }
 }
 
@@ -267,6 +266,7 @@ impl Running {
         // than a wish to deselect. Dragging orbits.
         if let Some(id) = self.pick(self.input.pointer) {
             self.transform_click(id);
+            self.mirror_click_side();
         }
         Drag::Orbit
     }
@@ -298,7 +298,7 @@ impl Running {
         };
         if std::mem::take(stale) {
             let doc = &mut self.doc;
-            deform.apply(&mut doc.mesh, doc.scene.active().matrix(), drag.world_delta());
+            deform.apply(&mut doc.mesh, doc.scene.shown_matrix(), drag.world_delta());
         }
     }
 
