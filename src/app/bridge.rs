@@ -455,6 +455,9 @@ impl Running {
             s.radial.axis = axis.ok_or("radial_axis is \"x\", \"y\" or \"z\". radial_custom_axis takes any other direction.")?;
         }
         if let Some(direction) = vec3(args, "radial_custom_axis")? {
+            if !(direction.is_finite() && direction.length_squared() > 1e-12) {
+                return Err("radial_custom_axis must point somewhere: it cannot be all zeros.".into());
+            }
             s.radial.set_custom_axis(direction);
         }
         Ok(self.brush_state().to_string())

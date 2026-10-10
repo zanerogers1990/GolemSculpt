@@ -10,7 +10,7 @@ mod overlay;
 pub mod question;
 mod scene_graph;
 mod spheres;
-pub mod symmetry;
+mod symmetry;
 pub mod theme;
 mod tools;
 

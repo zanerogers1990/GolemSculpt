@@ -150,6 +150,13 @@ impl Params {
         if self.mask { 24 } else { self.brush.max_dabs_per_frame() }
     }
 
+    /// Whether the brush raises the surface to a set height in one dab and
+    /// never past it (Layer). Copies of such a dab that overlap must not be
+    /// added up beyond what any one of them asked for; see `radial.rs`.
+    pub fn holds_a_height(&self) -> bool {
+        !self.mask && self.brush == Brush::Layer
+    }
+
     /// How far from a dab centre vertices can be affected.
     pub fn reach(&self, dab: &Dab) -> f32 {
         match (self.brush, dab.prev) {

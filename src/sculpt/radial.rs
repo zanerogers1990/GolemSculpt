@@ -23,13 +23,23 @@
 //! cost; where copies do not overlap it is exactly the plain walk. Where they
 //! do, a sum would stack them (Crease carving N times as deep at the pole), so
 //! it is divided by how many copies sit on top of each other (see
-//! [`Walk::multiplicity`]): N copies landing on one spot at the pole act as
-//! one dab, profile and all, rather than piling up N-fold. That is one number
+//! [`multiplicity`]): N copies landing on one spot at the pole act as one
+//! dab, profile and all, rather than piling up N-fold. That is one number
 //! for the whole set of copies, so it cannot favour one of them. (Dividing
 //! each vertex by the number of copies covering it was tried first in the
 //! Unity app. It turned N coincident dabs into a flat-topped mesa with a
 //! cliff where the cover fell below one, and Inflate amplified float noise on
 //! that cliff to 4% of the stroke.)
+//!
+//! A brush that holds a height needs one thing more. Layer raises the surface
+//! to a set height in a single dab and never past it. A dab a little off the
+//! axis has every copy covering the middle while the set counts as fewer
+//! (they only partly overlap), so the shared-out sum carried the middle half
+//! as high again as the brush allows, and Layer never takes anything back
+//! down. (The Unity app's Layer does exactly that within a radius of the
+//! axis.) For such a brush the shared-out move is also held to the furthest
+//! any one copy moved the vertex: what the copies would have left applied one
+//! after another, each only topping up the last, but with no order to it.
 //!
 //! Which copies can meet is a subgroup of the symmetry, and copies in
 //! different cosets of it never do (`SymmetryGroup::interacting_subgroup`), so
@@ -54,6 +64,15 @@ use crate::mesh::Mesh;
 /// vertex over the boundary within a frame.
 const INTERACTION_MARGIN: f32 = 1.5;
 
+/// What the copies of one set have done to a vertex between them.
+#[derive(Clone, Copy, Default)]
+struct Moved {
+    /// Their moves, added up.
+    sum: DVec3,
+    /// The square of the furthest any one of them moved it.
+    furthest: f32,
+}
+
 /// What a stroke with turns in its symmetry keeps between dabs: the symmetry
 /// itself, and the buffers its dabs work in (a footprint on a dense mesh is
 /// megabytes, and that costs more to get fresh for every dab than to fill).
@@ -69,10 +88,10 @@ pub struct Walk {
     ends: Vec<usize>,
     /// Every leaf the set reaches, ascending.
     leaves: Vec<u32>,
-    /// Where the vertices of `leaves` were before the dab, and how far the
-    /// copies have moved each between them.
+    /// Where the vertices of `leaves` were before the dab, and what the
+    /// copies have done to each between them.
     saved: Vec<Vec3>,
-    moved: Vec<DVec3>,
+    moved: Vec<Moved>,
 }
 
 impl Walk {
@@ -93,20 +112,24 @@ impl Walk {
     }
 
     /// Applies a dab and every copy of it. `reach` is the widest radius one
-    /// copy reads or writes vertices within.
+    /// copy reads or writes vertices within, which for Clay's swept tip is
+    /// more than the brush's radius.
     pub fn apply(&mut self, mesh: &mut Mesh, p: &Params, dab: &Dab, reach: f32, scratch: &mut Scratch) {
         // Mask amounts all have the same sign and saturate, so order does not
         // matter there.
         if !p.mask {
             // Two copies can meet when they land within the margin of each
-            // other's reach.
-            self.group.interacting_subgroup(dab.center, 2.0 * reach * INTERACTION_MARGIN, &mut self.subgroup);
+            // other. That is measured by the brush's radius, as is how much
+            // they overlap: a sweep makes a copy look further for its
+            // vertices, it does not put it any nearer its neighbours.
+            let within = 2.0 * p.radius * INTERACTION_MARGIN;
+            self.group.interacting_subgroup(dab.center, within, &mut self.subgroup);
         }
         if p.mask || self.subgroup.len() == 1 {
             return self.in_turn(mesh, p, dab, reach, scratch);
         }
         self.group.coset_representatives(&self.subgroup, &mut self.cosets);
-        let scale = 1.0 / self.multiplicity(dab.center, reach);
+        let scale = 1.0 / multiplicity(&self.group, &self.subgroup, dab.center, p.radius);
         for coset in 0..self.cosets.len() {
             self.together(mesh, p, dab, reach, self.cosets[coset], scale, scratch);
         }
@@ -178,7 +201,7 @@ impl Walk {
         let (starts, total) = kernels::layout(mesh, leaves);
         super::save(mesh, leaves, saved);
         moved.clear();
-        moved.resize(total, DVec3::ZERO);
+        moved.resize(total, Moved::default());
         let mut from = 0;
         for (&h, &end) in subgroup.iter().zip(ends.iter()) {
             let own = &reached[from..end];
@@ -191,33 +214,41 @@ impl Walk {
         }
         // Moves rather than positions, so a vertex no copy touched is not
         // written at all and keeps its position to the bit.
-        let (saved, moved) = (&*saved, &*moved);
+        let (saved, moved, holds) = (&*saved, &*moved, p.holds_a_height());
         mesh.move_vertices(leaves, |at, _| {
-            let sum = moved[at];
-            (sum != DVec3::ZERO).then(|| saved[at] + sum.as_vec3() * scale)
+            let Moved { sum, furthest } = moved[at];
+            if sum == DVec3::ZERO {
+                return None;
+            }
+            let mut step = sum.as_vec3() * scale;
+            // See the module's notes on a brush that holds a height.
+            let length = step.length_squared();
+            if holds && length > furthest {
+                step *= (furthest / length).sqrt();
+            }
+            Some(saved[at] + step)
         });
         mesh.positions_changed(leaves);
     }
+}
 
-    /// How many copies of the dab sit on top of each other. Each copy that
-    /// can meet the dab counts by how much of its footprint it shares with
-    /// it (the overlap of two discs of the dab's reach), so the answer is the
-    /// number of copies when they all land on one spot (the dab on the axis),
-    /// 1 when none overlap, and moves smoothly between the two as the dab
-    /// travels off the axis. A copy is as far from the first one whichever
-    /// coset it is in (the symmetries are rigid), so every copy of every
-    /// coset gets the same number.
-    fn multiplicity(&self, centre: Vec3, reach: f32) -> f32 {
-        let copies: f64 = self
-            .subgroup
-            .iter()
-            .map(|&h| {
-                let apart = centre.distance(self.group[h].apply_point(centre));
-                shared_disc((apart / (2.0 * reach)) as f64)
-            })
-            .sum();
-        copies.max(1.0) as f32
-    }
+/// How many copies of a dab at `centre` sit on top of each other, of the
+/// copies `subgroup` of `group` that can meet it. Each counts by how much of
+/// its footprint it shares with the dab (the overlap of two discs of the
+/// brush's radius), so the answer is the number of copies when they all land
+/// on one spot (the dab on the axis), 1 when none overlap, and moves smoothly
+/// between the two as the dab travels off the axis. A copy is as far from the
+/// first one whichever coset it is in (the symmetries are rigid), so every
+/// copy of every coset gets the same number.
+fn multiplicity(group: &SymmetryGroup, subgroup: &[usize], centre: Vec3, radius: f32) -> f32 {
+    let copies: f64 = subgroup
+        .iter()
+        .map(|&h| {
+            let apart = centre.distance(group[h].apply_point(centre));
+            shared_disc((apart / (2.0 * radius)) as f64)
+        })
+        .sum();
+    copies.max(1.0) as f32
 }
 
 /// The area two equal discs share when their centres are `u` diameters
@@ -232,27 +263,30 @@ fn shared_disc(u: f64) -> f64 {
     }
 }
 
-/// Adds how far every vertex of `own` has moved from `saved` to `moved`, and
-/// puts the vertex back. `own` is some of `leaves`, whose vertices `saved`
-/// and `moved` hold leaf after leaf, the leaf at `leaves[k]` from `starts[k]`.
+/// Adds what one copy did to every vertex of `own` to `moved`, measured from
+/// `saved`, and puts the vertex back. `own` is some of `leaves`, whose
+/// vertices `saved` and `moved` hold leaf after leaf, the leaf at `leaves[k]`
+/// from `starts[k]`.
 ///
 /// Added up in double. A vertex and its twin in another sector get the same
 /// moves in a different order, and float addition is not associative: with
 /// four terms or more the twins come out an ulp apart, a seed every brush
 /// that follows the normals then amplifies. A handful of floats adds up
 /// exactly in double, so the order stops mattering.
-fn bank(mesh: &mut Mesh, own: &[u32], leaves: &[u32], starts: &[usize], saved: &[Vec3], moved: &mut [DVec3]) {
+fn bank(mesh: &mut Mesh, own: &[u32], leaves: &[u32], starts: &[usize], saved: &[Vec3], moved: &mut [Moved]) {
     let ranges = &mesh.bvh.leaves;
     let owned = |leaf: u32| kernels::owned(&ranges[leaf as usize]);
     let place = |leaf: u32| leaves.binary_search(&leaf).map_or(0, |k| starts[k]);
     let total: usize = own.iter().map(|&leaf| owned(leaf).len()).sum();
     let live = kernels::stretches(&mut mesh.positions, own.iter().map(|&leaf| owned(leaf)));
     let sums = kernels::stretches(moved, own.iter().map(|&leaf| place(leaf)..place(leaf) + owned(leaf).len()));
-    let work: Vec<(&mut [Vec3], &mut [DVec3], usize)> =
+    let work: Vec<(&mut [Vec3], &mut [Moved], usize)> =
         live.into_iter().zip(sums).zip(own).map(|((live, sums), &leaf)| (live, sums, place(leaf))).collect();
-    let settle = |(live, sums, at): (&mut [Vec3], &mut [DVec3], usize)| {
-        for ((pos, sum), &before) in live.iter_mut().zip(sums.iter_mut()).zip(&saved[at..]) {
-            *sum += (*pos - before).as_dvec3();
+    let settle = |(live, sums, at): (&mut [Vec3], &mut [Moved], usize)| {
+        for ((pos, moved), &before) in live.iter_mut().zip(sums.iter_mut()).zip(&saved[at..]) {
+            let step = *pos - before;
+            moved.sum += step.as_dvec3();
+            moved.furthest = moved.furthest.max(step.length_squared());
             *pos = before;
         }
     };
@@ -348,5 +382,50 @@ impl Held {
             pull /= total;
         }
         pull.as_vec3()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discs_share_all_of_themselves_at_no_distance_and_nothing_a_diameter_apart() {
+        assert_eq!(shared_disc(0.0), 1.0);
+        assert_eq!(shared_disc(1.0), 0.0);
+        assert_eq!(shared_disc(7.0), 0.0);
+        // Half a diameter apart: 2/3 - sqrt(3) / (2 pi) of a disc.
+        assert!((shared_disc(0.5) - (2.0 / 3.0 - 3f64.sqrt() / std::f64::consts::TAU)).abs() < 1e-12);
+        let mut last = 1.0;
+        for step in 1..=100 {
+            let shared = shared_disc(step as f64 / 100.0);
+            assert!(shared < last && shared >= 0.0, "it only ever falls with distance");
+            last = shared;
+        }
+    }
+
+    /// The number the copies' sum is divided by: the count of copies when
+    /// they land on one spot, 1 when none touch, and in between by how much
+    /// of the brush's own disc they share, whatever the dab's reach was.
+    #[test]
+    fn multiplicity_counts_copies_by_how_much_they_overlap() {
+        let radius = 0.1;
+        let off_axis = |from_axis: f32| Vec3::new(from_axis, 0.3, 0.0);
+        for repeats in [2u32, 3, 8, 32] {
+            let group = SymmetryGroup::build(false, false, false, repeats, Vec3::Y);
+            let every: Vec<usize> = (0..group.len()).collect();
+            assert_eq!(multiplicity(&group, &every, off_axis(0.0), radius), repeats as f32, "all on one spot");
+            assert_eq!(multiplicity(&group, &every, off_axis(40.0 * radius), radius), 1.0, "none touching");
+            let near = multiplicity(&group, &every, off_axis(0.3 * radius), radius);
+            let further = multiplicity(&group, &every, off_axis(0.6 * radius), radius);
+            assert!(near < repeats as f32 && further < near && further > 1.0, "x{repeats}: {near} then {further}");
+        }
+        // Two copies half a radius either side of the axis are half a
+        // diameter apart: the dab itself, and 0.391 of its copy.
+        let pair = SymmetryGroup::build(false, false, false, 2, Vec3::Y);
+        let both = multiplicity(&pair, &[0, 1], off_axis(0.5 * radius), radius);
+        assert!((both - 1.391).abs() < 1e-3, "{both}");
+        // Copies that do not meet are not asked about: the dab alone is 1.
+        assert_eq!(multiplicity(&pair, &[0], off_axis(0.5 * radius), radius), 1.0);
     }
 }

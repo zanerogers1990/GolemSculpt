@@ -125,7 +125,8 @@ fn mirror_only_strokes_keep_the_copies_they_always_had() {
     };
     // Radial symmetry set up but switched off, or on with a count that means
     // off, changes nothing.
-    let off = [(false, 8), (true, 0), (true, 1)].map(|(on, count)| Radial { on, count, axis: RadialAxis::X, custom_axis: Vec3::ONE });
+    let off = [(false, 8), (true, 0), (true, 1)]
+        .map(|(on, count)| Radial { on, count, axis: RadialAxis::X, custom_axis: Vec3::ONE });
     for mask in 0..24usize {
         let mut settings = Settings::default();
         settings.symmetry = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0];
@@ -159,6 +160,70 @@ fn mirror_only_strokes_keep_the_copies_they_always_had() {
     }
 }
 
+// ------------------------------------------------------------- the settings
+
+#[test]
+fn the_custom_axis_takes_any_real_direction_and_nothing_else() {
+    let mut radial = Radial::default();
+    assert_eq!((radial.axis, radial.axis_vector()), (RadialAxis::Y, Vec3::Y));
+    radial.set_custom_axis(Vec3::new(0.0, 0.0, -4.0));
+    assert_eq!((radial.axis, radial.custom_axis, radial.axis_vector()), (RadialAxis::Custom, Vec3::NEG_Z, Vec3::NEG_Z));
+    // What From View would hand over looking at nothing: left as it was.
+    for bad in [Vec3::ZERO, Vec3::new(f32::NAN, 1.0, 0.0), Vec3::new(0.0, f32::INFINITY, 0.0)] {
+        radial.set_custom_axis(bad);
+        assert_eq!(radial.custom_axis, Vec3::NEG_Z, "{bad}");
+    }
+    // A custom axis that is no direction (a file edited by hand) is Y when used.
+    radial.custom_axis = Vec3::ZERO;
+    assert_eq!(radial.axis_vector(), Vec3::Y);
+    // Choosing X, Y or Z leaves the custom axis for next time.
+    radial.custom_axis = Vec3::new(0.0, 3.0, 4.0);
+    radial.axis = RadialAxis::X;
+    assert_eq!(radial.axis_vector(), Vec3::X);
+    radial.axis = RadialAxis::Custom;
+    assert!(radial.axis_vector().distance(Vec3::new(0.0, 0.6, 0.8)) < 1e-6);
+}
+
+#[test]
+fn the_viewport_guide_follows_the_settings() {
+    let mut radial = Radial::default();
+    assert_eq!(radial.guide(), None, "no guide with radial symmetry off");
+    radial.on = true;
+    // Y, eight spokes, the first along X, in the Y axis colour.
+    assert_eq!(radial.guide(), Some(([0.0, 1.0, 0.0, 8.0], [1.0, 0.0, 0.0, 1.0])));
+    for (count, spokes) in [(0, None), (1, None), (2, Some(2.0)), (32, Some(32.0)), (900, Some(32.0))] {
+        radial.count = count;
+        assert_eq!(radial.guide().map(|(axis, _)| axis[3]), spokes, "{count} repeats");
+    }
+    radial.count = 5;
+    for (axis, color) in [(RadialAxis::X, 0.0), (RadialAxis::Y, 1.0), (RadialAxis::Z, 2.0), (RadialAxis::Custom, 3.0)] {
+        radial.axis = axis;
+        radial.custom_axis = Vec3::new(0.3, -0.8, 0.5);
+        let (along, spoke) = radial.guide().unwrap();
+        let (along, first) = (Vec3::from_slice(&along), Vec3::from_slice(&spoke));
+        assert_eq!(spoke[3], color);
+        assert!(along.distance(radial.axis_vector()) < 1e-6);
+        assert!((first.length() - 1.0).abs() < 1e-5 && first.dot(along).abs() < 1e-5, "{axis:?}: the first spoke is {first}");
+    }
+    // Straight down is as far from Y as an axis gets, and still has spokes.
+    radial.custom_axis = Vec3::NEG_Y;
+    let (along, spoke) = radial.guide().unwrap();
+    assert!(Vec3::from_slice(&spoke).dot(Vec3::from_slice(&along)).abs() < 1e-5 && spoke.iter().all(|c| c.is_finite()));
+}
+
+#[test]
+fn the_card_header_names_what_is_on() {
+    let mut settings = Settings::default();
+    assert_eq!(settings.symmetry_summary(), "Off");
+    settings.symmetry = [true, false, true];
+    assert_eq!(settings.symmetry_summary(), "X + Z");
+    settings.radial.on = true;
+    assert_eq!(settings.symmetry_summary(), "X + Z + Radial 8");
+    settings.symmetry = [false; 3];
+    settings.radial.count = 12;
+    assert_eq!(settings.symmetry_summary(), "Radial 12");
+}
+
 // ----------------------------------------------------------------- the ball
 
 // The mesh the radial tests sculpt: a ball of rings whose vertex counts
@@ -179,13 +244,38 @@ const BALL_RADIUS: f32 = 0.5;
 const BRUSH_RADIUS: f32 = 0.06;
 const STROKE_FRAMES: usize = 16;
 
-// How far apart a vertex and its partner may end up: a fraction of the
-// stroke's own displacement, plus a floor. The floor is the size of the step
-// Clay's finishing pass leaves out as too small to see (`clay_relax`): a
-// vertex a hair over it moves while its twin, a hair under, stays.
-const RELATIVE_TOLERANCE: f32 = 1e-4;
-const ABSOLUTE_TOLERANCE: f32 = BALL_RADIUS / 4000.0;
-const RELATIVE_TOLERANCE_FRONT_FACING: f32 = 2e-2;
+/// How far apart a vertex and its partner may end up: a fraction of the
+/// furthest the stroke moved anything, plus a floor.
+#[derive(Clone, Copy)]
+struct Tolerance {
+    relative: f32,
+    floor: f32,
+}
+
+impl Tolerance {
+    /// The Unity tests' own: a ten-thousandth of the stroke, and a floor the
+    /// size of the step Clay's finishing pass leaves out as too small to see
+    /// (`clay_relax`): a vertex a hair over it moves while its twin, a hair
+    /// under, stays. Clay, and anything with Clay in it, is held to this.
+    const CLAY: Tolerance = Tolerance { relative: 1e-4, floor: BALL_RADIUS / 4000.0 };
+    /// No brush but Clay has such a step, and that floor is several percent
+    /// of what Smooth or Flatten move at all, as much as copies applied one
+    /// after another would leave between sectors. The others are held to a
+    /// two-thousandth of the stroke. (Inflate through the pole uses half of
+    /// that: it follows the normals, which carry rounding from frame to frame.)
+    const OTHERS: Tolerance = Tolerance { relative: 5e-4, floor: 2e-6 };
+    /// With Front Facing Only each copy is judged from its own turned
+    /// viewpoint, and the gate's ramp is steep: the Unity tests allow 2%.
+    const FRONT_FACING: Tolerance = Tolerance { relative: 2e-2, floor: BALL_RADIUS / 4000.0 };
+
+    fn of(brush: Brush) -> Tolerance {
+        if brush == Brush::Clay { Tolerance::CLAY } else { Tolerance::OTHERS }
+    }
+
+    fn allows(self, displacement: f32) -> f32 {
+        self.relative * displacement + self.floor
+    }
+}
 
 /// Which vertex is where: ring `r` (1 to RINGS - 1) has `ring_count[r]`
 /// vertices from `ring_start[r]`; band `b`, between rings `b` and `b + 1`, has
@@ -204,7 +294,12 @@ impl Layout {
     /// that keeps the edge along the ring no shorter than the edge between
     /// rings.
     fn new() -> Layout {
-        let mut layout = Layout { ring_count: vec![0; RINGS], ring_start: vec![0; RINGS], centre_start: vec![None; RINGS], vertices: 2 };
+        let mut layout = Layout {
+            ring_count: vec![0; RINGS],
+            ring_start: vec![0; RINGS],
+            centre_start: vec![None; RINGS],
+            vertices: 2,
+        };
         for ring in 1..RINGS {
             let fit = 2.0 * RINGS as f64 * (std::f64::consts::PI * ring as f64 / RINGS as f64).sin();
             let mut count = BASE_COUNT;
@@ -426,8 +521,13 @@ const STROKE_AZIMUTH: f32 = 0.37;
 /// `from_axis` away from the Y axis and crossing that spot at a slant, one
 /// point per frame.
 fn stroke_points(from_axis: f32, frames: usize) -> Vec<Vec3> {
+    stroke_points_at(from_axis, STROKE_AZIMUTH, frames)
+}
+
+/// The same at another angle round Y.
+fn stroke_points_at(from_axis: f32, azimuth: f32, frames: usize) -> Vec<Vec3> {
     let polar = (from_axis / BALL_RADIUS).clamp(0.0, 1.0).asin();
-    let centre = Vec3::new(polar.sin() * STROKE_AZIMUTH.cos(), polar.cos(), polar.sin() * STROKE_AZIMUTH.sin());
+    let centre = Vec3::new(polar.sin() * azimuth.cos(), polar.cos(), polar.sin() * azimuth.sin());
     let across = centre.cross(Vec3::new(0.3, 0.2, 1.0)).normalize();
     (0..frames)
         .map(|f| point_on_ball((centre + across * (0.012 * (f as f32 - STROKE_FRAMES as f32 * 0.5))).normalize()))
@@ -526,13 +626,13 @@ impl Symmetry {
     }
 }
 
-fn assert_symmetric(label: &str, ball: &Ball, partners: &[(SymmetryOp, Vec<u32>)], relative: f32) {
+fn assert_symmetric(label: &str, ball: &Ball, partners: &[(SymmetryOp, Vec<u32>)], tolerance: Tolerance) {
     let pair = pair_error(&ball.mesh, partners);
     let displacement = ball.displacement();
     let report = format!("{label}: pair {pair:.2e}, displacement {displacement:.3e}");
     println!("{report}");
     assert!(displacement > 5e-5, "{report}: the stroke barely moved the mesh, so symmetry would prove nothing");
-    let allowed = relative * displacement + ABSOLUTE_TOLERANCE;
+    let allowed = tolerance.allows(displacement);
     assert!(pair <= allowed, "{report}: allowed {allowed:.2e}");
 }
 
@@ -563,7 +663,8 @@ fn a_radial_stroke_stays_symmetric() {
                 symmetry.set(&mut sculptor.settings);
                 let points = stroke_points(radii_from_axis * BRUSH_RADIUS, STROKE_FRAMES);
                 let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
-                assert_symmetric(&format!("{tip:?} {symmetry:?} {radii_from_axis}r"), &ball, &partners, RELATIVE_TOLERANCE);
+                let label = format!("{tip:?} {symmetry:?} {radii_from_axis}r");
+                assert_symmetric(&label, &ball, &partners, Tolerance::of(tip.brush()));
                 ball.undo(delta);
             }
         }
@@ -583,7 +684,8 @@ fn a_radial_stroke_with_front_facing_only_stays_symmetric() {
             sculptor.settings.current_mut().front_facing = true;
             let points = stroke_points(radii_from_axis * BRUSH_RADIUS, STROKE_FRAMES);
             let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
-            assert_symmetric(&format!("{tip:?} front facing {radii_from_axis}r"), &ball, &partners, RELATIVE_TOLERANCE_FRONT_FACING);
+            let label = format!("{tip:?} front facing {radii_from_axis}r");
+            assert_symmetric(&label, &ball, &partners, Tolerance::FRONT_FACING);
             ball.undo(delta);
         }
     }
@@ -593,6 +695,11 @@ fn a_radial_stroke_with_front_facing_only_stays_symmetric() {
 /// stacked ones: a stroke across the pole moves the surface about as far with
 /// 12 repeats as with none, where applying the copies one after another
 /// would have moved it up to 12 times as far.
+///
+/// The Unity test allows up to twice as far. This app's brushes limit
+/// themselves within a stroke, so twelve stacked copies come out at 1.6 to
+/// 1.9 times here, not twelve; one and a half is the line that tells one dab
+/// from twelve.
 #[test]
 fn coincident_copies_at_the_pole_act_as_one_dab() {
     let mut ball = Ball::new();
@@ -612,7 +719,7 @@ fn coincident_copies_at_the_pole_act_as_one_dab() {
         let (single, radial) = (displacement(None), displacement(Some(RADIAL_12)));
         let report = format!("{tip:?}: no symmetry {single:.3e}, radial 12 {radial:.3e} ({:.2}x)", radial / single);
         println!("{report}");
-        assert!((0.5..=2.0).contains(&(radial / single)), "{report}");
+        assert!((0.5..=1.5).contains(&(radial / single)), "{report}");
     }
 }
 
@@ -639,7 +746,7 @@ fn more_copies_than_a_frame_of_clay_usually_has_do_not_stall() {
 fn stroke_and_check(ball: &mut Ball, view: &View, sculptor: &mut Sculptor, from_axis: f32, label: &str) {
     let partners = ball.partners_under(&sculptor.settings.symmetry_group());
     let delta = stroke_through(&mut ball.mesh, sculptor, view, &stroke_points(from_axis, STROKE_FRAMES));
-    assert_symmetric(label, ball, &partners, RELATIVE_TOLERANCE);
+    assert_symmetric(label, ball, &partners, Tolerance::of(sculptor.settings.brush));
     ball.undo(delta);
 }
 
@@ -661,7 +768,8 @@ fn a_stroke_with_n_repeats_maps_onto_itself_under_a_turn_of_one_nth() {
             Symmetry { mirror: [false; 3], repeats }.set(&mut sculptor.settings);
             let points = stroke_points(from_axis * BRUSH_RADIUS, STROKE_FRAMES);
             let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
-            assert_symmetric(&format!("{brush:?} x{repeats} at {from_axis}r, one turn"), &ball, &turn, RELATIVE_TOLERANCE);
+            let label = format!("{brush:?} x{repeats} at {from_axis}r, one turn");
+            assert_symmetric(&label, &ball, &turn, Tolerance::of(brush));
             ball.undo(delta);
         }
     }
@@ -700,6 +808,131 @@ fn odd_counts_about_a_custom_axis_repeat_the_stroke_all_the_way_round() {
         println!("x{repeats} about a custom axis: {checked} points, tallest {tallest:.4}, worst {worst:.2e}");
         assert!(checked > 100, "x{repeats}: only {checked} raised points");
         assert!(worst <= 0.02 * tallest + 0.5e-4, "x{repeats}: a turned point is off the surface by {worst:.2e}");
+    }
+}
+
+/// How far a stroke of `sculptor`'s brush centred `from_axis` from the axis
+/// moves the ball at most, under `symmetry` or with none.
+fn furthest_moved(ball: &mut Ball, view: &View, mut sculptor: Sculptor, symmetry: Option<Symmetry>, from_axis: f32) -> f32 {
+    if let Some(symmetry) = symmetry {
+        symmetry.set(&mut sculptor.settings);
+    }
+    let delta = stroke_through(&mut ball.mesh, &mut sculptor, view, &stroke_points(from_axis, STROKE_FRAMES));
+    let moved = ball.displacement();
+    ball.undo(delta);
+    moved
+}
+
+/// Layer raises the surface by one even height and no more, also where the
+/// copies of its dab overlap: on the axis, and a little off it, where every
+/// copy covers the middle of the ring they make. (Shared out by their overlap
+/// alone, the middle came up to 1.45 times the height, and Layer never takes
+/// anything back down.)
+#[test]
+fn layer_keeps_to_its_height_near_the_axis() {
+    let mut ball = Ball::new();
+    let view = view_from_above(&ball.mesh);
+    for strength in [0.5, 1.0] {
+        for repeats in [3, 6, 12] {
+            let symmetry = Symmetry { mirror: [false; 3], repeats };
+            for radii_from_axis in [0.0, 0.3, 0.6, 1.0, 1.5, 2.5] {
+                let layer = || {
+                    let mut sculptor = sculptor_with(Brush::Layer);
+                    sculptor.settings.current_mut().strength = strength;
+                    sculptor
+                };
+                let from_axis = radii_from_axis * BRUSH_RADIUS;
+                let alone = furthest_moved(&mut ball, &view, layer(), None, from_axis);
+                let repeated = furthest_moved(&mut ball, &view, layer(), Some(symmetry), from_axis);
+                let report = format!(
+                    "Layer at strength {strength}, x{repeats}, {radii_from_axis}r from the axis: \
+                     {alone:.3e} alone and {repeated:.3e} repeated ({:.2}x)",
+                    repeated / alone
+                );
+                println!("{report}");
+                assert!((0.9..=1.03).contains(&(repeated / alone)), "{report}");
+            }
+        }
+    }
+}
+
+/// Copies that only partly overlap are shared out by the one number for the
+/// whole set, taken from the brush's own radius.
+///
+/// Two copies half a radius either side of the axis count as 1.391 dabs, so
+/// a vertex only one of them reaches moves by 1 / 1.391 of what the dab alone
+/// would have moved it. And copies whose rings do not touch are not shared
+/// out at all, however far each one's sweep makes it look for its vertices:
+/// Clay, whose tip is swept from one dab to the next, is exactly as strong
+/// with its copy 2.6 radii away as with none.
+#[test]
+fn partly_overlapping_copies_are_shared_out_by_the_brush_radius() {
+    let mut ball = Ball::new();
+    let view = view_from_above(&ball.mesh);
+    let two = Symmetry { mirror: [false; 3], repeats: 2 };
+
+    // One Inflate dab half a radius from the axis, alone and with its copy.
+    let at = stroke_points(0.5 * BRUSH_RADIUS, STROKE_FRAMES)[STROKE_FRAMES / 2];
+    let copy = Vec3::new(-at.x, at.y, -at.z);
+    let mut dab = |symmetry: Option<Symmetry>| {
+        let mut sculptor = sculptor_with(Brush::Inflate);
+        if let Some(symmetry) = symmetry {
+            symmetry.set(&mut sculptor.settings);
+        }
+        let pos = view.project(at).unwrap();
+        assert!(sculptor.begin(&mut ball.mesh, &view, PointerSample { pos, pressure: None, time: 0.0 }, false, false));
+        let delta = sculptor.end(&mut ball.mesh, &view);
+        let moved: Vec<f32> = ball.mesh.positions.iter().zip(&ball.start).map(|(a, b)| a.distance(*b)).collect();
+        ball.undo(delta);
+        moved
+    };
+    let (alone, shared) = (dab(None), dab(Some(two)));
+    let most = alone.iter().fold(0.0f32, |a, &b| a.max(b));
+    let (mut checked, mut worst) = (0, 0.0f32);
+    for (v, &start) in ball.start.iter().enumerate() {
+        // Well inside the dab, and out of its copy's reach.
+        if alone[v] > 0.3 * most && start.distance(copy) > 1.05 * BRUSH_RADIUS {
+            worst = worst.max((shared[v] / alone[v] - 1.0 / 1.391).abs());
+            checked += 1;
+        }
+    }
+    println!("{checked} vertices only one copy reaches: off 1 / 1.391 by {worst:.2e} at most");
+    assert!(checked > 30, "only {checked} vertices to judge by");
+    assert!(worst < 0.01, "a vertex one copy reaches is off its share by {worst:.3}");
+
+    // A short Clay stroke round the axis, 1.1 radii out: its copy is always
+    // 2.2 radii away, more than a diameter, and less than the two swept tips
+    // reach between them (each looks 1.2 radii from its centre). Short, so
+    // that the far end of the copy's stroke stays out of reach as well.
+    let polar = (1.1 * BRUSH_RADIUS / BALL_RADIUS).asin();
+    let points: Vec<Vec3> = (0..STROKE_FRAMES)
+        .map(|f| {
+            let azimuth = STROKE_AZIMUTH + 0.04 * (f as f32 - STROKE_FRAMES as f32 * 0.5);
+            point_on_ball(Vec3::new(polar.sin() * azimuth.cos(), polar.cos(), polar.sin() * azimuth.sin()))
+        })
+        .collect();
+    for accumulate in [false, true] {
+        let mut clay = |symmetry: Option<Symmetry>| {
+            let mut sculptor = sculptor_with(Brush::Clay);
+            sculptor.settings.current_mut().accumulate = accumulate;
+            // Without the finishing pass, whose smallest step turns a
+            // rounding error into a vertex that moved or did not.
+            sculptor.settings.clay_relax = 0.0;
+            if let Some(symmetry) = symmetry {
+                symmetry.set(&mut sculptor.settings);
+            }
+            let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
+            let moved: Vec<Vec3> = ball.mesh.positions.iter().zip(&ball.start).map(|(a, b)| *a - *b).collect();
+            ball.undo(delta);
+            moved
+        };
+        let (alone, repeated) = (clay(None), clay(Some(two)));
+        let most = alone.iter().fold(0.0f32, |a, b| a.max(b.length()));
+        // Where the stroke itself went, its copy changed nothing.
+        let worst = alone.iter().zip(&repeated).filter(|(a, _)| **a != Vec3::ZERO).map(|(a, b)| a.distance(*b));
+        let worst = worst.fold(0.0f32, f32::max);
+        println!("Clay (accumulate {accumulate}) with its copy out of reach: moved {most:.3e}, off by {worst:.2e}");
+        assert!(most > 5e-3 && worst < 1e-4 * most, "Clay was shared out with a copy it does not touch: {worst:.2e}");
     }
 }
 
@@ -751,15 +984,18 @@ fn a_stroke_through_the_axis_neither_piles_up_nor_tears() {
             };
             let ((plain, plain_rough), (radial, radial_rough)) = (made(None), made(Some(symmetry)));
             let report = format!(
-                "{name} x{}: moved {plain:.3e} alone and {radial:.3e} repeated ({:.2}x), roughest edge {plain_rough:.2e} and {radial_rough:.2e}",
+                "{name} x{}: moved {plain:.3e} alone and {radial:.3e} repeated ({:.2}x), \
+                 roughest edge {plain_rough:.2e} and {radial_rough:.2e}",
                 symmetry.group().len(),
                 radial / plain
             );
             println!("{report}");
+            // Stacked, the copies would move it 1.6 to 1.9 times as far even
+            // at 12 repeats (the brushes limit themselves within a stroke).
             // Not below 0.4 either: Inflate comes out lowest, a little over
             // half, because a ring of copies spreads what a line of dabs
             // through one spot would have piled on it.
-            assert!((0.4..=2.0).contains(&(radial / plain)), "{report}");
+            assert!((0.4..=1.5).contains(&(radial / plain)), "{report}");
             assert!(radial_rough <= 2.0 * plain_rough + 1e-5, "{report}");
         }
     }
@@ -794,12 +1030,15 @@ fn a_grab_on_the_axis_keeps_the_axis_where_it_is() {
         };
         let (alone, alone_most, alone_rough, _) = dragged(None);
         let (repeated, most, rough, pair) = dragged(Some(RADIAL_12));
-        println!("{brush:?}: the pole went {alone} alone and {repeated} repeated; most {alone_most:.3e} and {most:.3e}; pair {pair:.2e}");
+        println!(
+            "{brush:?}: the pole went {alone} alone and {repeated} repeated; \
+             most {alone_most:.3e} and {most:.3e}; pair {pair:.2e}"
+        );
         assert!(alone.x.hypot(alone.z) > 0.01, "{brush:?}: the drag did not carry the pole sideways: {alone}");
         assert!(repeated.x.hypot(repeated.z) < 1e-5, "{brush:?}: the pole left the axis: {repeated}");
         assert!(most <= alone_most * 1.05 && most > 0.0, "{brush:?}: {most:.3e} against {alone_most:.3e} alone");
         assert!(rough <= 2.0 * alone_rough + 1e-5, "{brush:?}: roughest edge {rough:.2e} against {alone_rough:.2e}");
-        assert!(pair <= RELATIVE_TOLERANCE * most + ABSOLUTE_TOLERANCE, "{brush:?}: pair {pair:.2e}");
+        assert!(pair <= Tolerance::of(brush).allows(most), "{brush:?}: pair {pair:.2e}");
     }
 }
 
@@ -874,10 +1113,22 @@ fn one_repeat_is_no_symmetry_and_two_is_a_half_turn() {
 
     let half_turn = Symmetry { mirror: [false; 3], repeats: 2 };
     assert_eq!(half_turn.group()[1], SymmetryOp::from_sign(Vec3::new(-1.0, 1.0, -1.0)));
-    for (tip, from_axis) in [(Tip::Clay, 0.0), (Tip::Clay, 0.7), (Tip::Inflate, 1.2), (Tip::Crease, 4.0), (Tip::Smooth, 0.4)] {
+    let partners = ball.partners_under(&half_turn.group());
+    // The ball's own two halves differ by this much and no more: its south
+    // pole is laid out a rounding error off the axis.
+    let floor = pair_error(&ball.mesh, &partners);
+    assert!(floor < 1e-15, "{floor:.2e}");
+    let strokes = [(Tip::Clay, 0.0), (Tip::Clay, 0.7), (Tip::Inflate, 1.2), (Tip::Crease, 4.0), (Tip::Smooth, 0.4)];
+    for (tip, from_axis) in strokes {
         let mut sculptor = tip.sculptor();
         half_turn.set(&mut sculptor.settings);
-        stroke_and_check(&mut ball, &view, &mut sculptor, from_axis * BRUSH_RADIUS, &format!("{tip:?} x2 at {from_axis}r"));
+        let points = stroke_points(from_axis * BRUSH_RADIUS, STROKE_FRAMES);
+        let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
+        assert_symmetric(&format!("{tip:?} x2 at {from_axis}r"), &ball, &partners, Tolerance::of(tip.brush()));
+        // A sign flip is exact, as a mirror is: the two halves stay equal
+        // to the bit, not just to rounding.
+        assert_eq!(pair_error(&ball.mesh, &partners), floor, "{tip:?} x2 at {from_axis}r");
+        ball.undo(delta);
     }
 }
 
@@ -926,7 +1177,8 @@ fn every_brush_stays_symmetric_under_radial_symmetry() {
                 let mut sculptor = sculptor_with(brush);
                 symmetry.set(&mut sculptor.settings);
                 let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
-                assert_symmetric(&format!("{brush:?} {symmetry:?} at {from_axis}r"), &ball, &partners, RELATIVE_TOLERANCE);
+                let label = format!("{brush:?} {symmetry:?} at {from_axis}r");
+                assert_symmetric(&label, &ball, &partners, Tolerance::of(brush));
                 ball.undo(delta);
                 assert!(ball.mesh.positions == ball.start, "{brush:?}: undo did not put every copy of the stroke back");
             }
@@ -942,7 +1194,7 @@ fn every_brush_stays_symmetric_under_radial_symmetry() {
             println!("Mask {symmetry:?} at {from_axis}r: {masked} vertices, pair {error:.2e}");
             assert!(masked > 200, "the mask stroke painted only {masked} vertices");
             assert!(ball.displacement() == 0.0, "painting the mask moved the surface");
-            assert!(error < 1e-4, "a vertex and its partner carry masks {error:.2e} apart");
+            assert!(error < 1e-5, "a vertex and its partner carry masks {error:.2e} apart");
             ball.undo(delta);
             assert!(ball.mesh.mask.iter().all(|&m| m == 0.0));
         }
@@ -970,7 +1222,11 @@ fn timing_of_radial_strokes() {
     ];
     println!("mean / worst ms per frame of 4 pointer samples, at r = 40 px and r = 150 px");
     for brush in [Brush::Clay, Brush::Inflate, Brush::Smooth, Brush::Crease, Brush::SnakeHook, Brush::Move] {
-        for (place, from, to) in [("through the axis", Vec2::new(-130.0, -40.0), Vec2::new(130.0, 40.0)), ("clear of it", Vec2::new(150.0, 0.0), Vec2::new(250.0, 120.0))] {
+        let places = [
+            ("through the axis", Vec2::new(-130.0, -40.0), Vec2::new(130.0, 40.0)),
+            ("clear of it", Vec2::new(150.0, 0.0), Vec2::new(250.0, 120.0)),
+        ];
+        for (place, from, to) in places {
             for (name, symmetry) in symmetries {
                 let mut line = format!("{:>10} {place:>16} {name:>15}", brush.name());
                 for radius_px in [40.0, 150.0] {
@@ -986,6 +1242,41 @@ fn timing_of_radial_strokes() {
                 println!("{line}");
             }
         }
+    }
+}
+
+/// Stroke after stroke on the same surface, as in a real session: each one
+/// meets what the ones before left, on and off the axis, with the brushes
+/// that follow the normals among them (they amplify any difference between
+/// sectors). What is left between a vertex and its partners after thirty
+/// strokes is still rounding, not a drift that built up.
+#[test]
+fn sectors_do_not_drift_apart_over_a_session() {
+    let mut ball = Ball::new();
+    let view = view_from_above(&ball.mesh);
+    for symmetry in [RADIAL_8, Symmetry { mirror: [true, false, false], repeats: 6 }] {
+        let partners = ball.partners_under(&symmetry.group());
+        let mut strokes = Vec::new();
+        let tips = [Tip::Clay, Tip::Inflate, Tip::Crease, Tip::ClayAccumulate, Tip::Smooth, Tip::Flatten];
+        let places = [0.0, 0.6, 1.4, 2.5, 4.0, 6.0, 0.3];
+        for stroke in 0..30 {
+            let mut sculptor = tips[stroke % tips.len()].sculptor();
+            symmetry.set(&mut sculptor.settings);
+            let from_axis = places[stroke % places.len()] * BRUSH_RADIUS;
+            let azimuth = STROKE_AZIMUTH + 0.21 * (stroke % 5) as f32 - 0.4;
+            let points = stroke_points_at(from_axis, azimuth, STROKE_FRAMES);
+            strokes.push(stroke_through(&mut ball.mesh, &mut sculptor, &view, &points));
+        }
+        let (pair, displacement) = (pair_error(&ball.mesh, &partners), ball.displacement());
+        println!("{symmetry:?}: after 30 strokes, pair {pair:.2e}, displacement {displacement:.3e}");
+        assert!(displacement > 0.02, "the session barely moved the ball: {displacement}");
+        let allowed = Tolerance::CLAY.allows(displacement);
+        assert!(pair <= allowed, "{symmetry:?}: the sectors are {pair:.2e} apart, allowed {allowed:.2e}");
+        // Newest first, back to the ball as it was built.
+        while let Some(delta) = strokes.pop() {
+            ball.undo(delta);
+        }
+        assert!(ball.mesh.positions == ball.start, "thirty undos did not put the ball back");
     }
 }
 

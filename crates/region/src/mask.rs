@@ -26,7 +26,8 @@ fn target(cx: &Ctx) -> Result<ObjectId, String> {
 /// selected object that `region` covers as seen through `view`, or with
 /// `outside` on every vertex it does not. With mirror axes on, a vertex also
 /// counts as covered when its mirrored position is, so a box over one arm
-/// takes both. Hidden parts are left alone. Returns what to tell the user.
+/// takes both; radial symmetry does the same for every turn round its axis.
+/// Hidden parts are left alone. Returns what to tell the user.
 ///
 /// `covered` is the per-vertex scratch buffer, kept by the caller across
 /// gestures: at millions of vertices it is the largest thing a gesture

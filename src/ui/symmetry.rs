@@ -88,9 +88,13 @@ fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_
         // The text being typed lives here while the box has the keyboard;
         // the rest of the time the box shows the axis itself.
         let id = ui.id().with("radial_custom_axis");
-        let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| format_axis(radial.custom_axis));
+        let shown = format_axis(radial.custom_axis);
+        let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
         let field = theme::text_field(ui, &mut text, ui.available_width() - BUTTON - 6.0);
-        if field.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // Only what was typed is taken. The box shows three decimals, and
+        // reading those back after a click in and out would nudge an axis
+        // that From View had set more finely.
+        if field.lost_focus() && text != shown && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             // Text that is not a direction leaves the axis as it was.
             if let Some(axis) = parse_axis(&text) {
                 radial.custom_axis = axis;

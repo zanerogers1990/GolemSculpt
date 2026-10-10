@@ -54,8 +54,8 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// The selected object as seen through `view`, with the brush mirror
-    /// axes as the symmetry the cut repeats under.
+    /// The selected object as seen through `view`, with the brushes' mirror
+    /// axes and radial symmetry as the symmetry the cut repeats under.
     pub fn take(cx: &Ctx, view: &View) -> Result<Snapshot, String> {
         let scene = cx.scene();
         let object = scene.active();
