@@ -12,7 +12,7 @@
 use glam::{Mat4, Vec2, Vec4};
 use sculpt_cut::CutView;
 use sculpt_geom::SymmetryOp;
-use sculpt_toolkit::{Env, ObjectId, Scene, View};
+use sculpt_toolkit::{Env, ObjectId, ObjectInfo, Scene, View};
 
 /// World space into the camera's own: x right, y up, looking down -z, the
 /// eye at the origin. The app's own view matrix (see `src/camera.rs`).
@@ -33,26 +33,60 @@ pub fn cut_view(view: &View, model: Mat4) -> CutView {
 }
 
 /// One view per place `object`'s mesh is drawn: the object itself first, then
-/// every other shown object that shares its mesh (its instances). A shape
-/// drawn over an instance covers the vertices the instance shows, which are
-/// the object's own.
+/// its live mirror copies, then every other shown object that shares its mesh
+/// (its instances) and their mirror copies. A shape drawn over any of these
+/// covers the vertices that place shows, which are the object's own: the order
+/// of the Unity app's `MeshFrameMatrices`, minus the array copies, which the
+/// Array tool keeps to itself.
+///
+/// A mirror copy is the object's matrix with a world reflection after it, so
+/// for an odd number of mirrored axes its determinant is negative, and seen
+/// through it the mesh is inside out. Nothing the cuts do reads that sign, so
+/// the reflected matrix goes in as it is, exactly as the Unity app hands its
+/// trimmer the copy's `localToWorldMatrix`. A shape covers whatever lies
+/// under it, front and back, so there is no facing to get the wrong way
+/// round. The cut is made on the object's mesh in the object's own space, and
+/// the view only says where each vertex lands on screen and how deep: a
+/// cut loop is closed on the swept surface, in the chart of arc length against
+/// view depth, and every cap, ring and wall takes its winding from the
+/// direction the shell walks the rim it is sewn to (see `sculpt_cut::trim`).
+/// So the mesh comes out wound as it went in, however the view turned it.
+/// `tests/mirror.rs` holds the proof: each cut is checked against the same
+/// shape drawn over the copy baked into an object of its own.
+///
+/// A copy is shown only while its object is: a hidden object's copies are
+/// hidden with it, and the shape cannot be drawn over what is not there. The
+/// object's own view is always first, since the tools refuse to start on a
+/// hidden object and an instance's shape is drawn over a shown one.
 pub fn cut_views(scene: &dyn Scene, object: ObjectId, view: &View) -> Vec<CutView> {
     let Some(info) = scene.info(object) else { return Vec::new() };
-    let mut views = vec![cut_view(view, info.matrix())];
+    let mut views = placed(&info, view, true);
     for other in scene.objects() {
         if other == object {
             continue;
         }
         if let Some(instance) = scene.info(other).filter(|o| o.mesh == info.mesh && o.visible) {
-            views.push(cut_view(view, instance.matrix()));
+            views.extend(placed(&instance, view, false));
         }
     }
     views
 }
 
+/// The views of one object: itself (unless it is hidden and `even_hidden` is
+/// off) and, while it is shown, each of its live mirror copies.
+fn placed(info: &ObjectInfo<'_>, view: &View, even_hidden: bool) -> Vec<CutView> {
+    info.placements()
+        .into_iter()
+        .filter(|&(copy, _)| info.visible || (copy == 0 && even_hidden))
+        .map(|(_, model)| cut_view(view, model))
+        .collect()
+}
+
 /// The brushes' symmetry as the list of operations a gesture repeats under:
 /// the identity first, then every other copy a stroke would be made as, the
-/// mirror images and the turns round the radial axis alike.
+/// mirror images and the turns round the radial axis alike. They are in the
+/// object's own space, so they repeat the same way under every view of it:
+/// the object, its instances and its live mirror copies.
 pub fn symmetry(env: &Env) -> Vec<SymmetryOp> {
     env.symmetry().ops().to_vec()
 }

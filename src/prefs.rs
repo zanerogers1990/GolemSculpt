@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use sculpt_geom::LengthUnit;
 use serde::{Deserialize, Serialize};
 
-use crate::sculpt::{Brush, FalloffCurve, Settings};
+use crate::sculpt::{Brush, FalloffCurve, PoseMode, PoseSettings, Settings};
 
 const FILE_NAME: &str = "settings.json";
 
@@ -166,6 +166,13 @@ pub struct BrushPrefs {
     pub falloff: BTreeMap<String, Vec<[f32; 2]>>,
     /// Move: grab only what is connected to the point under the pointer.
     pub move_connected: bool,
+    /// Pose: what a drag does, by name (Bend, Resize or Stretch), how many
+    /// joints a bend has, how far past the brush ring the first one sits and
+    /// how sharply a joint bends.
+    pub pose_mode: String,
+    pub pose_joints: u32,
+    pub pose_offset: f32,
+    pub pose_rigidity: f32,
     pub mask_hardness: f32,
     pub clay_depth: f32,
     pub clay_softness: f32,
@@ -210,6 +217,10 @@ impl BrushPrefs {
                 })
                 .collect(),
             move_connected: s.move_connected,
+            pose_mode: s.pose.mode.name().to_owned(),
+            pose_joints: s.pose.joints,
+            pose_offset: s.pose.offset,
+            pose_rigidity: s.pose.rigidity,
             mask_hardness: s.mask_hardness,
             clay_depth: s.clay_depth,
             clay_softness: s.clay_softness,
@@ -240,6 +251,12 @@ impl BrushPrefs {
         // Any size that is one; the sculptor brings it into the model's range.
         s.radius_world = fit(self.radius_world, 1e-6, 1e6, d.radius_world);
         s.move_connected = self.move_connected;
+        if let Some(mode) = PoseMode::ALL.into_iter().find(|mode| mode.name() == self.pose_mode) {
+            s.pose.mode = mode;
+        }
+        s.pose.joints = self.pose_joints.clamp(1, PoseSettings::MAX_JOINTS);
+        s.pose.offset = fit(self.pose_offset, 0.0, PoseSettings::MAX_OFFSET, d.pose.offset);
+        s.pose.rigidity = fit(self.pose_rigidity, 0.0, 1.0, d.pose.rigidity);
         for &brush in &Brush::ALL {
             // A curve needs two points that are numbers; `normalize` then
             // orders them and pins the ends, as after any edit.
@@ -556,6 +573,60 @@ mod tests {
         assert_eq!(settings.per_brush[Brush::Clay.index()].strength, 1.0);
     }
 
+    /// A settings file written before there was a Pose brush: nine brushes,
+    /// nothing about Pose. It loads, every brush it names keeps what it says,
+    /// and Pose starts as it would on a first run.
+    #[test]
+    fn a_settings_file_from_before_the_pose_brush_still_loads() {
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        let brush = older["brush"].as_object_mut().unwrap();
+        for key in ["pose_mode", "pose_joints", "pose_offset", "pose_rigidity"] {
+            assert!(brush.remove(key).is_some(), "{key} is in the file");
+        }
+        assert!(brush["brushes"].as_object_mut().unwrap().remove("Pose").is_some());
+        brush["brush"] = "Snake Hook".into();
+        brush["brushes"]["Snake Hook"]["strength"] = 0.77.into();
+        brush["falloff"]["Layer"] = serde_json::json!([[0.0, 1.0], [1.0, 0.0]]);
+        assert_eq!(brush["brushes"].as_object().unwrap().len(), 9);
+
+        let prefs = Prefs::parse(&older.to_string());
+        let mut settings = Settings::default();
+        prefs.brush.apply(&mut settings);
+        assert_eq!(settings.brush, Brush::SnakeHook);
+        assert_eq!(settings.per_brush[Brush::SnakeHook.index()].strength, 0.77);
+        assert!(settings.falloff[Brush::Layer.index()].is_some());
+        assert_eq!(settings.pose, PoseSettings::default());
+        let pose = (settings.per_brush[Brush::Pose.index()], Settings::default().per_brush[Brush::Pose.index()]);
+        assert_eq!(BrushTuning::of(&pose.0), BrushTuning::of(&pose.1));
+
+        // And what this version writes names the Pose brush and its settings.
+        settings.brush = Brush::Pose;
+        settings.pose.joints = 3;
+        let written = serde_json::to_value(BrushPrefs::of(&settings)).unwrap();
+        assert_eq!(written["brush"], "Pose");
+        assert_eq!(written["pose_joints"], 3);
+        assert!(written["brushes"]["Pose"].is_object());
+    }
+
+    /// The number of joints has a lowest value as well as a highest (house
+    /// rule 9), and a mode this version has not heard of changes nothing.
+    #[test]
+    fn pose_settings_out_of_range_are_brought_back_in() {
+        let mut prefs = Prefs::default();
+        let mut settings = Settings::default();
+        for (kept, want) in [(0, 1), (1, 1), (8, 8), (9, 8), (u32::MAX, 8)] {
+            prefs.brush.pose_joints = kept;
+            prefs.brush.apply(&mut settings);
+            assert_eq!(settings.pose.joints, want, "{kept} joints kept");
+        }
+        prefs.brush.pose_mode = "Wobble".into();
+        (prefs.brush.pose_offset, prefs.brush.pose_rigidity) = (9.0, f32::NAN);
+        settings.pose.mode = PoseMode::Resize;
+        prefs.brush.apply(&mut settings);
+        assert_eq!(settings.pose.mode, PoseMode::Resize);
+        assert_eq!((settings.pose.offset, settings.pose.rigidity), (2.0, 0.6));
+    }
+
     #[test]
     fn brush_settings_survive_a_capture_and_apply() {
         let mut settings = Settings::default();
@@ -565,6 +636,7 @@ mod tests {
         settings.screen_space_size = false;
         settings.radius_world = 0.125;
         settings.move_connected = true;
+        settings.pose = PoseSettings { mode: PoseMode::Stretch, joints: 5, offset: 0.75, rigidity: 0.2 };
         settings.per_brush[Brush::Layer.index()].front_facing = true;
         settings.per_brush[Brush::Flatten.index()].focal_shift = -0.4;
         let drawn = FalloffCurve { points: vec![glam::Vec2::new(0.0, 1.0), glam::Vec2::new(0.25, 0.75), glam::Vec2::new(1.0, 0.0)] };
@@ -579,6 +651,7 @@ mod tests {
         assert_eq!(back.brush, Brush::SnakeHook);
         assert!(back.per_brush[Brush::Layer.index()].front_facing);
         assert_eq!((back.screen_space_size, back.radius_world, back.move_connected), (false, 0.125, true));
+        assert_eq!(back.pose, PoseSettings { mode: PoseMode::Stretch, joints: 5, offset: 0.75, rigidity: 0.2 });
         assert_eq!(back.falloff[Brush::Clay.index()], Some(drawn));
         assert!(back.falloff[Brush::Crease.index()].is_none(), "a brush with no curve kept goes back to its own falloff");
 

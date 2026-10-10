@@ -1178,6 +1178,15 @@ fn every_brush_stays_symmetric_under_radial_symmetry() {
                 symmetry.set(&mut sculptor.settings);
                 let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
                 let label = format!("{brush:?} {symmetry:?} at {from_axis}r");
+                if brush == Brush::Pose && from_axis < 1.0 {
+                    // Next to the axis every copy has hold of the one limb,
+                    // the cap of the ball, and no bend is the same from every
+                    // side: it is left as it was (`pose::pinned`, and the
+                    // Pose brush's own tests for what it can still do there).
+                    assert!(ball.mesh.positions == ball.start, "{label}: a bend moved a limb that stands on the axis");
+                    assert!(delta.is_none(), "{label}: a drag that moved nothing is no undo step");
+                    continue;
+                }
                 assert_symmetric(&label, &ball, &partners, Tolerance::of(brush));
                 ball.undo(delta);
                 assert!(ball.mesh.positions == ball.start, "{brush:?}: undo did not put every copy of the stroke back");

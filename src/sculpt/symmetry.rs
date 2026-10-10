@@ -163,6 +163,12 @@ impl Settings {
         SymmetryGroup::build(x, y, z, self.radial.repeats(), self.radial.axis_vector())
     }
 
+    /// The same as the list a stroke keeps: what a stroke begun now would be
+    /// made as (the Pose brush's preview asks before there is a stroke).
+    pub(super) fn ops(&self) -> Vec<SymOp> {
+        copies(&self.symmetry_group())
+    }
+
     /// What the Symmetry card says in its header: "X + Z + Radial 8", or "Off".
     pub fn symmetry_summary(&self) -> String {
         let mut parts: Vec<String> =

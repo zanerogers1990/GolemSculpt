@@ -67,7 +67,7 @@ fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) {
     // For each mesh of the file, the first object added that shows it.
     let mut shown_by: Vec<Option<u64>> = vec![None; meshes.len()];
     let mut first = None;
-    for o in saved.objects {
+    for (row, o) in saved.objects.into_iter().enumerate() {
         let Some(owner) = shown_by.get(o.mesh).copied() else { continue };
         let id = match (owner, meshes[o.mesh].take()) {
             (Some(owner), _) => {
@@ -90,6 +90,7 @@ fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) {
         };
         let object = scene.active_mut();
         (object.visible, object.position, object.rotation, object.scale) = (o.visible, o.position, o.rotation, o.scale);
+        object.mirror = crate::scene::saved_mirror(&saved.details, row);
         first.get_or_insert(id);
     }
     if let Some(first) = first {
@@ -314,6 +315,7 @@ impl Running {
         details.set(io::slot::LOOK, &opts.look);
         details.set(io::slot::CAMERA, &self.doc.camera.saved_view());
         details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides, radial });
+        self.doc.scene.keep_mirrors(&mut details);
         details
     }
 
@@ -321,6 +323,7 @@ impl Running {
     /// the file does not have (it is from before that part was kept) leaves
     /// the app as it is; with no saved view, the model is framed instead.
     fn apply_details(&mut self, details: &io::Details) {
+        self.doc.scene.restore_mirrors(details);
         if let Some(shading) = details.get_over(io::slot::SHADING, &io::Shading::default()) {
             shading.apply(&mut self.doc.opts);
             // The picture is looked up by name: the list differs between
@@ -400,11 +403,13 @@ impl Running {
         let mut reach = Vec3::ZERO;
         for o in scene.objects.iter().filter(|o| o.visible) {
             let Some(mesh) = scene.mesh(o.mesh, &self.doc.mesh) else { continue };
-            let model = o.matrix();
             let step = (mesh.vertex_count() / SAMPLES).clamp(1, usize::MAX);
-            for p in mesh.positions.iter().step_by(step) {
-                let from = model.transform_point3(*p) - camera.pivot;
-                reach = reach.max(Vec3::new(from.dot(right).abs(), from.dot(up).abs(), from.dot(toward)));
+            // The object and its live mirror copies.
+            for (_, model) in o.placements() {
+                for p in mesh.positions.iter().step_by(step) {
+                    let from = model.transform_point3(*p) - camera.pivot;
+                    reach = reach.max(Vec3::new(from.dot(right).abs(), from.dot(up).abs(), from.dot(toward)));
+                }
             }
         }
         let tan = camera.tan_half_fov();
@@ -469,6 +474,7 @@ impl Running {
             })
             .collect();
         let items = self.tools_copies(items);
+        let items = self.mirror_items(items);
 
         // Nothing over the model. The next frame puts each of these back.
         self.renderer.flash.show(&self.gpu, &globals.view_proj, &[]);

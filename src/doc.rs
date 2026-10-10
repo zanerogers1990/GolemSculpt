@@ -223,6 +223,9 @@ pub enum Action {
     ResetTransform,
     /// Turn the SSphere rig's skin into a new object.
     MakeSkin,
+    /// A command of the Mirror section of the Objects card: live copies of the
+    /// active object across the world's planes.
+    Mirror(crate::scene::MirrorCommand),
     /// Bring the SSphere tool up with a first sphere in the middle of the view.
     NewRig,
 }

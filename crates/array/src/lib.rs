@@ -14,6 +14,12 @@
 //! the panel, the tool's own undo history, and making the copies real as one
 //! commit. See `tool.rs` for what it does and `finish.rs` for the commit.
 //!
+//! An object with a live mirror has its array mirrored with it (`copies.rs`:
+//! where each copy is drawn through each side of the mirror, and which is under
+//! the pointer). Clicking a copy puts the transform gizmo on it, and posing it
+//! poses them all; Copies Back onto the Path and the mirror buttons change the
+//! object in the scene along with the array (`pose.rs`).
+//!
 //! Everything is relative to the object the array repeats. Handle points are
 //! offsets from its position in world axes, and a copy's placement is an offset,
 //! a turn and a size from the object, so moving, turning or resizing the object
@@ -37,12 +43,14 @@ mod state;
 mod types;
 
 mod arrays;
+mod copies;
 mod demo;
 mod edit;
 mod finish;
 mod gestures;
 mod panel;
 mod picture;
+mod pose;
 mod simplify;
 mod tool;
 
@@ -52,10 +60,14 @@ mod testing;
 mod tests;
 #[cfg(test)]
 mod tool_tests;
+#[cfg(test)]
+mod copy_tests;
 
 pub use bake::{MAX_COMBINED_VERTICES, bake, bake_array, bake_normals, local_matrices};
+pub use copies::{Place, drawn as drawn_copies, places as copy_places};
 pub use finish::Apply;
 pub use layout::{axis_vector, compute as compute_layout, radial_arc, scale_at};
+pub use pose::CopyPick;
 pub use state::ArrayState;
 pub use tool::{ArrayTool, tool};
 pub use types::{ArrayKind, ArrayPlacement, ArraySettings, Pose};

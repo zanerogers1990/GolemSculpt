@@ -84,7 +84,7 @@ change things. Nothing is kept between calls; hold ids, not references.
 | `cx.time`, `cx.dt`, `cx.active` | Seconds; whether this tool is the one up |
 | `cx.mirror`, `cx.unit`, `cx.tips`, `cx.clean_view` | Brush mirror axes; mm or inches (`sculpt_geom::units` formats and parses); tooltips on; panels hidden (draw no handles) |
 | `cx.radial_count`, `cx.radial_axis`, `cx.symmetry()` | Radial symmetry (repeats round an axis; 1 is off); every copy a stroke is made as, mirrors and turns together, as a `SymmetryGroup` |
-| `cx.scene()` | `objects()`, `active()`, `selected()` (every selected object, the active one first), `info(id)` (name, visible, placement, mesh id, counts), `mesh(id)` (positions, normals, indices, mask, hidden-face flags **as slices**, object space), `raycast(&ray)`, `raycast_object(id, &ray)`, `bounds(id)` |
+| `cx.scene()` | `objects()`, `active()`, `selected()` (every selected object, the active one first), `info(id)` (name, visible, placement, live mirror, mesh id, counts), `mesh(id)` (positions, normals, indices, mask, hidden-face flags **as slices**, object space), `raycast(&ray)`, `raycast_object(id, &ray)`, `raycast_placed(id, &model, &ray)`, `bounds(id)` |
 | `cx.pick(px)` | The visible surface under a pixel: object, position, normal, distance |
 
 Screen positions are physical pixels, y down. Sizes meant in interface points
@@ -114,12 +114,39 @@ let receipt = cx.commit("Split", vec![
 let piece = receipt.added[0];
 ```
 
-`Add`, `Replace`, `Place`, `Show`, `Rename`, `Delete`, `Select`. They run in
-order, at once; the scene read on the next line is the changed one. However many
-are in one commit, **Z takes them all back together**. `Select` alone leaves no
-undo step. `Mask { object, mask }` is the exception: a mask is undone like a
-brush stroke, so each is a step of its own, applied after the rest. So are the
-three commands for hidden faces, below.
+`Add`, `Replace`, `Place`, `Mirror`, `Show`, `Rename`, `Delete`, `Select`. They
+run in order, at once; the scene read on the next line is the changed one.
+However many are in one commit, **Z takes them all back together**. `Select`
+alone leaves no undo step. `Mask { object, mask }` is the exception: a mask is
+undone like a brush stroke, so each is a step of its own, applied after the
+rest. So are the three commands for hidden faces, below.
+
+**Live mirror copies.** An object can have live copies of itself across the
+world's planes (the Mirror section of the Objects card). They are not objects:
+each is the object's own mesh drawn again through a reflected matrix, so there
+is nothing to keep in step. A tool meets them in three places:
+
+```rust
+let info = cx.scene().info(object)?;
+info.mirror                          // Option<MirrorRepeater>: the axes (X = 1, Y = 2, Z = 4) and the centre
+info.placements()                    // [(0, the object's matrix), (flip mask, the copy's matrix)..]
+cx.commit("Mirror", vec![Command::Mirror { object, mirror: MirrorRepeater::new(1, Vec3::ZERO) }]);  // None takes it off
+NewObject::new("Piece", mesh).mirrored(info.mirror)                 // a new object that starts with the same
+```
+
+A copy's matrix is the world reflection after the object's own, so for an odd
+number of axes its determinant is negative and the mesh seen through it is
+inside out. The app draws that right (`draw.copies` goes the way the mirror
+copies themselves do); a tool that takes triangles out to world space has to
+turn the faces back. Everything that is a question about the mesh, such as
+which vertices a shape on screen covers, is answered by projecting the
+object's own vertices through the copy's matrix: `sculpt_cut` takes the
+matrix as it is. To find
+which copy a click landed on, ask `cx.scene().raycast_placed(id, &model, &ray)`
+for each place in `placements()` and keep the nearest hit; it takes any matrix,
+so it picks a copy of the tool's own (one copy of an array) the same way.
+A clone, an instance or a piece cut from a mirrored object is not mirrored
+unless the tool says so with `.mirrored(..)`.
 
 **Hidden faces.** Part of a mesh can be switched off: not drawn, not hit by the
 pointer (`cx.pick`, `raycast`), not touched by brushes. Nothing is removed:
@@ -316,6 +343,8 @@ bench.env.mods.shift = true;                        // set the moment directly
 let draw = bench.frame(&mut tool);                  // inspect draw.overlay.shapes, draw.previews()
 assert!(bench.undo(&mut tool));                     // Z as the app routes it
 bench.select(&[cube, other]);                       // several selected, the first active
+bench.mirror(cube, 1);                              // live mirror across X (Y = 2, Z = 4); Scene::raycast meets the copies
+let twin = bench.instance(cube, "Cube Instance", Placement::at(Vec3::X));   // another object showing the same mesh
 bench.gizmo(&mut tool, Placement::at(Vec3::X));     // a drag of the gizmo on the tool's target
 ```
 

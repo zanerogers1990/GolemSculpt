@@ -13,12 +13,14 @@
 
 use std::collections::HashMap;
 
-use glam::{Mat3, Vec2, Vec3};
+use glam::{Mat3, Mat4, Vec2, Vec3};
 use sculpt_geom::{Aabb, TriMesh, tri};
 
 use crate::ctx::{Ctx, Env, Outbox};
 use crate::draw::{Draw, smooth_normals};
 use crate::jobs::Jobs;
+use sculpt_symmetry::MirrorRepeater;
+
 use crate::scene::{Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Scene};
 use crate::tool::{Button, Event, GizmoPhase, Key, Tool};
 use crate::view::{Ray, View};
@@ -46,6 +48,7 @@ struct Object {
     visible: bool,
     mesh: MeshId,
     placement: Placement,
+    mirror: Option<MirrorRepeater>,
 }
 
 struct Geometry {
@@ -153,9 +156,9 @@ impl TestDoc {
         (2..).map(|n| format!("{base} ({n})")).find(|name| !taken(name)).unwrap()
     }
 
-    fn hit_object(&self, object: &Object, ray: &Ray) -> Option<Hit> {
+    /// Where the ray meets the object's mesh drawn through `model`.
+    fn hit_placed(&self, object: &Object, model: Mat4, ray: &Ray) -> Option<Hit> {
         let geometry = self.meshes.get(&object.mesh)?;
-        let model = object.placement.matrix();
         let inverse = model.inverse();
         let local = ray.transformed(&inverse);
         let mut best: Option<(f32, Vec3)> = None;
@@ -178,6 +181,31 @@ impl TestDoc {
             normal = -normal;
         }
         Some(Hit { object: object.id, position, normal, distance: (position - ray.origin).dot(ray.dir) })
+    }
+
+    fn info_of<'a>(&'a self, o: &'a Object, geometry: &Geometry) -> ObjectInfo<'a> {
+        ObjectInfo {
+            id: o.id,
+            name: &o.name,
+            visible: o.visible,
+            active: o.id == self.active,
+            mesh: o.mesh,
+            placement: o.placement,
+            mirror: o.mirror,
+            vertices: geometry.mesh.vertex_count(),
+            triangles: geometry.mesh.triangle_count(),
+        }
+    }
+
+    /// The nearest hit on an object or on any of its live mirror copies, as
+    /// the app picks them.
+    fn hit_object(&self, object: &Object, ray: &Ray) -> Option<Hit> {
+        let geometry = self.meshes.get(&object.mesh)?;
+        let places = self.info_of(object, geometry).placements();
+        places
+            .into_iter()
+            .filter_map(|(_, model)| self.hit_placed(object, model, ray))
+            .min_by(|a, b| a.distance.total_cmp(&b.distance))
     }
 
     /// How many undo steps are held.
@@ -243,16 +271,7 @@ impl Scene for TestDoc {
     fn info(&self, id: ObjectId) -> Option<ObjectInfo<'_>> {
         let o = self.get(id)?;
         let geometry = self.meshes.get(&o.mesh)?;
-        Some(ObjectInfo {
-            id,
-            name: &o.name,
-            visible: o.visible,
-            active: id == self.active,
-            mesh: o.mesh,
-            placement: o.placement,
-            vertices: geometry.mesh.vertex_count(),
-            triangles: geometry.mesh.triangle_count(),
-        })
+        Some(self.info_of(o, geometry))
     }
 
     fn active(&self) -> ObjectId {
@@ -287,7 +306,12 @@ impl Scene for TestDoc {
     }
 
     fn raycast_object(&self, id: ObjectId, ray: &Ray) -> Option<Hit> {
-        self.hit_object(self.get(id)?, ray)
+        let o = self.get(id)?;
+        self.hit_placed(o, o.placement.matrix(), ray)
+    }
+
+    fn raycast_placed(&self, id: ObjectId, model: &Mat4, ray: &Ray) -> Option<Hit> {
+        self.hit_placed(self.get(id)?, *model, ray)
     }
 
     fn bounds(&self, id: ObjectId) -> Aabb {
@@ -312,7 +336,14 @@ impl Document for TestDoc {
         let mesh = self.store(object.mesh)?;
         let id = ObjectId(self.fresh());
         let name = self.unique_name(&object.name);
-        self.objects.push(Object { id, name, visible: object.visible, mesh, placement: object.placement });
+        self.objects.push(Object {
+            id,
+            name,
+            visible: object.visible,
+            mesh,
+            placement: object.placement,
+            mirror: object.mirror,
+        });
         if object.select || self.objects.len() == 1 {
             self.active = id;
             self.also.clear();
@@ -334,6 +365,17 @@ impl Document for TestDoc {
     fn place(&mut self, object: ObjectId, placement: Placement) -> bool {
         self.log.push(format!("place {}", object.0));
         self.get_mut(object).map(|o| o.placement = placement).is_some()
+    }
+
+    fn set_mirror(&mut self, object: ObjectId, mirror: Option<MirrorRepeater>) -> bool {
+        self.log.push(format!("mirror {}", object.0));
+        match self.get_mut(object) {
+            Some(o) if o.mirror != mirror => {
+                o.mirror = mirror;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn show(&mut self, object: ObjectId, visible: bool) -> bool {
@@ -473,6 +515,23 @@ impl Bench {
     pub fn add(&mut self, name: &str, mesh: TriMesh) -> ObjectId {
         let id = self.doc.add(NewObject::new(name, mesh)).expect("plain meshes can always be added");
         self.doc.log.clear();
+        id
+    }
+
+    /// Gives an object live mirror copies across these world axes (X = 1,
+    /// Y = 2, Z = 4) through the world's centre, as the Mirror section of the
+    /// Objects card does; 0 takes them away. Not an undo step.
+    pub fn mirror(&mut self, object: ObjectId, axes: u8) {
+        self.doc.set_mirror(object, MirrorRepeater::new(axes, Vec3::ZERO));
+        self.doc.log.clear();
+    }
+
+    /// Makes `instance` a second object showing the same mesh as `of`, at
+    /// `placement`, as Instance in the Objects card does. Not an undo step.
+    pub fn instance(&mut self, of: ObjectId, name: &str, placement: Placement) -> ObjectId {
+        let mesh = self.doc.get(of).expect("an object to make an instance of").mesh;
+        let id = ObjectId(self.doc.fresh());
+        self.doc.objects.push(Object { id, name: name.to_owned(), visible: true, mesh, placement, mirror: None });
         id
     }
 
@@ -832,7 +891,14 @@ mod tests {
         let shared = bench.doc.info(a).unwrap().mesh;
         // Hand-make an instance: a second object showing the same mesh.
         let b = ObjectId(bench.doc.fresh());
-        bench.doc.objects.push(Object { id: b, name: "A Instance".into(), visible: true, mesh: shared, placement: Placement::at(Vec3::X) });
+        bench.doc.objects.push(Object {
+            id: b,
+            name: "A Instance".into(),
+            visible: true,
+            mesh: shared,
+            placement: Placement::at(Vec3::X),
+            mirror: None,
+        });
         bench.call(|cx| cx.commit("Remesh", vec![Command::Replace { object: a, mesh: cube(0.1).into() }]));
         assert_eq!(bench.doc.info(a).unwrap().mesh, bench.doc.info(b).unwrap().mesh);
         assert_ne!(bench.doc.info(b).unwrap().mesh, shared);
@@ -963,6 +1029,81 @@ mod tests {
         let mut probe = Probe::default();
         assert!(!bench.gizmo(&mut probe, to));
         assert!(probe.seen.is_empty());
+    }
+
+    #[test]
+    fn an_objects_mirror_is_read_from_its_info_and_changed_by_a_command_as_part_of_the_commit() {
+        let mut bench = Bench::new();
+        let a = bench.add("A", cube(0.5));
+        bench.call(|cx| cx.commit("Place", vec![Command::Place { object: a, placement: Placement::at(Vec3::new(2.0, 0.0, 0.0)) }]));
+        assert_eq!(bench.doc.info(a).unwrap().mirror, None);
+        assert_eq!(bench.doc.info(a).unwrap().placements().len(), 1);
+        let steps = bench.doc.undo_steps();
+
+        // Mirrored across X as one step with the rest of the commit, and a
+        // new object that starts mirrored too.
+        let mirror = MirrorRepeater::new(1, Vec3::ZERO);
+        let receipt = bench.call(|cx| {
+            cx.commit(
+                "Mirror",
+                vec![
+                    Command::Mirror { object: a, mirror },
+                    Command::Add(NewObject::new("B", cube(0.1)).mirrored(MirrorRepeater::new(2, Vec3::ZERO)).unselected()),
+                ],
+            )
+        });
+        assert_eq!((receipt.changed, receipt.failed), (true, 0));
+        assert_eq!(bench.doc.undo_steps(), steps + 1);
+        let info = bench.doc.info(a).unwrap();
+        assert_eq!(info.mirror, mirror);
+        let places = info.placements();
+        assert_eq!(places.iter().map(|p| p.0).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(places[0].1, info.matrix());
+        assert!(places[1].1.transform_point3(Vec3::ZERO).distance(Vec3::new(-2.0, 0.0, 0.0)) < 1e-6, "the copy is across the plane");
+        assert!(places[1].1.determinant() < 0.0, "a reflection turns the mesh inside out");
+        assert_eq!(bench.doc.info(receipt.added[0]).unwrap().mirror.map(|m| m.axis_mask), Some(2));
+
+        // Saying it again changes nothing and is counted as failed.
+        let receipt = bench.call(|cx| cx.commit("Mirror", vec![Command::Mirror { object: a, mirror }]));
+        assert_eq!((receipt.changed, receipt.failed), (false, 1));
+
+        assert!(bench.undo_scene());
+        assert_eq!(bench.doc.info(a).unwrap().mirror, None);
+        assert_eq!(bench.doc.objects(), vec![a], "the new object and the mirror went in the one step");
+        assert!(bench.redo_scene());
+        assert_eq!(bench.doc.info(a).unwrap().mirror, mirror);
+        let off = bench.call(|cx| cx.commit("Unmirror", vec![Command::Mirror { object: a, mirror: None }]));
+        assert!(off.changed && bench.doc.info(a).unwrap().mirror.is_none());
+    }
+
+    #[test]
+    fn a_ray_is_cast_through_any_placement_and_the_scene_is_hit_through_the_mirror_copies() {
+        let mut bench = Bench::new();
+        let a = bench.add("A", cube(0.5));
+        bench.call(|cx| cx.commit("Place", vec![Command::Place { object: a, placement: Placement::at(Vec3::new(1.5, 0.0, 0.0)) }]));
+        bench.mirror(a, 1);
+        let ray = bench.env.view.ray(bench.px(Vec3::new(-1.5, 0.0, 0.5)));
+
+        // The scene's pick finds the copy; the object's own placement does not.
+        let hit = bench.call(|cx| cx.pick(bench_px(cx, Vec3::new(-1.5, 0.0, 0.5)))).expect("the copy is under the pointer");
+        assert_eq!(hit.object, a);
+        assert!(hit.position.distance(Vec3::new(-1.5, 0.0, 0.5)) < 1e-4);
+        assert!(bench.doc.raycast_object(a, &ray).is_none());
+
+        // Through the copy's own matrix, the same ray meets it; through any other, where that puts the mesh.
+        let places = bench.doc.info(a).unwrap().placements();
+        let through = bench.doc.raycast_placed(a, &places[1].1, &ray).expect("the copy");
+        assert!(through.position.distance(hit.position) < 1e-4);
+        // The ray runs on past the copy; a cube dropped on it two units behind is met on its near face.
+        let elsewhere = Mat4::from_translation(Vec3::new(-1.5 * 7.0 / 4.5, 0.0, -2.0));
+        let behind = bench.doc.raycast_placed(a, &elsewhere, &ray).expect("a place behind it");
+        assert!((behind.position.z + 1.5).abs() < 1e-4, "{:?}", behind.position);
+        assert!(bench.doc.raycast_placed(a, &Mat4::from_translation(Vec3::new(9.0, 0.0, 0.0)), &ray).is_none());
+        assert!(bench.doc.raycast_placed(ObjectId(999), &Mat4::IDENTITY, &ray).is_none());
+    }
+
+    fn bench_px(cx: &Ctx, world: Vec3) -> Vec2 {
+        cx.view.project(world).unwrap()
     }
 
     #[test]

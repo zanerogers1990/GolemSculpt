@@ -12,6 +12,8 @@ use sculpt_toolkit::{Button, Command, Draw, Event, Key, Look, ObjectId, Placemen
 use crate::testing::{closed_error, sphere, volume};
 use crate::{Action, Extract, Region, Shape, hide};
 
+mod mirror;
+
 const CENTRE: Vec2 = Vec2::new(400.0, 300.0);
 
 /// A unit-radius ball at the origin with `tool` brought up on it.

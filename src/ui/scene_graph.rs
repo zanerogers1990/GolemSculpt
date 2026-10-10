@@ -30,6 +30,8 @@ const MAX_ROWS: f32 = 8.0;
 const HOLD: f64 = 0.25;
 /// Name colour of objects that share their mesh with another.
 const LINKED: Color32 = Color32::from_rgb(140, 217, 255);
+/// Name colour of objects with a live mirror, as in the Unity app.
+const MIRRORED: Color32 = Color32::from_rgb(255, 209, 115);
 /// Row colour of objects selected along with the active one.
 const ALSO: Color32 = Color32::from_rgb(102, 102, 115);
 
@@ -157,6 +159,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<A
 
         theme::heading(ui, "Selected Object");
         selected(ui, doc, assets, st, tips, actions);
+        super::mirror_copies::show(ui, doc, assets, tips, actions);
         combine(ui, doc, assets, st, tips, actions);
     });
 }
@@ -175,6 +178,8 @@ struct Look {
     /// Selected along with the active one.
     also: bool,
     linked: bool,
+    /// Has live mirror copies.
+    mirrored: bool,
     can_delete: bool,
     /// The name is a text field just now, so only the buttons are painted.
     editing: bool,
@@ -200,21 +205,21 @@ fn paint_row(p: &Painter, rect: Rect, object: &Object, look: &Look, assets: &Ass
         };
         p.rect_filled(name, 5.0, fill);
         glow(name, look.hover[0]);
-        let mut ink = match (look.selected || look.also, look.linked) {
-            (true, _) => Color32::WHITE,
-            (false, true) => LINKED,
-            (false, false) => theme::TEXT,
+        let mut ink = match (look.selected || look.also, look.linked, look.mirrored) {
+            (true, _, _) => Color32::WHITE,
+            (false, true, _) => LINKED,
+            (false, false, true) => MIRRORED,
+            (false, false, false) => theme::TEXT,
         };
         if !object.visible {
             ink = ink.gamma_multiply(0.55);
         }
         let mut x = name.left() + 8.0;
-        if look.linked {
-            if let Some(icon) = assets.icon("instance") {
-                let r = Rect::from_center_size(pos2(x + 6.0, name.center().y), Vec2::splat(13.0));
-                p.image(icon, r, uv, ink);
-                x += 18.0;
-            }
+        let badge = if look.linked { Some("instance") } else { look.mirrored.then_some("mirror") };
+        if let Some(icon) = badge.and_then(|name| assets.icon(name)) {
+            let r = Rect::from_center_size(pos2(x + 6.0, name.center().y), Vec2::splat(13.0));
+            p.image(icon, r, uv, ink);
+            x += 18.0;
         }
         let clip = Rect::from_min_max(name.min, pos2(name.right() - 4.0, name.bottom()));
         p.with_clip_rect(clip.intersect(p.clip_rect())).text(
@@ -303,6 +308,7 @@ fn rows(ui: &mut Ui, scene: &Scene, assets: &Assets, st: &mut State, tips: bool,
         selected: o.id == scene.active_id(),
         also: scene.is_selected(o.id),
         linked: scene.users(o.mesh) > 1,
+        mirrored: o.mirror.is_some(),
         can_delete: n > 1,
         editing: false,
         hover: [false; 3],
@@ -388,7 +394,8 @@ fn rows(ui: &mut Ui, scene: &Scene, assets: &Assets, st: &mut State, tips: bool,
             } else {
                 "Click to select, Ctrl + click to add to the selection, double-click to rename, hold and drag to reorder."
             };
-            tip(response, tips, help);
+            let note = "Mirrored live: its copies are drawn from this mesh (see Mirror below). ";
+            tip(response, tips, &if look.mirrored { format!("{note}{help}") } else { help.to_owned() });
         }
 
         if lifted.is_none() {

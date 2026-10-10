@@ -236,14 +236,32 @@ fn tools() -> Value {
             "Choose the brush and its settings. Only what is given changes. Returns the brush as it now is.",
             json!({
                 "brush": choice(
-                    &["Move", "Clay", "Smooth", "Crease", "Inflate", "Flatten", "Standard", "Layer", "Snake Hook"],
-                    "The brush. Choosing one turns mask painting off.",
+                    &["Move", "Clay", "Smooth", "Crease", "Inflate", "Flatten", "Pose", "Standard", "Layer", "Snake Hook"],
+                    "The brush. Choosing one turns mask painting off. Pose bends a limb: a stroke with it presses on \
+                     the limb and drags, and the limb turns about a joint the brush finds one brush radius back \
+                     along it, toward the body. Size the brush to put the joint where the bend should be.",
                 ),
                 "radius": number("Brush radius as a fraction of the window height, e.g. 0.05."),
                 "strength": number("0.01 to 1. The app's default is 0.1."),
                 "focal_shift": number("-1 to 1: where the falloff sits between the centre and the rim."),
                 "direction": choice(&["add", "subtract"], "Whether the brush builds up or digs in."),
                 "accumulate": boolean("Whether passing over the same place again keeps adding."),
+                "pose_mode": choice(
+                    &["bend", "resize", "stretch"],
+                    "Pose: what a drag does. bend turns the limb about the joint (an inverted stroke twists it \
+                     about its own length); resize grows or shrinks it about the joint (inverted: slides it \
+                     without turning); stretch makes it longer and thinner or shorter and fatter.",
+                ),
+                "pose_joints": number(
+                    "Pose, bend only: 1 to 8 joints. More than one makes a chain back along the limb that reaches \
+                     for the pointer while its far end stays put.",
+                ),
+                "pose_offset": number(
+                    "Pose: 0 to 2. Moves the joint this many brush radii further up the limb, past the brush ring.",
+                ),
+                "pose_rigidity": number(
+                    "Pose: 0 to 1. How sharply a joint bends: 0 a long soft curve, 1 a hinge. The app's default is 0.6.",
+                ),
                 "mask_mode": boolean("Paint the mask instead of sculpting. Masked areas do not move."),
                 "mirror_x": boolean("Mirror strokes across the X plane (left and right)."),
                 "mirror_y": boolean("Mirror strokes across the Y plane."),
@@ -266,7 +284,10 @@ fn tools() -> Value {
                     "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 },
                     "description": "[x, y] or [x, y, pressure] each, all from 0 to 1. Without pressure the stroke is at full pressure, like a mouse.",
                 },
-                "invert": boolean("Flip the brush's direction for this stroke (like holding Ctrl)."),
+                "invert": boolean(
+                    "Flip the brush's direction for this stroke (like holding Ctrl). With Pose: twist instead of \
+                     bend, slide instead of resize.",
+                ),
                 "smooth": boolean("Smooth instead, whatever the brush (like holding Shift)."),
             }),
             &["points"],
