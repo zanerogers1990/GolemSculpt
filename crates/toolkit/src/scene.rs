@@ -70,6 +70,14 @@ pub struct ObjectInfo<'a> {
     /// shape drawn over the object's geometry (see [`ObjectInfo::placements`]).
     /// Not shared with instances.
     pub mirror: Option<MirrorRepeater>,
+    /// Copies of the object that another tool keeps on screen (the copies of
+    /// an array): its own mesh drawn again through these matrices (each the
+    /// copy's own space into world space, after any mirror), as the tool said
+    /// with `Draw::live_copies` in its last frame. Like the mirror copies
+    /// they are places the mesh is shown, not objects; unlike them they are
+    /// not the object's own settings, so [`ObjectInfo::placements`] leaves
+    /// them out and [`ObjectInfo::all_places`] has them.
+    pub live_copies: &'a [Mat4],
     pub vertices: usize,
     pub triangles: usize,
 }
@@ -83,7 +91,8 @@ impl ObjectInfo<'_> {
     /// Every place the object's mesh is drawn through its own settings: the
     /// object itself first, with flip mask 0, then each live mirror copy with
     /// its flip mask (X = 1, Y = 2, Z = 4) and the matrix that puts the mesh
-    /// there. Instances are other objects and are not in it. A copy's matrix
+    /// there. Instances are other objects and are not in it, and neither are
+    /// the copies another tool keeps (`live_copies`). A copy's matrix
     /// is the world reflection after the object's own, so for a reflecting
     /// copy (an odd number of axes) its determinant is negative.
     pub fn placements(&self) -> Vec<(u8, Mat4)> {
@@ -94,6 +103,15 @@ impl ObjectInfo<'_> {
             places.extend(copies.into_iter().map(|copy| (copy.flip_mask, copy.matrix(&model, mirror.center))));
         }
         places
+    }
+
+    /// The matrix of every place the object's mesh is drawn: those of
+    /// [`ObjectInfo::placements`] (the object, then its mirror copies), then
+    /// each of [`ObjectInfo::live_copies`]. What a shape drawn on screen has
+    /// to be tried against to find every vertex it covers.
+    pub fn all_places(&self) -> Vec<Mat4> {
+        let own = self.placements().into_iter().map(|(_, model)| model);
+        own.chain(self.live_copies.iter().copied()).collect()
     }
 }
 
@@ -195,7 +213,10 @@ pub trait Scene {
     /// An object's geometry in its own space.
     fn mesh(&self, id: ObjectId) -> Option<MeshView<'_>>;
 
-    /// The nearest visible surface along a world ray.
+    /// The nearest visible surface along a world ray: any object's own
+    /// place, its live mirror copies, or the copies another tool keeps of it
+    /// (`ObjectInfo::live_copies`). The hit names the object whichever place
+    /// it was on.
     fn raycast(&self, ray: &Ray) -> Option<Hit>;
 
     /// Where a world ray meets one object, shown or hidden.

@@ -171,7 +171,7 @@ impl ArrayTool {
     pub(crate) fn release(&mut self, cx: &mut Ctx) {
         match std::mem::take(&mut self.gesture) {
             Gesture::None => {}
-            Gesture::Drag(drag) if drag.index == 0 => self.end_object_move(cx, drag),
+            Gesture::Drag(drag) if drag.index == 0 => self.end_object_move(cx, drag.index),
             Gesture::Drag(_) => self.commit_edit(),
             Gesture::Draw(stroke) => self.finish_stroke(cx, stroke),
         }
@@ -224,9 +224,10 @@ impl ArrayTool {
         self.arrays.set(drag.object, state);
     }
 
-    /// The start point was let go: the object moves where the drag took it, as
-    /// one step of the scene's history.
-    fn end_object_move(&mut self, cx: &mut Ctx, drag: Drag) {
+    /// The start point (`index`, 0) was let go, by hand or with the gizmo's
+    /// arrows: the object moves where the drag took it, as one step of the
+    /// scene's history.
+    pub(crate) fn end_object_move(&mut self, cx: &mut Ctx, index: usize) {
         let Some((object, by)) = self.shift.take() else { return };
         if by == Vec3::ZERO {
             return;
@@ -235,7 +236,7 @@ impl ArrayTool {
         let mut placement = info.placement;
         placement.position += by;
         cx.commit("Move Arrayed Object", vec![Command::Place { object, placement }]);
-        self.picked = Some(drag.index);
+        self.picked = Some(index);
         // It is a step of the scene's history, not the tool's: say so, since Z
         // steps the array's own edits first.
         let text = "Moved the object and its array. That is a step of the scene's history: Z undoes the array's own \

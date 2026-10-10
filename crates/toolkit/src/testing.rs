@@ -101,6 +101,13 @@ pub struct TestDoc {
     /// The objects selected along with the active one, in the order they
     /// were added (`Bench::select`).
     also: Vec<ObjectId>,
+    /// What each tool said with `Draw::live_copies` in its last frame, by the
+    /// tool (the address of the value the bench was handed, 0 for
+    /// `Bench::live_copies`): replaced whole by that tool's next frame, as the
+    /// app replaces everything every frame.
+    declared: Vec<(usize, ObjectId, Vec<Mat4>)>,
+    /// The same, by object: what `ObjectInfo::live_copies` lends.
+    live: HashMap<ObjectId, Vec<Mat4>>,
     next: u64,
     undo: Vec<Step>,
     redo: Vec<Step>,
@@ -118,6 +125,8 @@ impl TestDoc {
             meshes: HashMap::new(),
             active: ObjectId(0),
             also: Vec::new(),
+            declared: Vec::new(),
+            live: HashMap::new(),
             next: 1,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -192,20 +201,36 @@ impl TestDoc {
             mesh: o.mesh,
             placement: o.placement,
             mirror: o.mirror,
+            live_copies: self.live.get(&o.id).map_or(&[], |copies| &copies[..]),
             vertices: geometry.mesh.vertex_count(),
             triangles: geometry.mesh.triangle_count(),
         }
     }
 
-    /// The nearest hit on an object or on any of its live mirror copies, as
-    /// the app picks them.
+    /// The nearest hit on an object, on any of its live mirror copies or on
+    /// the copies a tool keeps of it, as the app picks them.
     fn hit_object(&self, object: &Object, ray: &Ray) -> Option<Hit> {
         let geometry = self.meshes.get(&object.mesh)?;
-        let places = self.info_of(object, geometry).placements();
+        let places = self.info_of(object, geometry).all_places();
         places
             .into_iter()
-            .filter_map(|(_, model)| self.hit_placed(object, model, ray))
+            .filter_map(|model| self.hit_placed(object, model, ray))
             .min_by(|a, b| a.distance.total_cmp(&b.distance))
+    }
+
+    /// Takes in what `key` (a tool) said this frame about copies of objects:
+    /// whatever it said before is replaced, what the other tools said kept.
+    fn declare(&mut self, key: usize, said: &[(ObjectId, Vec<Mat4>)]) {
+        self.declared.retain(|(from, _, _)| *from != key);
+        self.declared.extend(said.iter().map(|(object, copies)| (key, *object, copies.clone())));
+        self.gather();
+    }
+
+    fn gather(&mut self) {
+        self.live.clear();
+        for (_, object, copies) in &self.declared {
+            self.live.entry(*object).or_default().extend(copies.iter().copied());
+        }
     }
 
     /// How many undo steps are held.
@@ -526,6 +551,19 @@ impl Bench {
         self.doc.log.clear();
     }
 
+    /// Says that `object` has copies of itself at these world matrices, as a
+    /// tool does with `Draw::live_copies`: places the mesh is shown, which
+    /// `ObjectInfo::live_copies` lends and `raycast` meets. They stay until
+    /// this is called again for the object (with an empty list to take them
+    /// away); no tool's frame touches them.
+    pub fn live_copies(&mut self, object: ObjectId, copies: &[Mat4]) {
+        self.doc.declared.retain(|(from, said, _)| !(*from == 0 && *said == object));
+        if !copies.is_empty() {
+            self.doc.declared.push((0, object, copies.to_vec()));
+        }
+        self.doc.gather();
+    }
+
     /// Makes `instance` a second object showing the same mesh as `of`, at
     /// `placement`, as Instance in the Objects card does. Not an undo step.
     pub fn instance(&mut self, of: ObjectId, name: &str, placement: Placement) -> ObjectId {
@@ -673,11 +711,16 @@ impl Bench {
         taken
     }
 
-    /// One frame: what the tool draws.
+    /// One frame: what the tool draws. The copies it said were places of an
+    /// object (`Draw::live_copies`) are taken in, as the app does, replacing
+    /// what it said in its last frame.
     pub fn frame(&mut self, tool: &mut dyn Tool) -> Draw {
         let mut draw = Draw::default();
         self.call(|cx| tool.frame(cx, &mut draw));
         self.env.time += self.env.dt as f64;
+        // A reference is never at address 0, which is `Bench::live_copies`' own.
+        let key = (tool as *const dyn Tool).cast::<()>() as usize;
+        self.doc.declare(key, draw.object_places());
         draw
     }
 
@@ -1104,6 +1147,63 @@ mod tests {
 
     fn bench_px(cx: &Ctx, world: Vec3) -> Vec2 {
         cx.view.project(world).unwrap()
+    }
+
+    /// A tool that keeps copies of the selected object, as the Array tool does.
+    #[derive(Default)]
+    struct Keeper {
+        at: Vec<Mat4>,
+    }
+
+    impl Tool for Keeper {
+        fn info(&self) -> crate::tool::Info {
+            crate::tool::Info { id: "keeper", name: "Keeper", icon: "", tip: "", hotkey: None }
+        }
+
+        fn frame(&mut self, cx: &mut Ctx, draw: &mut Draw) {
+            draw.live_copies(cx.scene().active(), &self.at);
+        }
+    }
+
+    #[test]
+    fn copies_a_tool_keeps_are_places_of_the_object_for_everyone_until_its_next_frame_says_otherwise() {
+        let mut bench = Bench::new();
+        let a = bench.add("A", cube(0.25));
+        let (left, right) = (Mat4::from_translation(Vec3::new(-1.5, 0.0, 0.0)), Mat4::from_translation(Vec3::new(1.5, 0.0, 0.0)));
+        let mut keeper = Keeper { at: vec![left, right] };
+
+        // Nothing is said before the tool's first frame.
+        assert!(bench.doc.info(a).unwrap().live_copies.is_empty());
+        assert!(bench.doc.raycast(&bench.env.view.ray(bench.px(Vec3::new(1.5, 0.0, 0.25)))).is_none());
+
+        let draw = bench.frame(&mut keeper);
+        assert_eq!(draw.object_copies().len(), 1, "they are drawn");
+        let info = bench.doc.info(a).unwrap();
+        assert_eq!(info.live_copies, [left, right]);
+        assert_eq!(info.placements().len(), 1, "they are not the object's own settings");
+        assert_eq!(info.all_places(), [info.matrix(), left, right]);
+        for x in [-1.5, 1.5] {
+            let hit = bench.doc.raycast(&bench.env.view.ray(bench.px(Vec3::new(x, 0.0, 0.25)))).expect("a copy is there to hit");
+            assert_eq!((hit.object, hit.position.z), (a, 0.25));
+        }
+
+        // A tool's places are its own: another tool's frame leaves them alone, its own replaces them.
+        let mut other = Keeper::default();
+        bench.frame(&mut other);
+        assert_eq!(bench.doc.info(a).unwrap().live_copies.len(), 2);
+        keeper.at.pop();
+        bench.frame(&mut keeper);
+        assert_eq!(bench.doc.info(a).unwrap().live_copies, [left]);
+        keeper.at.clear();
+        bench.frame(&mut keeper);
+        assert!(bench.doc.info(a).unwrap().live_copies.is_empty());
+
+        // And a test can say them directly.
+        bench.live_copies(a, &[right]);
+        bench.frame(&mut keeper);
+        assert_eq!(bench.doc.info(a).unwrap().live_copies, [right]);
+        bench.live_copies(a, &[]);
+        assert!(bench.doc.info(a).unwrap().live_copies.is_empty());
     }
 
     #[test]

@@ -14,6 +14,7 @@
 //! | Line, Circle | Make an array of the selected object in one click |
 //! | Draw Curve, then drag | The copies follow the curve you draw; end where you began to close it |
 //! | Drag a point | Move it, on the plane facing you |
+//! | Click a point | Pick it: the gizmo's arrows sit on it, to slide it along one axis |
 //! | Drag the square start point | Move the object, and its array with it |
 //! | Click the path | Add a point there, and keep dragging it |
 //! | Shift + drag the last point | Extend the path from there |
@@ -38,6 +39,7 @@ use glam::Vec3;
 use sculpt_toolkit::{Button, Ctx, Draw, Event, GizmoTarget, Info, Key, ObjectId, Placement, Tool};
 
 use crate::arrays::{Arrays, History};
+use crate::arrows::Pointing;
 use crate::copies;
 use crate::finish::{Building, Retired};
 use crate::gestures::{Gesture, Hover, Note};
@@ -66,8 +68,10 @@ pub struct ArrayTool {
     pub(crate) copy: Option<CopyPick>,
     /// A gizmo drag of that copy in progress.
     pub(crate) posing: Option<Posing>,
+    /// A gizmo drag of the picked point (its arrows) in progress.
+    pub(crate) pointing: Option<Pointing>,
     /// What the gizmo sits on, worked out each frame (`Tool::gizmo` has no
-    /// context to work it out from).
+    /// context to work it out from): the picked copy, or the picked point.
     pub(crate) pose_gizmo: Option<GizmoTarget>,
     pub(crate) hover: Hover,
     /// The next drag in the viewport draws a curve.
@@ -145,6 +149,10 @@ impl ArrayTool {
             "Making the copies real. Cancel it from the jobs list if it is taking too long."
         } else if !self.arrays.has(target) {
             "Pick Line, Circle or Draw Curve to repeat the selected object."
+        } else if self.picked == Some(0) {
+            "Drag the square to move the object and its array, or an arrow to slide it along one axis."
+        } else if self.picked.is_some() {
+            "Drag the dot to move the point, or an arrow to slide it along one axis. Delete removes it."
         } else {
             "Drag the points to reshape the array. Click a copy to turn or move them all."
         }
@@ -158,6 +166,7 @@ impl ArrayTool {
             return;
         }
         self.cancel_gesture();
+        self.finish_arrows(cx);
         self.commit_edit();
         self.finish_pose(cx);
         self.picked = None;
@@ -170,6 +179,12 @@ impl ArrayTool {
     /// What this frame draws of every live array: the copies, as the object's
     /// own mesh drawn again. Whether the tool is up or not, so they stay on
     /// screen once it is put away.
+    ///
+    /// They are also said to be places of the object (`Draw::live_copies`),
+    /// so that the region tools cut through them and the brushes sculpt
+    /// through them, as in the Unity app. That is for the copies as they
+    /// stand: while a drag shows the object somewhere the scene does not
+    /// have it yet, the copies are only drawn there.
     fn draw_copies(&self, cx: &Ctx, draw: &mut Draw) {
         let scene = cx.scene();
         for (object, live) in self.arrays.iter() {
@@ -182,12 +197,12 @@ impl ArrayTool {
             // Its own mirror copies go with it when it is left out, so they
             // are drawn here as the mirror's side of copy 0.
             let placement = self.drawn_placement(&info);
-            let first = if placement == info.placement { 1 } else { 0 };
-            if first == 0 {
+            if placement != info.placement {
                 draw.hide(object);
+                draw.copies(object, &copies::drawn(&live.layout, &pose_of(placement), info.mirror, 0));
+            } else {
+                draw.live_copies(object, &copies::drawn(&live.layout, &pose_of(placement), info.mirror, 1));
             }
-            let matrices = copies::drawn(&live.layout, &pose_of(placement), info.mirror, first);
-            draw.copies(object, &matrices);
         }
     }
 
@@ -258,8 +273,9 @@ impl Tool for ArrayTool {
 
     fn leave(&mut self, cx: &mut Ctx) {
         self.cancel_gesture();
-        self.commit_edit();
         // A drag of the gizmo that is cut short ends where it is.
+        self.finish_arrows(cx);
+        self.commit_edit();
         self.finish_pose(cx);
         self.armed = false;
         self.picked = None;

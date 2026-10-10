@@ -310,14 +310,14 @@ impl Running {
     }
 
     /// Whether a press at `pos` is a stroke on the active mesh, given the
-    /// placement under the pointer (an object and which of its live mirror
-    /// copies, 0 for the object itself). If it is, the stroke is sent through
-    /// the placement of the mesh that was pressed: the active object, any
-    /// instance of it, or a mirror copy of either, which show the same mesh
-    /// somewhere else.
-    pub(super) fn press_on_active(&mut self, picked: Option<(u64, u8)>, pos: Vec2) -> bool {
+    /// placement under the pointer (an object and which of its places, 0 for
+    /// the object itself: see `Picked::copy`). If it is, the stroke is sent
+    /// through the placement of the mesh that was pressed: the active object,
+    /// any instance of it, or a mirror copy or an array copy of either, which
+    /// show the same mesh somewhere else.
+    pub(super) fn press_on_active(&mut self, picked: Option<(u64, u16)>, pos: Vec2) -> bool {
         self.doc.scene.release_brush();
-        let on = |at: (u64, u8)| self.doc.scene.shows_active_mesh(at.0).then_some(at);
+        let on = |at: (u64, u16)| self.doc.scene.shows_active_mesh(at.0).then_some(at);
         let Some((target, copy)) = picked.and_then(|at| on(at).or_else(|| self.reach_past(pos))) else { return false };
         let doc = &mut self.doc;
         doc.scene.aim_brush(target, copy);
@@ -338,7 +338,7 @@ impl Running {
     /// counts when the mesh lies no more than a brush radius behind and shows
     /// through somewhere inside the brush ring. Returns the placement of the
     /// mesh the stroke should go through. The Unity app's rule.
-    fn reach_past(&self, pos: Vec2) -> Option<(u64, u8)> {
+    fn reach_past(&self, pos: Vec2) -> Option<(u64, u16)> {
         let doc = &self.doc;
         let (scene, mesh) = (&doc.scene, doc.scene.active_mesh());
         let (origin, dir) = self.view.ray(pos);
@@ -360,7 +360,7 @@ impl Running {
     }
 
     /// Whether the pointer is over the active mesh: the active object, an
-    /// instance of it, or a live mirror copy of either. Over one of those the
+    /// instance of it, or a live mirror copy or an array copy of either. Over one of those the
     /// brush cursor is worked out in that placement's space until the view is
     /// next rebuilt, so the ring sits on what is under the pointer. Runs each
     /// frame.
@@ -379,7 +379,7 @@ impl Running {
         let Some((id, copy)) = picked else { return false };
         let Some(under) = scene.get(id).filter(|o| o.mesh == mesh) else { return false };
         if (id, copy) != (scene.active_id(), 0) {
-            self.local = self.view.local_to(under.placed_matrix(copy));
+            self.local = self.view.local_to(scene.place_matrix(under, copy));
         }
         true
     }

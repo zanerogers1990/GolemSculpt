@@ -320,6 +320,8 @@ pub struct Draw {
     pub overlay: Overlay,
     previews: Vec<PreviewDraw>,
     copies: Vec<(ObjectId, Vec<Mat4>)>,
+    /// The copies that are also places the object is shown (`live_copies`).
+    places: Vec<(ObjectId, Vec<Mat4>)>,
     hidden: Vec<ObjectId>,
 }
 
@@ -347,6 +349,27 @@ impl Draw {
         }
     }
 
+    /// Draws extra copies of a scene object as [`Draw::copies`] does, and says
+    /// they are part of the object: places its mesh is shown, as its own live
+    /// mirror copies are. Every other tool and the app's own pointer then see
+    /// them (`ObjectInfo::live_copies`): a shape drawn over one acts on the
+    /// object through it, a brush stroke begun on one sculpts the object
+    /// through it, and a click on one picks the object.
+    ///
+    /// For copies that are really there, such as the copies of an array, not
+    /// for a ghost of where something would go (`copies` and `instances` are
+    /// for those). Say it every frame, for as long as the copies are on
+    /// screen, even when the tool is not up; a frame that does not say it
+    /// takes the places away again. The matrices are each copy's own space
+    /// into world space, so a copy drawn reflected has a negative determinant,
+    /// as a mirror copy's does.
+    pub fn live_copies(&mut self, object: ObjectId, transforms: &[Mat4]) {
+        if !transforms.is_empty() {
+            self.copies.push((object, transforms.to_vec()));
+            self.places.push((object, transforms.to_vec()));
+        }
+    }
+
     /// Leaves a scene object out of this frame's picture, without changing
     /// the scene: for when a preview stands in for it.
     pub fn hide(&mut self, object: ObjectId) {
@@ -370,11 +393,18 @@ impl Draw {
         &self.hidden
     }
 
+    /// For the host: the copies of scene objects that are places the object
+    /// is shown (see [`Draw::live_copies`]), drawn already with `object_copies`.
+    pub fn object_places(&self) -> &[(ObjectId, Vec<Mat4>)] {
+        &self.places
+    }
+
     /// Adds everything in `other` after what is here.
     pub fn append(&mut self, mut other: Draw) {
         self.overlay.shapes.append(&mut other.overlay.shapes);
         self.previews.append(&mut other.previews);
         self.copies.append(&mut other.copies);
+        self.places.append(&mut other.places);
         for id in other.hidden {
             self.hide(id);
         }
@@ -429,7 +459,26 @@ mod tests {
         draw.mesh(&Preview::new(), Style::solid(Color32::WHITE));
         draw.instances(&Preview::from_mesh(triangle()), Style::solid(Color32::WHITE), &[]);
         draw.copies(ObjectId(1), &[]);
+        draw.live_copies(ObjectId(1), &[]);
         assert!(draw.is_empty());
+    }
+
+    #[test]
+    fn live_copies_are_drawn_like_copies_and_also_declared_as_places() {
+        let (a, b) = (ObjectId(1), ObjectId(2));
+        let (moved, turned) = (Mat4::from_translation(Vec3::X), Mat4::from_rotation_z(0.5));
+        let mut one = Draw::default();
+        one.copies(a, &[moved]);
+        one.live_copies(b, &[moved, turned]);
+        assert_eq!(one.object_copies().len(), 2, "both are drawn");
+        assert_eq!(one.object_places(), [(b, vec![moved, turned])], "only the live ones are places");
+
+        let mut all = Draw::default();
+        all.live_copies(a, &[turned]);
+        all.append(one);
+        assert_eq!(all.object_places().len(), 2, "another tool's places are kept when the draws are put together");
+        assert_eq!(all.object_places()[0].0, a);
+        assert!(!all.is_empty());
     }
 
     #[test]

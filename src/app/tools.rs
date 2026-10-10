@@ -288,6 +288,7 @@ impl kit::Scene for Access<'_> {
             mesh: kit::MeshId(o.mesh),
             placement: kit::Placement { position: o.position, rotation: o.rotation, scale: o.scale },
             mirror: o.mirror,
+            live_copies: self.scene.tool_places(o.id),
             vertices: mesh.map_or(0, Mesh::vertex_count),
             triangles: mesh.map_or(0, Mesh::triangle_count),
         })
@@ -949,6 +950,13 @@ impl Running {
                 Tools::call(&mut self.doc, &self.ui.assets, index, |tool, cx| tool.frame(cx, &mut one));
                 draw.append(one);
             }
+            // The copies tools keep of objects (an array's) are places the
+            // object is shown, for the pointer and for the other tools.
+            let mut places = std::collections::HashMap::<u64, Vec<Mat4>>::new();
+            for (object, copies) in draw.object_places() {
+                places.entry(object.0).or_default().extend(copies.iter().copied());
+            }
+            self.doc.scene.set_tool_places(places);
             self.doc.tools.draw = draw;
         }
         self.renderer.previews.show(&self.gpu, &self.view, self.doc.tools.draw.previews());

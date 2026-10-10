@@ -166,12 +166,13 @@ impl ArrayTool {
     // ---- the gizmo ---------------------------------------------------------------
 
     /// Works out what the gizmo sits on this frame: the picked copy, with its
-    /// arrows and rings but no cubes (a copy's size is the array's to set).
+    /// arrows and rings but no cubes (a copy's size is the array's to set), or
+    /// else the picked point of the path with arrows only (`arrows.rs`).
     /// Lets go of a copy that is no longer there: the array changed, was taken
     /// off, or the mirror side it was seen through is gone.
     pub(crate) fn refresh_gizmo(&mut self, cx: &Ctx) {
         self.pose_gizmo = None;
-        let Some(pick) = self.copy else { return };
+        let Some(pick) = self.copy else { return self.refresh_arrows(cx) };
         let scene = cx.scene();
         let live = self.arrays.get(pick.object);
         let info = scene.info(pick.object);
@@ -202,8 +203,12 @@ impl ArrayTool {
         });
     }
 
-    /// A drag of the gizmo on the picked copy: where the copy belongs now.
+    /// A drag of the gizmo on the picked copy, or on the picked point: where
+    /// it belongs now.
     pub(crate) fn gizmo_event(&mut self, cx: &mut Ctx, placement: Placement, phase: GizmoPhase) {
+        if self.arrows_event(cx, placement, phase) {
+            return;
+        }
         match phase {
             GizmoPhase::Begin => self.begin_pose(cx),
             GizmoPhase::Move => self.pose_to(cx, placement),

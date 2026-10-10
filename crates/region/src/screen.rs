@@ -33,17 +33,22 @@ pub fn cut_view(view: &View, model: Mat4) -> CutView {
 }
 
 /// One view per place `object`'s mesh is drawn: the object itself first, then
-/// its live mirror copies, then every other shown object that shares its mesh
-/// (its instances) and their mirror copies. A shape drawn over any of these
-/// covers the vertices that place shows, which are the object's own: the order
-/// of the Unity app's `MeshFrameMatrices`, minus the array copies, which the
-/// Array tool keeps to itself.
+/// its live mirror copies and the copies another tool keeps of it (the copies
+/// of an array, `ObjectInfo::live_copies`), then every other shown object that
+/// shares its mesh (its instances) with theirs. A shape drawn over any of
+/// these covers the vertices that place shows, which are the object's own:
+/// the places of the Unity app's `MeshFrameMatrices`, in its order, which
+/// walks the mirror copies, the instances and the array copies in turn.
 ///
-/// A mirror copy is the object's matrix with a world reflection after it, so
-/// for an odd number of mirrored axes its determinant is negative, and seen
-/// through it the mesh is inside out. Nothing the cuts do reads that sign, so
-/// the reflected matrix goes in as it is, exactly as the Unity app hands its
-/// trimmer the copy's `localToWorldMatrix`. A shape covers whatever lies
+/// A copy is told apart from the object by its matrix alone: the object's
+/// matrix with a world reflection after it for a mirror copy, and for an array
+/// copy the object turned, moved and resized by the array's layout (a
+/// tapered array's copies are smaller, and the matrix carries that), seen
+/// through the mirror too when the array is mirrored. For an odd number of
+/// mirrored axes the determinant is negative, and seen through it the mesh
+/// is inside out. Nothing the cuts do reads that sign, so the reflected
+/// matrix goes in as it is, exactly as the Unity app hands its trimmer the
+/// copy's `localToWorldMatrix`. A shape covers whatever lies
 /// under it, front and back, so there is no facing to get the wrong way
 /// round. The cut is made on the object's mesh in the object's own space, and
 /// the view only says where each vertex lands on screen and how deep: a
@@ -51,8 +56,9 @@ pub fn cut_view(view: &View, model: Mat4) -> CutView {
 /// view depth, and every cap, ring and wall takes its winding from the
 /// direction the shell walks the rim it is sewn to (see `sculpt_cut::trim`).
 /// So the mesh comes out wound as it went in, however the view turned it.
-/// `tests/mirror.rs` holds the proof: each cut is checked against the same
-/// shape drawn over the copy baked into an object of its own.
+/// `tests/mirror.rs` and `tests/copies.rs` hold the proof: each cut is
+/// checked against the same shape drawn over the copy baked into an object of
+/// its own.
 ///
 /// A copy is shown only while its object is: a hidden object's copies are
 /// hidden with it, and the shape cannot be drawn over what is not there. The
@@ -60,33 +66,36 @@ pub fn cut_view(view: &View, model: Mat4) -> CutView {
 /// hidden object and an instance's shape is drawn over a shown one.
 pub fn cut_views(scene: &dyn Scene, object: ObjectId, view: &View) -> Vec<CutView> {
     let Some(info) = scene.info(object) else { return Vec::new() };
-    let mut views = placed(&info, view, true);
+    let mut shown = vec![(info, true)];
     for other in scene.objects() {
         if other == object {
             continue;
         }
         if let Some(instance) = scene.info(other).filter(|o| o.mesh == info.mesh && o.visible) {
-            views.extend(placed(&instance, view, false));
+            shown.push((instance, false));
         }
     }
-    views
+    // What each object's own settings give, then the copies tools keep: the
+    // order of the Unity app's list, which walks the copies, the instances and
+    // the array copies.
+    let own = shown.iter().flat_map(|(info, even_hidden)| own_places(info, *even_hidden));
+    let kept = shown.iter().filter(|(info, _)| info.visible).flat_map(|(info, _)| info.live_copies.iter().copied());
+    own.chain(kept).map(|model| cut_view(view, model)).collect()
 }
 
-/// The views of one object: itself (unless it is hidden and `even_hidden` is
-/// off) and, while it is shown, each of its live mirror copies.
-fn placed(info: &ObjectInfo<'_>, view: &View, even_hidden: bool) -> Vec<CutView> {
-    info.placements()
-        .into_iter()
-        .filter(|&(copy, _)| info.visible || (copy == 0 && even_hidden))
-        .map(|(_, model)| cut_view(view, model))
-        .collect()
+/// The places one object's own settings give its mesh: itself (unless it is
+/// hidden and `even_hidden` is off) and, while it is shown, each of its live
+/// mirror copies.
+fn own_places(info: &ObjectInfo<'_>, even_hidden: bool) -> Vec<Mat4> {
+    let wanted = |copy: u8| info.visible || (copy == 0 && even_hidden);
+    info.placements().into_iter().filter(|&(copy, _)| wanted(copy)).map(|(_, model)| model).collect()
 }
 
 /// The brushes' symmetry as the list of operations a gesture repeats under:
 /// the identity first, then every other copy a stroke would be made as, the
 /// mirror images and the turns round the radial axis alike. They are in the
 /// object's own space, so they repeat the same way under every view of it:
-/// the object, its instances and its live mirror copies.
+/// the object, its instances, its live mirror copies and the copies tools keep.
 pub fn symmetry(env: &Env) -> Vec<SymmetryOp> {
     env.symmetry().ops().to_vec()
 }

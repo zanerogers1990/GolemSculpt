@@ -11,3 +11,8 @@ egui = { workspace = true }
 sculpt-geom = { path = "../geom" }
 sculpt-toolkit = { path = "../toolkit" }
 sculpt-cut = { path = "../cut" }
+
+# Only the tests: they draw shapes over the copies of a real array's layout
+# (tests/copies.rs). The tools themselves know nothing of arrays.
+[dev-dependencies]
+sculpt-array = { path = "../array" }

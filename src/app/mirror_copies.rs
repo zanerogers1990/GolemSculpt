@@ -16,7 +16,7 @@ use super::{Drag, Running};
 use crate::doc::{Action, Tool};
 use crate::gizmo::{Frame, Handles, Placement, Target};
 use crate::render::{DrawItem, flash};
-use crate::scene::{MirrorCommand, Object, Scene};
+use crate::scene::{MirrorCommand, Object, Scene, TOOL_COPY};
 use crate::sculpt::Brush;
 
 /// The gizmo's target for an object: its own place, or, when it is the active
@@ -92,8 +92,10 @@ impl Running {
     }
 
     /// The nearest placement of any object under a pixel: the object, and
-    /// which of its live mirror copies (0 for the object itself).
-    pub(super) fn pick_placed(&self, px: Vec2) -> Option<(u64, u8)> {
+    /// which of its places (0 for the object itself, else a live mirror
+    /// copy's flip mask or `TOOL_COPY` and up for a copy a tool keeps: see
+    /// `Picked::copy`).
+    pub(super) fn pick_placed(&self, px: Vec2) -> Option<(u64, u16)> {
         let (origin, dir) = self.view.ray(px);
         self.doc.scene.pick(origin, dir, &self.doc.mesh).map(|p| (p.id, p.copy))
     }
@@ -108,7 +110,10 @@ impl Running {
             return;
         }
         if let Some((id, copy)) = self.pick_placed(self.input.pointer) {
-            self.doc.scene.select_side(id, copy);
+            // The gizmo sits on the object or on one of its mirror copies; a
+            // copy a tool keeps is the tool's, and the object's own place is
+            // where the gizmo goes for it.
+            self.doc.scene.select_side(id, if copy < TOOL_COPY { copy as u8 } else { 0 });
             self.redraw = true;
         }
     }

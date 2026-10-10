@@ -23,6 +23,11 @@
 //! button says what the next drag will do: a trim deletes geometry and should
 //! not look like a mask. The shape is the row inside each.
 //!
+//! A shape acts through every place the selected object is drawn, as in the
+//! Unity app: the object, its live mirror copies, its instances and the copies
+//! another tool keeps of it (an array's). The tools learn of the places from
+//! the scene (`ObjectInfo`), not from whoever made them; see `screen.rs`.
+//!
 //! While Mask, Hide, Trim or Split is up it has the pointer:
 //!
 //! | Input | Action |

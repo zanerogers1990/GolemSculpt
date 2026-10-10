@@ -2550,6 +2550,7 @@ dependencies = [
  "egui",
  "glam",
  "rayon",
+ "sculpt-array",
  "sculpt-cut",
  "sculpt-geom",
  "sculpt-toolkit",
