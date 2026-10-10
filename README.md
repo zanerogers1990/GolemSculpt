@@ -482,9 +482,9 @@ its own.
 Dragging on the background orbits, as everywhere else (the Unity app drew a
 tube there; here that is Ctrl + drag). Live tubes are a scaffold: not saved in
 `.sclp` files, and drawn only while the tool is up. Put it away and they wait,
-out of sight, until it is brought back (the Unity app hid them too, and so do
-the tool's handles: to see a tube among the rest of the model, merge it or
-keep it separate). While the tool is up Z steps the
+out of sight, until it is brought back (the Unity app hid them too: to see a
+tube among the rest of the model while you sculpt, merge it or keep it
+separate). While the tool is up Z steps the
 tubes' own edits first (a point moved, a slider changed), then the scene's.
 Merge and Keep Separate are steps of the scene's history: Z right after one
 gives the tubes back live, with the tool brought up if it was put away, and
