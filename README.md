@@ -16,7 +16,7 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | Input | Action |
 | --- | --- |
 | Left drag on the model | Sculpt |
-| Ctrl + drag, or right drag | Sculpt inverted |
+| Ctrl + drag, or right drag | Sculpt inverted (Pose: twist the limb, or slide it) |
 | Shift + drag | Smooth |
 | Left drag on the background | Orbit |
 | Alt + drag | Orbit |
@@ -30,7 +30,7 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | H / Shift + H / Alt + H | Hide the selection / hide everything else / show everything |
 | / | Local View: only the selection, framed; again to bring the rest and the view back |
 | Delete | Delete the selected object (asks first) |
-| 1 2 3 4 5 6 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Standard, Layer, Snake Hook |
+| 1 2 3 4 5 6 7 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook |
 | S / F / D + drag | Brush size / strength / focal shift |
 | Space (hold) | Brush wheel |
 | M | Mask painting |
@@ -77,6 +77,48 @@ them all.
   so moving one finger leaves the finger next to it alone.
 - Mask painting has **Mask Hardness** for its edge; the selected brush's
   falloff and Front Facing Only do not apply to it.
+
+### Pose
+
+**Pose** (**7**) bends a limb the way you would pose a figure, with nothing to
+mask or set up first. It works as the Pose brush in Blender does.
+
+- Rest the pointer on a limb and a white line shows what a press would do. It
+  runs from the pointer to a dot with a ring round it: the **joint**. What is
+  on the pointer's side of the joint is the limb that will move, hand and all;
+  what is past it stays where it is.
+- **The brush size places the joint.** It sits in the middle of the limb where
+  the brush ring crosses it, on the side toward the body, so a bigger brush
+  bends the limb further up. Scroll, or hold S and drag, and the line follows
+  as the ring grows. The ring has to reach right round the limb: with the
+  pointer on one side of an arm it must take in the far side too. A smaller
+  one only gets hold of a patch of skin, and turns that patch and nothing
+  else (the line shows it: the joint sits right under the pointer).
+- Drag, and the limb turns about the joint to point at the pen. **Ctrl + drag**
+  (or the right button) twists it about its own length, the skin under the pen
+  going round with the pen.
+- **Segments (Joints)**: with more than one, a chain of joints runs back along
+  the limb, each a brush size from the last, and the limb reaches for the pen
+  like an arm: the point you took hold of follows the pen, every part keeps
+  its length, and the last joint (the ringed one) stays put.
+- **Joint Offset** pushes the joint further up the limb, past the brush ring,
+  by that many brush sizes: for a hand or a face, where a brush small enough
+  to pick out one part would put the joint too close to it.
+- **Rigidity** sets how sharply a joint bends, from a long soft curve to a
+  hinge. Focal Shift and Custom Falloff shape the bend itself: the curve's
+  left end is the limb's side of the joint, its right end the side that stays.
+- **Resize** makes the limb bigger or smaller about the joint as you drag away
+  from the joint or toward it (Ctrl + drag slides it without turning).
+  **Stretch** makes it longer and thinner, or shorter and fatter, keeping its
+  volume. Both work about one joint.
+- Masked surface stays where it is, hidden parts are left alone, and one drag
+  is one undo step. Strength and pen pressure do not apply: the limb follows
+  the pen exactly.
+- With a mirror on, each side gets a joint of its own, so both arms bend
+  together. A limb that lies on the mirror plane itself (a neck, a tail, the
+  trunk) can only bend within the plane, and will not twist: dragged to one
+  side it stays put, which is the mirror keeping the model symmetric. Turn the
+  mirror off to tilt a head.
 
 ## Transform gizmo
 
@@ -628,15 +670,33 @@ single-key shortcuts are switched off, a drag orbits, and the pointer hides
 once it has rested for a second and a half.
 
 **Record 360° Loop** saves exactly one turn, starting from the view as it is
-and at the Speed above, as numbered PNG pictures (`frame_0000.png`...) in a
-folder of their own under `Videos\Sculpt`. The last picture flows straight
-back into the first, so it plays as a seamless loop. Pick the shape (16:9,
-1:1, 9:16 or 4K) and 24, 30 or 60 frames a second first; the line under the
-buttons says how many pictures that makes. The pictures are drawn at that size
-whatever size the window is, with no panels or guides in them, and a square or
-upright picture gets a wider lens so nothing at the sides is cropped. The
-window shows progress while it records; **Cancel** or Esc stops it and removes
-what was written. The pictures are large (about 2 MB each at 1080p).
+and at the Speed above, as an **MP4** video in `Videos\Sculpt`
+(`Turntable_<date>_<time>.mp4`), ready to post or to play round and round. Pick
+the shape (16:9, 1:1, 9:16 or 4K) and 24, 30 or 60 frames a second first; the
+line under the buttons says how long the loop is, how many frames it holds and
+what it will be saved as. The frames are drawn at that size whatever size the
+window is, with no panels or guides in them, and a square or upright picture
+gets a wider lens so nothing at the sides is cropped. The window shows progress
+while it records, and afterwards the card says what the file is called and
+where it went. **Cancel** or Esc stops it and removes what was written;
+closing the app part-way does the same. Until it is finished the video is
+called `Turntable_<date>_<time>.recording.mp4`, so a half-written file is never
+mistaken for a loop.
+
+It is a true loop: the video holds one picture for each step of the turn and
+no more, so its frames add up to exactly the turn's length (a 12 second turn at
+30 frames a second is 360 frames, 12.000 seconds) and the last frame flows into
+the first with the same step as any other two, with no repeated frame at the
+join. No frame is ever dropped: if the encoder is behind, the recording waits
+for it.
+The video needs Windows (it uses the video encoder Windows comes with); the
+card offers it only there.
+
+**PNG frames**, the second choice beside **MP4**, saves the same turn as
+numbered pictures (`frame_0000.png`...) in a folder of their own under
+`Videos\Sculpt`, for compositing or a GIF tool. They are large (about 2 MB each
+at 1080p). The Unity app offered the same two choices, with the video as the
+default.
 
 ## Timelapse
 
@@ -700,12 +760,15 @@ sculpt.exe --screenshot out.png --demo-select  # the same with three objects sel
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
 sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play | gizmo | gizmo-held | gizmo-play
 sculpt.exe --screenshot out.png --demo-mirror  # the sphere off centre, its live mirror on, strokes laid on the copy (SCULPT_DEMO_MIRROR=xz | gizmo | validate | front | back | play)
+sculpt.exe --screenshot out.png --demo-pose bend     # a figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play (bend:close moves the camera in; :soft and :offset change those settings)
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo-tool trim:mirror   # a shape drawn over the object's live mirror copy: also hide:mirror, mask:mirror, split:mirror
 sculpt.exe --screenshot out.png --demo-tool array:mirror  # a mirrored column of copies; array:copy picks one (the gizmo on it), array:posed moves and turns it, array:onpath puts the move back
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
+sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a name ending in .mp4): then reads the file back and checks its frames, size, frame rate and length
+sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 frames (SCULPT_DEMO_CAMERA=close closes the app instead) and checks nothing is left
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-exit | ask-open | ask-open-clean | play

@@ -181,6 +181,11 @@ pub(super) fn crease_built_in(t: f32) -> f32 {
 /// It walks the same functions the brushes weigh vertices with, so the ring
 /// cannot drift from the stroke.
 pub fn half_weight_radius(brush: Brush, falloff: &Falloff, clay_soft: f32) -> f32 {
+    if brush == Brush::Pose {
+        // Pose turns a limb about a joint: its radius only says where the
+        // joint is, so there is no half weight to draw a ring at.
+        return 1.0;
+    }
     let weight = |u: f32| match brush {
         Brush::Crease => falloff.at(u, crease_built_in),
         Brush::Clay => clay_weight(falloff, u, clay_soft),
@@ -479,7 +484,8 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut
         Brush::Crease => crease(mesh, p, d, leaves),
         Brush::Smooth => smooth_dab(mesh, p, d, leaves, scratch),
         Brush::SnakeHook => snake(mesh, p, d, leaves),
-        Brush::Move => {}
+        // Move and Pose take hold once at the press and are dragged, not dabbed.
+        Brush::Move | Brush::Pose => {}
     }
 }
 
