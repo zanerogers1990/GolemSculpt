@@ -13,7 +13,7 @@
 use glam::{Mat4, Quat, Vec2, Vec3};
 use sculpt_geom::mirror::reflect_point;
 use sculpt_toolkit::testing::{Bench, cube};
-use sculpt_toolkit::{Button, Command, Draw, Key, ObjectId, Placement, Scene, Tool};
+use sculpt_toolkit::{Button, Command, Draw, Key, ObjectId, Placement, Scene, Symmetry, Tool};
 
 use crate::tool_tests::Panel;
 use crate::{Apply, ArrayState, ArrayTool, CopyPick};
@@ -194,6 +194,23 @@ fn separate_objects_of_a_mirrored_array_are_mirrored_too_and_one_undo_takes_them
     assert!(tool.has_array(object), "the live array is back, still mirrored");
     assert_eq!(bench.doc.info(object).unwrap().mirror, mirror);
     assert_eq!(copies(&bench.frame(&mut tool), object).len(), 4 * 4);
+}
+
+/// Each object an array is turned into is sculpted the way the arrayed object
+/// is: it starts with that object's own symmetry settings, as a clone does
+/// (the Unity app made them with the same call a clone is made with).
+#[test]
+fn separate_objects_start_with_the_arrayed_objects_own_symmetry() {
+    let (mut bench, mut tool, object) = column(0);
+    let own = Symmetry { mirror: [true, false, false], radial_count: 6, ..Symmetry::NONE };
+    bench.set_symmetry(object, own);
+    bench.call(|cx| tool.apply(cx, Apply::Separate));
+    let objects = bench.doc.objects();
+    assert_eq!(objects.len(), 5, "the object and a new one for each of the four copies");
+    for &id in &objects {
+        let name = &bench.doc.info(id).unwrap().name;
+        assert_eq!(bench.doc.symmetry(id), own, "{name} is sculpted the way the arrayed object is");
+    }
 }
 
 #[test]

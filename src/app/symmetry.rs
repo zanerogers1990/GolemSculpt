@@ -115,7 +115,8 @@ impl Running {
             self.act(Action::SelectObject(id));
             // The ball's are measured from its middle along the world's axes.
             let object = self.doc.scene.active();
-            let place = |at: Vec3| if id == second && !world { object.matrix().transform_point3(at) } else { object.position + at };
+            let own = id == second && !world;
+            let place = |at: Vec3| if own { object.matrix().transform_point3(at) } else { object.position + at };
             let (from, to) = (place(from), place(to));
             self.symmetry_demo_stroke(from, to);
         }

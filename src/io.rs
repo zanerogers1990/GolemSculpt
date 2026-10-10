@@ -662,8 +662,10 @@ const OBJECT_FIELDS: [&str; 6] = ["name", "visible", "mesh", "position", "rotati
 /// one):
 ///
 /// ```ignore
-/// details.set_object(row, io::slot::SYMMETRY, &scene.symmetry(object.id));      // from `Running::details`
-/// if let Some(s) = details.get_object_over(row, io::slot::SYMMETRY, &Symmetry::default()) { .. }   // from `Running::apply_details`
+/// // on a save, from `Running::details`
+/// details.set_object(row, io::slot::SYMMETRY, &scene.symmetry(object.id));
+/// // on an open, from `Running::apply_details`
+/// if let Some(s) = details.get_object_over(row, io::slot::SYMMETRY, &Symmetry::default()) { .. }
 /// ```
 ///
 /// The value only has to derive `Serialize` and `Deserialize`. Give its

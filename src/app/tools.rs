@@ -233,7 +233,8 @@ impl Tools {
 fn symmetry_of(scene: &Scene, id: u64) -> kit::Symmetry {
     let Some(object) = scene.get(id) else { return kit::Symmetry::NONE };
     let symmetry = scene.symmetry(id);
-    let placed = |p: sculpt_symmetry::Placement| kit::Placement { position: p.position, rotation: p.rotation, scale: p.scale };
+    let placed =
+        |p: sculpt_symmetry::Placement| kit::Placement { position: p.position, rotation: p.rotation, scale: p.scale };
     kit::Symmetry {
         mirror: symmetry.mirror,
         radial_count: symmetry.radial.repeats().clamp(1, Radial::MAX_COUNT),

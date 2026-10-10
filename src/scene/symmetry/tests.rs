@@ -39,7 +39,14 @@ fn view_of(scene: &Scene, mesh: &Mesh) -> View {
 /// One stroke on the active object the way the app makes one: the scene
 /// hands its symmetry to the sculptor, and the pointer is dragged over the
 /// object between two places given in the object's own space.
-fn stroke(scene: &Scene, mesh: &mut Mesh, sculptor: &mut Sculptor, brush: Brush, from: Vec3, to: Vec3) -> Option<StrokeDelta> {
+fn stroke(
+    scene: &Scene,
+    mesh: &mut Mesh,
+    sculptor: &mut Sculptor,
+    brush: Brush,
+    from: Vec3,
+    to: Vec3,
+) -> Option<StrokeDelta> {
     let view = view_of(scene, mesh);
     let model = scene.active().matrix();
     let local = view.local_to(scene.brush_matrix());
@@ -50,7 +57,8 @@ fn stroke(scene: &Scene, mesh: &mut Mesh, sculptor: &mut Sculptor, brush: Brush,
     settings.per_brush[brush.index()].strength = 0.5;
     scene.hand_symmetry_to(&mut sculptor.settings);
     let steps = 32;
-    let sample = |i: usize| PointerSample { pos: a.lerp(b, i as f32 / steps as f32), pressure: None, time: i as f64 / 240.0 };
+    let sample =
+        |i: usize| PointerSample { pos: a.lerp(b, i as f32 / steps as f32), pressure: None, time: i as f64 / 240.0 };
     assert!(sculptor.begin(mesh, &local, sample(0), false, false), "the stroke missed the object");
     for i in 1..=steps {
         sculptor.sample(mesh, &local, sample(i));
@@ -294,7 +302,8 @@ fn two_objects_each_sculpt_under_their_own_symmetry() {
     // And back: nothing of the face's symmetry came along.
     scene.select(body, &mut mesh);
     assert_eq!(mesh.positions, body_after);
-    assert!(stroke(&scene, &mut mesh, &mut sculptor, Brush::Inflate, from * Vec3::new(1.0, -1.0, 1.0), to * Vec3::new(1.0, -1.0, 1.0)).is_some());
+    let below = Vec3::new(1.0, -1.0, 1.0);
+    assert!(stroke(&scene, &mut mesh, &mut sculptor, Brush::Inflate, from * below, to * below).is_some());
     let (exact_z, _) = across(&rest, &mesh.positions, 2);
     let (exact_x, alone_x) = across(&rest, &mesh.positions, 0);
     assert!(exact_z && !exact_x && alone_x > 100, "still across Z alone");
@@ -367,7 +376,8 @@ fn a_stroke_on_an_instance_is_under_the_selected_objects_symmetry() {
     scene.hand_symmetry_to(&mut sculptor.settings);
     let settings = &mut sculptor.settings;
     (settings.brush, settings.screen_space_size, settings.radius_world) = (Brush::Inflate, false, 0.08);
-    let sample = |i: usize| PointerSample { pos: px(from).lerp(px(to), i as f32 / 20.0), pressure: None, time: i as f64 / 240.0 };
+    let sample =
+        |i: usize| PointerSample { pos: px(from).lerp(px(to), i as f32 / 20.0), pressure: None, time: i as f64 / 240.0 };
     assert!(sculptor.begin(&mut mesh, &local, sample(0), false, false), "the stroke missed the instance");
     for i in 1..=20 {
         sculptor.sample(&mut mesh, &local, sample(i));
@@ -457,7 +467,10 @@ fn world_space_on_a_moved_and_turned_object_mirrors_across_the_worlds_plane_and_
     let to_world = scene.active().matrix();
     let moved = (0..rest.len()).filter(|&v| mesh.positions[v] != rest[v]).map(|v| to_world.transform_point3(rest[v]).x);
     let (left, right) = moved.fold((0usize, 0usize), |(l, r), x| (l + (x < -1e-3) as usize, r + (x > 1e-3) as usize));
-    assert!(left > 300 && left.abs_diff(right) <= left / 50, "{left} vertices moved on one side of the world's plane, {right} on the other");
+    assert!(
+        left > 300 && left.abs_diff(right) <= left / 50,
+        "{left} vertices moved on one side of the world's plane, {right} on the other"
+    );
 }
 
 /// The planes stay put in the world while the object moves through them: the
@@ -512,7 +525,8 @@ fn world_radial_symmetry_goes_round_the_worlds_axis() {
     let mut sculptor = Sculptor::default();
     let to_own = scene.active().matrix().inverse();
     let own = |world: Vec3| to_own.transform_point3(world);
-    assert!(stroke(&scene, &mut mesh, &mut sculptor, Brush::Inflate, own(Vec3::new(0.2, 0.15, 0.42)), own(Vec3::new(0.3, 0.05, 0.38))).is_some());
+    let (from, to) = (own(Vec3::new(0.2, 0.15, 0.42)), own(Vec3::new(0.3, 0.05, 0.38)));
+    assert!(stroke(&scene, &mut mesh, &mut sculptor, Brush::Inflate, from, to).is_some());
     // The same number of vertices moved in each quarter turn about the world's Y.
     let to_world = scene.active().matrix();
     let mut quarters = [0usize; 4];
@@ -605,7 +619,8 @@ fn rows(scene: &Scene) -> Vec<SavedObject> {
                 meshes.push(o.mesh);
                 meshes.len() - 1
             });
-            SavedObject { name: o.name.clone(), visible: o.visible, mesh, position: o.position, rotation: o.rotation, scale: o.scale }
+            let (position, rotation, scale) = (o.position, o.rotation, o.scale);
+            SavedObject { name: o.name.clone(), visible: o.visible, mesh, position, rotation, scale }
         })
         .collect()
 }
@@ -630,7 +645,8 @@ fn a_file_keeps_every_objects_own_symmetry() {
     let mut details = io::Details::default();
     scene.keep_symmetry(&mut details);
     let objects = rows(&scene);
-    let all: Vec<&Mesh> = [face, body, vase, plain].iter().map(|&id| scene.mesh(scene.get(id).unwrap().mesh, &mesh).unwrap()).collect();
+    let mesh_of = |&id: &u64| scene.mesh(scene.get(id).unwrap().mesh, &mesh).unwrap();
+    let all: Vec<&Mesh> = [face, body, vase, plain].iter().map(mesh_of).collect();
     let path = temp("each_its_own.sclp");
     io::save_scene_with(&all, &objects, 1, &details, &path).expect("the file writes");
 
@@ -714,12 +730,18 @@ fn a_file_from_before_gives_its_one_setting_to_every_object() {
 fn an_objects_symmetry_reads_as_far_as_it_can() {
     let mut details = io::Details::default();
     details.set_object(0, io::slot::SYMMETRY, &serde_json::json!({ "mirror": [false, true, false] }));
-    details.set_object(1, io::slot::SYMMETRY, &serde_json::json!({ "space": "screen", "mirror": [true, false, false], "radial": { "on": true, "count": 900, "axis": "x" } }));
+    let from_later = serde_json::json!({
+        "space": "screen",
+        "mirror": [true, false, false],
+        "radial": { "on": true, "count": 900, "axis": "x" }
+    });
+    details.set_object(1, io::slot::SYMMETRY, &from_later);
     details.set_object(2, io::slot::SYMMETRY, &serde_json::json!({ "space": "world" }));
     let first = saved_symmetry(&details, 0).unwrap();
     assert_eq!(first, mirror(false, true, false), "what is missing is as an object starts");
     let second = saved_symmetry(&details, 1).unwrap();
-    assert_eq!((second.mirror, second.space), ([true, false, false], Space::Local), "a space this version has not heard of");
+    let (axes, space) = (second.mirror, second.space);
+    assert_eq!((axes, space), ([true, false, false], Space::Local), "a space this version has not heard of");
     assert_eq!((second.radial.on, second.radial.count, second.radial.axis), (true, Radial::MAX_COUNT, RadialAxis::X));
     assert_eq!(saved_symmetry(&details, 2).unwrap().space, Space::World);
     assert_eq!(saved_symmetry(&details, 3), None, "no slot and no setting for the scene");

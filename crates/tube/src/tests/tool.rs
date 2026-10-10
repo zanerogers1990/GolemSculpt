@@ -487,8 +487,8 @@ fn a_tube_is_made_under_the_symmetry_of_the_object_it_is_drawn_on() {
 #[test]
 fn a_tube_on_an_object_with_a_world_symmetry_is_mirrored_across_the_worlds_plane() {
     let (mut bench, mut tool, body) = bench();
-    let placement =
-        Placement { position: Vec3::new(0.3, -0.1, 0.0), rotation: glam::Quat::from_rotation_z(0.4), scale: Vec3::splat(1.2) };
+    let (position, rotation) = (Vec3::new(0.3, -0.1, 0.0), glam::Quat::from_rotation_z(0.4));
+    let placement = Placement { position, rotation, scale: Vec3::splat(1.2) };
     bench.call(|cx| cx.commit("Place", vec![Command::Place { object: body, placement }]));
     bench.env.mirror = [true, false, false];
     bench.env.symmetry_world = Some(placement);
