@@ -227,14 +227,21 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
 pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
     let Some(anchor) = state.radial else { return };
     let screen = ctx.content_rect();
-    let center = pos2(
-        anchor.x.clamp(screen.left() + 140.0, screen.right() - 140.0),
-        anchor.y.clamp(screen.top() + 140.0, screen.bottom() - 140.0),
-    );
     let open = ctx.animate_bool_with_time(Id::new("radial_open"), true, 0.11);
     let spheres = doc.tool == Tool::SSpheres;
+    // The wheel's half size, the radius of its disc and of the ring the
+    // tiles sit on, a tile's size and how near the pointer picks it. The
+    // brush wheel has nine tiles where the Unity app's has eight (Pose is
+    // not on that one): on the old ring two of nine would overlap at the
+    // corners, so its ring is a little wider and its tiles a little smaller.
+    let (half, disc, ring, tile_size, pick) =
+        if spheres { (140.0, 134.0, 92.0, 58.0, 34.0) } else { (152.0, 146.0, 104.0, 54.0, 31.0) };
+    let center = pos2(
+        anchor.x.clamp(screen.left() + half, screen.right() - half),
+        anchor.y.clamp(screen.top() + half, screen.bottom() - half),
+    );
     // Clockwise from the top; `None` is the mask tile.
-    let brushes: [(Option<Brush>, &str, &str); 8] = [
+    let brushes: [(Option<Brush>, &str, &str); 9] = [
         (Some(Brush::Move), "Move", "brush_move"),
         (Some(Brush::Clay), "Clay", "brush_clay"),
         (Some(Brush::Standard), "Standard", "brush_standard"),
@@ -243,6 +250,7 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
         (None, "Mask", "brush_mask"),
         (Some(Brush::Inflate), "Inflate", "brush_inflate"),
         (Some(Brush::Flatten), "Flatten", "brush_flatten"),
+        (Some(Brush::Pose), "Pose", "brush_pose"),
     ];
     // Name, icon and whether it is the current choice.
     let s = &doc.sculptor.settings;
@@ -265,22 +273,22 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
     let mut clicked = None;
     egui::Area::new(Id::new("radial_menu"))
         .order(Order::Foreground)
-        .fixed_pos(center - Vec2::splat(140.0))
+        .fixed_pos(center - Vec2::splat(half))
         .show(ctx, |ui| {
-            let (rect, response) = ui.allocate_exact_size(Vec2::splat(280.0), Sense::click());
+            let (rect, response) = ui.allocate_exact_size(Vec2::splat(2.0 * half), Sense::click());
             let p = ui.painter();
             let scale = 0.85 + 0.15 * open;
             let fade = |c: Color32| c.gamma_multiply(open);
             let c = rect.center();
-            p.circle_filled(c, 134.0 * scale, fade(Color32::from_rgba_unmultiplied(14, 14, 18, 200)));
-            p.circle_stroke(c, 134.0 * scale, Stroke::new(1.0, fade(Color32::from_white_alpha(18))));
+            p.circle_filled(c, disc * scale, fade(Color32::from_rgba_unmultiplied(14, 14, 18, 200)));
+            p.circle_stroke(c, disc * scale, Stroke::new(1.0, fade(Color32::from_white_alpha(18))));
             let pointer = response.hover_pos();
             let mut hovered_name = None;
             for (i, &(name, icon, active)) in tiles.iter().enumerate() {
                 let a = i as f32 / tiles.len() as f32 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-                let at = c + vec2(a.cos(), a.sin()) * 92.0 * scale;
-                let hovered = pointer.is_some_and(|q| q.distance(at) < 34.0);
-                let size = 58.0 * scale * if hovered { 1.1 } else { 1.0 };
+                let at = c + vec2(a.cos(), a.sin()) * ring * scale;
+                let hovered = pointer.is_some_and(|q| q.distance(at) < pick);
+                let size = tile_size * scale * if hovered { 1.1 } else { 1.0 };
                 let tile = Rect::from_center_size(at, Vec2::splat(size));
                 let fill = if hovered {
                     Color32::from_rgb(92, 163, 255)

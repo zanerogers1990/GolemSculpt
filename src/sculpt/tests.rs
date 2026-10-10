@@ -131,6 +131,13 @@ fn every_brush_has_a_ring_that_moves_with_the_shift() {
     for brush in Brush::ALL {
         let mut settings = Settings::default();
         settings.brush = brush;
+        if brush == Brush::Pose {
+            // Pose turns a limb about a joint; its radius places the joint
+            // and there is no half weight to ring. The cursor leaves a ring
+            // at the rim out.
+            assert_eq!(ring(&settings), 1.0);
+            continue;
+        }
         settings.current_mut().focal_shift = -0.5;
         let hard = ring(&settings);
         settings.current_mut().focal_shift = 0.5;

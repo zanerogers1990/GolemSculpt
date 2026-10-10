@@ -4,6 +4,7 @@
 //! Split by concern:
 //!   rig.rs    the armature itself (pure data)
 //!   frame.rs  where the rig stands in the world, and attaching it to an object
+//!   gizmo.rs  the transform gizmo's arrows on the selected sphere
 //!   skin.rs   turning a rig into a mesh
 //!   pose.rs   the two-bone solve behind posing a limb
 //!   input.rs  picking and every pointer gesture
@@ -15,6 +16,7 @@
 //! real geometry.
 
 pub mod frame;
+mod gizmo;
 mod input;
 pub mod pose;
 pub mod rig;
@@ -101,7 +103,7 @@ impl EditMode {
                 "Drag off a sphere to pull a new one out of it. With a sphere selected, click empty space to add the next one of its chain. Drag a link to add a joint and bend the limb there."
             }
             EditMode::Move => {
-                "Drag a sphere to move it with everything below it; Shift moves just that sphere. Drag a link to pose the limb: it bends at the joint above, keeping every length."
+                "Drag a sphere to move it with everything below it; Shift moves just that sphere. Drag a link to pose the limb: it bends at the joint above, keeping every length. Drag an arrow of the selected sphere to move it straight along one axis."
             }
             EditMode::Scale => {
                 "Drag right or up to grow a sphere, left or down to shrink it. Shift scales its whole branch."

@@ -16,7 +16,7 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | Input | Action |
 | --- | --- |
 | Left drag on the model | Sculpt |
-| Ctrl + drag, or right drag | Sculpt inverted |
+| Ctrl + drag, or right drag | Sculpt inverted (Pose: twist the limb, or slide it) |
 | Shift + drag | Smooth |
 | Left drag on the background | Orbit |
 | Alt + drag | Orbit |
@@ -30,7 +30,7 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | H / Shift + H / Alt + H | Hide the selection / hide everything else / show everything |
 | / | Local View: only the selection, framed; again to bring the rest and the view back |
 | Delete | Delete the selected object (asks first) |
-| 1 2 3 4 5 6 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Standard, Layer, Snake Hook |
+| 1 2 3 4 5 6 7 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook |
 | S / F / D + drag | Brush size / strength / focal shift |
 | Space (hold) | Brush wheel |
 | M | Mask painting |
@@ -40,7 +40,9 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | L | Measure tool on / off |
 | Y | Array tool on / off |
 | (Lathe button) | Lathe tool on / off: the Unity app gives it no key; Enter creates, Esc puts it away |
+| T | Tube tool on / off: Enter fuses the tubes into the model, Esc puts it away |
 | N | Mask tool: on (box), again for lasso, again for off |
+| (Hide button) | Hide tool: a box or lasso hides part of the selected object; it has no key, as H hides whole objects |
 | K | Split tool: on (line), again for lasso, box, then off |
 | J | Keys tool on / off |
 | Z, Shift + Z (also Ctrl + Z, Ctrl + Y) | Undo, redo |
@@ -76,6 +78,48 @@ them all.
 - Mask painting has **Mask Hardness** for its edge; the selected brush's
   falloff and Front Facing Only do not apply to it.
 
+### Pose
+
+**Pose** (**7**) bends a limb the way you would pose a figure, with nothing to
+mask or set up first. It works as the Pose brush in Blender does.
+
+- Rest the pointer on a limb and a white line shows what a press would do. It
+  runs from the pointer to a dot with a ring round it: the **joint**. What is
+  on the pointer's side of the joint is the limb that will move, hand and all;
+  what is past it stays where it is.
+- **The brush size places the joint.** It sits in the middle of the limb where
+  the brush ring crosses it, on the side toward the body, so a bigger brush
+  bends the limb further up. Scroll, or hold S and drag, and the line follows
+  as the ring grows. The ring has to reach right round the limb: with the
+  pointer on one side of an arm it must take in the far side too. A smaller
+  one only gets hold of a patch of skin, and turns that patch and nothing
+  else (the line shows it: the joint sits right under the pointer).
+- Drag, and the limb turns about the joint to point at the pen. **Ctrl + drag**
+  (or the right button) twists it about its own length, the skin under the pen
+  going round with the pen.
+- **Segments (Joints)**: with more than one, a chain of joints runs back along
+  the limb, each a brush size from the last, and the limb reaches for the pen
+  like an arm: the point you took hold of follows the pen, every part keeps
+  its length, and the last joint (the ringed one) stays put.
+- **Joint Offset** pushes the joint further up the limb, past the brush ring,
+  by that many brush sizes: for a hand or a face, where a brush small enough
+  to pick out one part would put the joint too close to it.
+- **Rigidity** sets how sharply a joint bends, from a long soft curve to a
+  hinge. Focal Shift and Custom Falloff shape the bend itself: the curve's
+  left end is the limb's side of the joint, its right end the side that stays.
+- **Resize** makes the limb bigger or smaller about the joint as you drag away
+  from the joint or toward it (Ctrl + drag slides it without turning).
+  **Stretch** makes it longer and thinner, or shorter and fatter, keeping its
+  volume. Both work about one joint.
+- Masked surface stays where it is, hidden parts are left alone, and one drag
+  is one undo step. Strength and pen pressure do not apply: the limb follows
+  the pen exactly.
+- With a mirror on, each side gets a joint of its own, so both arms bend
+  together. A limb that lies on the mirror plane itself (a neck, a tail, the
+  trunk) can only bend within the plane, and will not twist: dragged to one
+  side it stays put, which is the mirror keeping the model symmetric. Turn the
+  mirror off to tilt a head.
+
 ## Dynamic topology
 
 **Dynamic Topology**, in the Remesh card of the Sculpt panel, adds triangles
@@ -86,8 +130,8 @@ else. It starts off, and the app remembers how you left it.
   percentage of the brush's radius: 3% to 50%, starting at 15%. Detail goes
   with the brush, so a small brush adds fine triangles and a big one leaves
   the surface as it is. Zoom in and shrink the brush to ask for more.
-- Standard, Clay, Crease, Inflate, Flatten and Layer refine. Move, Snake
-  Hook, Smooth and mask painting do not. Pull a shape out with Snake Hook,
+- Standard, Clay, Crease, Inflate, Flatten and Layer refine. Move, Pose,
+  Snake Hook, Smooth and mask painting do not. Pull a shape out with Snake Hook,
   then run one of the refining brushes along it, and the triangles the pull
   stretched are split into even ones.
 - It only ever adds. Triangles are never merged back, so a region stays as
@@ -167,6 +211,7 @@ shape before sculpting detail.
 | Click empty space (Draw) | Add a sphere to the selected one |
 | Drag a link (Draw) | Add a joint there and bend the limb |
 | Drag a sphere (Move) | Move it with everything below it; Shift moves it alone |
+| Drag an arrow (Move) | Move the selected sphere and everything below it along that axis |
 | Drag a link (Move) | Pose the limb: it bends at the joint above, keeping every length |
 | Drag (Scale) | Resize a sphere; Shift resizes its whole branch |
 | Drag (Rotate) | Swing a branch about its parent joint; Shift twists it |
@@ -180,6 +225,17 @@ shape before sculpting detail.
 | Space (hold) | SSphere wheel, with the size of the next sphere under it |
 | Z, Shift + Z | Undo, redo the spheres (they keep their own history) |
 | F F | Frame the spheres |
+
+In Move mode the selected sphere carries the Transform gizmo's arrows: drag one
+to slide the sphere, and everything below it, exactly along that axis of the
+world, for the times a limb has to go straight up or straight out. The mirrored
+twin follows, a sphere near the red plane sticks to it as it does for any
+other move, and each pull is one step in the spheres' own undo history (Esc
+cancels it). Pressing on a sphere itself, wherever an arrow runs over it, still
+moves that sphere freely. A sphere gets arrows only, no rings or cubes: it is
+round, and its size and turn are what the Scale and Rotate modes are for. The
+arrows go when the mode changes, when the sphere is deselected or deleted, in
+the solid preview, and when the tool is put away.
 
 Dragging on the background orbits, as everywhere else. The spheres mirror
 across X by default: one placed on the red plane is shared by both sides, one
@@ -283,13 +339,76 @@ Scale sliders; the preview is drawn at up to 256 around and Create always uses
 the full Density. Dragging on the background orbits. The profile is a scaffold:
 not saved, with its own Z while the tool is up.
 
-## Mask, Trim, Split and Extract
+## Tube
 
-Three tools act on what a shape drawn over the viewport covers, front and
-back, straight through the model, and a fourth turns a masked area into a
+Press **T** (or the Tube button) to draw tubes along a stroke: horns, arms,
+legs, tails, veins. A tube stays live after you draw it, as a curve through
+round points that you can move, add to and thicken, with the solid following
+as you work. When it is right, fuse it into the model or make it an object of
+its own.
+
+1. Drag from the model, out into the air, to draw a tube. The stroke is laid
+   on a plane facing you through the spot where it began, so the tube grows
+   out of that spot. **On Surface** lays it along the model instead, half sunk
+   into it (a vein, a ridge, a tail draped along a body). The ring at the
+   pointer shows how thick the next tube will be. With a mirror axis on, one
+   stroke makes both: the twin's curve and points are drawn fainter, and
+   grabbing one of its points edits the tube through the mirror.
+2. Shape it by its points, the dots along its orange curve; press one to
+   select it (it turns orange). Drag a point, click the curve to add one,
+   double-click a point to make it a sharp corner (it turns square) or smooth
+   again, Shift + drag an end point to carry the tube on from there. Each
+   point can be made thicker or thinner. The panel sets the whole tube:
+   **Radius**, how thick; **Taper**, which narrows it toward its end, for a
+   horn or a claw (**Thick End at the Tip** turns that round, so the start of
+   the stroke narrows instead); **Smoothness**, how loosely it flows between
+   its points; and **Round** or **Flat** ends. These change the selected tube,
+   and the next one you draw.
+3. **Merge** (Enter) fuses every live tube into the object it was drawn on, as
+   one surface with a soft join; **Blend** sets how soft (0 is a crisp seam).
+   The object is rebuilt at its current density, as a remesh does, so it
+   starts with a clear mask and everything showing. The work runs in the
+   background, with its progress and a Cancel button (or Esc) while it does.
+   **Keep Separate** makes each tube an object of its own to sculpt, placed
+   with the object it was drawn on. Either is one undo step.
+
+| Input (Tube up) | Action |
+| --- | --- |
+| Drag from the model | Draw a tube (Ctrl + drag starts one from empty space, at the depth of the selected object) |
+| Drag a point | Move it (a point on the surface slides over the model) |
+| Shift + drag an end point | Extend the tube from that end |
+| Click the selected tube | Add a point there, and keep dragging it |
+| Click another tube | Select it |
+| Double-click a point | Sharp / smooth |
+| Right-click a point | Delete it |
+| Delete | Delete the selected point, else the selected tube |
+| Drag the square beside the selected point | Thicker / thinner there |
+| Scroll over a point | The same |
+| S + move sideways | Thickness of the point under the pointer, else of the tube |
+| Enter | Merge |
+| Z, Shift + Z | Undo, redo the tubes' own edits |
+| Esc | Cancel the drag, then deselect, then put the tool away |
+
+Dragging on the background orbits, as everywhere else (the Unity app drew a
+tube there; here that is Ctrl + drag). Live tubes are a scaffold: not saved in
+`.sclp` files, and drawn only while the tool is up. Put it away and they wait,
+out of sight, until it is brought back. While the tool is up Z steps the
+tubes' own edits first (a point moved, a slider changed), then the scene's.
+Merge and Keep Separate are steps of the scene's history: Z right after one
+gives the tubes back live, with the tool brought up if it was put away, and
+Shift + Z fuses them again. A tube thinner than the model's own detail comes
+out thicker than drawn: undo, remesh the model finer, and merge again.
+
+## Mask, Hide, Trim, Split and Extract
+
+Four tools act on what a shape drawn over the viewport covers, front and
+back, straight through the model, and a fifth turns a masked area into a
 piece of its own:
 
 - **Mask** (**N**): drag a box or draw a lasso, and what it covers is masked.
+- **Hide**: drag a box or draw a lasso, and the part of the selected object it
+  covers is hidden, to get at what is behind it (see Hidden parts). It has no
+  key, since H hides whole objects: use the Hide button.
 - **Trim**: a box, a lasso or a straight line. What it covers is cut away and
   the hole closed with a face you can sculpt on; a line leaves a flat one.
 - **Split** (**K**): the same cut, keeping both sides. The covered side becomes
@@ -300,24 +419,25 @@ piece of its own:
   thickness, offset and smoothing; **Accept** (Enter) makes it an object, Esc
   cancels.
 
-| Input (Mask, Trim or Split up) | Action |
+| Input (Mask, Hide, Trim or Split up) | Action |
 | --- | --- |
 | Drag, anywhere on the viewport | Draw the shape; it acts when you let go |
-| Ctrl + drag, or right drag | The reverse: unmask; trim keeps what the shape covers |
+| Ctrl + drag, or right drag | The reverse: unmask; show what was hidden; trim keeps what the shape covers |
 | Shift | Box, lasso: everything outside the shape. Line: turn it in steps of 15 degrees |
-| Click | Mask: clear the mask |
+| Click | Mask: clear the mask. Hide: show everything |
 | N / K | The next shape, then put the tool away |
-| Space (hold) | Shape wheel |
+| Space (hold) | Shape wheel (Mask adds Clear and Invert, Hide adds Show All and Invert) |
 | Esc | Cancel the drag, else put the tool away |
 | 1 to 9 | Back to sculpting |
 
-While Mask, Trim or Split is up, a drag on the background draws a shape
+While Mask, Hide, Trim or Split is up, a drag on the background draws a shape
 instead of orbiting, because a box or a cut line has to be able to start
 beside the model: orbit with Alt + drag, pan with the middle button. (With
-Extract up a drag orbits as usual.) A cut made with a mirror axis on repeats
-on the other side. Each mask, trim, split and extract is one undo step, and a
-mask is carried across a cut. On a large model a cut runs in the background:
-its progress shows at the bottom of the viewport, with a Cancel button.
+Extract up a drag orbits as usual.) They work on the selected object. With a
+mirror axis on, a mask or a hide covers the other side too, and a cut repeats
+there. Each mask, hide, trim, split and extract is one undo step, and a mask
+is carried across a cut. On a large model a cut runs in the background: its
+progress shows at the bottom of the viewport, with a Cancel button.
 
 ## Keys
 
@@ -356,7 +476,7 @@ pair; after that they can be moved apart and the joints stay on them.
 
 - **Save / Open** use `.sclp`, which keeps the whole sculpt: every object
   (its exact mesh and mask, hidden faces, quads, name, position and
-  visibility; instances stay linked) and how it was left: the material and
+  visibility; instances stay linked; live mirrors stay on) and how it was left: the material and
   finish, lighting, HDRI, background and effects, the camera view and the
   mirror axes. Reopening a file puts all of it back. (An HDRI is kept as the
   path of its picture, not the picture.)
@@ -384,7 +504,10 @@ pair; after that they can be moved apart and the joints stay on them.
   instance exports as its own placed copy. The STL is binary, in millimetres,
   turned upright for a slicer (the model's up is the bed's Z, its front faces
   the front of the bed, nothing mirrored). The OBJ keeps the app's own units
-  and axes, and a quad-remeshed object goes out as its quads. The save box
+  and axes, and a quad-remeshed object goes out as its quads. The live mirror
+  copies of an object are part of the model on screen and go out with it: the
+  STL holds them all in one file, the OBJ writes each as an object of its own
+  ("Cube_MirrorX"). The save box
   offers `<object name>_<date>_<time>` as the file name. The size conversion
   lives in one place, `crates/geom/src/units.rs`.
 - **The app remembers how you left it**: interface size, tooltips on or off,
@@ -468,6 +591,23 @@ The **Objects** card at the top of the Scene panel is the scene graph.
 - **Clone** makes an independent copy. **Instance** makes a linked copy that
   shares the mesh (shown in blue): sculpt one and all change. **Make Unique**
   unlinks one.
+- **Mirror** (its own section, under Selected Object) gives the selected
+  object live copies of itself across the world's planes, through the world's
+  centre: tick X, Y and / or Z and press **Mirror**. There is one copy for each
+  combination of the ticked axes (X and Z make three: X, Z and XZ). A copy is
+  the object's own mesh drawn again, so every stroke, remesh or cut shows on
+  all of them, and moving, turning or resizing the object carries them with
+  it. Either side can be worked on: sculpt through whichever copy is under the
+  pointer, and with the Transform tool a click on a copy (or one of the
+  buttons under **The Transform gizmo is on**) puts the gizmo on that copy,
+  where dragging it moves the original the other way. A tick on an object that
+  is already mirrored changes its mirror at once, **Remove** takes the copies
+  away, and **Validate** turns them into objects of their own ("Cube Mirror
+  X"), exactly where they were shown. Each is one undo step. Mirrored objects
+  are amber in the list. The copies are framed with the model, saved in `.sclp`
+  files and written by the exports. A clone or an instance of a mirrored object
+  is not mirrored. Not here yet: a mask, trim or split shape drawn over a copy
+  (those see an object and its instances only).
 - Copies start on top of the original; **Position** and **Scale** place the
   selected one by numbers, and the Transform gizmo by hand.
 - Every one of these is an undo step, a Join or a boolean included (one
@@ -481,16 +621,25 @@ part is not drawn, the pointer goes straight through it to whatever is
 behind, and brushes leave it alone; the edge of what still shows sculpts like
 any other surface. Nothing is cut away.
 
+- The **Hide** button brings up the Hide tool (no key: H hides whole objects).
+  Drag a box or draw a lasso over the part to hide: what it covers goes, front
+  and back, straight through the selected object. A face is hidden when all
+  three of its corners are under the shape, so a face on the edge stays.
+  Ctrl + drag (or a right drag) shows what the shape covers instead, Shift +
+  drag hides everything outside it (to isolate a limb), and a click shows
+  everything again. With a mirror axis on, the other side goes too. A drag
+  that would hide the whole object is refused, with a line saying so. A box or
+  lasso mask leaves hidden parts alone, so hide a limb first and a mask drawn
+  over the body in front of it will not reach it.
 - **Show All** brings everything back and **Invert Visible** swaps the hidden
   and the showing parts. Both are in the **Hidden Parts** card of the Sculpt
-  panel, under Masking; its header says how many faces are hidden.
+  panel, under Masking, and in the Hide tool's own panel and wheel; the card's
+  header says how many faces are hidden.
 - Hiding, showing and inverting are each an undo step.
 - Remesh, Quad Remesh, Join and both exports always work on the whole model,
   hidden parts included, and what a remesh or a join makes starts with
   everything showing, as in the Unity app.
 - The wireframe draws only the faces that show.
-
-Choosing what to hide is the job of the box and lasso tools.
 
 ## Turntable
 
@@ -507,15 +656,33 @@ single-key shortcuts are switched off, a drag orbits, and the pointer hides
 once it has rested for a second and a half.
 
 **Record 360° Loop** saves exactly one turn, starting from the view as it is
-and at the Speed above, as numbered PNG pictures (`frame_0000.png`...) in a
-folder of their own under `Videos\Sculpt`. The last picture flows straight
-back into the first, so it plays as a seamless loop. Pick the shape (16:9,
-1:1, 9:16 or 4K) and 24, 30 or 60 frames a second first; the line under the
-buttons says how many pictures that makes. The pictures are drawn at that size
-whatever size the window is, with no panels or guides in them, and a square or
-upright picture gets a wider lens so nothing at the sides is cropped. The
-window shows progress while it records; **Cancel** or Esc stops it and removes
-what was written. The pictures are large (about 2 MB each at 1080p).
+and at the Speed above, as an **MP4** video in `Videos\Sculpt`
+(`Turntable_<date>_<time>.mp4`), ready to post or to play round and round. Pick
+the shape (16:9, 1:1, 9:16 or 4K) and 24, 30 or 60 frames a second first; the
+line under the buttons says how long the loop is, how many frames it holds and
+what it will be saved as. The frames are drawn at that size whatever size the
+window is, with no panels or guides in them, and a square or upright picture
+gets a wider lens so nothing at the sides is cropped. The window shows progress
+while it records, and afterwards the card says what the file is called and
+where it went. **Cancel** or Esc stops it and removes what was written;
+closing the app part-way does the same. Until it is finished the video is
+called `Turntable_<date>_<time>.recording.mp4`, so a half-written file is never
+mistaken for a loop.
+
+It is a true loop: the video holds one picture for each step of the turn and
+no more, so its frames add up to exactly the turn's length (a 12 second turn at
+30 frames a second is 360 frames, 12.000 seconds) and the last frame flows into
+the first with the same step as any other two, with no repeated frame at the
+join. No frame is ever dropped: if the encoder is behind, the recording waits
+for it.
+The video needs Windows (it uses the video encoder Windows comes with); the
+card offers it only there.
+
+**PNG frames**, the second choice beside **MP4**, saves the same turn as
+numbered pictures (`frame_0000.png`...) in a folder of their own under
+`Videos\Sculpt`, for compositing or a GIF tool. They are large (about 2 MB each
+at 1080p). The Unity app offered the same two choices, with the video as the
+default.
 
 ## Timelapse
 
@@ -547,6 +714,11 @@ wheel, the two-panel interface, and multiple objects with the scene graph
 (sphere blockout with a live skin, symmetry, posing, attaching to an object,
 and Make Skin).
 
+Also ported: tubes (see Tube above) and box / lasso hide (see Mask, Hide,
+Trim, Split and Extract, and Hidden parts, above). A tube is drawn along a
+stroke, shaped by its points, and fused into the model or kept as an object of
+its own; the Hide tool hides part of an object with a box or lasso.
+
 Quad remesh is ported too: **Quad Remesh** in the Remesh card rebuilds the
 selected object as about the number of quads on the **Quads** slider, even in
 size and following the form. It is one undo step, and OBJ export then writes
@@ -555,8 +727,8 @@ draws the edges of every face (the quads after a quad remesh, the triangles
 otherwise); a quad remesh turns it on. The result ignores mirror symmetry. The
 quads are kept in `.sclp` files.
 
-Not ported yet: the Pose brush, radial symmetry, dynamic topology, box / lasso hide (listed in the Mask tool, greyed out), the gizmo on an SSphere,
-live mirror copies and tubes.
+Not ported yet: the Pose brush, radial symmetry, dynamic topology, the gizmo
+on an SSphere and live mirror copies.
 The turntable and the timelapse are ported (see Turntable and Timelapse above);
 a 360 loop is saved as PNG pictures only, not yet as a video.
 
@@ -574,11 +746,15 @@ sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a c
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
 sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
-sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play
+sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play | gizmo | gizmo-held | gizmo-play
+sculpt.exe --screenshot out.png --demo-mirror  # the sphere off centre, its live mirror on, strokes laid on the copy (SCULPT_DEMO_MIRROR=xz | gizmo | validate | front | back | play)
+sculpt.exe --screenshot out.png --demo-pose bend     # a figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play (bend:close moves the camera in; :soft and :offset change those settings)
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
+sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a name ending in .mp4): then reads the file back and checks its frames, size, frame rate and length
+sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 frames (SCULPT_DEMO_CAMERA=close closes the app instead) and checks nothing is left
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-exit | ask-open | ask-open-clean | play

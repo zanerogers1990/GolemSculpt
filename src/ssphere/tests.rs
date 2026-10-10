@@ -900,3 +900,367 @@ fn new_rig_drops_one_sphere_in_view_and_never_clears_a_rig() {
     assert!(view.contains(view.project(centre).unwrap()));
     assert_eq!(tool.attached_to(), Some(9));
 }
+
+// ---- the transform gizmo on a sphere (see gizmo.rs) --------------------------
+
+/// The elbow of the figure's arm: a sphere with the hand and three fingers
+/// hanging below it, off the mirror plane so it has a twin.
+const ELBOW: usize = 6;
+const BRANCH: [usize; 5] = [6, 7, 8, 9, 10];
+
+/// The figure with its elbow selected and Move mode up: what puts the arrows
+/// on a sphere.
+fn gizmo_tool() -> SSpheres {
+    let mut tool = figure_tool();
+    tool.set_mode(EditMode::Move);
+    tool.selected = Some(ELBOW);
+    tool
+}
+
+/// A front view with the whole figure in it.
+fn figure_view() -> View {
+    let mut camera = Camera::default();
+    camera.pivot = Vec3::new(0.2, 1.0, 0.0);
+    camera.distance = 3.5;
+    camera.view(Vec2::ZERO, SIZE, camera.distance, 1.0)
+}
+
+/// Drags the arrows' sphere to `to` (world) the way the app reports it: a
+/// press, a few moves, a release. False if there were no arrows to press.
+fn gizmo_drag(tool: &mut SSpheres, to: Vec3) -> bool {
+    let Some(offer) = tool.gizmo() else { return false };
+    if !tool.begin_gizmo_drag() {
+        return false;
+    }
+    for k in 1..=4 {
+        tool.gizmo_drag_to(offer.position.lerp(to, k as f32 / 4.0));
+    }
+    tool.end_gizmo_drag();
+    true
+}
+
+#[test]
+fn the_arrows_are_offered_in_move_mode_for_a_selected_sphere_and_only_then() {
+    let mut tool = figure_tool();
+    tool.selected = Some(ELBOW);
+    assert_eq!(tool.gizmo(), None, "Draw mode has no arrows");
+
+    tool.set_mode(EditMode::Move);
+    let offer = tool.gizmo().expect("Move mode, a sphere selected");
+    let node = &tool.rig.nodes()[ELBOW];
+    assert_eq!((offer.position, offer.radius), (node.position, node.radius));
+
+    // Scale and Rotate are their own modes: a sphere's size and turn are not
+    // the arrows' to change.
+    for mode in [EditMode::Scale, EditMode::Rotate, EditMode::Draw] {
+        tool.set_mode(mode);
+        assert_eq!(tool.gizmo(), None, "{}", mode.name());
+    }
+    tool.set_mode(EditMode::Move);
+
+    tool.preview = true;
+    assert_eq!(tool.gizmo(), None, "the solid skin has no armature to put them on");
+    tool.preview = false;
+    assert!(tool.gizmo().is_some());
+
+    // Esc lets go of the selection, and the arrows go with it.
+    assert!(tool.escape());
+    assert_eq!(tool.gizmo(), None, "nothing selected");
+
+    // Deleting the sphere takes them off; undoing the delete brings them back.
+    tool.selected = Some(ELBOW);
+    assert!(tool.delete_selected());
+    assert_eq!(tool.gizmo(), None, "the sphere is gone");
+    assert!(tool.undo());
+    assert!(tool.gizmo().is_some(), "and back with it");
+
+    // Not while another gesture has the pointer.
+    assert!(tool.begin_gizmo_drag());
+    assert_eq!(tool.gizmo(), None);
+}
+
+#[test]
+fn a_gizmo_drag_moves_the_sphere_and_everything_below_it_by_exactly_the_drag() {
+    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+        let mut tool = gizmo_tool();
+        let before = world_nodes(&tool);
+        let radii: Vec<f32> = tool.rig.nodes().iter().map(|n| n.radius).collect();
+        let offer = tool.gizmo().unwrap();
+        let by = axis * 0.3;
+
+        assert!(gizmo_drag(&mut tool, offer.position + by));
+
+        let after = world_nodes(&tool);
+        for (i, (was, now)) in before.iter().zip(&after).enumerate() {
+            let expected = if BRANCH.contains(&i) { *was + by } else { *was };
+            assert!(now.distance(expected) < 1e-5, "{axis}: sphere {i} went {was} -> {now}, not {expected}");
+        }
+        // Rigid: no sphere changes size, and no bone inside the branch changes
+        // length (the one joining it to the rest is what stretches).
+        for (i, node) in tool.rig.nodes().iter().enumerate() {
+            assert_eq!(node.radius, radii[i], "sphere {i} kept its size");
+            if let Some(parent) = node.parent.filter(|p| BRANCH.contains(p)) {
+                let (a, b) = (before[parent].distance(before[i]), after[parent].distance(after[i]));
+                assert!((a - b).abs() < 1e-5, "{axis}: bone {parent}-{i} went from {a} to {b}");
+            }
+        }
+        assert_eq!(tool.rig.alive_count(), 14);
+    }
+}
+
+#[test]
+fn a_gizmo_drag_works_from_the_press_so_dragging_back_puts_everything_back() {
+    let mut tool = gizmo_tool();
+    let before = world_nodes(&tool);
+    let offer = tool.gizmo().unwrap();
+    assert!(tool.begin_gizmo_drag());
+    tool.gizmo_drag_to(offer.position + Vec3::new(0.2, 0.4, -0.1));
+    tool.gizmo_drag_to(offer.position + Vec3::new(-0.1, 0.1, 0.3));
+    tool.gizmo_drag_to(offer.position);
+    tool.end_gizmo_drag();
+    for (i, (was, now)) in before.iter().zip(world_nodes(&tool)).enumerate() {
+        assert_eq!(*was, now, "sphere {i} is exactly where it began, not merely close");
+    }
+}
+
+#[test]
+fn the_reflection_follows_a_gizmo_drag_because_it_was_never_a_separate_sphere() {
+    let mut tool = gizmo_tool();
+    let body = plain_body(0);
+    assert_mirrors_across(&tool, &body);
+    let spheres = tool.rig.geometry(true).0.len();
+    let offer = tool.gizmo().unwrap();
+
+    assert!(gizmo_drag(&mut tool, offer.position + Vec3::new(-0.2, 0.25, 0.1)));
+
+    assert_mirrors_across(&tool, &body);
+    assert_eq!(tool.rig.geometry(true).0.len(), spheres, "no sphere appeared or went");
+    let real = tool.rig.nodes()[ELBOW].position;
+    let twin = world_spheres(&tool).into_iter().find(|s| s.0 == ELBOW && s.1).expect("the elbow has a twin").2;
+    assert_eq!(twin, Vec3::new(-real.x, real.y, real.z));
+}
+
+#[test]
+fn a_sphere_near_the_mirror_plane_sticks_to_it_under_the_gizmo() {
+    let mut tool = figure_tool();
+    tool.set_mode(EditMode::Move);
+    let chest = 2;
+    tool.selected = Some(chest);
+    let start = tool.rig.nodes()[chest].position;
+    assert_eq!(start.x, 0.0);
+    let central = tool.rig.geometry(true).0.len();
+
+    // A little sideways, well inside the sticking band: still exactly on the
+    // plane (so still one sphere, not a pair), and it rose as asked.
+    let offer = tool.gizmo().unwrap();
+    assert!(gizmo_drag(&mut tool, offer.position + Vec3::new(0.02, 0.1, 0.0)));
+    let node = &tool.rig.nodes()[chest];
+    assert_eq!(node.position.x, 0.0);
+    assert!((node.position.y - (start.y + 0.1)).abs() < 1e-5);
+    assert_eq!(tool.rig.geometry(true).0.len(), central);
+
+    // Pulled well off, it leaves the plane and gets a twin, and so do the neck
+    // and head that go with it; dragged back, they all land on the plane
+    // exactly again.
+    let offer = tool.gizmo().unwrap();
+    assert!(gizmo_drag(&mut tool, offer.position + Vec3::new(0.2, 0.0, 0.0)));
+    assert!(tool.rig.nodes()[chest].position.x > 0.1);
+    assert_eq!(tool.rig.geometry(true).0.len(), central + 3);
+    let offer = tool.gizmo().unwrap();
+    assert!(gizmo_drag(&mut tool, Vec3::new(0.0, offer.position.y, offer.position.z)));
+    assert_eq!(tool.rig.nodes()[chest].position.x, 0.0);
+    assert_eq!(tool.rig.geometry(true).0.len(), central);
+}
+
+#[test]
+fn a_gizmo_drag_is_one_undo_step_in_the_spheres_own_history() {
+    let mut tool = gizmo_tool();
+    let offer = tool.gizmo().unwrap();
+    assert!(gizmo_drag(&mut tool, offer.position + Vec3::new(0.1, 0.2, -0.1)));
+    let moved = world_nodes(&tool);
+    assert_eq!(tool.undo_summary(), Some(("Move Sphere", 1)), "however many moves the drag made");
+
+    assert!(tool.undo());
+    for (node, original) in tool.rig.nodes().iter().zip(figure().nodes()) {
+        assert_eq!(node.position, original.position, "exactly as it was");
+    }
+    assert_eq!(tool.selected, Some(ELBOW));
+    assert!(!tool.can_undo(), "one press was enough");
+
+    assert!(tool.redo());
+    assert_same_points(&moved, &world_nodes(&tool), "redo");
+    assert!(!tool.can_redo());
+
+    // Pressing an arrow and letting go without moving is not an edit.
+    let mut still = gizmo_tool();
+    assert!(still.begin_gizmo_drag());
+    still.end_gizmo_drag();
+    assert!(!still.can_undo());
+    assert_eq!(still.undo_summary(), None);
+}
+
+#[test]
+fn escape_cancels_a_gizmo_drag_and_the_rest_of_the_drag_does_nothing() {
+    let mut tool = gizmo_tool();
+    let before = world_nodes(&tool);
+    let offer = tool.gizmo().unwrap();
+    assert!(tool.begin_gizmo_drag());
+    tool.gizmo_drag_to(offer.position + Vec3::X * 0.3);
+    assert!(world_nodes(&tool)[ELBOW].distance(before[ELBOW]) > 0.25);
+
+    assert!(tool.escape());
+    assert_same_points(&before, &world_nodes(&tool), "Esc puts the spheres back");
+    assert_eq!(tool.selected, Some(ELBOW), "and cancels the drag rather than the selection");
+
+    // The pointer is still down and still moving; nothing follows it now.
+    tool.gizmo_drag_to(offer.position + Vec3::X * 0.5);
+    tool.end_gizmo_drag();
+    assert_same_points(&before, &world_nodes(&tool), "after Esc");
+    assert!(!tool.can_undo());
+}
+
+#[test]
+fn a_gizmo_drag_will_not_start_without_a_sphere_or_over_another_gesture() {
+    let mut tool = gizmo_tool();
+    tool.selected = None;
+    assert!(!tool.begin_gizmo_drag());
+    assert!(!tool.is_dragging());
+
+    tool.selected = Some(ELBOW);
+    tool.gauge_begin(Vec2::ZERO);
+    assert!(!tool.begin_gizmo_drag(), "S is held, sizing the next sphere");
+    tool.gauge_end();
+
+    assert!(tool.begin_gizmo_drag());
+    assert!(!tool.begin_gizmo_drag(), "one drag at a time");
+    // The wheel is no longer the sphere's while an arrow has it.
+    let radius = tool.rig.nodes()[ELBOW].radius;
+    assert!(tool.wheel(1.0));
+    assert_eq!(tool.rig.nodes()[ELBOW].radius, radius);
+    tool.end_gizmo_drag();
+    assert!(!tool.is_dragging());
+
+    // Moves that arrive with no drag open (the arrow's drag was cancelled
+    // elsewhere) change nothing.
+    let before = world_nodes(&tool);
+    tool.gizmo_drag_to(Vec3::splat(5.0));
+    assert_same_points(&before, &world_nodes(&tool), "no drag open");
+}
+
+#[test]
+fn the_gizmo_works_in_the_world_on_a_rig_standing_on_a_turned_and_resized_object() {
+    let mut tool = gizmo_tool();
+    let was = placed_body(7);
+    tool.attach(was);
+    // The object is then moved, turned and made half as big again.
+    let now = Body {
+        position: was.position + Vec3::new(1.0, 2.0, -0.5),
+        rotation: Quat::from_rotation_x(1.1) * was.rotation,
+        scale: was.scale * 1.5,
+        ..was
+    };
+    tool.follow(|_| Some(now));
+    let frame = tool.frame();
+    assert!((frame.scale - 1.5).abs() < 1e-6);
+
+    // Offered where the sphere is and as big as it looks.
+    let offer = tool.gizmo().unwrap();
+    let node = &tool.rig.nodes()[ELBOW];
+    assert!(offer.position.distance(frame.to_world(node.position)) < 1e-5);
+    assert!((offer.radius - node.radius * 1.5).abs() < 1e-6);
+
+    // A drag along a world axis moves the branch that far in the world,
+    // whatever way the rig is turned.
+    let before = world_nodes(&tool);
+    let by = Vec3::new(0.0, 0.3, 0.0);
+    assert!(gizmo_drag(&mut tool, offer.position + by));
+    for (i, (was, now)) in before.iter().zip(world_nodes(&tool)).enumerate() {
+        let expected = if BRANCH.contains(&i) { *was + by } else { *was };
+        assert!(now.distance(expected) < 1e-4, "sphere {i} went {was} -> {now}, not {expected}");
+    }
+    assert_mirrors_across(&tool, &now);
+}
+
+#[test]
+fn a_press_on_a_sphere_belongs_to_the_sphere_and_not_to_an_arrow_over_it() {
+    let view = figure_view();
+    let cx = Ctx { view: &view, pivot: Vec3::ZERO, surface: &no_surface, body: None };
+    let mut tool = gizmo_tool();
+    let offer = tool.gizmo().unwrap();
+    let at = |p: Vec3| view.project(p).unwrap();
+
+    assert!(tool.claims_pointer(&cx, at(offer.position)));
+    // Another sphere of the figure, with an arrow passing over it or not.
+    assert!(tool.claims_pointer(&cx, at(tool.rig.nodes()[0].position)));
+    // So is a reflection, where it is drawn.
+    let elbow = tool.rig.nodes()[ELBOW].position;
+    assert!(tool.claims_pointer(&cx, at(Vec3::new(-elbow.x, elbow.y, elbow.z))));
+    assert!(!tool.claims_pointer(&cx, Vec2::new(4.0, 4.0)), "empty space is nobody's");
+    assert!(!SSpheres::default().claims_pointer(&cx, at(offer.position)), "no spheres, nothing to claim");
+}
+
+#[test]
+fn the_gizmo_on_a_sphere_is_arrows_alone_and_drives_the_drag() {
+    use crate::gizmo::{Drag as ArrowDrag, Frame as ArrowFrame, Handle, Orientation};
+
+    let view = figure_view();
+    let mut tool = gizmo_tool();
+    let before = world_nodes(&tool);
+    let offer = tool.gizmo().unwrap();
+    let (target, handles) = offer.target();
+    let frame = ArrowFrame::on(&[target], Orientation::Auto, handles, &view, 1.0).unwrap();
+    let frame = frame.keeping_clear(target.radius, &view, 1.0);
+
+    // Arrows on the world's axes, and no ring or cube: a sphere has no turn
+    // or size of its own for them to change.
+    for i in 0..3 {
+        assert!(!frame.shown.has(Handle::Rotate(i)), "no ring {i}");
+        assert!(!frame.shown.has(Handle::Scale(i)), "no cube {i}");
+        assert!((frame.axis(i) - Vec3::AXES[i]).length() < 1e-5);
+    }
+    assert!(frame.shown.has(Handle::Move(0)) && frame.shown.has(Handle::Move(1)));
+    assert!(!frame.shown.has(Handle::Uniform));
+
+    // The middle is the sphere's to grab; the arrows begin outside it.
+    let at = |p: Vec3| view.project(p).unwrap();
+    assert_eq!(frame.pick(&view, at(offer.position), 1.0), None);
+    let grab = offer.position + Vec3::Y * frame.arm * 1.1;
+    assert_eq!(frame.pick(&view, at(grab), 1.0), Some(Handle::Move(1)));
+
+    // Pulling the green arrow up moves the sphere and its branch up by as
+    // much as the arrow went.
+    let mut drag = ArrowDrag::on(Handle::Move(1), frame, &[target], &view, at(grab));
+    assert!(tool.begin_gizmo_drag());
+    let placed = drag.update(&view, at(grab + Vec3::Y * 0.3));
+    tool.gizmo_drag_to(placed.position);
+    tool.end_gizmo_drag();
+    for (i, (was, now)) in before.iter().zip(world_nodes(&tool)).enumerate() {
+        let expected = if BRANCH.contains(&i) { *was + Vec3::Y * 0.3 } else { *was };
+        assert!(now.distance(expected) < 2e-3, "sphere {i} went {was} -> {now}");
+    }
+}
+
+#[test]
+fn the_live_skin_follows_a_gizmo_drag() {
+    let far_right = |skin: &Skin| skin.positions.iter().map(|p| p.x).fold(f32::MIN, f32::max);
+    let mut tool = gizmo_tool();
+    tool.refresh_skin(true);
+    let (reach, generation) = tool.skin().map(|(skin, g)| (far_right(skin), g)).expect("a skin");
+
+    // The hand is pulled out sideways: while the arrow is held the skin
+    // follows as a draft...
+    let offer = tool.gizmo().unwrap();
+    assert!(tool.begin_gizmo_drag());
+    tool.gizmo_drag_to(offer.position + Vec3::X * 0.3);
+    tool.refresh_skin(false);
+    let (draft, drafted) = tool.skin().expect("a skin");
+    assert!(drafted > generation && tool.skin_is_draft());
+    assert!(far_right(draft) > reach + 0.2, "{} against {reach}", far_right(draft));
+
+    // ...and settles to the finished preview once it is let go.
+    tool.end_gizmo_drag();
+    tool.refresh_skin(true);
+    let (settled, generation) = tool.skin().expect("a skin");
+    assert!(generation > drafted && !tool.skin_is_draft());
+    assert!(far_right(settled) > reach + 0.2);
+}

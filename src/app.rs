@@ -34,6 +34,8 @@ mod recording;
 mod faces;
 mod files;
 mod masked;
+mod mirror_copies;
+mod pose;
 mod selection;
 mod spheres;
 pub(crate) mod tools;
@@ -75,12 +77,18 @@ pub struct Args {
     /// Hold the blue selection flash on the active object at half strength
     /// (for visual checks).
     pub demo_flash: bool,
+    /// Move the sphere off the middle, turn its live mirror on and sculpt on
+    /// the copy (for visual checks; see app/mirror_copies.rs).
+    pub demo_mirror: bool,
     /// Hide half of the active object's faces after the demo strokes (for
     /// visual checks of hidden faces).
     pub demo_hide: bool,
     /// Pull a long shape out of a coarse ball and work along it with dynamic
     /// topology on, wireframe showing (for visual checks; see app/dyntopo.rs).
     pub demo_dyntopo: bool,
+    /// Stand a figure in the scene and pose it: `hover`, `bend`, `chain`...
+    /// (for visual checks of the Pose brush; see app/pose.rs).
+    pub demo_pose: Option<String>,
     /// Testing aid: keep treating the pointer as inside the window after the
     /// OS says it left, so input posted to the window by a script (while the
     /// real cursor is elsewhere) still gets hover behaviour.
@@ -92,6 +100,10 @@ pub struct Args {
     /// With `record_loop`: the picture size and how many pictures.
     pub loop_size: Option<(u32, u32)>,
     pub loop_frames: Option<u32>,
+    /// With `record_loop`: frames a second, and stop (cancel, or close the
+    /// app) once this many pictures are in.
+    pub loop_fps: Option<u32>,
+    pub loop_cancel: Option<u32>,
     /// Record a timelapse of a few scripted strokes to this file, then close.
     pub demo_timelapse: Option<PathBuf>,
     /// Save and open scripted scenes, or put up a question about unsaved
@@ -415,11 +427,17 @@ impl Running {
         if let Some(what) = running.args.demo_spheres.clone() {
             running.spheres_demo(&what);
         }
+        if running.args.demo_mirror {
+            running.mirror_demo();
+        }
         if running.args.demo {
             running.demo_strokes();
         }
         if running.args.demo_dyntopo {
             running.dyntopo_demo();
+        }
+        if let Some(what) = running.args.demo_pose.clone() {
+            running.pose_demo(&what);
         }
         if let Some(what) = running.args.demo_tool.clone() {
             running.tools_demo(&what);
@@ -489,7 +507,7 @@ impl Running {
             return None;
         }
         // The brush works in the active object's space.
-        let p = self.doc.scene.stroke_object().matrix().transform_point3(self.doc.sculptor.last_hit?);
+        let p = self.doc.scene.stroke_matrix().transform_point3(self.doc.sculptor.last_hit?);
         let px = self.view.project(p)?;
         (self.view.contains(px) && self.view.depth_of(p) > 0.0).then_some(p)
     }
@@ -657,8 +675,9 @@ impl Running {
                 self.sync_view();
                 // Only the active object takes strokes, and only where no
                 // other object is in front of it.
-                let picked = self.pick(pos);
-                let on_active = self.press_on_active(picked, pos);
+                let placed = self.pick_placed(pos);
+                let picked = placed.map(|(id, _)| id);
+                let on_active = self.press_on_active(placed, pos);
                 let doc = &mut self.doc;
                 if on_active && doc.sculptor.begin(&mut doc.mesh, &self.local, sample, invert, mods.shift_key()) {
                     self.input.samples.clear();
@@ -752,17 +771,6 @@ impl Running {
         if self.spheres_key_pressed(code) || self.tools_key_pressed(code) {
             return;
         }
-        let brush_key =|b: Brush| match b.hotkey() {
-            '1' => KeyCode::Digit1,
-            '2' => KeyCode::Digit2,
-            '3' => KeyCode::Digit3,
-            '4' => KeyCode::Digit4,
-            '5' => KeyCode::Digit5,
-            '6' => KeyCode::Digit6,
-            '8' => KeyCode::Digit8,
-            '9' => KeyCode::Digit9,
-            _ => KeyCode::Digit0,
-        };
         if let Some(&b) = Brush::ALL.iter().find(|&&b| brush_key(b) == code) {
             if idle && !ctrl {
                 self.doc.sculptor.settings.brush = b;
@@ -1138,6 +1146,7 @@ impl Running {
             Action::Tool(tool) => self.set_tool(tool),
             Action::ResetTransform => self.reset_transform(),
             Action::MakeSkin => self.spheres_make_skin(),
+            Action::Mirror(command) => self.mirror_command(command),
             Action::NewRig => self.spheres_new_rig(),
             // Saving, opening and closing are in app/files.rs.
             Action::Open => self.open_action(),
@@ -1153,9 +1162,13 @@ impl Running {
                 let file = io::export_file_name(&name, "obj");
                 let pick = rfd::FileDialog::new().add_filter("Wavefront OBJ", &["obj"]).set_file_name(file).save_file();
                 if let Some(path) = pick {
-                    // The active object's own place, so an instance exports as its own copy.
-                    let result = io::export_obj(&self.doc.mesh, self.doc.scene.active().matrix(), &path);
-                    self.report(result, format!("Exported \"{name}\" to {}", path.display()));
+                    // The active object's own place, so an instance exports as its own copy,
+                    // and its live mirror copies, which are part of the model on screen.
+                    let places = self.export_places();
+                    let places: Vec<(&str, glam::Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+                    let result = io::export_obj_placed(&self.doc.mesh, &places, &path);
+                    let note = self.export_note();
+                    self.report(result, format!("Exported \"{name}\"{note} to {}", path.display()));
                 }
             }
             Action::ExportStl => {
@@ -1163,8 +1176,10 @@ impl Running {
                 let file = io::export_file_name(&name, "stl");
                 let pick = rfd::FileDialog::new().add_filter("STL", &["stl"]).set_file_name(file).save_file();
                 if let Some(path) = pick {
-                    let result = io::export_stl(&self.doc.mesh, self.doc.scene.active().matrix(), &path);
-                    self.report(result, format!("Exported \"{name}\" to {} (millimetres, Z up)", path.display()));
+                    let models: Vec<glam::Mat4> = self.export_places().into_iter().map(|(_, m)| m).collect();
+                    let result = io::export_stl_placed(&self.doc.mesh, &models, &path);
+                    let note = self.export_note();
+                    self.report(result, format!("Exported \"{name}\"{note} to {} (millimetres, Z up)", path.display()));
                 }
             }
         }
@@ -1241,7 +1256,7 @@ impl Running {
         }
         self.view_depth = depth.max(1e-5);
         self.view = self.doc.camera.view(Vec2::ZERO, size, self.view_depth, self.scene_size);
-        self.local = self.view.local_to(self.doc.scene.brush_object().matrix());
+        self.local = self.view.local_to(self.doc.scene.brush_matrix());
     }
 
     fn cursor(&mut self) -> Cursor {
@@ -1455,6 +1470,7 @@ impl Running {
         // Interface.
         self.egui_ctx.set_zoom_factor(self.doc.opts.ui_scale);
         let cursor = self.cursor();
+        self.pose_frame();
         if cursor.visible || self.recording_hides_pointer() {
             self.egui_ctx.set_cursor_icon(egui::CursorIcon::None);
         }
@@ -1572,6 +1588,7 @@ impl Running {
             })
             .collect();
         let items = self.tools_copies(items);
+        let items = self.mirror_items(items);
         self.recording.items.clone_from(&items);
         // The pulse over a picked, framed or undone object (see render/flash.rs).
         // Not in the Tab "clean" view, nor in the bridge's screenshots.
@@ -1579,10 +1596,7 @@ impl Running {
             .flash
             .frame(dt, !self.doc.opts.clean_view && capture.is_none())
             .into_iter()
-            .filter_map(|(id, color)| {
-                let o = self.doc.scene.get(id).filter(|o| o.visible && !self.spheres_stand_in_for(id))?;
-                Some(flash::Item { mesh: o.mesh, model: o.matrix().to_cols_array_2d(), color })
-            })
+            .flat_map(|(id, color)| self.pulses_of(id, color))
             .collect();
         self.redraw |= self.flash.animating();
         self.renderer.flash.show(&self.gpu, &globals.view_proj, &pulses);
@@ -1718,6 +1732,22 @@ impl Running {
     }
 }
 
+/// The number key that picks a brush.
+fn brush_key(brush: Brush) -> KeyCode {
+    match brush.hotkey() {
+        '1' => KeyCode::Digit1,
+        '2' => KeyCode::Digit2,
+        '3' => KeyCode::Digit3,
+        '4' => KeyCode::Digit4,
+        '5' => KeyCode::Digit5,
+        '6' => KeyCode::Digit6,
+        '7' => KeyCode::Digit7,
+        '8' => KeyCode::Digit8,
+        '9' => KeyCode::Digit9,
+        _ => KeyCode::Digit0,
+    }
+}
+
 fn is_native(path: &std::path::Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("sclp"))
 }
@@ -1750,6 +1780,7 @@ fn install(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) -> io::Det
             position: o.position,
             rotation: o.rotation,
             scale: o.scale,
+            mirror: None,
         })
         .collect();
     scene.load(saved.meshes, objects, saved.active, slot);
