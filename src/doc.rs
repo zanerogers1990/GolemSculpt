@@ -210,7 +210,13 @@ pub enum Action {
     /// The answer to the question about a copy a crash left behind.
     Recover(Recover),
     ExportObj,
+    /// Export STL for Printing: checks the object first, and asks before
+    /// writing one that is not a closed surface.
     ExportStl,
+    /// The answer "Export Anyway" to that question: straight to the save box.
+    ExportStlAnyway,
+    /// Say whether the selected object is a closed surface a printer can use.
+    CheckForPrinting,
     Remesh,
     QuadRemesh,
     Mask(MaskOp),

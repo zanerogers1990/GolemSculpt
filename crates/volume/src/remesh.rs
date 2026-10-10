@@ -67,12 +67,40 @@ pub struct Remeshed {
     /// Size of one lattice cell, the smallest feature that survives.
     pub cell: f32,
     pub stats: Stats,
+    /// What was done about the meshes that went in not being closed.
+    pub sources: Sources,
+}
+
+/// How many of the meshes handed to a remesh (one) or a boolean (several)
+/// were not closed surfaces, and what was read in their place. The result is
+/// closed either way; this is so the caller can say that the model's holes
+/// were closed for it rather than leave that to be discovered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sources {
+    /// Meshes with holes that had a rim, each capped flat across it before
+    /// the mesh was read.
+    pub capped: usize,
+    /// Meshes still open after any capping (a tear with no rim, faces wound
+    /// the wrong way), where inside and outside were settled by a vote of the
+    /// three axes: right away from the damage, a best guess next to it.
+    pub voted: usize,
+}
+
+impl Sources {
+    pub(crate) fn of<'a>(scans: impl IntoIterator<Item = &'a Scan>) -> Sources {
+        let mut sources = Sources::default();
+        for scan in scans {
+            sources.capped += scan.was_capped() as usize;
+            sources.voted += scan.was_voted() as usize;
+        }
+        sources
+    }
 }
 
 impl Remeshed {
-    pub(crate) fn new(surface: Surface, resolution: u32, cell: f32) -> Remeshed {
+    pub(crate) fn new(surface: Surface, resolution: u32, cell: f32, sources: Sources) -> Remeshed {
         let Surface { positions, normals, indices, stats } = surface;
-        Remeshed { mesh: TriMesh::new(positions, indices), normals, resolution, cell, stats }
+        Remeshed { mesh: TriMesh::new(positions, indices), normals, resolution, cell, stats, sources }
     }
 }
 
@@ -145,7 +173,7 @@ pub fn remesh_with(positions: &[Vec3], indices: &[u32], settings: &RemeshSetting
             error
         }
     })?;
-    Ok(Remeshed::new(surface, resolution, cell))
+    Ok(Remeshed::new(surface, resolution, cell, Sources::of([&scan])))
 }
 
 #[cfg(test)]
@@ -480,6 +508,29 @@ mod tests {
             creases += out.stats.crease_cells;
         }
         assert!(creases > 50, "the tangles were meant to be awkward: {creases} crease cells");
+    }
+
+    /// The caller is told when the model was not closed and what was read
+    /// in its place, so the app can say so instead of quietly lidding a bust.
+    #[test]
+    fn the_result_says_when_holes_were_capped() {
+        let whole = icosphere(5, 0.5, Vec3::new(0.01, -0.02, 0.015));
+        assert_eq!(rebuilt(&whole, 48, [false; 3]).sources, Sources::default());
+
+        let pierced = without_near(&whole, Vec3::new(0.51, -0.02, 0.015), 0.05);
+        assert!(pierced.triangle_count() < whole.triangle_count());
+        assert_eq!(rebuilt(&pierced, 48, [false; 3]).sources, Sources { capped: 1, voted: 0 });
+        assert_eq!(rebuilt(&bowl(48, 96, 0.5), 48, [false; 3]).sources, Sources { capped: 1, voted: 0 });
+
+        // Half the sphere wound inside out: there is no hole to cap, and no
+        // line through both halves that enters and then leaves.
+        let mut torn = whole.clone();
+        for t in 0..torn.triangle_count() {
+            if whole.triangle(t).iter().all(|p| p.x > 0.01) {
+                torn.indices.swap(t * 3 + 1, t * 3 + 2);
+            }
+        }
+        assert_eq!(rebuilt(&torn, 48, [false; 3]).sources, Sources { capped: 0, voted: 1 });
     }
 
     /// A dense sphere with a few triangles missing, here and there and all

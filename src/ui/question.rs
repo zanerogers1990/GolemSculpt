@@ -1,6 +1,7 @@
 //! The questions the app asks before something that could cost work: delete
-//! this object, close with unsaved changes, open a file over the scene, and
-//! at start-up, whether to bring back the copy a crash left behind.
+//! this object, close with unsaved changes, open a file over the scene,
+//! export for printing a model that may not print, and at start-up, whether
+//! to bring back the copy a crash left behind.
 //!
 //! One dialog serves them all (the Unity app's is `UIFactory.ShowModal`): the
 //! window dims, the question is put in plain words, and each answer is a
@@ -39,6 +40,9 @@ pub enum Question {
     /// `earlier` is when the last regular copy before it was made, if there
     /// is one to offer instead. (See app/recovery.rs.)
     Recover { when: Option<String>, what: String, stopped: bool, earlier: Option<String> },
+    /// Export STL for Printing was pressed on an object that is not a closed
+    /// surface. `text` is the question, with what is wrong (`printable.rs`).
+    ExportNotClosed { object: u64, text: String },
 }
 
 /// One answer: its button, and what it sets in motion. `None` only takes the
@@ -163,6 +167,10 @@ impl Question {
             Question::Recover { when, what, stopped, earlier } => {
                 recover_words(when.as_deref(), what, *stopped, earlier.as_deref())
             }
+            // It was asked of the selected object, and is about no other.
+            Question::ExportNotClosed { object, text } => {
+                (doc.scene.active_id() == *object).then(|| text.clone())?
+            }
         })
     }
 
@@ -172,7 +180,7 @@ impl Question {
     fn names_lost_work(&self) -> bool {
         match self {
             Question::Exit { lost, .. } | Question::Open { lost, .. } => !lost.is_empty(),
-            Question::Delete(_) | Question::Recover { .. } => false,
+            Question::Delete(_) | Question::Recover { .. } | Question::ExportNotClosed { .. } => false,
         }
     }
 
@@ -223,6 +231,9 @@ impl Question {
                 choices.push(Choice::new("Discard It", lossy, Action::Recover(Recover::Discard)));
                 choices.push(Choice::not_now());
                 choices
+            }
+            Question::ExportNotClosed { .. } => {
+                vec![Choice::new("Export Anyway", lossy, Action::ExportStlAnyway), cancel]
             }
         }
     }

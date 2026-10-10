@@ -26,7 +26,7 @@ use sculpt_geom::{Aabb, TriMesh};
 
 use crate::extract::{self, CellSource, ExtractOptions, Hermite, hermite_from_edges, values_from_edges};
 use crate::grid::Grid;
-use crate::remesh::{MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION, Remeshed, surface_area};
+use crate::remesh::{MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION, Remeshed, Sources, surface_area};
 use crate::scan::{Scan, facing_out, unpack_direction};
 
 /// Which way two solids are combined.
@@ -253,6 +253,7 @@ pub fn boolean_with(
         }
         scans.push(scan);
     }
+    let sources = Sources::of(&scans);
     let source = Combined { scans, op, grid };
     let options = ExtractOptions { mirror: settings.mirror, max_vertices: settings.max_triangles / 4 * 3 };
     let surface = extract::extract(&source, &grid, &options).map_err(|error| {
@@ -265,7 +266,7 @@ pub fn boolean_with(
             BooleanOp::Union => error,
         }
     })?;
-    Ok(Remeshed::new(surface, resolution, cell))
+    Ok(Remeshed::new(surface, resolution, cell, sources))
 }
 
 #[cfg(test)]
@@ -285,6 +286,21 @@ mod tests {
         assert_eq!((out.stats.skipped_quads, out.stats.residual_collapses), (0, 0));
         assert_closed(&out.mesh, &format!("{op:?}"));
         out
+    }
+
+    /// A boolean says how many of its solids had holes capped for it.
+    #[test]
+    fn the_result_counts_the_solids_that_were_capped() {
+        let (a, b) = spheres();
+        let whole = boolean_with(&a, &[&b], BooleanOp::Subtract, &BooleanSettings::new(48)).unwrap();
+        assert_eq!(whole.sources, Sources::default());
+        let pierced = crate::testing::without_near(&b, Vec3::new(0.5, 1.02, 0.01), 0.1);
+        assert!(pierced.triangle_count() < b.triangle_count());
+        for (target, cutter, capped) in [(&a, &pierced, 1), (&pierced, &a, 1), (&pierced, &pierced, 2)] {
+            let out = boolean_with(target, &[cutter], BooleanOp::Union, &BooleanSettings::new(48)).unwrap();
+            assert_eq!(out.sources, Sources { capped, voted: 0 });
+            assert_closed(&out.mesh, "a union of capped solids");
+        }
     }
 
     /// Two unit spheres a unit apart, against the analytic volumes.

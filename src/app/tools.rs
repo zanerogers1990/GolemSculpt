@@ -22,6 +22,7 @@ use crate::camera;
 use crate::doc::{Action, Doc, Tool};
 use crate::history::History;
 use crate::mesh::Mesh;
+use crate::printable::{self, Cure};
 use crate::render::DrawItem;
 use crate::scene::{Scene, SceneState};
 use crate::sculpt::{Radial, RadialAxis, Sculptor};
@@ -70,6 +71,9 @@ struct Pending {
     /// A line for the status area, and whether it is good news.
     status: Option<(String, bool)>,
     toast: Option<String>,
+    /// What to add to that line: objects a tool has just made or rebuilt
+    /// that are not closed surfaces, in words (`printable::warning`).
+    print_warning: Option<String>,
 }
 
 /// The hosted tools and what the app keeps for them.
@@ -199,13 +203,19 @@ impl Tools {
         env.clean_view = doc.opts.clean_view;
 
         let mut out = Outbox::default();
-        let result = {
+        let (result, rebuilt) = {
             let Doc { mesh, scene, history, sculptor, tools, .. } = doc;
-            let mut access = Access { scene, mesh, history, sculptor, before: None };
+            let mut access = Access { scene, mesh, history, sculptor, before: None, rebuilt: Vec::new() };
             let icons = |name: &str| assets.icon(name);
-            f(tool.as_mut(), &mut Ctx::new(env, &mut access, &tools.jobs, &icons, &mut out))
+            let result = f(tool.as_mut(), &mut Ctx::new(env, &mut access, &tools.jobs, &icons, &mut out));
+            (result, access.rebuilt)
         };
         doc.tools.slots[index] = Some(tool);
+        // Whatever the tool made or rebuilt (a trim, a split, a merge, built keys) is
+        // looked over for holes, and the status line says if it may not print.
+        if let Some(warning) = print_warning(&doc.scene, &doc.mesh, &rebuilt) {
+            doc.tools.pending.print_warning = Some(warning);
+        }
 
         if let Some(unit) = out.unit {
             doc.tools.unit = unit;
@@ -225,6 +235,25 @@ impl Tools {
         pending.finish |= out.finish && env.active;
         Some(result)
     }
+}
+
+/// The warning for the objects a tool's commit made or gave a new mesh, if
+/// any of them is not a closed surface. Objects sharing a mesh are named
+/// once, and one that has gone again (a commit can add and delete) is passed
+/// over.
+fn print_warning(scene: &Scene, slot: &Mesh, rebuilt: &[u64]) -> Option<String> {
+    let mut seen = Vec::new();
+    let mut found = Vec::new();
+    for object in rebuilt.iter().filter_map(|&id| scene.get(id)) {
+        if seen.contains(&object.mesh) {
+            continue;
+        }
+        seen.push(object.mesh);
+        if let Some(mesh) = scene.mesh(object.mesh, slot) {
+            found.push((object.name.as_str(), printable::census(mesh)));
+        }
+    }
+    printable::warning(&found, Cure::Remesh)
 }
 
 /// An object's own symmetry as tools read it: plain numbers, with where the
@@ -287,6 +316,9 @@ struct Access<'a> {
     sculptor: &'a mut Sculptor,
     /// The object list when the edit in progress began.
     before: Option<SceneState>,
+    /// The objects this call added or gave a new mesh, for the printing
+    /// check that follows it (`print_warning`).
+    rebuilt: Vec<u64>,
 }
 
 /// The app's sculptable mesh from what a command carries.
@@ -425,6 +457,7 @@ impl kit::Document for Access<'_> {
         if !object.select {
             self.scene.select(previous, self.mesh);
         }
+        self.rebuilt.push(id);
         Some(ObjectId(id))
     }
 
@@ -448,6 +481,7 @@ impl kit::Document for Access<'_> {
         self.scene.select(object.0, self.mesh);
         self.scene.remove(carrier, self.mesh);
         self.scene.select(previous, self.mesh);
+        self.rebuilt.push(object.0);
         true
     }
 
@@ -729,9 +763,14 @@ impl Running {
         // may ask for more; a couple of rounds settles it.
         for _ in 0..4 {
             let pending = std::mem::take(&mut self.doc.tools.pending);
-            self.redraw |= pending.repaint;
-            if let Some((text, ok)) = pending.status {
-                self.status(text, ok);
+            self.redraw |= pending.repaint || pending.print_warning.is_some();
+            // A tool says what it did in the call that did it, so its line and the
+            // warning about what it left arrive together; the warning goes after.
+            match (pending.status, pending.print_warning) {
+                (Some((text, _)), Some(warning)) => self.status(format!("{text} {warning}"), false),
+                (Some((text, ok)), None) => self.status(text, ok),
+                (None, Some(warning)) => self.status(warning, false),
+                (None, None) => {}
             }
             if let Some(text) = pending.toast {
                 self.toast(text);
@@ -1247,8 +1286,14 @@ mod tests {
         let mut history = History::default();
         history.target = scene.active_mesh();
         let mut sculptor = Sculptor::default();
-        let mut access =
-            Access { scene: &mut scene, mesh: &mut mesh, history: &mut history, sculptor: &mut sculptor, before: None };
+        let mut access = Access {
+            scene: &mut scene,
+            mesh: &mut mesh,
+            history: &mut history,
+            sculptor: &mut sculptor,
+            before: None,
+            rebuilt: Vec::new(),
+        };
 
         let count = access.mesh(id).unwrap().triangle_count();
         let vertices = access.mesh(id).unwrap().vertex_count();
@@ -1284,6 +1329,58 @@ mod tests {
         assert_eq!(mesh.hidden_triangle_count(), hidden, "and the old hidden faces");
     }
 
+    /// What a tool makes or rebuilds (a trim, a split, a merge, built keys) is looked over for holes
+    /// when its commit lands, and the warning names the objects that are not closed and no others.
+    #[test]
+    fn what_a_tool_makes_or_rebuilds_is_looked_over_for_holes() {
+        let mut mesh = cube();
+        let mut scene = Scene::new("Cube");
+        let id = ObjectId(scene.active_id());
+        let mut history = History::default();
+        history.target = scene.active_mesh();
+        let mut sculptor = Sculptor::default();
+        let mut access = Access {
+            scene: &mut scene,
+            mesh: &mut mesh,
+            history: &mut history,
+            sculptor: &mut sculptor,
+            before: None,
+            rebuilt: Vec::new(),
+        };
+        let whole = cube();
+        let plain = |indices: &[u32]| kit::MeshData::from(TriMesh::new(whole.positions.clone(), indices.to_vec()));
+
+        // A commit of closed meshes, with edits that rebuild nothing: every object it gave a mesh is
+        // listed for the check, and the check has nothing to say.
+        let commands = vec![
+            Command::Replace { object: id, mesh: plain(&whole.indices) },
+            Command::Add(kit::NewObject::new("Part", plain(&whole.indices)).unselected()),
+            Command::Rename { object: id, name: "Body".into() },
+        ];
+        let receipt = kit::scene::apply(&mut access, "Split", commands);
+        let part = receipt.added[0];
+        assert_eq!(access.rebuilt, [id.0, part.0]);
+        assert_eq!(print_warning(access.scene, access.mesh, &access.rebuilt), None);
+
+        // The part replaced by a cube with two of its triangles missing: it is named, the body is not.
+        access.rebuilt.clear();
+        let open = kit::MeshData::from(TriMesh::new(whole.positions.clone(), whole.indices[6..].to_vec()));
+        kit::scene::apply(&mut access, "Trim", vec![Command::Replace { object: part, mesh: open }]);
+        assert_eq!(access.rebuilt, [part.0]);
+        let both = [id.0, part.0];
+        let warning = print_warning(access.scene, access.mesh, &both).expect("the part has a hole in it");
+        assert!(warning.starts_with("\"Part\" has ") && warning.contains(" open edges ("), "{warning}");
+        assert!(warning.ends_with(": it may not print. A Remesh (R) usually closes it."), "{warning}");
+        assert!(!warning.contains("Body"), "{warning}");
+
+        // An instance shows the same mesh, and is not named a second time; an object that has gone is passed over.
+        let part_mesh = access.scene.get(part.0).unwrap().mesh;
+        access.scene.select(part.0, access.mesh);
+        let twin = access.scene.instance_active();
+        assert_eq!(access.scene.get(twin).unwrap().mesh, part_mesh);
+        assert_eq!(print_warning(access.scene, access.mesh, &[part.0, twin, u64::MAX]), Some(warning));
+    }
+
     /// Symmetry belongs to objects, and that is what tools are shown: any
     /// object's own on asking, the piece a tool cuts from an object starting
     /// with that object's, and a change going to the object that was selected
@@ -1303,8 +1400,14 @@ mod tests {
         let mut history = History::default();
         history.target = scene.active_mesh();
         let mut sculptor = Sculptor::default();
-        let mut access =
-            Access { scene: &mut scene, mesh: &mut mesh, history: &mut history, sculptor: &mut sculptor, before: None };
+        let mut access = Access {
+            scene: &mut scene,
+            mesh: &mut mesh,
+            history: &mut history,
+            sculptor: &mut sculptor,
+            before: None,
+            rebuilt: Vec::new(),
+        };
         let (a, b) = (ObjectId(body), ObjectId(head));
 
         // Each object's own, whichever is selected (the head is).
@@ -1364,8 +1467,14 @@ mod tests {
         let mut history = History::default();
         history.target = scene.active_mesh();
         let mut sculptor = Sculptor::default();
-        let mut access =
-            Access { scene: &mut scene, mesh: &mut mesh, history: &mut history, sculptor: &mut sculptor, before: None };
+        let mut access = Access {
+            scene: &mut scene,
+            mesh: &mut mesh,
+            history: &mut history,
+            sculptor: &mut sculptor,
+            before: None,
+            rebuilt: Vec::new(),
+        };
         let (a, b, c) = (ObjectId(first), ObjectId(second), ObjectId(third));
         assert_eq!((access.active(), access.selected()), (b, vec![b, c, a]));
 

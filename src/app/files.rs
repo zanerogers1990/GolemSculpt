@@ -39,6 +39,7 @@ use crate::prefs::{self, BrushPrefs, Home, Prefs};
 use crate::recent;
 use crate::render::DrawItem;
 use crate::scene::Scene;
+use crate::printable::Cure;
 use crate::ui::question::Question;
 use crate::unity_import;
 
@@ -794,7 +795,8 @@ impl Running {
                     size[1],
                     size[2]
                 );
-                self.status(message, true);
+                // Models from elsewhere, scans above all, are often not closed.
+                self.status_checked(message, Cure::Remesh);
             }
             Err(e) => self.status(e, false),
         }

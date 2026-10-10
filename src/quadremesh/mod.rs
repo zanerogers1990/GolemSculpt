@@ -26,6 +26,7 @@ use std::time::Instant;
 
 use glam::Vec3;
 use rayon::prelude::*;
+use sculpt_geom::EdgeCensus;
 
 pub use poly::PolyMesh;
 use poly::{Edges, NONE, find, union};
@@ -53,8 +54,21 @@ pub struct Report {
     pub valence3: usize,
     pub valence5: usize,
     pub valence_other: usize,
+    /// Edges with one triangle, and with three or more, counted on the
+    /// triangles the faces are cut into: those are what is sculpted and
+    /// exported, and a quad's diagonal can land on an edge another face
+    /// already has, which the faces themselves do not show. Both are 0 for a
+    /// closed result.
     pub boundary_edges: usize,
     pub non_manifold_edges: usize,
+    /// The separate rims the open edges form: holes (see `EdgeCensus`).
+    pub holes: Option<usize>,
+    /// Loops the extraction traced and left out (see `extract::extract`). On
+    /// a closed model each one is a hole.
+    pub left_out_faces: usize,
+    /// Pieces left out altogether: parts of the model with less area than
+    /// one quad, and stray scraps of the result.
+    pub dropped_pieces: usize,
     /// Spread of edge lengths: standard deviation over mean.
     pub edge_spread: f32,
     pub seconds: f32,
@@ -65,8 +79,21 @@ impl Report {
         self.valence3 + self.valence5 + self.valence_other
     }
 
+    /// The open and crowded edges of the result, as the app words them.
+    pub fn census(&self) -> EdgeCensus {
+        EdgeCensus { open: self.boundary_edges, crowded: self.non_manifold_edges, holes: self.holes }
+    }
+
     pub fn of(mesh: &PolyMesh, seconds: f32) -> Report {
-        let mut report = Report { vertices: mesh.vertex_count(), seconds, ..Report::default() };
+        let census = sculpt_geom::edge_census(mesh.vertex_count(), &mesh.triangulate());
+        let mut report = Report {
+            vertices: mesh.vertex_count(),
+            seconds,
+            boundary_edges: census.open,
+            non_manifold_edges: census.crowded,
+            holes: census.holes,
+            ..Report::default()
+        };
         for face in mesh.faces() {
             match face.len() {
                 4 => report.quads += 1,
@@ -82,11 +109,6 @@ impl Report {
             let (a, b) = (edges.a[e] as usize, edges.b[e] as usize);
             valence[a] += 1;
             valence[b] += 1;
-            match edges.uses[e] {
-                2 => {}
-                1 => report.boundary_edges += 1,
-                _ => report.non_manifold_edges += 1,
-            }
             if edges.uses[e] != 2 {
                 on_boundary[a] = true;
                 on_boundary[b] = true;
@@ -113,16 +135,44 @@ impl Report {
         report
     }
 
+    /// One line for the status area. Whatever of the result is not closed
+    /// is in it, in the words the rest of the app uses for that, and so are
+    /// pieces that were left out: neither shows at a glance.
     pub fn summary(&self) -> String {
         let faces = self.quads + self.triangles + self.other_faces;
-        format!(
-            "{} quads + {} other faces ({:.1}% quads), {} poles, in {:.1} s",
+        let mut text = format!(
+            "{} quads + {} other faces ({:.1}% quads), {} poles",
             self.quads,
             faces - self.quads,
             100.0 * self.quads as f64 / faces.max(1) as f64,
             self.irregular(),
-            self.seconds,
-        )
+        );
+        if let Some(faults) = crate::printable::faults(&self.census()) {
+            text += &format!(", {faults}");
+        }
+        match self.dropped_pieces {
+            0 => {}
+            1 => text += ", 1 piece too small for a quad left out",
+            n => text += &format!(", {n} pieces too small for a quad left out"),
+        }
+        text + &format!(", in {:.1} s", self.seconds)
+    }
+
+    /// What to make of a result that is not closed, as a sentence to follow
+    /// the summary (with a space before it); empty for a closed one. A quad
+    /// remesh keeps the openings a model has, so `was_closed` (the model
+    /// before) decides whether these are new, and what to do about them.
+    pub fn advice(&self, was_closed: bool) -> &'static str {
+        match (self.census().is_closed(), was_closed) {
+            (true, _) => "",
+            (false, true) => {
+                " The model was closed before, so it may not print now: try a different number of quads, or Undo (Z)."
+            }
+            (false, false) => {
+                " The model was not closed before either, so it may not print: Undo (Z), Remesh (R) to close it, \
+                 then Quad Remesh again."
+            }
+        }
     }
 }
 
@@ -140,12 +190,14 @@ pub fn quad_remesh(vertices: &[Vec3], triangles: &[u32], target_quads: usize) ->
     let curvature = curvature::Curvature::build(&h, scale, target_quads);
     let q = field::solve_orientation(&h, Some(&curvature));
     let o = field::solve_position(&h, &q, scale);
-    let extracted = extract::extract(&h.levels[0], &q[0], &o[0], scale);
-    let mesh = finish(extracted, &input, scale);
+    let (extracted, left_out_faces) = extract::extract(&h.levels[0], &q[0], &o[0], scale);
+    let (mesh, scraps) = finish(extracted, &input, scale);
     if mesh.face_count() == 0 {
         return Err("Quad remesh produced no surface. Try more quads.".into());
     }
-    let report = Report::of(&mesh, start.elapsed().as_secs_f32());
+    let mut report = Report::of(&mesh, start.elapsed().as_secs_f32());
+    report.left_out_faces = left_out_faces;
+    report.dropped_pieces = input.dropped_pieces + scraps;
     Ok(QuadRemesh { mesh, report })
 }
 
@@ -181,13 +233,14 @@ fn triangle_pieces(vertex_count: usize, triangles: &[u32]) -> Vec<u32> {
 /// relaxes: each interior vertex moves halfway to the mean of its edge
 /// neighbours and is projected back, which evens out the lattice's small
 /// jitter without leaving the surface. Boundary vertices are only projected,
-/// so open edges keep their line.
-fn finish(mut mesh: PolyMesh, input: &prepare::Prepared, scale: f32) -> PolyMesh {
+/// so open edges keep their line. Returns the mesh and how many stray scraps
+/// of it were dropped on the way.
+fn finish(mut mesh: PolyMesh, input: &prepare::Prepared, scale: f32) -> (PolyMesh, usize) {
     let projector = project::Projector::new(&input.vertices, &input.triangles, scale);
     mesh.vertices.par_iter_mut().for_each(|p| *p = projector.project(*p));
     let mesh = cleanup::clean(mesh);
     let piece = triangle_pieces(input.vertices.len(), &input.triangles);
-    let mut mesh = cleanup::remove_fragments(mesh, |p| {
+    let (mut mesh, scraps) = cleanup::remove_fragments(mesh, |p| {
         projector.project_with_triangle(p).1.map_or(NONE, |t| piece[t as usize])
     });
 
@@ -232,5 +285,5 @@ fn finish(mut mesh: PolyMesh, input: &prepare::Prepared, scale: f32) -> PolyMesh
             .collect();
         mesh.vertices = next;
     }
-    mesh
+    (mesh, scraps)
 }

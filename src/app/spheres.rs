@@ -345,7 +345,7 @@ impl Running {
                     Some((_, old)) => format!(" The earlier skin \"{old}\" is hidden, not deleted."),
                     None => " Undo (Z) removes it.".to_owned(),
                 };
-                self.status(text, true);
+                self.status_checked(text, crate::printable::Cure::Remesh);
             }
             Err(e) => {
                 self.doc.spheres.say(e.clone());

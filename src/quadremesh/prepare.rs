@@ -14,6 +14,9 @@ pub struct Prepared {
     pub triangles: Vec<u32>,
     /// Target quad edge length: sqrt(area / quads).
     pub quad_edge: f32,
+    /// Separate pieces of the sculpt left out as debris: each with less area
+    /// than one quad. They are gone from the result, so the caller says so.
+    pub dropped_pieces: usize,
 }
 
 /// Hard ceiling on the conditioned vertex count, whatever the target asks
@@ -23,7 +26,7 @@ pub const MAX_VERTICES: usize = 3_000_000;
 pub fn prepare(vertices: &[Vec3], triangles: &[u32], target_quads: usize) -> Prepared {
     // A piece with less area than one quad cannot hold a quad.
     let raw_area = surface_area(vertices, triangles);
-    let (v, t) = sanitize(vertices, triangles, raw_area / target_quads as f64);
+    let (v, t, dropped_pieces) = sanitize(vertices, triangles, raw_area / target_quads as f64);
     let area = surface_area(&v, &t);
     let quad_edge = (area / target_quads as f64).sqrt() as f32;
     // The edge limit Instant Meshes uses: half the quad edge, but never more
@@ -31,7 +34,7 @@ pub fn prepare(vertices: &[Vec3], triangles: &[u32], target_quads: usize) -> Pre
     // toward the density of the rest of the model.
     let max_edge = (quad_edge as f64 * 0.5).min(mean_edge_length(&v, &t) * 2.0) as f32;
     let (vertices, triangles) = split_long_edges(v, t, max_edge, MAX_VERTICES);
-    Prepared { vertices, triangles, quad_edge }
+    Prepared { vertices, triangles, quad_edge, dropped_pieces }
 }
 
 pub fn surface_area(v: &[Vec3], t: &[u32]) -> f64 {
@@ -62,14 +65,15 @@ fn mean_edge_length(v: &[Vec3], t: &[u32]) -> f64 {
 ///   2. Every vertex whose faces form more than one fan is split, one copy
 ///      per fan. Fans join only across proper manifold edges, so a
 ///      non-manifold or misoriented edge is cut open: it becomes a boundary.
-///   3. Pieces with less area than `min_area` are dropped.
+///   3. Pieces with less area than `min_area` are dropped, and counted.
 ///   4. Unused vertices are removed.
-fn sanitize(vertices: &[Vec3], triangles: &[u32], min_area: f64) -> (Vec<Vec3>, Vec<u32>) {
+fn sanitize(vertices: &[Vec3], triangles: &[u32], min_area: f64) -> (Vec<Vec3>, Vec<u32>, usize) {
     let mut t = remove_bad_triangles(vertices.len(), triangles);
     let mut v = vertices.to_vec();
     split_fans(&mut v, &mut t);
-    let t = remove_small_components(&v, t, min_area);
-    compact(v, t)
+    let (t, dropped) = remove_small_components(&v, t, min_area);
+    let (v, t) = compact(v, t);
+    (v, t, dropped)
 }
 
 fn remove_bad_triangles(vertex_count: usize, triangles: &[u32]) -> Vec<u32> {
@@ -166,7 +170,9 @@ fn split_fans(v: &mut Vec<Vec3>, t: &mut [u32]) {
     }
 }
 
-fn remove_small_components(v: &[Vec3], t: Vec<u32>, min_area: f64) -> Vec<u32> {
+/// The triangles of every piece with at least `min_area`, and how many pieces
+/// had less.
+fn remove_small_components(v: &[Vec3], t: Vec<u32>, min_area: f64) -> (Vec<u32>, usize) {
     let mut parent: Vec<u32> = (0..v.len() as u32).collect();
     for tri in t.chunks_exact(3) {
         union(&mut parent, tri[0], tri[1]);
@@ -179,12 +185,16 @@ fn remove_small_components(v: &[Vec3], t: Vec<u32>, min_area: f64) -> Vec<u32> {
         area[root] += 0.5 * (v[tri[1] as usize] - a).cross(v[tri[2] as usize] - a).length() as f64;
     }
     let mut kept = Vec::with_capacity(t.len());
+    let mut dropped = vec![false; v.len()];
     for tri in t.chunks_exact(3) {
-        if area[find(&mut parent, tri[0]) as usize] >= min_area {
+        let root = find(&mut parent, tri[0]) as usize;
+        if area[root] >= min_area {
             kept.extend_from_slice(tri);
+        } else {
+            dropped[root] = true;
         }
     }
-    kept
+    (kept, dropped.iter().filter(|&&d| d).count())
 }
 
 fn compact(v: Vec<Vec3>, mut t: Vec<u32>) -> (Vec<Vec3>, Vec<u32>) {

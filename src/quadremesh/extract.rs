@@ -39,7 +39,11 @@ const IGNORE: u8 = 0;
 const COLLAPSE: u8 = 1;
 const OUTPUT: u8 = 2;
 
-pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> PolyMesh {
+/// The mesh, and how many traced loops were left out of it: walks too long
+/// to be a face, and loops that read as the outside of an opening. On a model
+/// with open edges the second is the trace round each rim and is expected; on
+/// a closed model either one leaves a hole.
+pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> (PolyMesh, usize) {
     let n = level.count();
     let inv = 1.0 / scale;
 
@@ -179,6 +183,7 @@ pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> PolyMesh {
     let mut used = vec![false; dart_start[count]];
 
     let mut out = PolyMesh::with_vertices(pos);
+    let mut left_out = 0;
     let mut face: Vec<u32> = Vec::new();
     let mut loops: Vec<Vec<u32>> = Vec::new();
     for c0 in 0..count {
@@ -208,6 +213,7 @@ pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> PolyMesh {
                 i = (back + links - 1) % links;
             }
             if !closed {
+                left_out += 1;
                 continue;
             }
             // A face that passes through a vertex twice wraps around a spur
@@ -217,16 +223,18 @@ pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> PolyMesh {
             loops.clear();
             split_into_simple_loops(&face, &mut loops);
             for simple in &loops {
-                if simple.len() >= 3 {
-                    emit_face(simple, &neighbours, &angles, &mut out);
+                if simple.len() >= 3 && !emit_face(simple, &neighbours, &angles, &mut out) {
+                    left_out += 1;
                 }
             }
         }
     }
-    out.remove_unused_vertices()
+    (out.remove_unused_vertices(), left_out)
 }
 
-fn emit_face(face: &[u32], neighbours: &[Vec<u32>], angles: &[Vec<f32>], out: &mut PolyMesh) {
+/// Adds the face, split into quads if it has five sides or more. False, and
+/// nothing is added, for a loop that reads as the outside of an opening.
+fn emit_face(face: &[u32], neighbours: &[Vec<u32>], angles: &[Vec<f32>], out: &mut PolyMesh) -> bool {
     // Interior of a planar k-gon: angles sum to (k - 2) * 180; the same loop
     // traced around its outside sums to (k + 2) * 180. Split the difference.
     // Only for k >= 5: a real opening in the sculpt is many quads around,
@@ -238,12 +246,12 @@ fn emit_face(face: &[u32], neighbours: &[Vec<u32>], angles: &[Vec<f32>], out: &m
             .map(|j| corner_angle(face[(j + k - 1) % k], face[j], face[(j + 1) % k], neighbours, angles))
             .sum();
         if sum > k as f64 * PI {
-            return;
+            return false;
         }
     }
     if k <= 4 {
         out.add_face(face);
-        return;
+        return true;
     }
     // Centre fan: quads (centre, f[2m], f[2m + 1], f[2m + 2]); odd k leaves
     // one triangle.
@@ -257,6 +265,7 @@ fn emit_face(face: &[u32], neighbours: &[Vec<u32>], angles: &[Vec<f32>], out: &m
     if k & 1 == 1 {
         out.add_face(&[cv, face[k - 1], face[0]]);
     }
+    true
 }
 
 /// Splits a closed walk into simple cycles: whenever a vertex repeats, the

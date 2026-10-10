@@ -514,6 +514,8 @@ pub struct Scan {
     /// As the mesh was given, before any capping: whether it showed a hole,
     /// and how many of the lattice lines it meets it leaves open.
     holed: bool,
+    /// Whether a cap was stretched over its holes before it was read.
+    capped: bool,
     occupied: usize,
     open: usize,
 }
@@ -533,13 +535,15 @@ impl Scan {
         let occupied = pass.iter().map(|p| p.occupied).sum();
         let open = pass.iter().map(|p| p.open).sum();
         let was_holed = holed(grid, &pass);
+        let mut capped = false;
         if was_holed && cap_holes {
             if let Some((positions, indices)) = cap::capped(positions, indices) {
                 pass = Scan::passes(&positions, &indices, grid)?;
+                capped = true;
             }
         }
         let voted = (was_holed && holed(grid, &pass)).then(|| vote::Voted::new(grid, &pass));
-        Ok(Scan { grid: *grid, pass, voted, holed: was_holed, occupied, open })
+        Ok(Scan { grid: *grid, pass, voted, holed: was_holed, capped, occupied, open })
     }
 
     /// The crossings of the triangles with the lattice lines of each axis.
@@ -602,6 +606,21 @@ impl Scan {
     /// about how much solid there is.
     pub fn is_closed(&self) -> bool {
         !self.holed
+    }
+
+    /// True when the mesh showed holes and a cap was stretched over each rim
+    /// before it was read (`scan/cap.rs`): the solid scanned is the mesh with
+    /// its holes closed flat, which whoever asked may want to be told.
+    pub fn was_capped(&self) -> bool {
+        self.capped
+    }
+
+    /// True when the mesh was still open after any capping (a tear with no
+    /// rim to speak of, a surface not consistently wound), so that inside and
+    /// outside were settled by the vote between the axes (`scan/vote.rs`).
+    /// The result is closed all the same; near the tear it is a best guess.
+    pub fn was_voted(&self) -> bool {
+        self.voted.is_some()
     }
 
     /// Lattice lines the mesh as given does not close, as a fraction of the

@@ -601,7 +601,12 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
         row(ui, &[(
             "Export STL for Printing (mm)...",
             Action::ExportStl,
-            "Write the selected object as a binary STL for a slicer: placed as it is in the scene, upright (Z up), in millimetres at real size (1 unit is 10 mm).",
+            "Write the selected object as a binary STL for a slicer: placed as it is in the scene, upright (Z up), in millimetres at real size (1 unit is 10 mm). If the object has holes it says so first, and asks.",
+        )]);
+        row(ui, &[(
+            "Check for Printing",
+            Action::CheckForPrinting,
+            "Look the selected object over for holes and for edges shared by more than two faces, either of which can stop it printing. The answer is in the line at the top of this panel.",
         )]);
         crate::recent::tiles(ui, &mut state.recent, tips, actions);
     });

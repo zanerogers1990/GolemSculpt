@@ -14,6 +14,7 @@ mod look;
 mod mcp;
 mod mesh;
 mod prefs;
+mod printable;
 mod quadremesh;
 mod recent;
 mod recovery;
@@ -135,6 +136,8 @@ fn main() {
             "--demo-pose" => opts.demo_pose = it.next().cloned(),
             // Saving, opening and the questions about unsaved work: recent | ask-exit | ask-open | ask-open-clean | play | open-undo
             "--demo-files" => opts.demo_files = it.next().cloned(),
+            // The printing check on a damaged object: check | closed | export | remesh | quads | damaged | play
+            "--demo-print" => opts.demo_print = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

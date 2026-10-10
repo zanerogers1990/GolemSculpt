@@ -832,7 +832,9 @@ pair; after that they can be moved apart and the joints stay on them.
   Unity app named them). An array of a very heavy object can ask for more
   triangles than an STL can hold (4 billion), and is refused in words. The save box
   offers `<object name>_<date>_<time>` as the file name. The size conversion
-  lives in one place, `crates/geom/src/units.rs`.
+  lives in one place, `crates/geom/src/units.rs`. **Export STL for Printing**
+  looks the object over first, and asks before writing one with holes in it
+  (see Checking a model for printing).
 - **The app remembers how you left it**: interface size, tooltips on or off,
   which cards are open, fullscreen, millimetres or inches, the remesh
   settings, dynamic topology and every brush's tuning. They are kept in
@@ -884,6 +886,55 @@ keep something new in it without changing the format, are set out in
 `src/io.rs`. What a tool keeps for an object (an array's settings and points)
 is one more field of that object's entry in the JSON, under the tool's name
 (`"array"`), which a version that does not know it steps over.
+
+## Checking a model for printing
+
+A printer needs a closed surface: every edge shared by exactly two faces. The
+app counts the edges that are not, and says so in the status line at the top
+of the Scene panel, in red:
+
+> "Sphere" has 12 open edges (2 holes) and 3 edges shared by more than two
+> faces: it may not print. A Remesh (R) usually closes it.
+
+An open edge has a face on one side only: it is on the rim of a hole. An edge
+shared by more than two faces is where sheets meet along a line, so there is
+no telling which side is inside. Hidden parts are counted like the rest: the
+file a slicer gets is the whole model.
+
+- **Check for Printing**, under Export STL for Printing in the File card,
+  looks over the selected object and answers in that line: what is wrong and
+  what closes it, or that it is a closed surface.
+- **Export STL for Printing** makes the same check first. A closed object goes
+  straight to the save box. For one that is not, a question says what is
+  wrong and offers **Export Anyway** (Enter) or **Cancel** (Esc); exported
+  anyway, the status line says once more that it may not print.
+- **After anything that rebuilds a mesh** the result is checked, and the
+  warning follows the operation's own line: Remesh, Quad Remesh, Join (with
+  or without the remesh), Subtract, Union and Intersect, Trim, Split,
+  Extract, a tube merge or tubes kept as objects, built keys, an array made
+  into one object or into separate ones, a lathe, an SSphere skin, and an
+  imported `.obj` or `.stl`. With dynamic topology on, a stroke that added
+  triangles is checked too, and is only spoken of if it left more holes than
+  it found.
+- **Remesh and the booleans close holes on their own**, and now say when they
+  did: "The model had holes, which were closed over flat" (for a boolean,
+  "One of the objects had holes..."). Where the surface was torn, doubled or
+  inside out, so that no flat cap fits, they say that what is solid there is
+  a best guess and to look that area over.
+- **Quad Remesh does not always give a closed model back closed.** It keeps
+  the openings a model has, and now and then leaves a five-sided hole of its
+  own, or two quads whose diagonals lie on one edge. Its line counts them
+  ("5 open edges (1 hole)") and says what to do: another number of quads, or
+  undo. Measured over the six closed test models at seven sizes each, 10 of
+  the 42 results were not closed; the sphere and the cube always were.
+
+Only holes and crowded edges are looked for. Surfaces that pass through each
+other (a plain Join of overlapping parts), walls too thin for the printer and
+faces turned inside out are not, so a model that passes is closed, which is
+not the same as certain to print. Nothing here repairs a model: a Remesh
+does, and the warning says so. The count is quick, 5 to 8 ms for each million
+triangles (`crates/geom/src/edge_census.rs`); the wording is in
+`src/printable.rs`.
 
 ## Look
 
@@ -1147,6 +1198,9 @@ sculpt.exe --screenshot out.png --demo-spheres attached --demo-tool tube --demo-
 sculpt.exe --screenshot out.png --demo-files ask-exit:mirror   # a change that is saved without an undo step, made first: mirror (the X key) | hide (H) | local (/)
 sculpt.exe --screenshot out.png --demo-files lost   # what closing and opening would lose, worked through the keys and every tool; prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files open-undo   # Open, Undo, Redo and Save in every order, looking at what is in the files after each; prints a line per check (name a .sclp or .sculpt to start from that file; open-undo:opened and open-undo:undone stop after an Open, and after its Undo, for a picture of the File card)
+sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
+cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
+cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
 SCULPT_UNITY_SAMPLES=folder cargo test unity_import -- --nocapture   # the Unity sculpt reader against every .sculpt in a folder, with what each holds (they are not in the repository)

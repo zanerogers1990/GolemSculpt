@@ -22,6 +22,7 @@ use crate::doc::{Action, Doc, MaskOp, Options, Stats, Tool};
 use crate::history::{History, Next};
 use crate::mesh::Mesh;
 use crate::mesh::primitives::{self, Primitive};
+use crate::printable::Cure;
 use crate::render::flash;
 use crate::render::{DrawItem, Globals, Gpu, Renderer};
 use crate::scene::{Object, Scene};
@@ -41,6 +42,7 @@ mod live_copies;
 mod masked;
 mod mirror_copies;
 mod pose;
+mod print_check;
 mod recovery;
 mod selection;
 mod spheres;
@@ -121,6 +123,10 @@ pub struct Args {
     /// Save and open scripted scenes, or put up a question about unsaved
     /// work (for visual checks; see app/files.rs).
     pub demo_files: Option<String>,
+    /// Damage the object so it will not print and run the printing check on
+    /// it: `check`, `closed`, `export`, `remesh`, `quads`, `damaged` or
+    /// `play` (for visual checks; see app/print_check.rs).
+    pub demo_print: Option<String>,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -210,6 +216,9 @@ struct Running {
     frames: u32,
     pivot_seen: Option<Instant>,
     stroke_ended: Option<Instant>,
+    /// How closed the mesh was before a stroke that can add triangles, so
+    /// the stroke can be held to leaving it no worse (app/print_check.rs).
+    print_watch: print_check::StrokeWatch,
     /// A screenshot the Claude bridge is waiting for.
     capture: Option<bridge::Capture>,
     transform: transform::State,
@@ -469,6 +478,7 @@ impl Running {
             frames: 0,
             pivot_seen: None,
             stroke_ended: None,
+            print_watch: Default::default(),
             capture: None,
             transform: Default::default(),
             flash: Default::default(),
@@ -506,6 +516,10 @@ impl Running {
         }
         if let Some(what) = running.args.demo_pose.clone() {
             running.pose_demo(&what);
+        }
+        // Before the tools, so that one of them can be shown at work on the damaged object.
+        if let Some(what) = running.args.demo_print.clone() {
+            running.print_demo(&what);
         }
         if let Some(what) = running.args.demo_tool.clone() {
             running.tools_demo(&what);
@@ -763,6 +777,9 @@ impl Running {
                 let placed = self.pick_placed(pos);
                 let picked = placed.map(|(id, _)| id);
                 let on_active = self.press_on_active(placed, pos);
+                if on_active {
+                    self.stroke_baseline(mods.shift_key());
+                }
                 let doc = &mut self.doc;
                 if on_active && doc.begin_stroke(&self.local, sample, invert, mods.shift_key()) {
                     self.input.samples.clear();
@@ -813,6 +830,7 @@ impl Running {
     fn finish_stroke(&mut self) {
         focus::end_stroke(&mut self.input, &mut self.doc, &self.local);
         self.stroke_ended = Some(Instant::now());
+        self.stroke_check();
     }
 
     fn wheel(&mut self, lines: f32) {
@@ -1123,28 +1141,32 @@ impl Running {
                 let res = self.doc.opts.remesh_resolution as u32;
                 // Exactly symmetric across the object's own mirror planes.
                 let mirrors = self.doc.scene.active_symmetry().exact_mirrors();
-                match remesh::voxel_remesh(&self.doc.mesh, res, mirrors) {
-                    Ok(mesh) => {
+                match remesh::voxel_remesh_noted(&self.doc.mesh, res, mirrors) {
+                    Ok((mesh, notes)) => {
                         let tris = mesh.triangle_count();
                         self.replace_mesh(mesh, true);
                         self.toast("Remesh");
-                        self.status(
-                            format!("Remeshed to {tris} triangles in {:.0} ms.", t.elapsed().as_secs_f64() * 1000.0),
-                            true,
-                        );
+                        let ms = t.elapsed().as_secs_f64() * 1000.0;
+                        // What it did about holes the model had, then whether the result is closed.
+                        let text = format!("Remeshed to {tris} triangles in {ms:.0} ms.{}", notes.after_remesh());
+                        self.status_checked(text, Cure::OtherResolution);
                     }
                     Err(e) => self.status(e, false),
                 }
             }
             Action::QuadRemesh => {
                 let target = self.doc.opts.quad_target as usize;
+                // A quad remesh keeps the holes a model has, and can leave new ones.
+                let was_closed = crate::printable::census(&self.doc.mesh).is_closed();
                 match crate::quadremesh::quad_remesh_mesh(&self.doc.mesh, target) {
                     Ok((mesh, report)) => {
                         self.replace_mesh(mesh, true);
                         // The quads are the point: show them.
                         self.doc.opts.wireframe = true;
                         self.toast("Quad Remesh");
-                        self.status(format!("Quad remesh: {}.", report.summary()), true);
+                        let closed = report.census().is_closed();
+                        let text = format!("Quad remesh: {}.{}", report.summary(), report.advice(was_closed));
+                        self.status(text, closed);
                     }
                     Err(e) => self.status(e, false),
                 }
@@ -1257,17 +1279,10 @@ impl Running {
                     self.report(result, format!("Exported \"{name}\"{note} to {}", path.display()));
                 }
             }
-            Action::ExportStl => {
-                let name = self.doc.scene.active().name.clone();
-                let file = io::export_file_name(&name, "stl");
-                let pick = rfd::FileDialog::new().add_filter("STL", &["stl"]).set_file_name(file).save_file();
-                if let Some(path) = pick {
-                    let models: Vec<glam::Mat4> = self.export_places().into_iter().map(|(_, m)| m).collect();
-                    let result = io::export_stl_placed(&self.doc.mesh, &models, &path);
-                    let note = self.export_note();
-                    self.report(result, format!("Exported \"{name}\"{note} to {} (millimetres, Z up)", path.display()));
-                }
-            }
+            // Checking and exporting for printing are in app/print_check.rs.
+            Action::ExportStl => self.export_stl_asking(),
+            Action::ExportStlAnyway => self.export_stl_now(),
+            Action::CheckForPrinting => self.check_for_printing(),
         }
     }
 

@@ -345,8 +345,9 @@ fn collapse_triangle_chords(mesh: &PolyMesh) -> Option<PolyMesh> {
 /// piece the largest output piece is kept, and any other under
 /// FRAGMENT_MAX_FACES is dropped. Big extra pieces stay (losing real surface
 /// would be worse than an unwanted split) and a genuinely separate small part
-/// (an eye) is its own input piece, so it is always kept.
-pub fn remove_fragments(mesh: PolyMesh, input_piece_of: impl Fn(Vec3) -> u32) -> PolyMesh {
+/// (an eye) is its own input piece, so it is always kept. Returns the mesh
+/// and how many pieces were dropped.
+pub fn remove_fragments(mesh: PolyMesh, input_piece_of: impl Fn(Vec3) -> u32) -> (PolyMesh, usize) {
     let n = mesh.vertex_count();
     let mut parent: Vec<u32> = (0..n as u32).collect();
     for face in mesh.faces() {
@@ -380,8 +381,9 @@ pub fn remove_fragments(mesh: PolyMesh, input_piece_of: impl Fn(Vec3) -> u32) ->
     for &(r, input) in &piece_of {
         drop[r as usize] = largest[&input] != r && faces[r as usize] < FRAGMENT_MAX_FACES;
     }
-    if !drop.contains(&true) {
-        return mesh;
+    let dropped = drop.iter().filter(|&&d| d).count();
+    if dropped == 0 {
+        return (mesh, 0);
     }
     let mut out = mesh.rebuild();
     for f in 0..mesh.face_count() {
@@ -389,5 +391,5 @@ pub fn remove_fragments(mesh: PolyMesh, input_piece_of: impl Fn(Vec3) -> u32) ->
             out.add_face(mesh.face(f));
         }
     }
-    out.remove_unused_vertices()
+    (out.remove_unused_vertices(), dropped)
 }

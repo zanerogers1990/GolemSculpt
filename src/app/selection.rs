@@ -19,7 +19,8 @@ use crate::doc::{Action, Tool};
 use crate::history::History;
 use crate::mesh::Mesh;
 use crate::mesh::primitives::{self, Primitive};
-use crate::remesh;
+use crate::printable::Cure;
+use crate::remesh::{self, Notes};
 use crate::render::flash;
 use crate::scene::{Others, Scene};
 
@@ -34,6 +35,9 @@ pub(super) struct Combined {
     /// How many cutters went into it.
     pub others: usize,
     pub triangles: usize,
+    /// What the engine did about objects that were not closed, and anything
+    /// it could not finish.
+    pub notes: Notes,
 }
 
 /// Subtract, Union or Intersect on the selection, as one undo step. The
@@ -79,12 +83,13 @@ pub(super) fn boolean(
     }
     let solids: Vec<&TriMesh> = cutters.iter().collect();
     let built = sculpt_volume::boolean_with(&target, &solids, op, settings).map_err(|e| format!("Nothing changed. {e}"))?;
+    let notes = Notes::of(&built);
     let mesh = Mesh::new(built.mesh.positions, built.mesh.indices, None);
     let triangles = mesh.triangle_count();
     let before = scene.state();
     let count = scene.install_combined(mesh, others, slot);
     history.push_scene(before);
-    Ok(Combined { others: count - 1, triangles })
+    Ok(Combined { others: count - 1, triangles, notes })
 }
 
 /// 1234567 as "1,234,567".
@@ -107,6 +112,8 @@ pub(super) struct Joined {
     pub triangles: usize,
     /// Why the remesh that was asked for did not run, if it did not.
     pub remesh_failed: Option<String>,
+    /// What a remesh that ran did about parts that were not closed.
+    pub notes: Notes,
 }
 
 /// Joins the selected objects into the active one, as one undo step: the
@@ -122,10 +129,10 @@ pub(super) fn join(
     rebuild: Option<(u32, [bool; 3])>,
 ) -> Option<Joined> {
     let mut mesh = scene.joined_mesh(slot)?;
-    let mut remesh_failed = None;
+    let (mut remesh_failed, mut notes) = (None, Notes::default());
     if let Some((resolution, symmetry)) = rebuild {
-        match remesh::voxel_remesh(&mesh, resolution, symmetry) {
-            Ok(rebuilt) => mesh = rebuilt,
+        match remesh::voxel_remesh_noted(&mesh, resolution, symmetry) {
+            Ok((rebuilt, noted)) => (mesh, notes) = (rebuilt, noted),
             Err(e) => remesh_failed = Some(e),
         }
     }
@@ -133,7 +140,7 @@ pub(super) fn join(
     let before = scene.state();
     let count = scene.install_joined(mesh, slot);
     history.push_scene(before);
-    Some(Joined { count, triangles, remesh_failed })
+    Some(Joined { count, triangles, remesh_failed, notes })
 }
 
 impl Running {
@@ -194,16 +201,18 @@ impl Running {
         doc.mesh_replaced = true;
         self.scene_changed();
         let name = &self.doc.scene.active().name;
-        let Joined { count, triangles, remesh_failed } = joined;
+        let Joined { count, triangles, remesh_failed, notes } = joined;
         let ms = started.elapsed().as_secs_f64() * 1000.0;
         let mut text = format!("Joined {count} objects into \"{name}\" ({triangles} triangles) in {ms:.0} ms.");
+        // A plain join keeps every hole its parts had; a remesh closes them.
+        let remeshed = rebuild.is_some() && remesh_failed.is_none();
         text += &match (rebuild, remesh_failed) {
             (_, Some(why)) => format!(" The remesh did not run ({why}), so the parts are as they were."),
-            (Some(_), None) => " It was remeshed into one surface.".to_owned(),
+            (Some(_), None) => format!(" It was remeshed into one surface.{}", notes.after_remesh()),
             (None, None) => String::new(),
         };
         text += " Undo (Z) brings the separate objects back.";
-        self.status(text, true);
+        self.status_checked(text, if remeshed { Cure::OtherResolution } else { Cure::Remesh });
         self.toast("Join");
         self.flash.start(self.doc.scene.active_id(), flash::Kind::Select);
     }
@@ -245,7 +254,7 @@ impl Running {
                 grouped(made.triangles)
             )
         };
-        self.status(text, true);
+        self.status_checked(text + &made.notes.after_boolean(), Cure::OtherResolution);
         self.toast(name);
         self.flash.start(self.doc.scene.active_id(), flash::Kind::Select);
     }
@@ -665,6 +674,9 @@ mod tests {
             let joined = join(&mut scene, &mut mesh, &mut history, rebuild).expect("two are selected");
             assert_eq!((joined.count, joined.triangles), (2, mesh.triangle_count()));
             assert!(joined.remesh_failed.is_none());
+            // Two closed cubes that overlap are not a model with holes, and are not called one.
+            assert_eq!(joined.notes, Notes::default());
+            assert!(crate::printable::census(&mesh).is_closed());
             assert_eq!(scene.objects.len(), 1);
             assert_eq!(scene.active_id(), first);
             match rebuild {
@@ -734,6 +746,8 @@ mod tests {
                 let settings = BooleanSettings::new(RESOLUTION);
                 let made = boolean(&mut scene, &mut mesh, &mut history, op, &settings, others).unwrap();
                 assert_eq!((made.others, made.triangles), (1, mesh.triangle_count()));
+                assert_eq!(made.notes, Notes::default(), "two closed cubes need nothing done for them");
+                assert!(crate::printable::census(&mesh).is_closed());
                 // The surface is rebuilt to within a fraction of a cell, so
                 // the volume is right to a thin skin over a few faces.
                 let found = volume(&mesh);
@@ -768,6 +782,50 @@ mod tests {
                 assert!(history.step_scene(false, &mut scene, &mut mesh));
                 assert!((volume(&mesh) - want).abs() < TOLERANCE);
                 assert!(!scene.get(cutter).is_some_and(|o| o.visible));
+            }
+        }
+    }
+
+    /// A cube with the faces round its `+X` side taken out.
+    fn open_cube() -> Mesh {
+        let whole = cube();
+        let kept = whole.indices.chunks_exact(3).filter(|t| t.iter().any(|&v| whole.positions[v as usize].x < 0.49));
+        let indices: Vec<u32> = kept.flatten().copied().collect();
+        assert!(indices.len() < whole.indices.len());
+        Mesh::new(whole.positions.clone(), indices, None)
+    }
+
+    #[test]
+    fn a_boolean_and_a_join_say_when_a_part_had_holes() {
+        // The cutter is open on the side away from the target.
+        let (mut scene, mut mesh, target, cutter) = pair(Vec3::new(0.4, 0.3, 0.2));
+        scene.select(cutter, &mut mesh);
+        mesh = open_cube();
+        scene.select(target, &mut mesh);
+        scene.select_also(cutter);
+        let mut history = History::default();
+        let settings = BooleanSettings::new(RESOLUTION);
+        let made = boolean(&mut scene, &mut mesh, &mut history, BooleanOp::Subtract, &settings, Others::Hidden).unwrap();
+        assert_eq!(made.notes, Notes { capped: 1, ..Notes::default() });
+        assert_eq!(made.notes.after_boolean(), " One of the objects had holes, which were closed over flat first.");
+        // Capped, the cutter is the cube it was: the same corner comes out.
+        assert!((volume(&mesh) - (1.0 - 0.6 * 0.7 * 0.8)).abs() < TOLERANCE, "volume {}", volume(&mesh));
+        assert!(crate::printable::census(&mesh).is_closed());
+
+        // Joined plainly the hole is still there; joined with a remesh it is closed, and said to have been.
+        for rebuild in [None, Some((64, [false; 3]))] {
+            let mut mesh = open_cube();
+            let mut scene = Scene::new("Cube");
+            let first = scene.active_id();
+            let second = scene.add("Cube", cube(), &mut mesh);
+            scene.get_mut(second).unwrap().position.x = -0.5;
+            scene.select(first, &mut mesh);
+            scene.select_also(second);
+            let joined = join(&mut scene, &mut mesh, &mut History::default(), rebuild).unwrap();
+            let closed = crate::printable::census(&mesh).is_closed();
+            match rebuild {
+                None => assert!(joined.notes == Notes::default() && !closed),
+                Some(_) => assert!(joined.notes == Notes { capped: 1, ..Notes::default() } && closed),
             }
         }
     }

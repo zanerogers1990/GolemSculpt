@@ -6,6 +6,7 @@
 //! and called from any thread.
 
 pub mod adjacency;
+pub mod edge_census;
 pub mod edge_key;
 pub mod join;
 pub mod mesh;
@@ -19,6 +20,7 @@ pub mod vector;
 mod testing;
 
 pub use adjacency::{MeshAdjacency, MeshEdges};
+pub use edge_census::{EdgeCensus, edge_census};
 pub use mesh::{Aabb, TriMesh};
 pub use symmetry::{SymmetryGroup, SymmetryOp};
 pub use units::LengthUnit;

@@ -551,6 +551,8 @@ impl Running {
             pressure: pen.then_some(samples[i].1),
             time: start + i as f64 / 240.0,
         };
+        // As for a stroke of the pointer's: if it adds triangles, it is checked for holes.
+        self.stroke_baseline(smooth);
         let doc = &mut self.doc;
         let brush = doc.sculptor.effective_brush(smooth);
         let dabs_before = doc.sculptor.dabs_applied;
@@ -573,6 +575,7 @@ impl Running {
         };
         let dabs = doc.sculptor.dabs_applied - dabs_before;
         let what = if doc.sculptor.settings.mask_mode { "Mask" } else { brush.name() };
+        self.stroke_check();
         Ok(if changed && dabs == 0 {
             // Move and Pose take hold once and are dragged: they lay no dabs.
             format!("{what} drag made. One undo step.")
@@ -789,9 +792,9 @@ impl Running {
                 Ok(format!("Exported \"{name}\"{} to {}", self.export_note(), path.display()))
             }
             "stl" => {
-                let models: Vec<glam::Mat4> = self.export_places().into_iter().map(|(_, m)| m).collect();
-                io::export_stl_placed(&self.doc.mesh, &models, &path)?;
-                Ok(format!("Exported \"{name}\"{} to {} (millimetres, Z up)", self.export_note(), path.display()))
+                // The same export as the button's, without its question: nobody is there to
+                // answer it, so the file is written and the answer says if it may not print.
+                self.export_stl_to(&path)
             }
             _ => Err("The path must end in .sclp (the whole scene), or .obj or .stl (the active object).".into()),
         }

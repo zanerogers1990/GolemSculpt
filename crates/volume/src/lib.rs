@@ -44,7 +44,7 @@ pub use boolean::{BooleanOp, BooleanSettings, boolean, boolean_with};
 pub use bvh::{Closest, TriangleBvh};
 pub use extract::{CellSource, ExtractOptions, Hermite, Stats, Surface, extract};
 pub use grid::Grid;
-pub use remesh::{RemeshSettings, Remeshed, remesh, remesh_with};
+pub use remesh::{RemeshSettings, Remeshed, Sources, remesh, remesh_with};
 
 use glam::Vec3;
 use rayon::prelude::*;

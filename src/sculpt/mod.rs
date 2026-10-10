@@ -541,6 +541,13 @@ impl Sculptor {
         if smooth_held && !self.settings.mask_mode { Brush::Smooth } else { self.settings.brush }
     }
 
+    /// Whether a stroke begun on `mesh` now could add triangles to it: see
+    /// [`dyntopo::DynTopo::may_grow`]. `smooth_held` as for [`Self::begin`].
+    pub fn may_refine(&self, mesh: &Mesh, smooth_held: bool) -> bool {
+        let brush = self.effective_brush(smooth_held);
+        self.dyntopo.may_grow(brush, self.settings.mask_mode, mesh.triangle_count())
+    }
+
     fn shape_pressure(&mut self, sample: &PointerSample) -> f32 {
         self.pen.step(sample.pressure, sample.time);
         if sample.pressure.is_none() {

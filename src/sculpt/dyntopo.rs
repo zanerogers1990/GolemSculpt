@@ -108,10 +108,24 @@ impl DynTopo {
         self.limit = limit;
     }
 
+    /// Whether a stroke of `brush` beginning now refines as it goes; `mask`
+    /// is whether it paints the mask instead of sculpting.
+    fn takes(&self, brush: Brush, mask: bool) -> bool {
+        self.enabled && !mask && refines(brush)
+    }
+
+    /// Whether a stroke of `brush` beginning now could change the triangles
+    /// of a mesh that has `triangles` of them. False at the triangle limit,
+    /// where [`Mesh::refine`] turns back before it touches anything. What is
+    /// only worth doing before a stroke that may grow the mesh asks this.
+    pub fn may_grow(&self, brush: Brush, mask: bool, triangles: usize) -> bool {
+        self.takes(brush, mask) && triangles + 2 <= self.limit
+    }
+
     /// A stroke begins. `brush` is the one it uses (Smooth when Shift makes
     /// it so) and `model_size` the largest side of the model.
     pub(super) fn begin(&mut self, brush: Brush, mask: bool, model_size: f32) {
-        self.path = (self.enabled && !mask && refines(brush)).then(|| Path {
+        self.path = self.takes(brush, mask).then(|| Path {
             last: None,
             edge: 0.0,
             unfinished: false,
