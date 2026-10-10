@@ -373,6 +373,7 @@ impl Running {
                     "triangles": mesh.map_or(0, |m| m.triangle_count()),
                     "vertices": mesh.map_or(0, |m| m.vertex_count()),
                     "instances": doc.scene.users(o.mesh),
+                    "mirror": o.mirror.map(|m| sculpt_symmetry::MirrorRepeater::axis_name_of(m.axis_mask)),
                     "on_screen": if o.visible { self.on_screen(bounds) } else { Value::Null },
                 })
             })
@@ -473,11 +474,16 @@ impl Running {
             }
         }
 
-        if self.pick(samples[0].0) != Some(self.doc.scene.active_id()) {
+        let active = self.doc.scene.active_id();
+        // On the object itself or on one of its live mirror copies, which the stroke is then worked through.
+        let Some((_, copy)) = self.pick_placed(samples[0].0).filter(|&(id, _)| id == active) else {
             return Err("A stroke has to start on the active object, and its first point is not on it. \
                         get_state gives each object's on_screen box; pick tests a single point."
                 .into());
-        }
+        };
+        self.doc.scene.aim_brush(active, copy);
+        let local = self.view.local_to(self.doc.scene.brush_matrix());
+        self.doc.scene.release_brush();
         let invert = flag(args, "invert").unwrap_or(false);
         let smooth = flag(args, "smooth").unwrap_or(false);
         let start = self.time();
@@ -489,17 +495,17 @@ impl Running {
         let doc = &mut self.doc;
         let brush = doc.sculptor.effective_brush(smooth);
         let dabs_before = doc.sculptor.dabs_applied;
-        if !doc.sculptor.begin(&mut doc.mesh, &self.local, sample(0), invert, smooth) {
+        if !doc.sculptor.begin(&mut doc.mesh, &local, sample(0), invert, smooth) {
             return Err("The stroke did not land on the mesh.".into());
         }
         for i in 1..samples.len() {
-            doc.sculptor.sample(&mut doc.mesh, &self.local, sample(i));
+            doc.sculptor.sample(&mut doc.mesh, &local, sample(i));
             if i % 4 == 0 {
-                doc.sculptor.frame(&mut doc.mesh, &self.local, 1.0 / 60.0);
+                doc.sculptor.frame(&mut doc.mesh, &local, 1.0 / 60.0);
             }
         }
-        doc.sculptor.frame(&mut doc.mesh, &self.local, 1.0 / 60.0);
-        let changed = match doc.sculptor.end(&mut doc.mesh, &self.local) {
+        doc.sculptor.frame(&mut doc.mesh, &local, 1.0 / 60.0);
+        let changed = match doc.sculptor.end(&mut doc.mesh, &local) {
             Some(delta) => {
                 doc.history.push_stroke(delta);
                 true
@@ -715,12 +721,15 @@ impl Running {
                 Ok(message)
             }
             "obj" => {
-                io::export_obj(&self.doc.mesh, self.doc.scene.active().matrix(), &path)?;
-                Ok(format!("Exported \"{name}\" to {}", path.display()))
+                let places = self.export_places();
+                let places: Vec<(&str, glam::Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+                io::export_obj_placed(&self.doc.mesh, &places, &path)?;
+                Ok(format!("Exported \"{name}\"{} to {}", self.export_note(), path.display()))
             }
             "stl" => {
-                io::export_stl(&self.doc.mesh, self.doc.scene.active().matrix(), &path)?;
-                Ok(format!("Exported \"{name}\" to {} (millimetres, Z up)", path.display()))
+                let models: Vec<glam::Mat4> = self.export_places().into_iter().map(|(_, m)| m).collect();
+                io::export_stl_placed(&self.doc.mesh, &models, &path)?;
+                Ok(format!("Exported \"{name}\"{} to {} (millimetres, Z up)", self.export_note(), path.display()))
             }
             _ => Err("The path must end in .sclp (the whole scene), or .obj or .stl (the active object).".into()),
         }

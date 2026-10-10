@@ -512,8 +512,9 @@ impl Renderer {
             })
         };
         let pipe_prepass = helper("prepass", "fs_prepass", GBUF_FORMAT, None);
-        // Back faces only: the far side of the model under each pixel.
-        let pipe_back = helper("back depth", "fs_back_depth", BACK_FORMAT, Some(wgpu::Face::Front));
+        // Back faces only: the far side of the model under each pixel. Picked in the
+        // shader, since a mirror copy's faces are turned the other way round.
+        let pipe_back = helper("back depth", "fs_back_depth", BACK_FORMAT, None);
         // Depth only, from the key light; ordinary (not reverse) depth.
         let pipe_shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("shadow"),

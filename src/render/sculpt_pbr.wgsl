@@ -1044,7 +1044,8 @@ fn glow_emission(px: Px, n: vec3<f32>) -> vec3<f32> {
 // ---- the surface ----------------------------------------------------------
 
 @fragment
-fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
+    let front = is_front(in, facing);
     var n = shading_normal(in, front);
     let smooth_n = select(-normalize(in.normal), normalize(in.normal), front);
 
@@ -1143,7 +1144,8 @@ fn vs_shadow(in: VsIn) -> @builtin(position) vec4<f32> {
     let y = in.model_y.xyz;
     let z = in.model_z.xyz;
     var world = x * in.position.x + y * in.position.y + z * in.position.z + in.model_w.xyz;
-    let n = normalize(cross(y, z) * in.normal.x + cross(z, x) * in.normal.y + cross(x, y) * in.normal.z);
+    let n = normalize((cross(y, z) * in.normal.x + cross(z, x) * in.normal.y + cross(x, y) * in.normal.z)
+        * handedness(x, y, z));
     let l = look.light_dir[0].xyz;
     world -= l * look.shadow_params.y;
     world -= n * ((1.0 - saturate(dot(l, n))) * look.shadow_params.z);
@@ -1153,7 +1155,12 @@ fn vs_shadow(in: VsIn) -> @builtin(position) vec4<f32> {
 // Eye depth of back faces, so the lure plastic can tell a thin claw from a
 // thick body by how much plastic the view ray crosses.
 @fragment
-fn fs_back_depth(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_back_depth(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
+    // Both faces are rasterised and the front ones dropped here, not culled by
+    // the pipeline: for a mirror copy the hardware's front is the far side.
+    if (is_front(in, facing)) {
+        discard;
+    }
     let depth = dot(in.world - g.cam_pos.xyz, g.cam_forward.xyz);
     return vec4<f32>(max(depth, 1e-6), 0.0, 0.0, 1.0);
 }
