@@ -381,12 +381,16 @@ fn make_symmetric_masked(
 pub struct CutAndMirrored {
     pub mesh: TriMesh,
     /// For each vertex of `mesh`, the vertex of the old mesh it was made from.
+    /// A vertex made where an edge crossed the plane names the kept end of
+    /// that edge.
     pub source: Vec<u32>,
     /// The old mesh's mask carried onto `mesh` (mirrored along with the
-    /// surface), when one was given.
+    /// surface), when one was given. Along the cut it is what the surface had
+    /// at each new vertex, between the two ends of the edge it was made on.
     pub mask: Option<Vec<f32>>,
     pub axis: Axis,
     pub source_is_positive: bool,
+    /// Triangles of the old mesh kept, whole or in part.
     pub kept_triangles: usize,
     pub discarded_triangles: usize,
 }
@@ -406,8 +410,10 @@ impl CutAndMirrored {
     }
 }
 
-/// Cut & Mirror: cuts the model at the mirror plane and rebuilds the discarded
-/// side as a reflection of the kept one (`weld::mirror_and_weld`).
+/// Cut & Mirror: cuts the model at the mirror plane, through the triangles that
+/// cross it, and rebuilds the discarded side as a reflection of the kept one
+/// (`weld::mirror_and_weld`). A closed model comes out closed, with the two
+/// halves sharing one loop of vertices on the plane.
 ///
 /// This is the answer for everything Make Symmetric refuses. Nothing about a
 /// correspondence map can fix a model whose halves were built separately: the
@@ -431,7 +437,7 @@ pub fn mirror_and_weld(
     let seam = tolerance(positions, indices, tolerance_scale);
     let built = weld::mirror_and_weld(positions, indices, axis, source_is_positive, seam)
         .ok_or_else(|| format!("Nothing on the {} side to mirror", sides(axis, source_is_positive).0))?;
-    let mask = mask.map(|m| built.carry(m));
+    let mask = mask.map(|m| built.carry_blended(m));
     Ok(CutAndMirrored {
         mesh: built.mesh,
         source: built.source,
@@ -538,8 +544,8 @@ pub fn cleanup(
 mod tests {
     use super::*;
     use crate::fixtures::{
-        Lcg, cube_sphere, cube_sphere_with, degenerate_triangles, duplicate_positions, edge_census, icosphere, max_delta,
-        octa_sphere, scatter,
+        Faults, Lcg, bumpy_sphere, cube_sphere, cube_sphere_with, degenerate_triangles, duplicate_positions, edge_census,
+        icosphere, max_delta, octa_sphere, scatter,
     };
     use crate::grid::VertexGrid;
 
@@ -877,10 +883,20 @@ mod tests {
 
         let built = mirror_and_weld(&drifted, indices, Some(&mask), Axis::X, 1.0, true).unwrap();
         assert_eq!(edge_census(&built.mesh), (0, 0));
+        assert_eq!(Faults::of(&built.mesh), Faults::NONE);
         assert!(built.mesh.signed_volume() > 0.0);
         assert_eq!(duplicate_positions(&built.mesh.positions), 0);
+        assert_eq!(degenerate_triangles(&built.mesh.positions, &built.mesh.indices, fixture.spacing), 0);
         assert_eq!(built.kept_triangles + built.discarded_triangles, fixture.mesh.triangle_count());
-        assert_eq!(built.mask.as_deref(), Some(&weld::carry(&built.source, &mask)[..]));
+        // The mask is where it was: every vertex has what the surface had at that point (0.5
+        // on the plane's own vertices, which are on y's ramp like the rest), on both sides.
+        let carried = built.mask.as_deref().unwrap();
+        assert_eq!(carried.len(), built.mesh.vertex_count());
+        for (k, &p) in built.mesh.positions.iter().enumerate() {
+            let from = drifted[built.source[k] as usize];
+            let moved = p.distance(if p.x < 0.0 { Axis::X.reflect(from) } else { from });
+            assert!((carried[k] - (p.y + 0.5).clamp(0.0, 1.0)).abs() <= moved + 1e-5, "vertex {k}: {}", carried[k]);
+        }
         assert_eq!(
             built.message(),
             format!(
@@ -904,6 +920,38 @@ mod tests {
         let error = mirror_and_weld(&drifted, &one_side, None, Axis::X, 1.0, true).unwrap_err();
         assert_eq!(error, "Nothing on the +X side to mirror");
         assert_eq!(mirror_and_weld(&[], &[], None, Axis::Y, 1.0, false).unwrap_err(), "Nothing on the -Y side to mirror");
+    }
+
+    /// Cut & Mirror at every setting of the Match Tolerance slider, on spiky models the plane
+    /// crosses many times over: always one sound closed surface, exactly symmetric, with no
+    /// slivers along the cut, and the same whichever cores did the work.
+    #[test]
+    fn cut_and_mirror_on_bumpy_models_is_closed_at_every_tolerance() {
+        for seed in 0..12 {
+            let ball = bumpy_sphere(seed, 30);
+            let spacing = map::mean_edge_length(&ball.positions, &ball.indices);
+            let mask: Vec<f32> = ball.positions.iter().map(|p| (p.z * 4.0).sin() * 0.5 + 0.5).collect();
+            for scale in [MIN_TOLERANCE_SCALE, 1.0, MAX_TOLERANCE_SCALE] {
+                let (axis, positive) = (Axis::ALL[seed as usize % 3], seed % 2 == 0);
+                let label = format!("seed {seed}, {axis:?}, tolerance x{scale}");
+                let built = mirror_and_weld(&ball.positions, &ball.indices, Some(&mask), axis, scale, positive).unwrap();
+                assert_eq!(Faults::of(&built.mesh), Faults::NONE, "{label}");
+                assert!(built.mesh.signed_volume() > 0.0, "{label}");
+                assert_eq!(degenerate_triangles(&built.mesh.positions, &built.mesh.indices, spacing), 0, "{label}");
+                let map = build_map(&built.mesh.positions, &built.mesh.indices, axis, 1.0).unwrap();
+                assert!(map.is_symmetric(), "{label}: {}", map.summary());
+                let mask_after = built.mask.as_deref().unwrap();
+                assert_eq!(mask_after.len(), built.mesh.vertex_count(), "{label}");
+                assert!(mask_after.iter().all(|m| (0.0..=1.0).contains(m)), "{label}");
+            }
+        }
+        // One large enough to be shared out among the cores.
+        let ball = bumpy_sphere(3, 40);
+        let mask: Vec<f32> = ball.positions.iter().map(|p| p.y.abs().min(1.0)).collect();
+        let run = || mirror_and_weld(&ball.positions, &ball.indices, Some(&mask), Axis::Y, MIN_TOLERANCE_SCALE, false);
+        let one_core = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap().install(run).unwrap();
+        assert!(one_core.mesh.triangle_count() > 8192 && one_core.mesh.positions.iter().any(|p| p.y == 0.0));
+        assert_eq!(Ok(one_core), run());
     }
 
     /// Cleanup is for welding a seam that is two coincident shells. A mesh with no such seam

@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use glam::Vec3;
-use sculpt_geom::TriMesh;
+use glam::{EulerRot, Mat4, Quat, Vec3};
+use sculpt_geom::{MeshAdjacency, MeshEdges, TriMesh};
 
 use crate::Axis;
 
@@ -278,6 +278,143 @@ pub fn icosphere(subdivisions: u32) -> (TriMesh, [Vec<u32>; 3]) {
     (TriMesh::new(verts, tris), partners)
 }
 
+/// A closed, spiky ball that no coordinate plane cuts cleanly: an octahedral
+/// sphere with its vertices knocked out of their rows and each pushed in or out
+/// by an amount of its own, up to three vertex spacings either way, then moved
+/// off centre. A plane through it runs across the sides of the spikes, where
+/// the surface crosses it, turns back and crosses again: the cut has ragged
+/// outlines, islands, and necks a single edge wide.
+///
+/// Every vertex stays on its own ray from the centre and at least half a unit
+/// along it, so the surface never passes through itself and the ball (moved
+/// less than that) is astride all three planes.
+pub fn bumpy_sphere(seed: u64, n: u32) -> TriMesh {
+    let mut rng = Lcg::new(seed);
+    let mut mesh = octa_sphere(n, 1.0);
+    let spacing = 1.5 / n as f32;
+    let rough = (3.0 * spacing).min(0.5);
+    let offset = rng.in_cube() * 0.45;
+    for p in &mut mesh.positions {
+        let dir = (*p + rng.in_cube() * (0.2 * spacing)).normalize();
+        *p = dir * (1.0 + (rng.unit() * 2.0 - 1.0) * rough) + offset;
+    }
+    mesh
+}
+
+/// A sphere with a deep pit pushed into it, the pit lying across all three
+/// coordinate planes, and the whole turned a little so no vertex sits on one:
+/// each plane's outline of it is concave.
+pub fn dented_sphere(n: u32) -> TriMesh {
+    let mut mesh = octa_sphere(n, 1.0);
+    let pit = Vec3::new(0.5, 0.6, 0.62).normalize();
+    for p in &mut mesh.positions {
+        let near = (1.0 - p.distance(pit) / 1.1).max(0.0);
+        *p *= 1.0 - 0.8 * near * near;
+    }
+    mesh.transform(&Mat4::from_quat(Quat::from_euler(EulerRot::XYZ, 0.07, -0.11, 0.05)));
+    mesh
+}
+
+/// A ring (a torus about Y), `around` by `across` squares, wound outward. Stood
+/// across a plane it is the simplest shape a cut goes through twice.
+pub fn torus(major: f32, minor: f32, around: u32, across: u32) -> TriMesh {
+    let mut positions = Vec::with_capacity((around * across) as usize);
+    let mut indices = Vec::with_capacity((around * across * 6) as usize);
+    for i in 0..around {
+        let (sin_u, cos_u) = (i as f32 / around as f32 * std::f32::consts::TAU).sin_cos();
+        for j in 0..across {
+            let (sin_v, cos_v) = (j as f32 / across as f32 * std::f32::consts::TAU).sin_cos();
+            let out = major + minor * cos_v;
+            positions.push(Vec3::new(out * cos_u, minor * sin_v, out * sin_u));
+            let at = |di: u32, dj: u32| ((i + di) % around) * across + (j + dj) % across;
+            indices.extend([at(0, 0), at(0, 1), at(1, 1), at(0, 0), at(1, 1), at(1, 0)]);
+        }
+    }
+    let mut mesh = TriMesh::new(positions, indices);
+    if mesh.signed_volume() < 0.0 {
+        mesh.flip();
+    }
+    mesh
+}
+
+/// What stops a mesh being one sound closed surface, counted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Faults {
+    /// Edges with one triangle: a hole.
+    pub open_edges: usize,
+    /// Edges with three or more triangles: sheets meeting along a line.
+    pub crowded_edges: usize,
+    /// Edges whose two triangles face opposite ways.
+    pub miswound: bool,
+    /// Vertices where two separate fans of triangles touch at a point.
+    pub pinched_vertices: usize,
+    /// Triangles with no area at all.
+    pub flat_triangles: usize,
+    /// Vertices at exactly the position of an earlier one.
+    pub duplicate_vertices: usize,
+}
+
+impl Faults {
+    pub const NONE: Faults = Faults {
+        open_edges: 0,
+        crowded_edges: 0,
+        miswound: false,
+        pinched_vertices: 0,
+        flat_triangles: 0,
+        duplicate_vertices: 0,
+    };
+
+    pub fn of(mesh: &TriMesh) -> Faults {
+        let adjacency = MeshAdjacency::of(mesh);
+        let edges = MeshEdges::of(mesh, &adjacency);
+        let flat = |t: &[u32]| {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+            (b - a).cross(c - a) == Vec3::ZERO
+        };
+        Faults {
+            open_edges: edges.boundary_edges().len(),
+            crowded_edges: edges.non_manifold_edges().len(),
+            miswound: !edges.is_consistently_wound(&mesh.indices),
+            pinched_vertices: pinched_among(mesh, &adjacency).len(),
+            flat_triangles: mesh.indices.chunks_exact(3).filter(|t| flat(t)).count(),
+            duplicate_vertices: duplicate_positions(&mesh.positions),
+        }
+    }
+}
+
+/// The vertices where two or more separate fans of triangles touch at a point,
+/// ascending.
+pub fn pinched_vertices(mesh: &TriMesh) -> Vec<u32> {
+    pinched_among(mesh, &MeshAdjacency::of(mesh))
+}
+
+fn pinched_among(mesh: &TriMesh, adjacency: &MeshAdjacency) -> Vec<u32> {
+    (0..mesh.vertex_count()).filter(|&v| fans_at(mesh, adjacency, v) > 1).map(|v| v as u32).collect()
+}
+
+/// How many separate fans the triangles round vertex `v` fall into, two
+/// triangles being in one fan when they share an edge at `v`.
+fn fans_at(mesh: &TriMesh, adjacency: &MeshAdjacency, v: usize) -> usize {
+    let triangles = adjacency.triangles_of(v);
+    let others = |t: u32| {
+        let corners = &mesh.indices[t as usize * 3..t as usize * 3 + 3];
+        let at = corners.iter().position(|&c| c as usize == v).unwrap();
+        [corners[(at + 1) % 3], corners[(at + 2) % 3]]
+    };
+    let mut fan: Vec<usize> = (0..triangles.len()).collect();
+    for a in 0..triangles.len() {
+        for b in 0..a {
+            if others(triangles[a]).iter().any(|w| others(triangles[b]).contains(w)) {
+                let (from, to) = (fan[a], fan[b]);
+                fan.iter_mut().filter(|f| **f == from).for_each(|f| *f = to);
+            }
+        }
+    }
+    fan.sort_unstable();
+    fan.dedup();
+    fan.len()
+}
+
 /// For every vertex, the vertex at exactly its reflection across `axis`, or
 /// `None` if some vertex has no exact mirror image.
 pub fn exact_partners(positions: &[Vec3], axis: Axis) -> Option<Vec<u32>> {
@@ -377,6 +514,46 @@ mod tests {
         }
         let fine = cube_sphere(65);
         assert!((fine.signed_volume() / sphere_volume(SPHERE_RADIUS as f64) - 1.0).abs() < 3e-3);
+    }
+
+    #[test]
+    fn the_shapes_for_cutting_are_sound_closed_surfaces() {
+        for seed in 0..40 {
+            let ball = bumpy_sphere(seed, 9);
+            assert_eq!(Faults::of(&ball), Faults::NONE, "seed {seed}");
+            assert!(ball.signed_volume() > 0.0, "seed {seed} is wound inward");
+            // Astride every plane, so a cut always has something on both sides.
+            let bounds = ball.bounds();
+            assert!(bounds.min.max_element() < -0.05 && bounds.max.min_element() > 0.05, "seed {seed}");
+        }
+        assert_ne!(bumpy_sphere(1, 9).positions, bumpy_sphere(2, 9).positions);
+        assert_eq!(bumpy_sphere(1, 9).positions, bumpy_sphere(1, 9).positions);
+        for mesh in [dented_sphere(12), torus(1.0, 0.4, 28, 14)] {
+            assert_eq!(Faults::of(&mesh), Faults::NONE);
+            assert!(mesh.signed_volume() > 0.0);
+        }
+        let ring = torus(1.0, 0.4, 64, 32).signed_volume();
+        assert!((ring / (2.0 * std::f64::consts::PI.powi(2) * 0.16) - 1.0).abs() < 0.01);
+    }
+
+    /// `Faults` sees each thing it is there to see.
+    #[test]
+    fn faults_are_counted() {
+        // Two tetrahedra sharing one vertex: every edge has two triangles, but the vertex is pinched.
+        let mut pinched = TriMesh::new(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z, -Vec3::X, -Vec3::Y, -Vec3::Z],
+            vec![0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3, 0, 5, 4, 0, 4, 6, 0, 6, 5, 4, 5, 6],
+        );
+        assert_eq!(Faults::of(&pinched), Faults { pinched_vertices: 1, ..Faults::NONE });
+        // Three sheets on the edge 0-1, each with open edges of its own.
+        let fan = TriMesh::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z, -Vec3::Y], vec![0, 1, 2, 0, 1, 3, 0, 1, 4]);
+        let faults = Faults::of(&fan);
+        assert_eq!((faults.crowded_edges, faults.open_edges), (1, 6));
+        // A corner repeated in place, and a triangle turned over.
+        pinched.positions[6] = pinched.positions[5];
+        pinched.indices.swap(0, 1);
+        let faults = Faults::of(&pinched);
+        assert!(faults.miswound && faults.duplicate_vertices == 1 && faults.flat_triangles == 2, "{faults:?}");
     }
 
     #[test]

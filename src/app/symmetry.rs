@@ -12,11 +12,14 @@
 //! lands on.
 
 use glam::{Quat, Vec3};
+use sculpt_geom::{MeshAdjacency, MeshEdges};
+use sculpt_symmetry::Axis;
 
 use super::Running;
 use crate::camera::View;
 use crate::doc::{Action, Doc};
-use crate::mesh::primitives::Primitive;
+use crate::mesh::Mesh;
+use crate::mesh::primitives::{self, Primitive};
 use crate::scene::{Space, Symmetry};
 use crate::sculpt::{Brush, PointerSample, Radial, RadialAxis};
 
@@ -58,9 +61,13 @@ impl Running {
     /// turned and astride the world's X plane, with Mirror X fixed in the
     /// world, and leaves that selected. `select:<name>` builds nothing: it
     /// selects the object of that name in the scene as it is (a file opened
-    /// on the command line), for a look at that object's own symmetry.
+    /// on the command line), for a look at that object's own symmetry. `cut`
+    /// is a different check altogether: see [`Self::cut_and_mirror_demo`].
     pub(super) fn symmetry_demo(&mut self) {
         let what = std::env::var("SCULPT_DEMO_SYMMETRY").unwrap_or_default();
+        if let Some(rest) = what.strip_prefix("cut") {
+            return self.cut_and_mirror_demo(rest == ":alone");
+        }
         let shut = ["Brushes", "Clay Settings", "Move Settings"].map(|card| (card.to_owned(), false));
         crate::prefs::cards::restore(&self.egui_ctx, &shut.into_iter().collect());
         if let Some(name) = what.strip_prefix("select:") {
@@ -123,6 +130,70 @@ impl Running {
         let keep = if what == "cube" || world { second } else { ball };
         self.act(Action::SelectObject(keep));
         // The brush ring is where the last stroke ended; leave it out of the picture.
+        self.input.inside = false;
+        self.sync_view();
+    }
+
+    /// `SCULPT_DEMO_SYMMETRY=cut`: Cut & Mirror (`sculpt_symmetry::ops`, which
+    /// no button reaches yet) run on a lumpy model, for a look at the seam it
+    /// leaves. The model as it was stands on the left and the result on the
+    /// right, its +X side kept and mirrored onto -X, both in wireframe and
+    /// seen from the front, so the seam runs straight down the middle of the
+    /// right one. A band of mask across the model shows the mask coming
+    /// through. `cut:alone` shows the result by itself, larger. Prints the
+    /// command's own message and a line per check (ok / FAIL).
+    fn cut_and_mirror_demo(&mut self, alone: bool) {
+        // Coarse, so each triangle along the seam can be seen, and moved off
+        // centre, so the plane runs through the sides of lumps at a slant.
+        let ball = primitives::build(Primitive::Sphere, 6_000, 0.5);
+        let lumpy = |p: Vec3| {
+            let dir = p.normalize();
+            let lumps = (dir.y * 7.0 + 1.0).sin() * (dir.z * 6.0 + 0.5).sin() + 0.5 * (dir.x * 9.0 + dir.y * 5.0).sin();
+            Quat::from_rotation_y(0.4) * (dir * (0.5 + 0.11 * lumps)) + Vec3::new(0.09, 0.0, 0.0)
+        };
+        let positions: Vec<Vec3> = ball.positions.iter().map(|&p| lumpy(p)).collect();
+        let band = |p: &Vec3| ((0.12 - (p.y - 0.1 + 0.5 * p.x).abs()) * 30.0).clamp(0.0, 1.0);
+        let mask: Vec<f32> = positions.iter().map(band).collect();
+
+        let cut = sculpt_symmetry::ops::mirror_and_weld(&positions, &ball.indices, Some(&mask), Axis::X, 1.0, true);
+        let built = match cut {
+            Ok(built) => built,
+            Err(why) => return eprintln!("demo-symmetry cut: {why}"),
+        };
+        println!("{}", built.message());
+        let adjacency = MeshAdjacency::of(&built.mesh);
+        let edges = MeshEdges::of(&built.mesh, &adjacency);
+        let on_plane = built.mesh.positions.iter().filter(|p| p.x == 0.0).count();
+        let places: std::collections::HashSet<[u32; 3]> =
+            built.mesh.positions.iter().map(|&p| (p + Vec3::ZERO).to_array().map(f32::to_bits)).collect();
+        let mirrored = |p: &Vec3| places.contains(&(Vec3::new(-p.x, p.y, p.z) + Vec3::ZERO).to_array().map(f32::to_bits));
+        let checks = [
+            ("closed: every edge has two triangles", edges.is_closed()),
+            ("no edge has more than two triangles", edges.non_manifold_edges().is_empty()),
+            ("every triangle faces the same way as its neighbours", edges.is_consistently_wound(&built.mesh.indices)),
+            ("every vertex has its mirror image, exactly", built.mesh.positions.iter().all(mirrored)),
+            ("the seam is a row of vertices on the plane", on_plane > 20),
+        ];
+        for (what, ok) in checks {
+            println!("{} {what}", if ok { "ok  " } else { "FAIL" });
+        }
+
+        self.replace_mesh(Mesh::new(positions, ball.indices.clone(), Some(mask)), false);
+        let before = self.doc.scene.active_id();
+        self.doc.scene.active_mut().position = Vec3::new(-0.75, 0.0, 0.0);
+        self.add_object("Cut and Mirrored", Mesh::new(built.mesh.positions, built.mesh.indices, built.mask));
+        self.doc.scene.active_mut().position = Vec3::new(0.75, 0.0, 0.0);
+        if alone {
+            self.act(Action::ToggleVisible(before));
+        }
+        self.doc.opts.wireframe = true;
+        let aspect = self.view.size.x / self.view.size.y.max(1.0);
+        let bounds = self.doc.scene.bounds(&self.doc.mesh);
+        self.doc.camera.frame(bounds, aspect, false);
+        (self.doc.camera.yaw, self.doc.camera.pitch) = (0.0, 12.0);
+        if alone {
+            self.doc.camera.distance *= 0.55;
+        }
         self.input.inside = false;
         self.sync_view();
     }
