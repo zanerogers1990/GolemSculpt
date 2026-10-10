@@ -230,9 +230,7 @@ impl Running {
         // Room round it: the panels cover the sides of the picture.
         self.doc.camera.distance *= 1.25;
         self.sync_view();
-        let settings = &mut self.doc.sculptor.settings;
-        settings.symmetry = [false; 3];
-        settings.demo_setup(false);
+        self.demo_symmetry(Some([false; 3]));
     }
 
     /// Where the middle of copy `copy` of the active object is on screen.

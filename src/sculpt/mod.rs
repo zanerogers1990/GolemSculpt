@@ -322,9 +322,10 @@ impl Settings {
     /// sets the brushes up, for a look at what the strokes and the panel make
     /// of it. A comma-separated list of `focal=-0.8` (every brush's Focal
     /// Shift), `curve=plateau` (every brush's falloff curve, by the name of
-    /// the shape it starts from), `fixed` (Screen-Space Size off), `radial=6`
-    /// (radial symmetry with that many repeats), `axis=z` (the axis it goes
-    /// round: x, y or z) and `mirror=off` (the demo's Mirror X off).
+    /// the shape it starts from) and `fixed` (Screen-Space Size off). The
+    /// words about symmetry (`radial=6`, `axis=z`, `mirror=off`,
+    /// `space=world`) are the sculpted object's to read: see
+    /// `scene::Symmetry::demo_setup`.
     /// `strokes_done` is false before the scripted strokes and true after
     /// them: the fixed size waits until then, because they are sized in
     /// pixels.
@@ -340,15 +341,6 @@ impl Settings {
                     let shape = FalloffPreset::ALL.into_iter().find(|p| p.name().eq_ignore_ascii_case(name));
                     self.falloff.iter_mut().for_each(|slot| *slot = shape.map(FalloffCurve::preset));
                 }
-                Some(("radial", count)) if !strokes_done => {
-                    let count = count.parse().unwrap_or(self.radial.count);
-                    self.radial = Radial { on: true, count, ..self.radial }.sanitized();
-                }
-                Some(("axis", name)) if !strokes_done => {
-                    let axis = RadialAxis::ALL.into_iter().find(|a| a.name().eq_ignore_ascii_case(name));
-                    self.radial.axis = axis.unwrap_or(self.radial.axis);
-                }
-                Some(("mirror", "off")) if !strokes_done => self.symmetry = [false; 3],
                 None if strokes_done && word == "fixed" => self.screen_space_size = false,
                 _ => {}
             }

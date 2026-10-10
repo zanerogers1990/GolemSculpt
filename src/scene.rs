@@ -28,7 +28,7 @@ mod symmetry;
 
 pub use mirror::{MirrorCommand, saved_mirror};
 pub use places::TOOL_COPY;
-pub use symmetry::{Guides, Space, Symmetry, saved_symmetry};
+pub use symmetry::{Space, Symmetry, saved_symmetry};
 
 /// New shapes are this fraction of the top object's average half-size, as in
 /// the Unity app: on a par with what is there without being its twin.

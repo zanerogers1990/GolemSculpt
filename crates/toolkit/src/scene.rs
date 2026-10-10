@@ -10,7 +10,7 @@ use std::any::Any;
 use std::fmt;
 
 use glam::{Mat4, Quat, Vec3};
-use sculpt_geom::{Aabb, TriMesh};
+use sculpt_geom::{Aabb, SymmetryGroup, TriMesh};
 use sculpt_symmetry::MirrorRepeater;
 
 use crate::view::Ray;
@@ -51,6 +51,52 @@ impl Placement {
 impl Default for Placement {
     fn default() -> Placement {
         Placement::IDENTITY
+    }
+}
+
+/// The symmetry an object is sculpted under, as plain data. Every object has
+/// its own ([`Scene::symmetry`]), and an `Env` carries the selected one's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Symmetry {
+    /// The mirror axes strokes are repeated across: X, Y, Z.
+    pub mirror: [bool; 3],
+    /// How many times a stroke is made round `radial_axis`, itself included:
+    /// 1 when radial symmetry is off.
+    pub radial_count: u32,
+    /// The axis the repeats go round: a direction through the origin of the
+    /// space the symmetry sits in.
+    pub radial_axis: Vec3,
+    /// `None` while the mirror planes and the radial axis are the object's
+    /// own, through its origin along its axes. When they are the world's
+    /// instead, this is where the object stands, which is what carries them
+    /// into its own space: they stay put while the object moves through them.
+    pub world: Option<Placement>,
+}
+
+impl Symmetry {
+    /// One stroke, no copies.
+    pub const NONE: Symmetry = Symmetry { mirror: [false; 3], radial_count: 1, radial_axis: Vec3::Y, world: None };
+
+    /// Every copy a brush stroke on the object is made as, the stroke itself
+    /// first: the mirror images, the turns round the radial axis, and the
+    /// two combined. They are in the object's own space whichever space the
+    /// symmetry sits in, so a tool repeats its own work under them the same
+    /// way for both (a copy of a world symmetry also shifts points; map a
+    /// point with `SymmetryOp::apply_point` and a direction with `apply`).
+    pub fn group(&self) -> SymmetryGroup {
+        let [x, y, z] = self.mirror;
+        let group = SymmetryGroup::build(x, y, z, self.radial_count, self.radial_axis);
+        match self.world {
+            // One copy is the stroke itself, wherever the planes are.
+            Some(at) if group.len() > 1 => group.in_object_frame(at.rotation, at.position, &at.matrix().inverse()),
+            _ => group,
+        }
+    }
+}
+
+impl Default for Symmetry {
+    fn default() -> Symmetry {
+        Symmetry::NONE
     }
 }
 
@@ -238,6 +284,15 @@ pub trait Scene {
     /// from the vertices when that matters. Empty for an unknown id.
     fn bounds(&self, id: ObjectId) -> Aabb;
 
+    /// The symmetry an object is sculpted under: its own, whichever object
+    /// is selected. For a tool that works on an object other than the
+    /// selected one (a tube grows on the object it was drawn on); the
+    /// selected object's is also in the `Env`. A scene that keeps none says
+    /// none.
+    fn symmetry(&self, _id: ObjectId) -> Symmetry {
+        Symmetry::NONE
+    }
+
     /// The selected object's row.
     fn active_info(&self) -> Option<ObjectInfo<'_>> {
         self.info(self.active())
@@ -321,6 +376,11 @@ pub struct NewObject {
     /// a piece or a clone of a mirrored object is not mirrored unless the
     /// tool that makes it says so.
     pub mirror: Option<MirrorRepeater>,
+    /// The object whose symmetry settings the new one starts with: all of
+    /// them, as the Symmetry card shows them. `None` by default, which
+    /// starts it with no symmetry. For a piece cut from an object or grown
+    /// on it, which is sculpted the way that object is.
+    pub symmetry_of: Option<ObjectId>,
 }
 
 impl NewObject {
@@ -332,7 +392,15 @@ impl NewObject {
             visible: true,
             select: true,
             mirror: None,
+            symmetry_of: None,
         }
+    }
+
+    /// Starts with the symmetry settings `object` has (see
+    /// [`NewObject::symmetry_of`]).
+    pub fn with_symmetry_of(mut self, object: ObjectId) -> NewObject {
+        self.symmetry_of = Some(object);
+        self
     }
 
     /// Starts with these live mirror copies (`None` leaves it without).

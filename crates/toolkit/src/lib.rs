@@ -24,7 +24,7 @@ pub use draw::{Draw, Label, Look, Overlay, Preview, PreviewData, PreviewDraw, Ru
 pub use jobs::{Baker, Job, JobCtx, Jobs};
 pub use scene::{
     Baked, Command, Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Receipt,
-    Scene,
+    Scene, Symmetry,
 };
 pub use tool::{Button, Event, GizmoPhase, GizmoTarget, Info, Key, Mods, RadialItem, Tool};
 pub use view::{Ray, View};

@@ -100,12 +100,12 @@ impl Running {
         }
         self.sync_view();
         self.input.inside = true;
+        self.doc.edit_symmetry(|symmetry| symmetry.mirror = [true, false, false]);
         let s = &mut self.doc.sculptor.settings;
         s.brush = Brush::Pose;
         s.mask_mode = false;
         s.screen_space_size = false;
         s.radius_world = 0.3;
-        s.symmetry = [true, false, false];
         if options.contains(&"soft") {
             s.pose.rigidity = 0.15;
         }
@@ -124,8 +124,8 @@ impl Running {
             "twist" => {
                 // A limb on the mirror plane cannot twist and stay
                 // symmetric, so the mirror is off for this one.
-                let s = &mut self.doc.sculptor.settings;
-                (s.symmetry, s.radius_world) = ([false; 3], 0.45);
+                self.doc.edit_symmetry(|symmetry| symmetry.mirror = [false; 3]);
+                self.doc.sculptor.settings.radius_world = 0.45;
                 self.input.mods = ModifiersState::CONTROL;
                 let chest = Vec3::new(0.08, 0.5, 0.185);
                 self.pose_demo_drag(chest, chest + Vec3::new(0.16, 0.0, 0.0), false);
@@ -137,7 +137,7 @@ impl Running {
                 if what == "slide" {
                     // With the mirror on, a head on the mirror plane only
                     // slides within the plane.
-                    self.doc.sculptor.settings.symmetry = [false; 3];
+                    self.doc.edit_symmetry(|symmetry| symmetry.mirror = [false; 3]);
                     self.input.mods = ModifiersState::CONTROL;
                     self.pose_demo_drag(crown, crown + Vec3::new(0.2, 0.0, 0.0), false);
                 } else {

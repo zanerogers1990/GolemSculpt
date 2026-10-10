@@ -198,7 +198,9 @@ pub fn land(cx: &mut Ctx, outcome: Outcome) -> Landed {
         }
         return Landed { message: note.unwrap_or_else(|| "Trimmed.".to_owned()), ok: clean, piece: None };
     };
-    let part = NewObject::new(format!("{name} Part"), piece).placed(placement).unselected();
+    // The part is a piece of the object and is sculpted the way it is: it
+    // starts with the object's own symmetry settings, as in the Unity app.
+    let part = NewObject::new(format!("{name} Part"), piece).placed(placement).unselected().with_symmetry_of(object);
     let receipt = cx.commit("Split", vec![Command::Replace { object, mesh: kept }, Command::Add(part)]);
     let added = receipt.added.first().copied();
     let part_name = added.and_then(|id| cx.scene().info(id)).map(|info| info.name.to_owned());

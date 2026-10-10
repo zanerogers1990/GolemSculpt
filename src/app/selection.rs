@@ -184,7 +184,9 @@ impl Running {
     pub(super) fn join_selected(&mut self, rebuild: bool) {
         let started = Instant::now();
         let doc = &mut self.doc;
-        let rebuild = rebuild.then(|| (doc.opts.remesh_resolution as u32, doc.sculptor.settings.symmetry));
+        // The object the join keeps is the one whose symmetry the result has.
+        let mirrors = doc.scene.active_symmetry().exact_mirrors();
+        let rebuild = rebuild.then(|| (doc.opts.remesh_resolution as u32, mirrors));
         let Some(joined) = join(&mut doc.scene, &mut doc.mesh, &mut doc.history, rebuild) else {
             self.status("Join needs two or more objects selected. Ctrl + click rows in the list to add them.", false);
             return;
@@ -212,9 +214,11 @@ impl Running {
     pub(super) fn boolean_selected(&mut self, op: BooleanOp, resolution: u32, delete: bool) {
         let started = Instant::now();
         let doc = &mut self.doc;
-        // Mirror-exact across the planes strokes are mirrored across, where
-        // the solids are: the same promise a remesh makes.
-        let settings = BooleanSettings { mirror: doc.sculptor.settings.symmetry, ..BooleanSettings::new(resolution) };
+        // Mirror-exact across the planes strokes on the kept object are
+        // mirrored across, where the solids are: the same promise a remesh
+        // makes.
+        let mirror = doc.scene.active_symmetry().exact_mirrors();
+        let settings = BooleanSettings { mirror, ..BooleanSettings::new(resolution) };
         let others = if delete { Others::Deleted } else { Others::Hidden };
         let made = match boolean(&mut doc.scene, &mut doc.mesh, &mut doc.history, op, &settings, others) {
             Ok(made) => made,
@@ -469,7 +473,8 @@ impl Running {
         self.sync_view();
         let settings = &mut self.doc.sculptor.settings;
         (settings.brush, settings.mask_mode) = (crate::sculpt::Brush::Inflate, false);
-        (settings.radius_px, settings.symmetry) = (40.0, [false; 3]);
+        settings.radius_px = 40.0;
+        self.doc.edit_symmetry(|symmetry| symmetry.mirror = [false; 3]);
 
         // A stroke on an instance of the active mesh.
         let rest = self.doc.mesh.positions.clone();

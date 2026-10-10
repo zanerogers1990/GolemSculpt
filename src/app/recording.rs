@@ -934,7 +934,7 @@ impl Running {
                 settings.mask_mode = false;
                 settings.radius_px = radius * k;
                 let doc = &mut self.doc;
-                if doc.sculptor.begin(&mut doc.mesh, &self.local, sample(0), false, false) {
+                if doc.begin_stroke(&self.local, sample(0), false, false) {
                     self.input.samples.clear();
                 }
             } else if self.doc.sculptor.is_active() {

@@ -92,6 +92,10 @@ fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) {
         let object = scene.active_mut();
         (object.visible, object.position, object.rotation, object.scale) = (o.visible, o.position, o.rotation, o.scale);
         object.mirror = crate::scene::saved_mirror(&saved.details, row);
+        // Its own symmetry comes with it, as its live mirror does.
+        if let Some(symmetry) = crate::scene::saved_symmetry(&saved.details, row) {
+            scene.place_symmetry(id, symmetry);
+        }
         first.get_or_insert(id);
     }
     if let Some(first) = first {
@@ -319,14 +323,19 @@ impl Running {
     fn details(&self) -> io::Details {
         let opts = &self.doc.opts;
         let matcap = self.ui.assets.matcaps.get(opts.matcap).map_or(String::new(), |m| format!("{}/{}", m.category, m.name));
-        let settings = &self.doc.sculptor.settings;
-        let ([x, y, z], radial) = (settings.symmetry, settings.radial);
         let mut details = io::Details::default();
         details.set(io::slot::SHADING, &io::Shading::of(opts, matcap));
         details.set(io::slot::LOOK, &opts.look);
         details.set(io::slot::CAMERA, &self.doc.camera.saved_view());
-        details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides, radial });
+        // Whether the guides show is the scene's. The axes beside it are the
+        // selected object's: every object's own symmetry is kept under the
+        // object, and these are what a version of the app from before that
+        // makes of the file.
+        let selected = self.doc.scene.active_symmetry();
+        let [x, y, z] = selected.mirror;
+        details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides, radial: selected.radial });
         self.doc.scene.keep_mirrors(&mut details);
+        self.doc.scene.keep_symmetry(&mut details);
         details
     }
 
@@ -335,6 +344,9 @@ impl Running {
     /// the app as it is; with no saved view, the model is framed instead.
     fn apply_details(&mut self, details: &io::Details) {
         self.doc.scene.restore_mirrors(details);
+        // Each object's own symmetry; a file from before objects had one
+        // gives its one setting to every object in it.
+        self.doc.scene.restore_symmetry(details);
         if let Some(shading) = details.get_over(io::slot::SHADING, &io::Shading::default()) {
             shading.apply(&mut self.doc.opts);
             // The picture is looked up by name: the list differs between
@@ -353,11 +365,9 @@ impl Running {
         if let Some(look) = details.get_over(io::slot::LOOK, &Look::default()) {
             self.set_look(look);
         }
-        // Read over the settings a new scene has, so a file from before
-        // radial symmetry was kept opens with it switched off.
+        // The guides are the scene's; the axes kept beside them went to the
+        // objects above.
         if let Some(mirror) = details.get_over(io::slot::MIRROR, &io::Mirror::default()) {
-            self.doc.sculptor.settings.symmetry = [mirror.x, mirror.y, mirror.z];
-            self.doc.sculptor.settings.radial = mirror.radial.sanitized();
             self.doc.opts.symmetry_guides = mirror.guides;
         }
         unity_import::restore_dynamic_topology(details, &mut self.doc.sculptor.dyntopo);
@@ -739,9 +749,9 @@ impl Running {
         look.focus_distance = 3.5;
         self.doc.opts.matcap_on = false;
         self.doc.opts.base_color = [0.8, 0.3, 0.1];
-        self.doc.sculptor.settings.symmetry = [true, false, true];
         let radial = crate::sculpt::Radial { on: true, count: 6, axis: crate::sculpt::RadialAxis::Z, custom_axis: Vec3::X };
-        self.doc.sculptor.settings.radial = radial;
+        let kept = crate::scene::Symmetry { mirror: [true, false, true], radial, space: crate::scene::Space::World };
+        self.doc.edit_symmetry(|symmetry| *symmetry = kept);
         (self.doc.camera.yaw, self.doc.camera.pitch, self.doc.camera.ortho) = (140.0, -20.0, true);
         let saved_view = self.doc.camera.saved_view();
         let saved = self.save_scene(&first);
@@ -769,8 +779,7 @@ impl Running {
         look.lighting = 0;
         look.depth_of_field = false;
         self.doc.opts.matcap_on = true;
-        self.doc.sculptor.settings.symmetry = [false; 3];
-        self.doc.sculptor.settings.radial = Default::default();
+        self.doc.edit_symmetry(|symmetry| *symmetry = Default::default());
         (self.doc.camera.yaw, self.doc.camera.ortho) = (10.0, false);
         self.load(first.clone(), true);
         let opts = &self.doc.opts;
@@ -784,8 +793,9 @@ impl Running {
                 && opts.look.focus_distance == 3.5,
         );
         say("and the material", !opts.matcap_on && opts.base_color == [0.8, 0.3, 0.1]);
-        say("and the mirror axes", self.doc.sculptor.settings.symmetry == [true, false, true]);
-        say("and radial symmetry", self.doc.sculptor.settings.radial == radial);
+        let opened = self.doc.scene.active_symmetry();
+        say("and the selected object's mirror axes", opened.mirror == [true, false, true]);
+        say("and its radial symmetry, fixed in the world as it was", (opened.radial, opened.space) == (radial, kept.space));
         say("and the view", self.doc.camera.saved_view() == saved_view);
         say("the opened file is the document, and clean", self.doc.path.as_deref() == Some(first.as_path()) && !self.unsaved());
         say("it is the newest recent file again", self.ui.recent.paths().first().is_some_and(|p| p.ends_with("first.sclp")));
@@ -802,6 +812,10 @@ impl Running {
         distinct.dedup();
         say("adding a sculpt brings its objects in", names.len() == before + count);
         say("under names of their own", distinct.len() == names.len());
+        // The second file held the ball as it was saved the first time and a new cube.
+        let scene = &self.doc.scene;
+        let added: Vec<_> = scene.objects[before.min(names.len())..].iter().map(|o| scene.symmetry(o.id)).collect();
+        say("each with the symmetry it was saved with", added == [kept, Default::default()]);
         say("the document is still the first file", self.doc.path.as_deref() == Some(first.as_path()));
         say("and it now has unsaved work", self.unsaved());
         say("its look stayed", self.doc.opts.look.finish == crate::look::Finish::Metal);

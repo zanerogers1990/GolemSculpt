@@ -30,12 +30,16 @@ struct Globals {
     ambient_sky: vec4<f32>,
     ambient_equator: vec4<f32>,
     ambient_ground: vec4<f32>,
-    // The radial symmetry guide. xyz the axis in the active object's own
-    // space, w how many spokes go round it (0 = no guide)
+    // The radial symmetry guide. xyz the axis in the space the guides are in,
+    // w how many spokes go round it (0 = no guide)
     radial_axis: vec4<f32>,
     // xyz the way the first spoke points, w its colour (0 1 2 = the X Y Z axis
     // colours, 3 = a custom axis)
     radial_spoke: vec4<f32>,
+    // The active object's own space into the space its symmetry guides are
+    // in: the identity for a symmetry of its own (the planes are its own
+    // x = 0, y = 0, z = 0), its placement for one fixed in the world
+    guide_space: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;

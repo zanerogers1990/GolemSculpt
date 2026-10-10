@@ -72,7 +72,7 @@ impl Running {
         self.doc.opts.wireframe = true;
         // `SCULPT_DEMO_BRUSH=radial=6` and the like, for a look at detail
         // being added under every copy of a stroke.
-        self.doc.sculptor.settings.demo_setup(false);
+        self.demo_symmetry(None);
         if what == "instance" {
             let original = self.doc.scene.active_id();
             self.act(Action::InstanceObject);
@@ -101,7 +101,7 @@ impl Running {
         if what == "live" {
             // Only the press now; the frames to come draw the rest.
             let (doc, press) = (&mut self.doc, along.next().expect("a stroke has a first sample"));
-            if doc.sculptor.begin(&mut doc.mesh, &self.local, press, false, false) {
+            if doc.begin_stroke(&self.local, press, false, false) {
                 LIVE.set(Some(along.collect()));
             }
             return;
@@ -206,7 +206,7 @@ impl Running {
     fn dyntopo_demo_stroke(&mut self, mut samples: impl Iterator<Item = PointerSample>) {
         let doc = &mut self.doc;
         let Some(press) = samples.next() else { return };
-        if !doc.sculptor.begin(&mut doc.mesh, &self.local, press, false, false) {
+        if !doc.begin_stroke(&self.local, press, false, false) {
             return;
         }
         for (i, sample) in samples.enumerate() {

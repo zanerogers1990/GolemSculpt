@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use glam::{Vec2, Vec3};
 use sculpt_geom::TriMesh;
 use sculpt_toolkit::testing::{Bench, cube};
-use sculpt_toolkit::{Button, Command, Draw, Key, ObjectId, Placement, Scene, Shape, Tool};
+use sculpt_toolkit::{Button, Command, Draw, Key, ObjectId, Placement, Scene, Shape, Symmetry, Tool};
 
 use crate::TubeTool;
 use crate::testing::{assert_closed, icosphere, shells, unmatched_across};
@@ -447,6 +447,66 @@ fn mirror_axes_make_a_pair_and_a_copy_edits_the_tube_through_the_mirror() {
     let draw = bench.frame(&mut tool);
     assert_eq!(tool.copy_count(0), 1);
     assert_eq!(shells(&preview_mesh(&draw, 0)), 1);
+}
+
+/// Symmetry belongs to objects, and a tube takes that of the object it is
+/// drawn on, whichever object is selected: the Unity app's tubes took their
+/// anchor's. Kept separate, the new object is sculpted the way that object is.
+#[test]
+fn a_tube_is_made_under_the_symmetry_of_the_object_it_is_drawn_on() {
+    let (mut bench, mut tool, body) = bench();
+    bench.env.mirror = [true, false, false];
+    // A second object, out of the way, selected, with no symmetry of its own.
+    let other = bench.add("Other", cube(0.1));
+    let aside = Placement::at(Vec3::new(0.0, 1.4, 0.0));
+    bench.call(|cx| cx.commit("Place", vec![Command::Place { object: other, placement: aside }]));
+    assert_eq!((bench.doc.active(), bench.env.mirror), (other, [false; 3]));
+
+    // Drawn on the body, it is made under the body's Mirror X.
+    draw_horn(&mut bench, &mut tool);
+    assert_eq!(tool.copy_count(0), 2, "the body's own symmetry, not the selected object's");
+    // Changing the selected object's symmetry changes nothing for it...
+    bench.env.mirror = [false, true, true];
+    bench.frame(&mut tool);
+    assert_eq!(tool.copy_count(0), 2);
+    // ...and changing the body's does.
+    bench.set_symmetry(body, Symmetry { radial_count: 4, ..Symmetry::NONE });
+    bench.frame(&mut tool);
+    assert_eq!(tool.copy_count(0), 4);
+
+    bench.call(|cx| tool.keep_separate(cx));
+    let made = bench.doc.active();
+    assert_eq!(bench.doc.info(made).unwrap().name, "Tube");
+    assert_eq!(bench.doc.symmetry(made), bench.doc.symmetry(body), "the kept tube takes the body's settings");
+    assert_eq!(bench.doc.symmetry(other).mirror, [false, true, true], "and the object that was selected keeps its own");
+}
+
+/// A symmetry fixed in the world, on an object that has been moved, turned
+/// and resized: the tube's copy is its mirror image across the world's plane,
+/// not across the object's own.
+#[test]
+fn a_tube_on_an_object_with_a_world_symmetry_is_mirrored_across_the_worlds_plane() {
+    let (mut bench, mut tool, body) = bench();
+    let placement =
+        Placement { position: Vec3::new(0.3, -0.1, 0.0), rotation: glam::Quat::from_rotation_z(0.4), scale: Vec3::splat(1.2) };
+    bench.call(|cx| cx.commit("Place", vec![Command::Place { object: body, placement }]));
+    bench.env.mirror = [true, false, false];
+    bench.env.symmetry_world = Some(placement);
+    let start = placement.matrix().transform_point3(on_sphere(0.2, 0.1));
+    stroke(&mut bench, &mut tool, &[start, start + Vec3::new(0.6, 0.3, 0.0), start + Vec3::new(1.0, 0.3, 0.0)]);
+    assert_eq!(tool.copy_count(0), 2);
+    for point in 0..tool.points(0).len() {
+        let (own, copy) = (tool.handle_world(0, point, 0).unwrap(), tool.handle_world(0, point, 1).unwrap());
+        assert!(own.x > 0.2, "the tube is drawn to the right of the world's plane: {own}");
+        assert!(copy.distance(own * Vec3::new(-1.0, 1.0, 1.0)) < 1e-4, "point {point}: {copy} is not {own} mirrored");
+    }
+    // The object moves on, the plane stays: the copy is still the world's mirror image.
+    let moved = Placement { position: Vec3::new(0.8, 0.2, 0.1), ..placement };
+    bench.call(|cx| cx.commit("Place", vec![Command::Place { object: body, placement: moved }]));
+    bench.env.symmetry_world = Some(moved);
+    bench.frame(&mut tool);
+    let (own, copy) = (tool.handle_world(0, 0, 0).unwrap(), tool.handle_world(0, 0, 1).unwrap());
+    assert!(own.x > 0.7 && copy.distance(own * Vec3::new(-1.0, 1.0, 1.0)) < 1e-4, "{own} and {copy}");
 }
 
 #[test]

@@ -95,6 +95,8 @@ fn main() {
             "--demo-flash" => opts.demo_flash = true,
             // The sphere off the middle with its live mirror on and strokes on the copy.
             "--demo-mirror" => opts.demo_mirror = true,
+            // Two objects, each with a symmetry of its own and a stroke under it.
+            "--demo-symmetry" => opts.demo_symmetry = true,
             // Half of the active object's faces hidden, cut on a slant.
             "--demo-hide" => opts.demo_hide = true,
             // A long shape pulled out of a coarse ball, then refined by dynamic topology; wireframe on.

@@ -1,5 +1,11 @@
-//! The Symmetry card of the Sculpt panel: the mirror axes, radial symmetry
-//! and the guides, laid out as the Unity app's is.
+//! The Symmetry card of the Sculpt panel: where the symmetry sits, the mirror
+//! axes, radial symmetry and the guides, laid out as the Unity app's is.
+//!
+//! The card shows the selected object's own symmetry (`scene::Symmetry`) and
+//! changes that, so selecting another object changes what the card says. Only
+//! Show Symmetry Guides is the whole viewport's: in the Unity app a tick that
+//! hid one object's planes and left another's standing read as a tick that
+//! did not work.
 
 use egui::{Color32, vec2};
 use glam::Vec3;
@@ -7,6 +13,7 @@ use glam::Vec3;
 use super::theme::{self, ACCENT, ButtonStyle};
 use super::tip;
 use crate::doc::Doc;
+use crate::scene::Space;
 use crate::sculpt::{Radial, RadialAxis};
 
 /// The colour of a custom radial axis: none of the three axis colours, so it
@@ -26,34 +33,72 @@ pub fn axis_color(axis: RadialAxis) -> Color32 {
 
 pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
     let tips = doc.opts.tooltips;
-    let summary = doc.sculptor.settings.symmetry_summary();
-    // Straight down the view, in the selected object's own space: what From
-    // View aims the custom axis along.
-    let down_the_view = doc.scene.active().rotation.inverse() * (doc.camera.rotation() * Vec3::NEG_Z);
-    theme::category(ui, "Symmetry", Color32::from_rgb(242, 115, 158), &summary, true, |ui| {
-        let s = &mut doc.sculptor.settings;
+    let active = doc.scene.active();
+    let before = doc.scene.symmetry(active.id);
+    let mut symmetry = before;
+    // Straight down the view, in the space the symmetry sits in (the selected
+    // object's own, or the world's): what From View aims the custom axis along.
+    let forward = doc.camera.rotation() * Vec3::NEG_Z;
+    let down_the_view = if before.space == Space::World { forward } else { active.rotation.inverse() * forward };
+    let of = format!("Of the selected object, \"{}\".", active.name);
+    theme::category(ui, "Symmetry", Color32::from_rgb(242, 115, 158), &before.summary(), true, |ui| {
+        theme::hint(ui, &of);
+        space_row(ui, &mut symmetry.space, tips);
         theme::heading(ui, "Mirror strokes across");
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 3, 6.0);
             for (a, name) in ["X", "Y", "Z"].into_iter().enumerate() {
                 ui.allocate_ui(vec2(w, 22.0), |ui| {
-                    let r = theme::checkbox(ui, &mut s.symmetry[a], name, theme::AXIS[a]);
+                    let r = theme::checkbox(ui, &mut symmetry.mirror[a], name, theme::AXIS[a]);
                     if a == 0 {
                         tip(r, tips, "Mirror left and right (X).");
                     }
                 });
             }
         });
-        radial(ui, &mut s.radial, tips, down_the_view);
+        radial(ui, &mut symmetry.radial, symmetry.space, tips, down_the_view);
         let guides = theme::checkbox(ui, &mut doc.opts.symmetry_guides, "Show Symmetry Guides", ACCENT);
-        tip(guides, tips, "Draws the mirror planes and the radial sectors on the model.");
+        tip(guides, tips, "Draws the selected object's mirror planes and radial sectors on it.");
+    });
+    if symmetry != before {
+        doc.scene.set_symmetry(doc.scene.active_id(), symmetry);
+    }
+}
+
+/// Local or World: where the planes and the radial axis sit (Nomad's names).
+fn space_row(ui: &mut egui::Ui, space: &mut Space, tips: bool) {
+    theme::heading(ui, "Symmetry space");
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 2, 6.0);
+        for choice in Space::ALL {
+            let style = ButtonStyle { active: (*space == choice).then_some(ACCENT), ..Default::default() };
+            let help = match choice {
+                Space::Local => {
+                    "Symmetry through the object's own centre along its own axes: it moves and turns with the object."
+                }
+                Space::World => {
+                    "Symmetry through the world's centre along the world's axes: it stays put while the object moves \
+                     through it. It pairs with Mirror in the Objects card: parts placed either side of the world's \
+                     centre sculpt symmetrically."
+                }
+            };
+            if tip(theme::button(ui, w, choice.name(), style), tips, help).clicked() {
+                *space = choice;
+            }
+        }
     });
 }
 
-fn radial(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_view: Vec3) {
+fn radial(ui: &mut egui::Ui, radial: &mut Radial, space: Space, tips: bool, down_the_view: Vec3) {
+    // Whose centre and axes the repeats go round.
+    let whose = if space == Space::World { "the world's" } else { "the object's" };
     theme::heading(ui, "Radial Symmetry");
     let on = theme::checkbox(ui, &mut radial.on, "Radial", axis_color(radial.axis));
-    tip(on, tips, "Repeats every stroke evenly around the axis below, through the object's centre. Combines with the mirror axes. Lathed objects are turned around Y.");
+    let help = format!(
+        "Repeats every stroke evenly around the axis below, through {whose} centre. Combines with the mirror axes. \
+         Lathed objects are turned around Y."
+    );
+    tip(on, tips, &help);
 
     let mut count = radial.count as f32;
     let range = Radial::MIN_COUNT as f32..=Radial::MAX_COUNT as f32;
@@ -69,6 +114,7 @@ fn radial(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_view: Vec
             let style = ButtonStyle { active: (radial.axis == axis).then(|| axis_color(axis)), ..Default::default() };
             let help = match axis {
                 RadialAxis::Custom => "Repeats strokes around an axis you set below: typed in, or taken from the view.".to_owned(),
+                _ if space == Space::World => format!("Repeats strokes around the world's {} axis.", axis.name()),
                 _ => format!("Repeats strokes around the object's own {} axis.", axis.name()),
             };
             if tip(theme::button(ui, w, axis.name(), style), tips, &help).clicked() {
@@ -77,12 +123,12 @@ fn radial(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_view: Vec
         }
     });
     if radial.axis == RadialAxis::Custom {
-        custom_axis_row(ui, radial, tips, down_the_view);
+        custom_axis_row(ui, radial, whose, tips, down_the_view);
     }
 }
 
 /// The custom axis as text, with From View beside it.
-fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_view: Vec3) {
+fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, whose: &str, tips: bool, down_the_view: Vec3) {
     const BUTTON: f32 = 84.0;
     ui.horizontal(|ui| {
         // The text being typed lives here while the box has the keyboard;
@@ -105,8 +151,11 @@ fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, tips: bool, down_the_
         } else {
             ui.data_mut(|d| d.remove::<String>(id));
         }
-        let help = "Points the custom axis straight down the current view, through the object's centre: seen from here, the repeats land evenly around it.";
-        if tip(theme::button(ui, BUTTON, "From View", ButtonStyle::default()), tips, help).clicked() {
+        let help = format!(
+            "Points the custom axis straight down the current view, through {whose} centre: seen from here, the \
+             repeats land evenly around it."
+        );
+        if tip(theme::button(ui, BUTTON, "From View", ButtonStyle::default()), tips, &help).clicked() {
             radial.set_custom_axis(down_the_view);
         }
     });

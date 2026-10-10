@@ -679,7 +679,12 @@ impl Keys {
             vec![
                 Command::Place { object, placement },
                 Command::Replace { object, mesh: cut.outside.mesh.into() },
-                Command::Add(NewObject::new(format!("{name} Piece"), cut.inside.mesh).placed(placement).unselected()),
+                Command::Add(
+                    NewObject::new(format!("{name} Piece"), cut.inside.mesh)
+                        .placed(placement)
+                        .unselected()
+                        .with_symmetry_of(object),
+                ),
             ],
         );
         Some(middle)

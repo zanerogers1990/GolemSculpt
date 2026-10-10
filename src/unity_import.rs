@@ -41,7 +41,9 @@
 //! - mirror axes keep their letters (the plane X = 0 is its own mirror image),
 //!   and the centre of a live mirror has its X negated. Radial symmetry
 //!   repeats as many times about the same axis; only a custom axis, being a
-//!   direction, has its X negated;
+//!   direction, has its X negated. That holds for a symmetry in an object's
+//!   own space and for one fixed in the world alike: the world's planes and
+//!   axes are their own mirror images too;
 //! - the camera's yaw gains half a turn. Unity measured yaw from a camera
 //!   looking along +Z, this app from one looking along -Z, and with X negated
 //!   those two are the same camera. Pitch, distance and lens are unchanged.
@@ -59,23 +61,24 @@
 //! # What goes where
 //!
 //! Every object comes in with its mesh, mask, hidden faces, name, place,
-//! visibility and order; instances stay linked to their mesh, and a live
-//! mirror stays live. The material, finish, lighting, HDRI, background,
-//! effects and camera go to the same settings here, which were ported from
-//! the Unity app with their numbers (see [`look_of`]). The object that was
-//! selected is the active one, and its mirror axes and radial symmetry
-//! become the scene's: the Unity app kept symmetry per object, this app has
-//! one setting. Dynamic topology is set as the file has it, because the
-//! Unity app restored it with the file.
+//! visibility and order, and with its own symmetry: its mirror axes, its
+//! radial symmetry and whether they sit in its own space or the world's
+//! (`scene::Symmetry`, which the Unity app also kept per object). Instances
+//! stay linked to their mesh, and a live mirror stays live. The material,
+//! finish, lighting, HDRI, background, effects and camera go to the same
+//! settings here, which were ported from the Unity app with their numbers
+//! (see [`look_of`]). The object that was selected is the active one, and
+//! whether it showed its symmetry guides is whether the scene does. Dynamic
+//! topology is set as the file has it, because the Unity app restored it
+//! with the file.
 //!
 //! A live array has no place in this app's files yet, so the copies it drew
 //! come in as linked copies of its object, where they were.
 //!
-//! The rest has nowhere to go: the array itself, the other objects' own
-//! symmetry, symmetry fixed in the world, and the brush settings (which are
-//! the user's own here, not a file's). It is still parsed, brought into this
-//! app's axes and handed back in [`Extras`], and [`LeftBehind`] says in plain
-//! words what the user is missing.
+//! The rest has nowhere to go: the array itself, and the brush settings
+//! (which are the user's own here, not a file's). It is still parsed,
+//! brought into this app's axes and handed back in [`Extras`], and
+//! [`LeftBehind`] says in plain words what the user is missing.
 //!
 //! The JSON's own shape, class for class, is in `header.rs`.
 
@@ -97,6 +100,7 @@ use crate::camera::SavedView;
 use crate::io::{self, Details, Mirror, SavedObject, SavedScene, Shading};
 use crate::look::{self, Finish, Look};
 use crate::mesh::Mesh;
+use crate::scene::{Space, Symmetry};
 use crate::sculpt::dyntopo::{self, DynTopo};
 use crate::sculpt::{Radial, RadialAxis};
 
@@ -274,32 +278,31 @@ pub enum SymmetrySpace {
     World,
 }
 
-/// An object's own brush symmetry. The Unity app kept one per object; this
-/// app has one for the whole scene, which takes the selected object's (see
-/// [`Extras`]).
+/// An object's own brush symmetry as the file has it, in this app's axes.
+/// The Unity app kept one per object, and so does this app: every object
+/// comes in with its own ([`ObjectSymmetry::settings`]). Only `show_planes`
+/// has no place per object here; whether the guides show is the scene's, and
+/// takes the selected object's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ObjectSymmetry {
     /// Strokes mirrored across X, Y, Z.
     pub mirror: [bool; 3],
     pub show_planes: bool,
     /// Radial symmetry as this app keeps it: on or off, how many times
-    /// round, and the axis in the object's own space, in this app's axes.
+    /// round, and the axis in the space the symmetry sits in, in this app's
+    /// axes.
     pub radial: Radial,
     pub space: SymmetrySpace,
 }
 
 impl ObjectSymmetry {
-    /// Whether strokes on the object were repeated at all.
-    fn any(&self) -> bool {
-        self.mirror.contains(&true) || self.radial.on
-    }
-
-    /// Whether a stroke is repeated the same way under both. What a
-    /// switched-off radial symmetry would do if it were switched on is not
-    /// compared: nothing on screen differs for it.
-    fn acts_like(&self, other: &ObjectSymmetry) -> bool {
-        let radial = |s: &ObjectSymmetry| s.radial.on.then(|| (s.radial.count, s.radial.axis, s.radial.axis_vector()));
-        self.mirror == other.mirror && radial(self) == radial(other)
+    /// The object's symmetry as the scene keeps it.
+    pub fn settings(&self) -> Symmetry {
+        let space = match self.space {
+            SymmetrySpace::Local => Space::Local,
+            SymmetrySpace::World => Space::World,
+        };
+        Symmetry { mirror: self.mirror, radial: self.radial, space }
     }
 }
 
@@ -332,14 +335,11 @@ pub struct ObjectExtras {
     pub array: Option<LiveArray>,
 }
 
-/// Everything a `.sculpt` held that this app has no place for, parsed and in
-/// this app's axes, so each can be connected if it ever gets one:
+/// What a `.sculpt` held beyond the scene, parsed and in this app's axes.
+/// Each object's own symmetry (`objects[i].symmetry`) is in the scene too,
+/// under the object (`io::slot::SYMMETRY`); the others have no place in
+/// this app yet, and are here so each can be connected if it ever gets one:
 ///
-/// - **Each object's own symmetry**: `objects[i].symmetry`. The mirror axes
-///   and radial symmetry are the scene's here, and take the selected
-///   object's; the other objects' are only here, as is whether an object's
-///   symmetry was fixed in the world rather than in its own space, which
-///   this app does not have.
 /// - **Live arrays**: `objects[i].array`. The copies Unity drew are in the
 ///   scene as linked copies, each with the object's live mirror; the array's
 ///   own settings and handle points are only here.
@@ -658,27 +658,23 @@ fn convert(header: Header, raw: Vec<RawObject>) -> Imported {
             left.objects.push(format!("an array on \"{name}\" that this app cannot read"));
         }
 
+        // Its own symmetry, for the object and for everything that came in
+        // as a linked copy of it: an instance or a copy of an array had no
+        // settings of its own in Unity, where the object's were what a stroke
+        // on any of them was made under.
         let symmetry = symmetry_of(entry);
-        // Symmetry fixed in the world is the same thing as symmetry in the
-        // object's own space only while the object sits square at the origin.
-        let square = position.length() < 1e-6 && rotation.abs_diff_eq(Quat::IDENTITY, 1e-6);
-        if symmetry.space == SymmetrySpace::World && symmetry.any() && !square {
-            left.settings.push(format!("the world-space symmetry of \"{name}\" (symmetry here goes with the object)"));
+        for linked in row..rows.len() {
+            details.set_object(linked, io::slot::SYMMETRY, &symmetry.settings());
         }
         extras.push(ObjectExtras { row, symmetry, array });
     }
 
-    // The selected object: the active one here, and the one whose mirror
-    // axes and radial symmetry the scene's one setting takes.
+    // The selected object is the active one here. Whether the guides show
+    // is the scene's, and takes that object's; its axes go beside them for
+    // versions of this app from before symmetry belonged to objects.
     let selected = header.primary_selection_index.clamp(0, header.objects.len() as i64 - 1) as usize;
     let active = extras[selected].row;
     let own = extras[selected].symmetry;
-    if extras.iter().any(|e| !e.symmetry.acts_like(&own)) {
-        left.settings.push(format!(
-            "each object's own symmetry (this app has one setting for the scene, taken from \"{}\")",
-            rows[active].name
-        ));
-    }
     let [x, y, z] = own.mirror;
     details.set(io::slot::MIRROR, &Mirror { x, y, z, guides: own.show_planes, radial: own.radial });
 

@@ -415,7 +415,13 @@ impl TubeTool {
                     Placement::at(centre)
                 }
             };
-            commands.push(Command::Add(NewObject::new("Tube", mesh).placed(placement)));
+            // It grew on the anchor, so it is sculpted the way the anchor is:
+            // it takes the anchor's symmetry settings, as in the Unity app.
+            let mut object = NewObject::new("Tube", mesh).placed(placement);
+            if let Some(anchor) = tube.state.anchor {
+                object = object.with_symmetry_of(anchor);
+            }
+            commands.push(Command::Add(object));
             kept.push(tube.state.clone());
         }
         if commands.is_empty() {

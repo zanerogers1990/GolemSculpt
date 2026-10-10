@@ -190,9 +190,8 @@ impl Tools {
         let mut tool = doc.tools.slots.get_mut(index)?.take()?;
         let mut env = doc.tools.env;
         env.active = doc.tools.active(doc.tool) == Some(index);
-        env.mirror = doc.sculptor.settings.symmetry;
-        env.radial_count = doc.sculptor.settings.radial.repeats();
-        env.radial_axis = doc.sculptor.settings.radial.axis_vector();
+        // The selected object's own symmetry is the one the tool follows.
+        env.set_symmetry(symmetry_of(&doc.scene, doc.scene.active_id()));
         env.unit = doc.tools.unit;
         env.tips = doc.opts.tooltips;
         env.clean_view = doc.opts.clean_view;
@@ -209,12 +208,7 @@ impl Tools {
         if let Some(unit) = out.unit {
             doc.tools.unit = unit;
         }
-        if let Some(mirror) = out.mirror {
-            doc.sculptor.settings.symmetry = mirror;
-        }
-        if let Some(change) = out.radial {
-            change_radial(&mut doc.sculptor.settings.radial, change);
-        }
+        take_symmetry(&mut doc.scene, &out);
         if let Some(bounds) = out.frame.filter(|b| !b.is_empty()) {
             let aspect = env.view.size.x / env.view.size.y.max(1.0);
             doc.camera.frame(crate::mesh::bvh::Aabb { min: bounds.min, max: bounds.max }, aspect, true);
@@ -231,9 +225,39 @@ impl Tools {
     }
 }
 
-/// A tool's request for radial symmetry, taken into the Symmetry card's
-/// settings. A direction along the object's X, Y or Z is that axis; any other
-/// is the custom one.
+/// An object's own symmetry as tools read it: plain numbers, with where the
+/// object stands when the symmetry is fixed in the world. None for an object
+/// that is not there.
+fn symmetry_of(scene: &Scene, id: u64) -> kit::Symmetry {
+    let Some(object) = scene.get(id) else { return kit::Symmetry::NONE };
+    let symmetry = scene.symmetry(id);
+    let placed = |p: sculpt_symmetry::Placement| kit::Placement { position: p.position, rotation: p.rotation, scale: p.scale };
+    kit::Symmetry {
+        mirror: symmetry.mirror,
+        radial_count: symmetry.radial.repeats().clamp(1, Radial::MAX_COUNT),
+        radial_axis: symmetry.radial.axis_vector(),
+        world: symmetry.world(object).map(placed),
+    }
+}
+
+/// Carries out what a tool asked for of an object's symmetry. Symmetry
+/// belongs to objects: a change goes to the one that was selected when the
+/// tool asked, which is the object it made if it had just made one (the
+/// Lathe's Radial Symmetry on Create), and never to the one that was
+/// selected before that. Not an undo step, like the Symmetry card's ticks.
+fn take_symmetry(scene: &mut Scene, out: &Outbox) {
+    let target = out.symmetry_of.map_or(scene.active_id(), |object| object.0);
+    if let Some(mirror) = out.mirror {
+        scene.edit_symmetry(target, |symmetry| symmetry.mirror = mirror);
+    }
+    if let Some(change) = out.radial {
+        scene.edit_symmetry(target, |symmetry| change_radial(&mut symmetry.radial, change));
+    }
+}
+
+/// A tool's request for radial symmetry, taken into an object's symmetry
+/// settings, which the Symmetry card shows while it is selected. A direction
+/// along X, Y or Z is that axis; any other is the custom one.
 fn change_radial(radial: &mut Radial, change: kit::RadialChange) {
     if let Some(on) = change.on {
         radial.on = on;
@@ -370,6 +394,10 @@ impl kit::Scene for Access<'_> {
         let b = self.scene.bounds_of(o, self.mesh);
         if b.is_empty() { sculpt_geom::Aabb::EMPTY } else { sculpt_geom::Aabb::new(b.min, b.max) }
     }
+
+    fn symmetry(&self, id: ObjectId) -> kit::Symmetry {
+        symmetry_of(self.scene, id.0)
+    }
 }
 
 impl kit::Document for Access<'_> {
@@ -385,6 +413,11 @@ impl kit::Document for Access<'_> {
             (o.position, o.rotation, o.scale) = (object.placement.position, object.placement.rotation, object.placement.scale);
             o.visible = object.visible;
             o.mirror = object.mirror;
+        }
+        // A piece of an object, or something grown on it, is sculpted the
+        // way that object is.
+        if let Some(from) = object.symmetry_of {
+            self.scene.inherit_symmetry(from.0, id);
         }
         if !object.select {
             self.scene.select(previous, self.mesh);
@@ -652,6 +685,7 @@ impl Running {
             mirror: [false; 3],
             radial_count: 1,
             radial_axis: glam::Vec3::Y,
+            symmetry_world: None,
             unit: tools.unit,
             tips: true,
             clean_view: false,
@@ -1229,6 +1263,71 @@ mod tests {
         assert!(history.step_scene(true, &mut scene, &mut mesh));
         assert!(mesh.mask.iter().all(|&m| m == 1.0), "the old mask is back");
         assert_eq!(mesh.hidden_triangle_count(), hidden, "and the old hidden faces");
+    }
+
+    /// Symmetry belongs to objects, and that is what tools are shown: any
+    /// object's own on asking, the piece a tool cuts from an object starting
+    /// with that object's, and a change going to the object that was selected
+    /// when the tool asked for it.
+    #[test]
+    fn tools_read_and_set_each_objects_own_symmetry() {
+        use crate::scene::{Space, Symmetry};
+
+        let mut mesh = cube();
+        let mut scene = Scene::new("Body");
+        let body = scene.active_id();
+        let radial = Radial { on: true, count: 5, axis: RadialAxis::Z, ..Radial::default() };
+        scene.set_symmetry(body, Symmetry { mirror: [true, false, false], radial, space: Space::Local });
+        let head = scene.add("Head", cube(), &mut mesh);
+        scene.get_mut(head).unwrap().position = Vec3::new(0.0, 2.0, 0.0);
+        scene.set_symmetry(head, Symmetry { mirror: [false, false, true], space: Space::World, ..Symmetry::default() });
+        let mut history = History::default();
+        history.target = scene.active_mesh();
+        let mut sculptor = Sculptor::default();
+        let mut access =
+            Access { scene: &mut scene, mesh: &mut mesh, history: &mut history, sculptor: &mut sculptor, before: None };
+        let (a, b) = (ObjectId(body), ObjectId(head));
+
+        // Each object's own, whichever is selected (the head is).
+        let own = access.symmetry(a);
+        assert_eq!((own.mirror, own.radial_count, own.radial_axis, own.world), ([true, false, false], 5, Vec3::Z, None));
+        assert_eq!(own.group().len(), 10);
+        let fixed = access.symmetry(b);
+        assert_eq!((fixed.mirror, fixed.radial_count), ([false, false, true], 1));
+        assert_eq!(fixed.world.map(|at| at.position), Some(Vec3::new(0.0, 2.0, 0.0)), "where the head stands");
+        assert_eq!(access.symmetry(ObjectId(u64::MAX)), kit::Symmetry::NONE);
+
+        // A piece cut from the body starts with the body's settings, all of
+        // them; an object made from nothing starts with none.
+        let shape = access.mesh(a).unwrap().to_tri_mesh();
+        let part = kit::NewObject::new("Body Part", shape.clone()).unselected().with_symmetry_of(a);
+        let fresh = kit::NewObject::new("Lathe", shape);
+        let receipt = kit::scene::apply(&mut access, "Split", vec![Command::Add(part), Command::Add(fresh)]);
+        let (part, fresh) = (receipt.added[0], receipt.added[1]);
+        assert_eq!(access.scene.symmetry(part.0), access.scene.symmetry(body));
+        assert_eq!(access.symmetry(fresh), kit::Symmetry::NONE);
+        assert_eq!(access.active(), fresh, "the new object is the selected one");
+
+        // The Lathe's Radial Symmetry on Create, asked for right after its
+        // commit: it is the new object's symmetry that is set.
+        let mut out = Outbox { symmetry_of: Some(fresh), ..Outbox::default() };
+        out.radial = Some(kit::RadialChange { on: Some(true), axis: Some(Vec3::Y), count: None });
+        take_symmetry(access.scene, &out);
+        let made = access.scene.symmetry(fresh.0);
+        assert_eq!((made.radial.on, made.radial.count, made.radial.axis, made.mirror), (true, 8, RadialAxis::Y, [false; 3]));
+        assert_eq!(access.scene.symmetry(head).mirror, [false, false, true], "the object selected before keeps its own");
+        assert_eq!(access.scene.symmetry(body).radial, radial);
+        // With no object named, it is the selected one's.
+        take_symmetry(access.scene, &Outbox { mirror: Some([true, true, false]), ..Outbox::default() });
+        assert_eq!(access.scene.symmetry(fresh.0).mirror, [true, true, false]);
+
+        // Undoing the commit takes the two objects away; their symmetry was
+        // never an undo step, and the ones that stay have what they had.
+        assert!(history.step_scene(true, &mut scene, &mut mesh));
+        assert_eq!(scene.objects.len(), 2);
+        assert_eq!((scene.symmetry(body).mirror, scene.symmetry(head).mirror), ([true, false, false], [false, false, true]));
+        assert!(history.step_scene(false, &mut scene, &mut mesh));
+        assert_eq!(scene.symmetry(fresh.0).mirror, [true, true, false], "redone, the object is back as it was left");
     }
 
     /// What a tool's context does with the document, without the window.

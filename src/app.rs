@@ -39,6 +39,7 @@ mod mirror_copies;
 mod pose;
 mod selection;
 mod spheres;
+mod symmetry;
 pub(crate) mod tools;
 mod transform;
 mod unity;
@@ -82,6 +83,9 @@ pub struct Args {
     /// Move the sphere off the middle, turn its live mirror on and sculpt on
     /// the copy (for visual checks; see app/mirror_copies.rs).
     pub demo_mirror: bool,
+    /// Two objects with a symmetry each, selected in turn and sculpted (for
+    /// visual checks of symmetry belonging to objects; see app/symmetry.rs).
+    pub demo_symmetry: bool,
     /// Hide half of the active object's faces after the demo strokes (for
     /// visual checks of hidden faces).
     pub demo_hide: bool,
@@ -435,6 +439,9 @@ impl Running {
         if running.args.demo_mirror {
             running.mirror_demo();
         }
+        if running.args.demo_symmetry {
+            running.symmetry_demo();
+        }
         if running.args.demo {
             running.demo_strokes();
         }
@@ -692,7 +699,7 @@ impl Running {
                 let picked = placed.map(|(id, _)| id);
                 let on_active = self.press_on_active(placed, pos);
                 let doc = &mut self.doc;
-                if on_active && doc.sculptor.begin(&mut doc.mesh, &self.local, sample, invert, mods.shift_key()) {
+                if on_active && doc.begin_stroke(&self.local, sample, invert, mods.shift_key()) {
                     self.input.samples.clear();
                     Drag::Sculpt
                 } else if button == MouseButton::Left {
@@ -830,9 +837,9 @@ impl Running {
                 self.toast(if on { "Mask" } else { "Mask Off" });
             }
             KeyCode::KeyX if idle => {
-                let s = &mut self.doc.sculptor.settings;
-                s.symmetry[0] = !s.symmetry[0];
-                let on = s.symmetry[0];
+                // The selected object's own Mirror X, as in the Unity app.
+                self.doc.edit_symmetry(|symmetry| symmetry.mirror[0] = !symmetry.mirror[0]);
+                let on = self.doc.scene.active_symmetry().mirror[0];
                 self.toast(if on { "Mirror X" } else { "Mirror Off" });
             }
             KeyCode::KeyR if idle => self.act(Action::Remesh),
@@ -1051,7 +1058,9 @@ impl Running {
             Action::Remesh => {
                 let t = Instant::now();
                 let res = self.doc.opts.remesh_resolution as u32;
-                match remesh::voxel_remesh(&self.doc.mesh, res, self.doc.sculptor.settings.symmetry) {
+                // Exactly symmetric across the object's own mirror planes.
+                let mirrors = self.doc.scene.active_symmetry().exact_mirrors();
+                match remesh::voxel_remesh(&self.doc.mesh, res, mirrors) {
                     Ok(mesh) => {
                         let tris = mesh.triangle_count();
                         self.replace_mesh(mesh, true);
@@ -1379,8 +1388,9 @@ impl Running {
     fn globals(&self) -> Globals {
         let o = &self.doc.opts;
         let v = &self.view;
-        let s = &self.doc.sculptor.settings;
-        let guides = |a: usize| if o.symmetry_guides && !o.clean_view && s.symmetry[a] { 1.0 } else { 0.0 };
+        // The selected object's guides: the planes of its own symmetry.
+        let shown = self.doc.scene.guides();
+        let guides = |a: usize| if o.symmetry_guides && !o.clean_view && shown.mirror[a] { 1.0 } else { 0.0 };
         let cavity = |x: f32| if o.cavity { x } else { 0.0 };
         let bg = srgb_to_linear(o.background);
         let top = srgb_to_linear(o.background_top);
@@ -1429,6 +1439,7 @@ impl Running {
             ambient_ground: lin([0.16, 0.15, 0.14]),
             radial_axis: [0.0; 4],
             radial_spoke: [0.0; 4],
+            guide_space: shown.space.to_cols_array_2d(),
         }
     }
 
@@ -1439,7 +1450,7 @@ impl Running {
     fn radial_guide(&self) -> ([f32; 4], [f32; 4]) {
         let o = &self.doc.opts;
         let shown = o.symmetry_guides && !o.clean_view;
-        self.doc.sculptor.settings.radial.guide().filter(|_| shown).unwrap_or_default()
+        self.doc.scene.guides().radial.filter(|_| shown).unwrap_or_default()
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
@@ -1457,6 +1468,11 @@ impl Running {
         }
         self.recording_step(dt);
         self.sync_view();
+        // The selected object's symmetry is the sculptor's: what the Pose
+        // brush's preview goes by between strokes (a stroke asks again).
+        if !self.doc.sculptor.is_active() {
+            self.doc.scene.hand_symmetry_to(&mut self.doc.sculptor.settings);
+        }
 
         // Sculpt: every pointer sample since the last frame, in order.
         self.dyntopo_demo_frame();
@@ -1725,8 +1741,7 @@ impl Running {
             (Brush::Layer, 0.8, 24.0, Vec2::new(-40.0, -170.0), Vec2::new(-25.0, -110.0), 0.0),
             (Brush::SnakeHook, 0.5, 40.0, Vec2::new(-150.0, -175.0), Vec2::new(-210.0, -260.0), 0.0),
         ];
-        self.doc.sculptor.settings.symmetry = [true, false, false];
-        self.doc.sculptor.settings.demo_setup(false);
+        self.demo_symmetry(Some([true, false, false]));
         for (brush, strength, radius, from, to, bend) in strokes {
             let s = &mut self.doc.sculptor.settings;
             s.brush = brush;
@@ -1739,7 +1754,7 @@ impl Running {
             };
             let sample = |i: usize| PointerSample { pos: point(i), pressure: None, time: i as f64 / 240.0 };
             let doc = &mut self.doc;
-            if !doc.sculptor.begin(&mut doc.mesh, &self.local, sample(0), false, false) {
+            if !doc.begin_stroke(&self.local, sample(0), false, false) {
                 continue;
             }
             for i in 1..=n {
@@ -1757,7 +1772,7 @@ impl Running {
         self.doc.sculptor.settings.demo_setup(true);
         // Strokes repeated round an axis are looked at down that axis, where
         // every repeat shows.
-        let radial = self.doc.sculptor.settings.radial;
+        let radial = self.doc.scene.active_symmetry().radial;
         let down_the_axis = match radial.axis {
             crate::sculpt::RadialAxis::X => Some((-90.0, 0.0)),
             crate::sculpt::RadialAxis::Y => Some((0.0, 90.0)),

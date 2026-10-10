@@ -7,7 +7,7 @@ use glam::{Vec2, Vec3};
 use sculpt_geom::{Aabb, LengthUnit, SymmetryGroup};
 
 use crate::jobs::{Job, JobCtx, Jobs};
-use crate::scene::{Command, Document, Hit, Receipt, Scene, apply};
+use crate::scene::{Command, Document, Hit, ObjectId, Placement, Receipt, Scene, Symmetry, apply};
 use crate::tool::Mods;
 use crate::view::View;
 
@@ -33,15 +33,20 @@ pub struct Env {
     pub dt: f32,
     /// Whether this tool is the one that is up.
     pub active: bool,
-    /// The mirror axes brushes are working with (X, Y, Z), in the selected
-    /// object's own space.
+    /// The selected object's symmetry, which is the one brushes are working
+    /// with (every object has its own: `Scene::symmetry`). First the mirror
+    /// axes: X, Y, Z.
     pub mirror: [bool; 3],
     /// Radial symmetry, on top of the mirror axes: how many times brushes
     /// repeat a stroke round `radial_axis` (1 when it is off), a direction
-    /// through the selected object's origin in its own space.
-    /// [`Env::symmetry`] makes the one list of copies out of all three.
+    /// through the origin of the space the symmetry sits in.
+    /// [`Env::symmetry`] makes the one list of copies out of all of it.
     pub radial_count: u32,
     pub radial_axis: Vec3,
+    /// `None` while that symmetry is the object's own, through its origin
+    /// along its axes. `Some` when it is fixed in the world instead: where
+    /// the selected object stands (see `Symmetry::world`).
+    pub symmetry_world: Option<Placement>,
     /// The unit lengths are shown and typed in (see `sculpt_geom::units`).
     pub unit: LengthUnit,
     /// Whether tooltips are switched on. `theme::tip` takes this.
@@ -65,34 +70,53 @@ impl Env {
             mirror: [false; 3],
             radial_count: 1,
             radial_axis: Vec3::Y,
+            symmetry_world: None,
             unit: LengthUnit::default(),
             tips: true,
             clean_view: false,
         }
     }
 
-    /// Every copy a brush stroke is made as under the symmetry that is on,
-    /// the stroke itself first: the mirror images, the turns round the radial
+    /// Every copy a brush stroke on the selected object is made as, the
+    /// stroke itself first: the mirror images, the turns round the radial
     /// axis, and the two combined. What a tool that follows the brushes'
-    /// symmetry repeats its own work under, in the selected object's space.
+    /// symmetry repeats its own work under. The copies are in the selected
+    /// object's own space, whether the symmetry is its own or the world's.
     pub fn symmetry(&self) -> SymmetryGroup {
-        let [x, y, z] = self.mirror;
-        SymmetryGroup::build(x, y, z, self.radial_count, self.radial_axis)
+        self.symmetry_settings().group()
+    }
+
+    /// The selected object's symmetry as one value: what `Scene::symmetry`
+    /// says of that object.
+    pub fn symmetry_settings(&self) -> Symmetry {
+        Symmetry {
+            mirror: self.mirror,
+            radial_count: self.radial_count,
+            radial_axis: self.radial_axis,
+            world: self.symmetry_world,
+        }
+    }
+
+    /// For the host: shows the tool this symmetry as the selected object's.
+    pub fn set_symmetry(&mut self, symmetry: Symmetry) {
+        (self.mirror, self.radial_count, self.radial_axis) = (symmetry.mirror, symmetry.radial_count, symmetry.radial_axis);
+        self.symmetry_world = symmetry.world;
     }
 }
 
-/// A change to the brushes' radial symmetry that a tool asks for (see
-/// [`Ctx::set_radial`]). What is left `None` stays as the Symmetry card has
-/// it, so a tool that only wants it on, round an axis, does not have to know
-/// the repeat count that is kept while it is off.
+/// A change to the selected object's radial symmetry that a tool asks for
+/// (see [`Ctx::set_radial`]). What is left `None` stays as the Symmetry card
+/// has it, so a tool that only wants it on, round an axis, does not have to
+/// know the repeat count that is kept while it is off.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RadialChange {
     /// Switch radial symmetry on or off.
     pub on: Option<bool>,
     /// How many times a stroke is made, itself included (2 to 32).
     pub count: Option<u32>,
-    /// The axis it goes round, a direction through the selected object's
-    /// origin in its own space.
+    /// The axis it goes round, a direction through the origin of the space
+    /// the object's symmetry sits in (its own, unless it is fixed in the
+    /// world).
     pub axis: Option<Vec3>,
 }
 
@@ -112,8 +136,13 @@ pub struct Outbox {
     /// Glide the camera to fit this box.
     pub frame: Option<Aabb>,
     pub unit: Option<LengthUnit>,
+    /// New mirror axes, and a change to the radial symmetry, for the object
+    /// `symmetry_of` names.
     pub mirror: Option<[bool; 3]>,
     pub radial: Option<RadialChange>,
+    /// The object whose symmetry `mirror` and `radial` change: the one that
+    /// was selected when the tool asked.
+    pub symmetry_of: Option<ObjectId>,
     /// Draw another frame straight after this one.
     pub repaint: bool,
     /// A commit changed the scene.
@@ -123,6 +152,9 @@ pub struct Outbox {
 /// A tool's view of the app for the length of one call.
 pub struct Ctx<'a> {
     env: Env,
+    /// The object the symmetry in `env` is of: the one that was selected
+    /// when the call began, until the tool changes another's.
+    shown: ObjectId,
     doc: &'a mut dyn Document,
     jobs: &'a Jobs,
     icons: &'a dyn Fn(&str) -> Option<egui::TextureId>,
@@ -146,12 +178,33 @@ impl<'a> Ctx<'a> {
         icons: &'a dyn Fn(&str) -> Option<egui::TextureId>,
         out: &'a mut Outbox,
     ) -> Ctx<'a> {
-        Ctx { env, doc, jobs, icons, out }
+        Ctx { env, shown: doc.active(), doc, jobs, icons, out }
     }
 
     /// The scene, for reading.
     pub fn scene(&self) -> &dyn Scene {
         &*self.doc
+    }
+
+    /// The symmetry `object` is sculpted under: its own (every object has
+    /// one), with whatever this call has already asked to change in it,
+    /// which `Scene::symmetry` only has once the call returns.
+    pub fn symmetry_of(&self, object: ObjectId) -> Symmetry {
+        if object == self.shown { self.env.symmetry_settings() } else { self.doc.symmetry(object) }
+    }
+
+    /// Before a change to the selected object's symmetry: if the tool has
+    /// selected another object since the call began (one it has just made,
+    /// say), that object's symmetry is the one to show and to change.
+    fn aim_symmetry(&mut self) {
+        let selected = self.doc.active();
+        if selected != self.shown {
+            self.env.set_symmetry(self.doc.symmetry(selected));
+            self.shown = selected;
+            // One object's symmetry is changed per call: the last one asked for.
+            (self.out.mirror, self.out.radial) = (None, None);
+        }
+        self.out.symmetry_of = Some(selected);
     }
 
     /// The nearest visible surface under a pixel.
@@ -221,17 +274,28 @@ impl<'a> Ctx<'a> {
         self.out.unit = Some(unit);
     }
 
-    /// Switches the brushes' mirror axes, for a tool that follows them.
+    /// Switches the selected object's mirror axes, for a tool that follows
+    /// them. Like the Symmetry card's ticks, it is not an undo step.
+    ///
+    /// Symmetry belongs to objects, so this changes the object that is
+    /// selected at the moment of asking: after a commit that added and
+    /// selected an object it is that new object's symmetry that is set, and
+    /// the one selected before keeps its own. `cx.mirror` (and the rest of
+    /// the symmetry a `Ctx` reads as) is that object's from then on. The
+    /// same holds for [`Ctx::set_radial`].
     pub fn set_mirror(&mut self, mirror: [bool; 3]) {
+        self.aim_symmetry();
         self.env.mirror = mirror;
         self.out.mirror = Some(mirror);
     }
 
-    /// Switches the brushes' radial symmetry, for a tool that sets it to suit
-    /// what it made (the Lathe, round the axis it turned its object about).
+    /// Switches the selected object's radial symmetry, for a tool that sets
+    /// it to suit what it made (the Lathe, round the axis it turned its
+    /// object about, right after the commit that made and selected it).
     /// `cx.radial_count` and `cx.radial_axis` follow at once as far as the
     /// change says what they are; the app has the rest from the next call.
     pub fn set_radial(&mut self, change: RadialChange) {
+        self.aim_symmetry();
         if change.on == Some(false) {
             self.env.radial_count = 1;
         } else if let Some(count) = change.count.filter(|_| change.on == Some(true) || self.env.radial_count > 1) {

@@ -331,8 +331,10 @@ impl TubeTool {
 
     /// Brings every tube's copies (and, with `previews`, its preview mesh)
     /// up to date with its points, its settings, where its anchor stands
-    /// and the symmetry the brushes are under. A tube whose anchor has been deleted has nowhere
-    /// to live and goes with it.
+    /// and the symmetry its anchor is sculpted under, which is each object's
+    /// own: two tubes on two objects can be under two symmetries. A tube
+    /// drawn on nothing has none. A tube whose anchor has been deleted has
+    /// nowhere to live and goes with it.
     pub(crate) fn refresh(&mut self, cx: &Ctx, previews: bool) {
         let scene = cx.scene();
         let gone = |tube: &LiveTube| tube.state.anchor.is_some_and(|a| !scene.exists(a));
@@ -352,9 +354,10 @@ impl TubeTool {
             let info = tube.state.anchor.and_then(|a| scene.info(a));
             info.map_or(Frame::WORLD, |info| Frame { placement: info.placement })
         };
-        let symmetry = Symmetry::of(cx);
+        let symmetry_of =
+            |tube: &LiveTube| tube.state.anchor.map_or(Symmetry::NONE, |anchor| Symmetry::of(cx.symmetry_of(anchor)));
         for tube in self.tubes.iter_mut().chain(self.pointer.draft.as_mut()) {
-            tube.build(frame_of(tube), symmetry);
+            tube.build(frame_of(tube), symmetry_of(tube));
             if previews {
                 tube.build_preview();
             }

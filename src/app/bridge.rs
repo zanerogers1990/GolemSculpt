@@ -25,6 +25,7 @@ use crate::doc::{Action, MaskOp, Options};
 use crate::io;
 use crate::mesh::bvh::Aabb;
 use crate::mesh::primitives::{self, Primitive};
+use crate::scene::Space;
 use crate::sculpt::{Brush, PointerSample, PoseMode, PoseSettings, Radial, RadialAxis};
 use crate::ui::theme;
 
@@ -330,6 +331,8 @@ impl Running {
     fn brush_state(&self) -> Value {
         let s = &self.doc.sculptor.settings;
         let b = s.current();
+        // The active object's own symmetry, which is the one strokes are made under.
+        let symmetry = self.doc.scene.active_symmetry();
         json!({
             "name": s.brush.name(),
             "radius": round(s.radius_px / self.view.size.y.max(1.0)),
@@ -339,8 +342,13 @@ impl Running {
             "direction": if b.positive { "add" } else { "subtract" },
             "accumulate": b.accumulate,
             "mask_mode": s.mask_mode,
-            "mirror": { "x": s.symmetry[0], "y": s.symmetry[1], "z": s.symmetry[2] },
-            "radial": { "on": s.radial.on, "repeats": s.radial.count, "axis": point(s.radial.axis_vector()) },
+            "mirror": { "x": symmetry.mirror[0], "y": symmetry.mirror[1], "z": symmetry.mirror[2] },
+            "radial": {
+                "on": symmetry.radial.on,
+                "repeats": symmetry.radial.count,
+                "axis": point(symmetry.radial.axis_vector()),
+            },
+            "symmetry_space": symmetry.space.name().to_ascii_lowercase(),
             "pose": {
                 "mode": s.pose.mode.name(),
                 "joints": s.pose.joints,
@@ -383,6 +391,7 @@ impl Running {
                     "vertices": mesh.map_or(0, |m| m.vertex_count()),
                     "instances": doc.scene.users(o.mesh),
                     "mirror": o.mirror.map(|m| sculpt_symmetry::MirrorRepeater::axis_name_of(m.axis_mask)),
+                    "symmetry": doc.scene.symmetry(o.id).summary(),
                     "on_screen": if o.visible { self.on_screen(bounds) } else { Value::Null },
                 })
             })
@@ -461,29 +470,37 @@ impl Running {
         if let Some(rigidity) = num(args, "pose_rigidity") {
             s.pose.rigidity = rigidity.clamp(0.0, 1.0);
         }
+        // Symmetry is the active object's own; nothing is set if any of it is wrong.
+        let mut symmetry = self.doc.scene.active_symmetry();
         for (axis, name) in ["mirror_x", "mirror_y", "mirror_z"].into_iter().enumerate() {
             if let Some(on) = flag(args, name) {
-                s.symmetry[axis] = on;
+                symmetry.mirror[axis] = on;
             }
         }
+        let radial = &mut symmetry.radial;
         if let Some(repeats) = num(args, "radial") {
             // Fewer than two is no repeat at all: off, with the count kept
             // for when it is switched back on.
-            s.radial.on = repeats >= Radial::MIN_COUNT as f32;
-            if s.radial.on {
-                s.radial.count = (repeats as u32).clamp(Radial::MIN_COUNT, Radial::MAX_COUNT);
+            radial.on = repeats >= Radial::MIN_COUNT as f32;
+            if radial.on {
+                radial.count = (repeats as u32).clamp(Radial::MIN_COUNT, Radial::MAX_COUNT);
             }
         }
         if let Some(name) = text(args, "radial_axis") {
             let axis = [RadialAxis::X, RadialAxis::Y, RadialAxis::Z].into_iter().find(|a| key(a.name()) == key(name));
-            s.radial.axis = axis.ok_or("radial_axis is \"x\", \"y\" or \"z\". radial_custom_axis takes any other direction.")?;
+            radial.axis = axis.ok_or("radial_axis is \"x\", \"y\" or \"z\". radial_custom_axis takes any other direction.")?;
         }
         if let Some(direction) = vec3(args, "radial_custom_axis")? {
             if !(direction.is_finite() && direction.length_squared() > 1e-12) {
                 return Err("radial_custom_axis must point somewhere: it cannot be all zeros.".into());
             }
-            s.radial.set_custom_axis(direction);
+            radial.set_custom_axis(direction);
         }
+        if let Some(name) = text(args, "symmetry_space") {
+            let space = Space::ALL.into_iter().find(|space| key(space.name()) == key(name));
+            symmetry.space = space.ok_or("symmetry_space is \"local\" or \"world\".")?;
+        }
+        self.doc.edit_symmetry(|own| *own = symmetry);
         Ok(self.brush_state().to_string())
     }
 
@@ -537,7 +554,7 @@ impl Running {
         let doc = &mut self.doc;
         let brush = doc.sculptor.effective_brush(smooth);
         let dabs_before = doc.sculptor.dabs_applied;
-        if !doc.sculptor.begin(&mut doc.mesh, &local, sample(0), invert, smooth) {
+        if !doc.begin_stroke(&local, sample(0), invert, smooth) {
             return Err("The stroke did not land on the mesh.".into());
         }
         for i in 1..samples.len() {

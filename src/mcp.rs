@@ -217,8 +217,9 @@ fn tools() -> Value {
         tool(
             "get_state",
             "Everything about the app right now, as JSON: window size, the objects (id, name, size, triangle \
-             count, and the on_screen box [left, top, right, bottom] each covers, as fractions of the window), \
-             the brush and its settings, the camera, undo steps, the status line and the display options.",
+             count, each one's own symmetry, and the on_screen box [left, top, right, bottom] each covers, as \
+             fractions of the window), the brush and its settings (with the active object's symmetry, which is \
+             the one strokes are made under), the camera, undo steps, the status line and the display options.",
             json!({}),
             &[],
         ),
@@ -233,7 +234,10 @@ fn tools() -> Value {
         ),
         tool(
             "set_brush",
-            "Choose the brush and its settings. Only what is given changes. Returns the brush as it now is.",
+            "Choose the brush and its settings. Only what is given changes. Returns the brush as it now is. \
+             The symmetry settings (mirror_x, mirror_y, mirror_z, radial, radial_axis, radial_custom_axis, \
+             symmetry_space) are not the brush's: each object has its own, and these set the active object's. \
+             Select another object and its own symmetry is what strokes are made under.",
             json!({
                 "brush": choice(
                     &["Move", "Clay", "Smooth", "Crease", "Inflate", "Flatten", "Pose", "Standard", "Layer", "Snake Hook"],
@@ -268,7 +272,8 @@ fn tools() -> Value {
                 "mirror_z": boolean("Mirror strokes across the Z plane."),
                 "radial": number("Radial symmetry: how many times each stroke is made round the axis, 2 to 32. 0 or 1 switches it off. It combines with the mirror planes."),
                 "radial_axis": choice(&["x", "y", "z"], "The axis radial symmetry goes round, through the active object's centre. The app starts with y."),
-                "radial_custom_axis": xyz("Any other axis for it, as a direction in the active object's own space."),
+                "radial_custom_axis": xyz("Any other axis for it, as a direction in the active object's own space (the world's, with symmetry_space world)."),
+                "symmetry_space": choice(&["local", "world"], "Where the active object's mirror planes and radial axis sit: local is through the object's own centre along its own axes, moving with it; world is through the world's centre along the world's axes, staying put while the object moves through them. The app starts with local."),
             }),
             &[],
         ),

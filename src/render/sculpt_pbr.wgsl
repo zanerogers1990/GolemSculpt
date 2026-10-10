@@ -1120,12 +1120,15 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
     color = mix(color, color * look.mask_tint.rgb, saturate(in.mask * look.mask_tint.a));
 
     // Mirror plane guides: a thin tinted line where each plane cuts the surface.
-    let w = fwidth(in.local);
+    // The planes are x = 0, y = 0 and z = 0 of the space the object's symmetry
+    // sits in: its own, or the world's (g.guide_space takes the surface there).
+    let at = (g.guide_space * vec4<f32>(in.local, 1.0)).xyz;
+    let w = fwidth(at);
     var axis_color = array<vec3<f32>, 3>(
         vec3<f32>(1.0, 0.05, 0.05), vec3<f32>(0.1, 1.0, 0.1), vec3<f32>(0.08, 0.26, 1.0));
     for (var i = 0; i < 3; i++) {
         if (g.symmetry[i] > 0.5 && in.is_active > 0.5) {
-            let d = abs(in.local[i]) / max(w[i], 1e-9);
+            let d = abs(at[i]) / max(w[i], 1e-9);
             let guide = 1.0 - smoothstep(0.4, 1.1, d);
             color = mix(color, axis_color[i], guide * 0.35);
         }
@@ -1133,13 +1136,13 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
     // Radial symmetry guide: the same thin line along the edge of each
     // sector, one spoke per repeat, meeting where the axis comes through
     // the surface.
-    let across_x = dpdx(in.local);
-    let across_y = dpdy(in.local);
+    let across_x = dpdx(at);
+    let across_y = dpdy(at);
     let spokes = g.radial_axis.w;
     if (spokes > 1.5 && in.is_active > 0.5) {
         let u = g.radial_spoke.xyz;
         let v = cross(g.radial_axis.xyz, u);
-        let along = vec2<f32>(dot(in.local, u), dot(in.local, v));
+        let along = vec2<f32>(dot(at, u), dot(at, v));
         // The nearest spoke, as an angle round the axis. On the axis itself
         // every spoke is as near as any other.
         let sector = TAU / spokes;
@@ -1148,7 +1151,7 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
         // How far this point is from that spoke's plane, in pixels.
         let normal = cos(turn) * v - sin(turn) * u;
         let per_pixel = abs(dot(across_x, normal)) + abs(dot(across_y, normal));
-        let d = abs(dot(in.local, normal)) / max(per_pixel, 1e-9);
+        let d = abs(dot(at, normal)) / max(per_pixel, 1e-9);
         let guide = 1.0 - smoothstep(0.4, 1.1, d);
         var spoke_color = array<vec3<f32>, 4>(
             axis_color[0], axis_color[1], axis_color[2], vec3<f32>(1.0, 0.6, 0.05));

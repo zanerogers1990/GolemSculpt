@@ -141,10 +141,14 @@ pub struct Globals {
     pub ambient_equator: [f32; 4],
     pub ambient_ground: [f32; 4],
     /// The radial symmetry guide (see `sculpt::Radial::guide`): xyz the axis
-    /// in the active object's own space, w how many spokes, 0 for no guide.
+    /// in the space the guides are in, w how many spokes, 0 for no guide.
     pub radial_axis: [f32; 4],
     /// xyz the way the guide's first spoke points, w its colour.
     pub radial_spoke: [f32; 4],
+    /// The active object's own space into the space its symmetry guides are
+    /// in (`scene::Guides::space`): nothing to do for a symmetry of its own,
+    /// its placement for one fixed in the world.
+    pub guide_space: [[f32; 4]; 4],
 }
 
 struct Targets {

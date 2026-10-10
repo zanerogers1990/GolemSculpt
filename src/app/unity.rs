@@ -93,7 +93,8 @@ impl Running {
             ));
         }
         let opts = &self.doc.opts;
-        let settings = &self.doc.sculptor.settings;
+        // Every object's own, in list order, and whether the guides show.
+        let symmetry: Vec<_> = scene.objects.iter().map(|o| scene.symmetry(o.id)).collect();
         let matcap =
             self.ui.assets.matcaps.get(opts.matcap).map_or(String::new(), |m| format!("{}/{}", m.category, m.name));
         Kept {
@@ -103,7 +104,7 @@ impl Running {
             look: serde_json::to_string(&opts.look).unwrap_or_default(),
             shading: io::Shading::of(opts, matcap),
             view: self.doc.camera.saved_view(),
-            symmetry: format!("{:?} {:?} guides {}", settings.symmetry, settings.radial, opts.symmetry_guides),
+            symmetry: format!("{symmetry:?} guides {}", opts.symmetry_guides),
         }
     }
 
@@ -152,7 +153,7 @@ impl Running {
 
         // Disturb what a file keeps, then open the .sclp: all of it is back.
         self.doc.camera.yaw += 77.0;
-        self.doc.sculptor.settings.symmetry = [true, true, true];
+        self.doc.edit_symmetry(|symmetry| symmetry.mirror = [true, true, true]);
         self.doc.opts.look.brightness = 0.123;
         self.load(saved_to.clone(), true);
         let after = self.kept();
@@ -167,7 +168,11 @@ impl Running {
             after.look == before.look && after.shading == before.shading,
         );
         say("the same view", after.view == before.view);
-        say("the same mirror axes and radial symmetry", after.symmetry == before.symmetry);
+        say("every object's own mirror axes, radial symmetry and symmetry space", after.symmetry == before.symmetry);
+        let scene = &self.doc.scene;
+        for o in &scene.objects {
+            println!("     symmetry of {:?}: {}", o.name, scene.symmetry(o.id).summary());
+        }
         if after != before {
             println!("     before: {:?}\n     after:  {:?}", before.objects, after.objects);
         }
@@ -202,9 +207,10 @@ impl Running {
         say("adding the Unity sculpt brings its objects in beside the others", objects.len() == 2 * count);
         if objects.len() == 2 * count {
             let (own, added) = objects.split_at(count);
+            let scene = &self.doc.scene;
             let placed = own.iter().zip(added).all(|(a, b)| {
-                (a.visible, a.position, a.rotation, a.scale, a.mirror)
-                    == (b.visible, b.position, b.rotation, b.scale, b.mirror)
+                (a.visible, a.position, a.rotation, a.scale, a.mirror, scene.symmetry(a.id))
+                    == (b.visible, b.position, b.rotation, b.scale, b.mirror, scene.symmetry(b.id))
             });
             // Rows that shared a mesh still share one, and it is a new one.
             let linked = (0..count)
@@ -214,7 +220,7 @@ impl Running {
             names.sort_unstable();
             names.dedup();
             say(
-                "where they were, linked and mirrored as they were, under names of their own",
+                "where they were, linked, mirrored and each with its own symmetry as they were, under names of their own",
                 placed && linked && names.len() == 2 * count,
             );
         }

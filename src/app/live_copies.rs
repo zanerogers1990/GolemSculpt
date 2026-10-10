@@ -138,9 +138,7 @@ impl Running {
         let id = self.doc.scene.active_id();
         let copies = self.doc.scene.tool_places(id).len();
         say(&format!("the array keeps {copies} copies as places of the object"), copies == 4);
-        let settings = &mut self.doc.sculptor.settings;
-        settings.symmetry = [false; 3];
-        settings.demo_setup(false);
+        self.demo_symmetry(Some([false; 3]));
 
         let code = TOOL_COPY + 2;
         let Some((centre, r)) = self.place_on_screen(code) else { return say("the copy is in view", false) };

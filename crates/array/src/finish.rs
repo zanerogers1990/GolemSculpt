@@ -219,10 +219,13 @@ impl ArrayTool {
                 pieces
                     .into_iter()
                     .map(|piece| {
+                        // And each is sculpted the way the object is: it starts with
+                        // the object's own symmetry settings, as a clone does.
                         let object = NewObject::new(piece.name, piece.mesh)
                             .placed(piece.placement)
                             .unselected()
-                            .mirrored(mirror);
+                            .mirrored(mirror)
+                            .with_symmetry_of(start.object);
                         Command::Add(if visible { object } else { object.hidden() })
                     })
                     .collect()

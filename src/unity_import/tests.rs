@@ -100,8 +100,17 @@ fn shape(mesh: &Mesh) -> Shape {
 
 /// The settings a file's details hold, as the app takes them out: surface
 /// and background, the look (as text, having no equality of its own), the
-/// view, and the symmetry; then each row's live mirror.
-type Settings = (Shading, String, Option<SavedView>, Mirror, Vec<Option<sculpt_symmetry::MirrorRepeater>>);
+/// view, and whether the symmetry guides show (with the selected object's
+/// axes, for older versions of the app); then each row's live mirror and
+/// each row's own symmetry.
+type Settings = (
+    Shading,
+    String,
+    Option<SavedView>,
+    Mirror,
+    Vec<Option<sculpt_symmetry::MirrorRepeater>>,
+    Vec<Option<crate::scene::Symmetry>>,
+);
 
 fn settings(details: &Details, rows: usize) -> Settings {
     let look: Look = details.get_over(io::slot::LOOK, &Look::default()).expect("a look");
@@ -111,6 +120,7 @@ fn settings(details: &Details, rows: usize) -> Settings {
         details.get(io::slot::CAMERA),
         details.get_over(io::slot::MIRROR, &Mirror::default()).expect("symmetry"),
         (0..rows).map(|row| crate::scene::saved_mirror(details, row)).collect(),
+        (0..rows).map(|row| crate::scene::saved_symmetry(details, row)).collect(),
     )
 }
 
@@ -568,65 +578,77 @@ fn a_live_mirror_stays_live_through_the_mirrored_centre() {
     assert!(crate::scene::saved_mirror(details, 1).is_none());
 }
 
+/// The Unity app kept symmetry per object, and so does this app: each object
+/// of a file comes in with its own, and nothing of it is left behind.
 #[test]
-fn the_scene_takes_the_selected_objects_mirror_axes_and_radial_symmetry() {
+fn every_object_comes_in_with_its_own_symmetry() {
+    use crate::scene::{Space, Symmetry, saved_symmetry};
+
     let mut face = sphere("Face", 300);
     (face.mirror, face.show_planes) = ([true, false, false], false);
     let mut body = sphere("Body", 300).placed(Vec3::new(1.0, 0.0, 0.0), Quat::IDENTITY, Vec3::ONE);
     (body.mirror, body.symmetry_space) = ([false, false, true], 1);
-    // Six times round a slanted axis of the body's own.
+    // Six times round a slanted axis, in the world, where the body's symmetry is fixed.
     (body.radial, body.radial_count, body.radial_axis, body.radial_custom_axis) =
         (true, 6, 3, Vec3::new(3.0, 4.0, 0.0));
-    let mut sculpt = Sculpt::new(vec![face, body]);
+    // A second placement of the body: in Unity it had no settings of its own.
+    body.instances.push(Instance {
+        name: "Body Too".into(),
+        position: Vec3::new(3.0, 0.0, 0.0),
+        rotation: Quat::IDENTITY,
+        scale: Vec3::ONE,
+        visible: true,
+    });
+    let plain = sphere("Plain", 300);
+    let mut sculpt = Sculpt::new(vec![face, body, plain]);
     sculpt.primary = 1;
     let opened = open(&sculpt, "symmetry.sculpt");
-    // As the app reads a `.sclp`'s.
-    let mirror: Mirror = opened.scene.details.get_over(io::slot::MIRROR, &Mirror::default()).unwrap();
-    assert_eq!((mirror.x, mirror.y, mirror.z, mirror.guides), (false, false, true, true), "the selected object's");
-    // A custom axis is a direction in the object's own space, so it goes
-    // through the mirror with the mesh; how many times round does not change.
-    let slanted = Vec3::new(-0.6, 0.8, 0.0);
-    assert_eq!((mirror.radial.on, mirror.radial.count, mirror.radial.axis), (true, 6, RadialAxis::Custom));
-    assert!(
-        (mirror.radial.custom_axis - slanted).length() < 1e-6
-            && (mirror.radial.axis_vector() - slanted).length() < 1e-6
-    );
+    let names: Vec<&str> = opened.scene.objects.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["Face", "Body", "Body Too", "Plain"]);
 
-    // Every object's own is still there for the asking.
+    // As the app reads a `.sclp`'s: each row's own.
+    let details = &opened.scene.details;
+    let own = |row: usize| saved_symmetry(details, row).expect("every object comes with one");
+    assert_eq!(own(0), Symmetry { mirror: [true, false, false], ..Symmetry::default() }, "the face: X, its own space");
+    let body = own(1);
+    assert_eq!((body.mirror, body.space), ([false, false, true], Space::World), "the body: Z, in the world");
+    // A custom axis is a direction, so it goes through the mirror between
+    // the two apps as the meshes do; how many times round does not change.
+    let slanted = Vec3::new(-0.6, 0.8, 0.0);
+    assert_eq!((body.radial.on, body.radial.count, body.radial.axis), (true, 6, RadialAxis::Custom));
+    assert!((body.radial.custom_axis - slanted).length() < 1e-6 && (body.radial.axis_vector() - slanted).length() < 1e-6);
+    assert_eq!(own(2), body, "its linked copy is sculpted under the same");
+    assert_eq!(own(3), Symmetry::default(), "and an object with none set has none");
+
+    // Whether the guides show is the scene's here, and takes the selected
+    // object's. Its axes sit beside that for versions of this app from before
+    // symmetry belonged to objects.
+    let mirror: Mirror = details.get_over(io::slot::MIRROR, &Mirror::default()).unwrap();
+    assert_eq!((mirror.x, mirror.y, mirror.z, mirror.guides), (false, false, true, true), "the selected object's");
+    assert_eq!(mirror.radial, body.radial);
+
+    // The file's own form is still there for the asking, and nothing about
+    // symmetry is reported as left behind: not each object's own, not the world's.
     let [face, body] = [opened.extras.objects[0].symmetry, opened.extras.objects[1].symmetry];
     assert_eq!((face.mirror, face.show_planes, face.space), ([true, false, false], false, SymmetrySpace::Local));
     assert_eq!(face.radial, Radial::default());
     assert_eq!((body.mirror, body.space, body.radial), ([false, false, true], SymmetrySpace::World, mirror.radial));
+    assert_eq!((face.settings(), body.settings()), (own(0), own(1)));
     let left = &opened.left_behind;
-    assert_eq!(
-        left.settings[..2],
-        [
-            "the world-space symmetry of \"Body\" (symmetry here goes with the object)".to_owned(),
-            "each object's own symmetry (this app has one setting for the scene, taken from \"Body\")".to_owned(),
-        ]
-    );
-    assert!(left.objects.is_empty(), "symmetry is the scene's, so nothing of an object's is lost: {left:?}");
+    assert_eq!(left.settings, ["the Unity app's brush settings"]);
+    assert!(left.objects.is_empty(), "{left:?}");
 
     // The axes by number, and a count past the most there can be.
     for (number, axis) in [(0, RadialAxis::X), (1, RadialAxis::Y), (2, RadialAxis::Z), (7, RadialAxis::Y)] {
         (sculpt.objects[1].radial_axis, sculpt.objects[1].radial_count) = (number, 500);
-        let mirror: Mirror = open(&sculpt, "symmetry axes.sculpt").scene.details.get(io::slot::MIRROR).unwrap();
-        assert_eq!(
-            (mirror.radial.axis, mirror.radial.count, mirror.radial.on),
-            (axis, Radial::MAX_COUNT, true),
-            "axis {number}"
-        );
+        let radial = saved_symmetry(&open(&sculpt, "symmetry axes.sculpt").scene.details, 1).unwrap().radial;
+        assert_eq!((radial.axis, radial.count, radial.on), (axis, Radial::MAX_COUNT, true), "axis {number}");
     }
 
-    // Objects that are alike leave nothing to report, whatever a
-    // switched-off radial symmetry would have done; nor does world space
-    // on an object that sits square at the origin.
-    let mut twin = sphere("Twin", 300);
-    (twin.mirror, twin.radial_count, twin.radial_axis, twin.symmetry_space) = ([true, false, false], 12, 2, 1);
-    let mut other = sphere("Other", 300);
-    other.mirror = [true, false, false];
-    let alike = open(&Sculpt::new(vec![twin, other]), "symmetry alike.sculpt");
-    assert_eq!(alike.left_behind.settings, ["the Unity app's brush settings"]);
+    // A file from before radial symmetry (its count is 0) leaves an object as it starts.
+    (sculpt.objects[1].radial, sculpt.objects[1].radial_count) = (true, 0);
+    let before = saved_symmetry(&open(&sculpt, "symmetry before radial.sculpt").scene.details, 1).unwrap();
+    assert_eq!((before.radial, before.mirror), (Radial::default(), [false, false, true]));
 }
 
 #[test]
@@ -993,6 +1015,8 @@ fn opened_then_saved_as_sclp_then_reopened_is_the_same_scene() {
     ball.hidden =
         Some(ball.triangles.chunks_exact(3).map(|t| t.iter().all(|&i| ball.vertices[i as usize].z > 0.1)).collect());
     (ball.repeater_axes, ball.repeater_center) = (1, Vec3::new(0.25, 0.0, 0.0));
+    // Its own symmetry: X and Z, five times round Y, fixed in the world.
+    (ball.mirror, ball.symmetry_space, ball.radial, ball.radial_count) = ([true, false, true], 1, true, 5);
     ball.instances = vec![Instance {
         name: "Ball Instance".into(),
         position: Vec3::X * 5.0,
@@ -1037,7 +1061,7 @@ fn opened_then_saved_as_sclp_then_reopened_is_the_same_scene() {
     let (kept, wanted) = (settings(&again.details, rows), settings(&opened.details, rows));
     assert_eq!(kept, wanted);
     // And they are the file's, not the app's own starting ones.
-    let (shading, look, view, mirror, mirrors) = kept;
+    let (shading, look, view, mirror, mirrors, symmetries) = kept;
     assert!(
         shading.gradient_background
             && look.contains("\"finish\":\"Clay\"")
@@ -1045,8 +1069,14 @@ fn opened_then_saved_as_sclp_then_reopened_is_the_same_scene() {
             && look.contains("golden")
     );
     assert_eq!(view.map(|v| (v.yaw, v.pitch, v.distance, v.ortho)), Some((140.0, 25.0, 7.5, true)));
-    assert_eq!((mirror.x, mirror.radial.on), (false, false));
+    assert_eq!((mirror.x, mirror.radial.on), (false, false), "the selected object's, which is the link");
     assert!(mirrors[0].is_some() && mirrors[1].is_none() && mirrors[2].is_none());
+    // Every row with its own symmetry: the ball's and its instance's, then the link's and its copies'.
+    let ball = symmetries[0].expect("the ball has one");
+    assert_eq!((ball.mirror, ball.space), ([true, false, true], crate::scene::Space::World));
+    assert_eq!((ball.radial.on, ball.radial.count, ball.radial.axis), (true, 5, RadialAxis::Y));
+    assert_eq!(symmetries[1], Some(ball), "the instance is sculpted under the ball's");
+    assert!(symmetries[2..].iter().all(|own| *own == Some(crate::scene::Symmetry::default())), "{symmetries:?}");
 }
 
 // ---------------------------------------------------------------- failures

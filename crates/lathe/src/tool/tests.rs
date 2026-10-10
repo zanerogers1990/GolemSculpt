@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use glam::{Vec2, Vec3};
 use sculpt_geom::TriMesh;
 use sculpt_toolkit::testing::{Bench, cube};
-use sculpt_toolkit::{Button, Draw, Key, ObjectId, Scene, Shape, Tool, theme};
+use sculpt_toolkit::{Button, Draw, Key, ObjectId, Scene, Shape, Symmetry, Tool, theme};
 
 use super::{Drag, Lathe, wants_draft};
 use crate::{LathePreset, curve};
@@ -825,8 +825,8 @@ fn create(bench: &mut Bench, tool: &mut Lathe) -> ObjectId {
     created_object(bench)
 }
 
-/// What Unity's Create did: gave the new object radial symmetry round its own Y, the axis it was turned
-/// about, with the repeat count of the Symmetry card (`LatheController.CreateMesh`).
+/// What Unity's Create did: gave the new object radial symmetry of its own round its own Y, the axis it
+/// was turned about, with the repeat count every object starts with (`LatheController.CreateMesh`).
 #[test]
 fn radial_symmetry_on_create_turns_it_on_round_the_axis_the_object_was_turned_about() {
     let (mut bench, mut tool) = bench();
@@ -834,9 +834,13 @@ fn radial_symmetry_on_create_turns_it_on_round_the_axis_the_object_was_turned_ab
     tool.set_radial_on_create(true);
     tool.set_segments(64);
     assert_eq!((bench.env.radial_count, bench.env.radial_axis), (1, Vec3::Y));
+    let cube = bench.doc.active();
     let id = create(&mut bench, &mut tool);
+    // The new object is the selected one, so its symmetry is the one in force.
     assert!(bench.env.radial_count > 1, "radial symmetry is on");
     assert_eq!(bench.env.radial_axis, Vec3::Y);
+    assert_eq!(bench.doc.symmetry(id), bench.env.symmetry_settings(), "it is the new object's own");
+    assert_eq!(bench.doc.symmetry(cube), Symmetry::NONE, "and the object that was selected has none still");
     assert!(bench.status.as_ref().is_some_and(|s| s.1 && s.0.contains("Radial symmetry is on")));
 
     // Y is the axis the object was turned about: it stands upright, with its origin on the axis, and the
@@ -869,32 +873,42 @@ fn radial_symmetry_on_create_turns_it_on_round_the_axis_the_object_was_turned_ab
     assert!(bench.finished);
 }
 
+/// Symmetry belongs to objects: what the selected object has is its own, and a new object starts with none.
 #[test]
-fn without_the_option_create_leaves_the_symmetry_as_it_is() {
+fn without_the_option_the_new_object_has_no_symmetry_and_the_selected_one_keeps_its_own() {
     for (count, axis) in [(1, Vec3::Y), (6, Vec3::Z), (3, Vec3::Y)] {
         let (mut bench, mut tool) = bench();
         (bench.env.radial_count, bench.env.radial_axis) = (count, axis);
         bench.env.mirror = [true, false, false];
-        create(&mut bench, &mut tool);
-        assert_eq!((bench.env.radial_count, bench.env.radial_axis), (count, axis));
-        assert_eq!(bench.env.mirror, [true, false, false]);
+        let (cube, own) = (bench.doc.active(), bench.env.symmetry_settings());
+        let id = create(&mut bench, &mut tool);
+        assert_eq!(bench.doc.symmetry(cube), own, "the cube's own is as it was");
+        assert_eq!(bench.doc.symmetry(id), Symmetry::NONE, "the new object starts with none");
+        assert_eq!(bench.env.symmetry_settings(), Symmetry::NONE, "and it is the selected one now");
         assert!(bench.status.as_ref().is_some_and(|s| !s.0.contains("Radial symmetry")));
     }
 }
 
+/// The Unity app set the new object's own symmetry: radial on, round Y. Its repeat count and mirror axes
+/// are a new object's, not those of whatever was selected when Create was pressed.
 #[test]
-fn the_option_turns_the_axis_to_y_and_keeps_the_repeat_count_and_the_mirror() {
+fn the_option_sets_the_new_objects_own_symmetry_and_leaves_the_selected_objects_alone() {
     let (mut bench, mut tool) = bench();
     tool.set_radial_on_create(true);
     (bench.env.radial_count, bench.env.radial_axis) = (6, Vec3::Z);
     bench.env.mirror = [false, false, true];
-    create(&mut bench, &mut tool);
-    assert_eq!((bench.env.radial_count, bench.env.radial_axis), (6, Vec3::Y));
-    assert_eq!(bench.env.mirror, [false, false, true]);
+    let (cube, own) = (bench.doc.active(), bench.env.symmetry_settings());
+    let id = create(&mut bench, &mut tool);
+    assert_eq!(bench.doc.symmetry(cube), own, "six round Z with Mirror Z, as it was");
+    let made = bench.doc.symmetry(id);
+    assert_eq!((made.radial_count, made.radial_axis, made.mirror), (8, Vec3::Y, [false; 3]));
+    assert_eq!(bench.env.symmetry_settings(), made);
 }
 
+/// The symmetry is the object's, so it goes with the object when Create is undone and comes back with it:
+/// the object selected before never lost its own, and has it again.
 #[test]
-fn undoing_the_create_takes_the_symmetry_it_turned_on_with_it_and_redoing_brings_it_back() {
+fn undoing_the_create_takes_the_objects_symmetry_with_it_and_redoing_brings_it_back() {
     for (before_count, before_axis) in [(1, Vec3::Y), (1, Vec3::X), (6, Vec3::Z), (4, Vec3::Y)] {
         let (mut bench, mut tool) = bench();
         tool.set_radial_on_create(true);
@@ -914,24 +928,23 @@ fn undoing_the_create_takes_the_symmetry_it_turned_on_with_it_and_redoing_brings
     }
 }
 
+/// Changing a symmetry is not an undo step, so undoing the Create does not put an older one back: the
+/// object returns with the symmetry it was left with.
 #[test]
-fn symmetry_changed_since_the_create_is_left_alone_when_it_is_undone() {
+fn symmetry_changed_since_the_create_comes_back_with_the_object_when_it_is_redone() {
     let (mut bench, mut tool) = bench();
     tool.set_radial_on_create(true);
-    create(&mut bench, &mut tool);
+    let id = create(&mut bench, &mut tool);
     bench.env.active = false;
-    // The artist turned it to X (and switched it off, in the second round) before changing their mind.
-    bench.env.radial_axis = Vec3::X;
+    // The artist turned the new object's axis to X and gave it five repeats before changing their mind.
+    (bench.env.radial_count, bench.env.radial_axis) = (5, Vec3::X);
     assert!(bench.undo_scene());
     bench.frame(&mut tool);
-    assert_eq!((bench.env.radial_count > 1, bench.env.radial_axis), (true, Vec3::X), "their axis stays");
+    assert_eq!(bench.env.symmetry_settings(), Symmetry::NONE, "the cube is selected again, and has none");
     assert!(bench.redo_scene());
     bench.frame(&mut tool);
-
-    bench.env.radial_count = 1;
-    assert!(bench.undo_scene());
-    bench.frame(&mut tool);
-    assert_eq!(bench.env.radial_count, 1, "their off stays off");
+    assert_eq!((bench.env.radial_count, bench.env.radial_axis), (5, Vec3::X), "as the object was left");
+    assert_eq!(bench.doc.symmetry(id), bench.env.symmetry_settings());
 }
 
 #[test]

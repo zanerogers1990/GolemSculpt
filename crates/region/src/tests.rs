@@ -648,6 +648,28 @@ fn a_line_split_puts_the_piece_where_the_object_is() {
     assert!(positions(&bench, ball).iter().all(|p| bench.px(model.transform_point3(*p)).x <= middle.x + 0.05));
 }
 
+/// The part is a piece of the object, sculpted the way the object is: the
+/// Unity app's Split copied the object's symmetry settings to it. (Each
+/// object has its own; a new one otherwise starts with none.)
+#[test]
+fn a_split_part_starts_with_the_objects_own_symmetry() {
+    let (mut bench, mut tool, ball) = bench(Region::split());
+    // Mirror Z: a line cut seen from the front repeats onto itself.
+    bench.env.mirror = [false, false, true];
+    let own = bench.env.symmetry_settings();
+    let middle = bench.px(Vec3::ZERO);
+    bench.drag(&mut tool, Vec2::new(middle.x, 20.0), Vec2::new(middle.x, 580.0));
+    let part = bench.doc.objects()[1];
+    assert_eq!(bench.doc.info(part).unwrap().name, "Ball Part");
+    assert_eq!((bench.doc.symmetry(part), bench.doc.symmetry(ball)), (own, own));
+    // A cut is made under the selected object's symmetry and no other's:
+    // with another object selected, the ball's Mirror Z is not in force.
+    let other = bench.add("Other", sphere(2, 0.2));
+    assert_eq!((bench.doc.active(), bench.env.symmetry_settings()), (other, sculpt_toolkit::Symmetry::NONE));
+    bench.select(&[ball]);
+    assert_eq!(bench.env.symmetry_settings(), own);
+}
+
 #[test]
 fn a_split_that_misses_adds_nothing() {
     let (mut bench, mut tool, _) = bench(Region::split());

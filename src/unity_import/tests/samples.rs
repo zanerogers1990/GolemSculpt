@@ -412,9 +412,41 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
                     mirror.center.to_array()
                 );
             }
+            // Its own symmetry, as the file's entry has it: the Unity app kept
+            // one per object, and each comes in as its object's own.
+            let own = crate::scene::saved_symmetry(&scene.details, row)
+                .unwrap_or_else(|| panic!("{name} / {}: no symmetry of its own", object.name));
+            let flag = |key: &str| entry[key].as_bool().unwrap_or(false);
+            assert_eq!(
+                own.mirror,
+                [flag("mirrorX"), flag("mirrorY"), flag("mirrorZ")],
+                "{name} / {}: mirror axes",
+                object.name
+            );
+            let world = entry["symmetrySpace"].as_i64().unwrap_or(0) == 1;
+            assert_eq!(own.space == crate::scene::Space::World, world, "{name} / {}: symmetry space", object.name);
+            // A count of 0 is a file from before radial symmetry, which leaves it as an object starts.
+            let repeats = entry["radialCount"].as_i64().unwrap_or(0);
+            let radial_then = if repeats > 0 { (flag("radial"), repeats.clamp(2, 32) as u32) } else { (false, 8) };
+            assert_eq!((own.radial.on, own.radial.count), radial_then, "{name} / {}: radial symmetry", object.name);
+            println!("        symmetry: {}", own.summary());
+            // What this app was given per-object symmetry for: in these files
+            // the face is mirrored across X and the body across Z.
+            for (known, axes) in [("face", [true, false, false]), ("EsauCardona_BaseMesh", [false, false, true])] {
+                if object.name == known {
+                    assert_eq!((own.mirror, own.space), (axes, crate::scene::Space::Local), "{name} / {known}");
+                }
+            }
             for linked in 1..=instances + copies {
                 let copy = &scene.objects[row + linked];
                 assert_eq!(copy.mesh, index, "{name}: \"{}\" shares the mesh of \"{}\"", copy.name, object.name);
+                assert_eq!(
+                    crate::scene::saved_symmetry(&scene.details, row + linked),
+                    Some(own),
+                    "{name}: \"{}\" is sculpted under the symmetry of \"{}\"",
+                    copy.name,
+                    object.name
+                );
                 if linked > instances {
                     assert_eq!(
                         crate::scene::saved_mirror(&scene.details, row + linked).map_or(0, |m| m.axis_mask as i64),
@@ -504,11 +536,21 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
             shading.background,
             if shading.gradient_background { " (gradient)" } else { "" },
         );
-        println!("   mirror axes {:?}, guides {}", [mirror.x, mirror.y, mirror.z], mirror.guides);
+        println!("   symmetry guides {}", if mirror.guides { "showing" } else { "hidden" });
         let kept: SavedDynamicTopology = scene.details.get(slot::DYNAMIC_TOPOLOGY).unwrap();
         println!("   dynamic topology {} at detail {}", if kept.enabled { "on" } else { "off" }, kept.detail);
+        // Nothing about symmetry is left behind, whatever the objects' own are.
+        assert!(
+            opened.left_behind.settings.iter().chain(&opened.left_behind.objects).all(|line| !line.contains("symmetry")),
+            "{name}: {:?}",
+            opened.left_behind
+        );
         for (index, extra) in opened.extras.objects.iter().enumerate() {
-            println!("   kept for later, object {index} (row {}): {:?}", extra.row, extra.symmetry);
+            assert_eq!(
+                crate::scene::saved_symmetry(&scene.details, extra.row),
+                Some(extra.symmetry.settings()),
+                "{name}: object {index}"
+            );
             if let Some(array) = &extra.array {
                 println!(
                     "        array {:?}, {} points, copies in rows {:?}",

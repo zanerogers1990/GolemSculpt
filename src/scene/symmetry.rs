@@ -47,7 +47,6 @@
 //! side of the world's planes sculpt symmetrically.
 
 use glam::Vec3;
-use sculpt_geom::SymmetryGroup;
 use sculpt_symmetry::Placement;
 use serde::{Deserialize, Serialize};
 
@@ -103,14 +102,6 @@ impl Symmetry {
     /// object's own.
     pub fn world(&self, object: &Object) -> Option<Placement> {
         (self.space == Space::World).then(|| object.placement())
-    }
-
-    /// Every copy a stroke on `object` is made as, the stroke itself first,
-    /// in the space of the object's mesh.
-    pub fn group_for(&self, object: &Object) -> SymmetryGroup {
-        let mut settings = Settings::default();
-        settings.set_symmetry(self.mirror, self.radial, self.world(object));
-        settings.symmetry_group()
     }
 
     /// The mirror planes a rebuilt mesh can be made exactly symmetric across
@@ -208,11 +199,11 @@ impl Scene {
         }
     }
 
-    /// Changes the selected object's symmetry.
-    pub fn edit_symmetry(&mut self, edit: impl FnOnce(&mut Symmetry)) {
-        let mut symmetry = self.active_symmetry();
+    /// Changes the symmetry of object `id` (see [`Scene::set_symmetry`]).
+    pub fn edit_symmetry(&mut self, id: u64, edit: impl FnOnce(&mut Symmetry)) {
+        let mut symmetry = self.symmetry(id);
         edit(&mut symmetry);
-        self.set_symmetry(self.active_id(), symmetry);
+        self.set_symmetry(id, symmetry);
     }
 
     /// `to` starts with the symmetry `from` has: it is a copy of it, an

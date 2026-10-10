@@ -20,14 +20,16 @@ fn plural(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
 }
 
-/// What the brushes' symmetry is, as the Symmetry card says it ("X + Z + Radial 8"); `None` while it is off.
+/// What the selected object's symmetry is, as the Symmetry card says it ("X + Z + Radial 8", with "(World)"
+/// after it when it is fixed in the world); `None` while it is off.
 fn symmetry_summary(env: &Env) -> Option<String> {
     let mut parts: Vec<String> =
         ["X", "Y", "Z"].into_iter().zip(env.mirror).filter(|&(_, on)| on).map(|(name, _)| name.to_owned()).collect();
     if env.radial_count > 1 {
         parts.push(format!("Radial {}", env.radial_count));
     }
-    (!parts.is_empty()).then(|| parts.join(" + "))
+    let space = if env.symmetry_world.is_some() { " (World)" } else { "" };
+    (!parts.is_empty()).then(|| parts.join(" + ") + space)
 }
 
 #[cfg(test)]
@@ -151,7 +153,10 @@ impl TubeTool {
         };
         theme::line(ui, &line, theme::HINT);
         if let Some(symmetry) = symmetry_summary(cx) {
-            let text = format!("Symmetry: {symmetry}. Each tube is made under it (the Symmetry card of the Sculpt panel).");
+            let text = format!(
+                "Symmetry of the selected object: {symmetry}. A tube is made under the symmetry of the object it is \
+                 drawn on (the Symmetry card of the Sculpt panel shows the selected object's)."
+            );
             theme::hint(ui, &text);
         }
     }

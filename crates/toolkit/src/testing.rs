@@ -21,7 +21,9 @@ use crate::draw::{Draw, smooth_normals};
 use crate::jobs::Jobs;
 use sculpt_symmetry::MirrorRepeater;
 
-use crate::scene::{Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Scene};
+use crate::scene::{
+    Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Scene, Symmetry,
+};
 use crate::tool::{Button, Event, GizmoPhase, Key, Tool};
 use crate::view::{Ray, View};
 
@@ -107,6 +109,9 @@ pub struct TestDoc {
     declared: Vec<(&'static str, ObjectId, Vec<Mat4>)>,
     /// The same, by object: what `ObjectInfo::live_copies` lends.
     live: HashMap<ObjectId, Vec<Mat4>>,
+    /// Each object's own symmetry. Beside the list and not in it, as in the
+    /// app: no undo step holds it, so none puts an older one back.
+    symmetry: HashMap<ObjectId, Symmetry>,
     next: u64,
     undo: Vec<Step>,
     redo: Vec<Step>,
@@ -126,6 +131,7 @@ impl TestDoc {
             also: Vec::new(),
             declared: Vec::new(),
             live: HashMap::new(),
+            symmetry: HashMap::new(),
             next: 1,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -347,6 +353,15 @@ impl Scene for TestDoc {
             b
         })
     }
+
+    fn symmetry(&self, id: ObjectId) -> Symmetry {
+        let mut symmetry = self.symmetry.get(&id).copied().unwrap_or_default();
+        // One fixed in the world goes by where the object stands now.
+        if symmetry.world.is_some() {
+            symmetry.world = self.get(id).map(|o| o.placement);
+        }
+        symmetry
+    }
 }
 
 impl Document for TestDoc {
@@ -368,6 +383,9 @@ impl Document for TestDoc {
             placement: object.placement,
             mirror: object.mirror,
         });
+        if let Some(settings) = object.symmetry_of.and_then(|from| self.symmetry.get(&from).copied()) {
+            self.symmetry.insert(id, settings);
+        }
         if object.select || self.objects.len() == 1 {
             self.active = id;
             self.also.clear();
@@ -535,10 +553,17 @@ impl Bench {
         }
     }
 
-    /// Adds an object to the scene (not an undo step) and selects it.
+    /// Adds an object to the scene (not an undo step) and selects it. Like
+    /// any new object it has no symmetry, and it is its symmetry `env` then
+    /// shows; the first object of a scene takes whatever `env` was given
+    /// before there was anything to select.
     pub fn add(&mut self, name: &str, mesh: TriMesh) -> ObjectId {
+        let selected = (!self.doc.objects.is_empty()).then(|| self.keep_symmetry());
         let id = self.doc.add(NewObject::new(name, mesh)).expect("plain meshes can always be added");
         self.doc.log.clear();
+        if let Some(selected) = selected {
+            self.show_symmetry(selected);
+        }
         id
     }
 
@@ -569,17 +594,24 @@ impl Bench {
         let mesh = self.doc.get(of).expect("an object to make an instance of").mesh;
         let id = ObjectId(self.doc.fresh());
         self.doc.objects.push(Object { id, name: name.to_owned(), visible: true, mesh, placement, mirror: None });
+        // An instance is sculpted under the symmetry of the mesh it shows.
+        if let Some(shared) = self.doc.symmetry.get(&of).copied() {
+            self.doc.symmetry.insert(id, shared);
+        }
         id
     }
 
     /// Selects several objects, as Ctrl + clicking their rows does: the
     /// first becomes the active one and the rest are selected along with it,
-    /// which is what `Scene::selected` then lists. Not an undo step.
+    /// which is what `Scene::selected` then lists. Not an undo step. The
+    /// symmetry `env` shows becomes the newly selected object's own.
     pub fn select(&mut self, objects: &[ObjectId]) {
         let Some((&first, rest)) = objects.split_first() else { return };
         if self.doc.get(first).is_some() {
+            let selected = self.keep_symmetry();
             self.doc.active = first;
             self.doc.also = rest.to_vec();
+            self.show_symmetry(selected);
         }
     }
 
@@ -588,17 +620,48 @@ impl Bench {
         self.env.view.project(world).expect("the point is in front of the camera")
     }
 
-    /// Takes in a request for radial symmetry as the app does. The repeat
-    /// count the Symmetry card keeps while radial symmetry is off is 8 here.
-    fn take_radial(&mut self, change: RadialChange) {
-        let was_on = self.env.radial_count > 1;
+    /// Takes a request for radial symmetry into an object's symmetry as the
+    /// app does. The repeat count the Symmetry card keeps while radial
+    /// symmetry is off is 8 here.
+    fn take_radial(symmetry: &mut Symmetry, change: RadialChange) {
+        let was_on = symmetry.radial_count > 1;
         let on = change.on.unwrap_or(was_on);
-        let kept = if was_on { self.env.radial_count } else { 8 };
+        let kept = if was_on { symmetry.radial_count } else { 8 };
         let (fewest, most) = (SymmetryGroup::MIN_RADIAL_COUNT, SymmetryGroup::MAX_RADIAL_COUNT);
         let count = change.count.map_or(kept, |c| c.clamp(fewest, most));
-        self.env.radial_count = if on { count } else { 1 };
+        symmetry.radial_count = if on { count } else { 1 };
         if let Some(axis) = change.axis.filter(|axis| axis.length_squared() > 1e-12) {
-            self.env.radial_axis = axis.normalize();
+            symmetry.radial_axis = axis.normalize();
+        }
+    }
+
+    /// Gives an object symmetry settings of its own, as the Symmetry card
+    /// does while that object is selected. Not an undo step.
+    ///
+    /// The symmetry fields of `env` (`mirror`, `radial_count`, `radial_axis`,
+    /// `symmetry_world`) are the selected object's: setting them directly, as
+    /// most tests do, sets its symmetry, and they follow whenever another
+    /// object becomes the selected one (`add`, `select`, a tool's commit, an
+    /// undo). This is for the others.
+    pub fn set_symmetry(&mut self, object: ObjectId, symmetry: Symmetry) {
+        self.doc.symmetry.insert(object, symmetry);
+        if object == self.doc.active {
+            self.env.set_symmetry(symmetry);
+        }
+    }
+
+    /// The selected object's symmetry is what `env` says it is.
+    fn keep_symmetry(&mut self) -> ObjectId {
+        let selected = self.doc.active;
+        self.doc.symmetry.insert(selected, self.env.symmetry_settings());
+        selected
+    }
+
+    /// If another object is selected than `before`, `env` shows that one's
+    /// symmetry from here on, as the Symmetry card would.
+    fn show_symmetry(&mut self, before: ObjectId) {
+        if self.doc.active != before {
+            self.env.set_symmetry(self.doc.symmetry(self.doc.active));
         }
     }
 
@@ -606,6 +669,7 @@ impl Bench {
     pub fn call<R>(&mut self, f: impl FnOnce(&mut Ctx) -> R) -> R {
         let mut out = Outbox::default();
         let no_icons = |_: &str| None;
+        let selected = self.keep_symmetry();
         let result = f(&mut Ctx::new(self.env, &mut self.doc, &self.jobs, &no_icons, &mut out));
         if let Some(status) = out.status {
             self.status = Some(status);
@@ -616,11 +680,21 @@ impl Bench {
         if let Some(unit) = out.unit {
             self.env.unit = unit;
         }
+        // A change of symmetry goes to the object that was selected when the
+        // tool asked for it, which may be one it had just made.
+        let target = out.symmetry_of.unwrap_or(self.doc.active);
+        let mut symmetry = self.doc.symmetry(target);
         if let Some(mirror) = out.mirror {
-            self.env.mirror = mirror;
+            symmetry.mirror = mirror;
         }
         if let Some(change) = out.radial {
-            self.take_radial(change);
+            Self::take_radial(&mut symmetry, change);
+        }
+        self.doc.symmetry.insert(target, symmetry);
+        if target == self.doc.active {
+            self.env.set_symmetry(symmetry);
+        } else {
+            self.show_symmetry(selected);
         }
         if out.frame.is_some() {
             self.framed = out.frame;
@@ -748,13 +822,22 @@ impl Bench {
         self.send(tool, Event::Redo) || self.doc.step(false)
     }
 
-    /// Z with no tool up: steps the scene's history.
+    /// Z with no tool up: steps the scene's history. No step changes an
+    /// object's symmetry; one that changes which object is selected changes
+    /// whose symmetry `env` shows.
     pub fn undo_scene(&mut self) -> bool {
-        self.doc.step(true)
+        self.step_scene(true)
     }
 
     pub fn redo_scene(&mut self) -> bool {
-        self.doc.step(false)
+        self.step_scene(false)
+    }
+
+    fn step_scene(&mut self, undo: bool) -> bool {
+        let selected = self.keep_symmetry();
+        let stepped = self.doc.step(undo);
+        self.show_symmetry(selected);
+        stepped
     }
 }
 
@@ -1268,5 +1351,60 @@ mod tests {
         // A direction with no length is not an axis.
         bench.call(|cx| cx.set_radial(RadialChange { axis: Some(Vec3::ZERO), ..Default::default() }));
         assert_eq!(bench.env.radial_axis, Vec3::Z);
+    }
+
+    /// Symmetry belongs to objects. A tool reads any object's, an object it
+    /// makes can start with another's, and a change it asks for goes to the
+    /// object that is selected when it asks: the one it has just made, if it
+    /// has, and never the one that was selected before.
+    #[test]
+    fn every_object_has_its_own_symmetry() {
+        let mut bench = Bench::new();
+        let a = bench.add("A", cube(0.5));
+        bench.env.mirror = [true, false, false];
+        (bench.env.radial_count, bench.env.radial_axis) = (6, Vec3::Z);
+        let own = bench.env.symmetry_settings();
+        let b = bench.add("B", cube(0.5));
+        assert_eq!(bench.env.symmetry_settings(), Symmetry::NONE, "a new object has none, and is the selected one");
+
+        let vase = bench.call(|cx| {
+            assert_eq!((cx.scene().symmetry(a), cx.symmetry_of(a)), (own, own), "A's own, with B selected");
+            assert_eq!((cx.symmetry_of(b), cx.symmetry().len()), (Symmetry::NONE, 1));
+            // A piece of A, and something new that asks for radial symmetry of its own.
+            let part = NewObject::new("Part", cube(0.1)).unselected().with_symmetry_of(a);
+            let receipt = cx.commit("Make", vec![Command::Add(part), Command::Add(NewObject::new("Vase", cube(0.1)))]);
+            let (part, vase) = (receipt.added[0], receipt.added[1]);
+            assert_eq!(cx.scene().symmetry(part), own, "a piece starts with what it was cut from has");
+            cx.set_radial(RadialChange { on: Some(true), count: Some(5), axis: Some(Vec3::Y) });
+            assert_eq!((cx.radial_count, cx.radial_axis, cx.mirror), (5, Vec3::Y, [false; 3]), "the new object's, at once");
+            assert_eq!(cx.symmetry_of(vase), cx.symmetry_settings());
+            assert_eq!(cx.symmetry_of(b), Symmetry::NONE, "the one that was selected is left alone");
+            vase
+        });
+        let made = Symmetry { radial_count: 5, ..Symmetry::NONE };
+        assert_eq!((bench.doc.symmetry(vase), bench.doc.symmetry(b), bench.doc.symmetry(a)), (made, Symmetry::NONE, own));
+        assert_eq!(bench.env.symmetry_settings(), made, "the Symmetry card shows the selected object's");
+
+        // No undo step holds a symmetry: undoing the commit selects B again,
+        // with B's own, and redoing it brings the vase back with its own.
+        assert!(bench.undo_scene());
+        assert_eq!((bench.doc.active(), bench.env.symmetry_settings()), (b, Symmetry::NONE));
+        assert!(bench.redo_scene());
+        assert_eq!(bench.env.symmetry_settings(), made);
+        bench.select(&[a]);
+        assert_eq!(bench.env.symmetry_settings(), own, "and selecting A shows A's");
+
+        // One fixed in the world goes by where the object stands, and its
+        // copies are still in the object's own space: across the world's X
+        // plane, an object standing one unit to the right is mirrored about
+        // its own x = -1.
+        bench.env.radial_count = 1;
+        bench.env.symmetry_world = Some(Placement::IDENTITY);
+        bench.call(|cx| cx.commit("Move", vec![Command::Place { object: a, placement: Placement::at(Vec3::X) }]));
+        let fixed = bench.doc.symmetry(a);
+        assert_eq!(fixed.world, Some(Placement::at(Vec3::X)));
+        let across = fixed.group()[1];
+        assert_eq!(across.apply_point(Vec3::new(0.25, 0.5, 0.0)), Vec3::new(-2.25, 0.5, 0.0));
+        assert_eq!(across.apply(Vec3::X), Vec3::NEG_X, "a direction is only turned over");
     }
 }
