@@ -1,0 +1,13 @@
+[package]
+name = "sculpt-region"
+version = "0.1.0"
+edition = "2024"
+description = "The region tools: box and lasso select, hide, mask, trim and split, and mask extract."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+egui = { workspace = true }
+sculpt-geom = { path = "../geom" }
+sculpt-toolkit = { path = "../toolkit" }
+sculpt-cut = { path = "../cut" }

@@ -1,0 +1,12 @@
+[package]
+name = "sculpt-array"
+version = "0.1.0"
+edition = "2024"
+description = "Array layouts: copies along lines, circles and curves."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+sculpt-geom = { path = "../geom" }
+egui = { workspace = true }
+sculpt-toolkit = { path = "../toolkit" }

@@ -1,0 +1,12 @@
+[package]
+name = "sculpt-lathe"
+version = "0.1.0"
+edition = "2024"
+description = "Lathe profiles and the meshes turned from them."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+sculpt-geom = { path = "../geom" }
+egui = { workspace = true }
+sculpt-toolkit = { path = "../toolkit" }

@@ -1,0 +1,10 @@
+[package]
+name = "sculpt-volume"
+version = "0.1.0"
+edition = "2024"
+description = "Signed distance fields, surface extraction, voxel remesh and booleans."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+sculpt-geom = { path = "../geom" }

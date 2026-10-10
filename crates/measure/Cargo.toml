@@ -1,0 +1,11 @@
+[package]
+name = "sculpt-measure"
+version = "0.1.0"
+edition = "2024"
+description = "The Measure tool: distances on the model in real-world units."
+
+[dependencies]
+glam = { workspace = true }
+egui = { workspace = true }
+sculpt-geom = { path = "../geom" }
+sculpt-toolkit = { path = "../toolkit" }

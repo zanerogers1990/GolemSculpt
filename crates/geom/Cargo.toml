@@ -1,0 +1,10 @@
+[package]
+name = "sculpt-geom"
+version = "0.1.0"
+edition = "2024"
+description = "Plain-data geometry every tool crate shares: triangle meshes, bounds, symmetry, units."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+

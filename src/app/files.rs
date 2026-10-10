@@ -1,0 +1,803 @@
+//! Files, on the app's side: saving and opening `.sclp` scenes, the questions
+//! asked before work could be lost, the settings remembered between runs and
+//! the recent files. The formats themselves are in `io.rs`, `prefs.rs` and
+//! `recent.rs`; this is where they meet the running app.
+//!
+//! "Unsaved" means the undo history has moved since the scene was last saved
+//! or opened: something was sculpted, added, moved, undone. Changing only the
+//! look or the view does not count, so trying a matcap and closing the app
+//! asks nothing. (The Unity app has no such flag and asks every time.)
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use glam::{Vec2, Vec3};
+use winit::event_loop::ActiveEventLoop;
+use winit::window::Fullscreen;
+
+use super::{Running, import_mesh, install, is_native, stem};
+use crate::camera::{Camera, SavedView};
+use crate::doc::{Action, OpenHow};
+use crate::io;
+use crate::look::Look;
+use crate::mesh::Mesh;
+use crate::prefs::{self, BrushPrefs, Home, Prefs};
+use crate::recent;
+use crate::render::DrawItem;
+use crate::scene::Scene;
+use crate::ui::question::Question;
+
+/// How often the settings are compared with what is on disk.
+const SETTINGS_CHECK: Duration = Duration::from_secs(1);
+
+pub(super) struct State {
+    home: Home,
+    /// The settings as last written or read, to tell when they have changed.
+    kept: Prefs,
+    next_check: Instant,
+    /// The undo history as it stood when the scene was last saved or opened:
+    /// steps ever recorded, steps to undo, steps to redo.
+    clean: (u64, usize, usize),
+    /// The user has said the app may close.
+    quit: bool,
+}
+
+impl State {
+    pub(super) fn new(screenshot: bool) -> State {
+        let home = Home::for_run(screenshot);
+        let kept = home.load();
+        State { home, kept, next_check: Instant::now() + SETTINGS_CHECK, clean: (0, 0, 0), quit: false }
+    }
+}
+
+/// A file's name without its folders, for a status line.
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+fn how_many(count: usize) -> String {
+    if count == 1 { "1 object".to_owned() } else { format!("{count} objects") }
+}
+
+/// Adds a loaded file's objects to the scene, where they were saved, under
+/// names nothing in the scene has yet, and selects the first of them.
+/// Objects that shared a mesh in the file still share it.
+fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) {
+    let mut meshes: Vec<Option<Mesh>> = saved.meshes.into_iter().map(Some).collect();
+    // For each mesh of the file, the first object added that shows it.
+    let mut shown_by: Vec<Option<u64>> = vec![None; meshes.len()];
+    let mut first = None;
+    for o in saved.objects {
+        let Some(owner) = shown_by.get(o.mesh).copied() else { continue };
+        let id = match (owner, meshes[o.mesh].take()) {
+            (Some(owner), _) => {
+                // An instance: a second object on a mesh that is already in.
+                scene.select(owner, slot);
+                let id = scene.instance_active();
+                scene.move_to(id, scene.objects.len() - 1);
+                if scene.active().name != o.name {
+                    let name = scene.unique_name(&o.name);
+                    scene.active_mut().name = name;
+                }
+                id
+            }
+            (None, Some(mesh)) => {
+                let id = scene.add(&o.name, mesh, slot);
+                shown_by[o.mesh] = Some(id);
+                id
+            }
+            (None, None) => continue,
+        };
+        let object = scene.active_mut();
+        (object.visible, object.position, object.rotation, object.scale) = (o.visible, o.position, o.rotation, o.scale);
+        first.get_or_insert(id);
+    }
+    if let Some(first) = first {
+        scene.select(first, slot);
+    }
+}
+
+impl Running {
+    // ---- start-up, settings
+
+    /// Start-up: puts back what the settings file remembered, then the look
+    /// and view of the file named on the command line, if one was opened.
+    pub(super) fn files_start(&mut self, opened: Option<io::Details>) {
+        let kept = self.files.kept.clone();
+        self.apply_prefs(&kept);
+        if let Some(details) = opened {
+            self.apply_details(&details);
+            if let Some(path) = self.doc.path.clone() {
+                self.note_recent(&path, false);
+            }
+        }
+        self.mark_saved();
+    }
+
+    fn apply_prefs(&mut self, kept: &Prefs) {
+        let opts = &mut self.doc.opts;
+        opts.ui_scale = kept.interface_size();
+        opts.tooltips = kept.tooltips;
+        opts.remesh_resolution = kept.remesh_resolution();
+        opts.quad_target = kept.quad_target();
+        opts.new_shape_tris = kept.starting_detail();
+        self.doc.tools.unit = kept.length_unit();
+        kept.brush.apply(&mut self.doc.sculptor.settings);
+        prefs::cards::restore(&self.egui_ctx, &kept.cards);
+        self.ui.recent.restore(kept.recent.clone(), self.files.home.pictures());
+        // Not for a run that was given a window size: it asked for a window.
+        if kept.fullscreen && self.args.screenshot.is_none() && self.args.size.is_none() {
+            self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+    }
+
+    /// The settings as they are right now.
+    fn prefs_now(&self) -> Prefs {
+        let opts = &self.doc.opts;
+        Prefs {
+            interface_size: opts.ui_scale,
+            tooltips: opts.tooltips,
+            fullscreen: self.window.fullscreen().is_some(),
+            unit: self.doc.tools.unit.suffix().to_owned(),
+            cards: prefs::cards::snapshot(&self.egui_ctx),
+            brush: BrushPrefs::of(&self.doc.sculptor.settings),
+            remesh_resolution: opts.remesh_resolution,
+            quad_target: opts.quad_target,
+            starting_detail: opts.new_shape_tris,
+            recent: self.ui.recent.paths().to_vec(),
+        }
+    }
+
+    /// Writes the settings if they have changed since they were last written.
+    /// Called now and then while the app runs, and as it closes.
+    pub(super) fn save_prefs(&mut self) {
+        let now = self.prefs_now();
+        if now == self.files.kept {
+            return;
+        }
+        if let Err(e) = self.files.home.save(&now) {
+            log::warn!("{e}");
+        }
+        // Even if that failed: trying again every second would not help.
+        self.files.kept = now;
+    }
+
+    /// Once a frame: every second or so, between strokes, the settings are
+    /// compared with what was last written.
+    pub(super) fn files_frame(&mut self) {
+        let now = Instant::now();
+        if self.doc.sculptor.is_active() {
+            return;
+        }
+        if now < self.files.next_check {
+            // Frames are only drawn when something happens, and this may be
+            // the last one for a while: ask for one more when the look is
+            // due, so the last change before the app goes quiet is written.
+            let due = self.files.next_check;
+            self.repaint_at = Some(self.repaint_at.map_or(due, |at| at.min(due)));
+            return;
+        }
+        self.files.next_check = now + SETTINGS_CHECK;
+        self.save_prefs();
+    }
+
+    // ---- unsaved work, closing
+
+    fn history_mark(&self) -> (u64, usize, usize) {
+        let (undo, redo) = self.doc.history.steps();
+        (self.doc.history.edits, undo, redo)
+    }
+
+    /// The scene is now what its file holds (or what the app started with).
+    fn mark_saved(&mut self) {
+        self.files.clean = self.history_mark();
+    }
+
+    /// Whether anything has been done to the scene since it was last saved
+    /// or opened. Undoing back to that point makes it clean again.
+    pub(super) fn unsaved(&self) -> bool {
+        self.history_mark() != self.files.clean
+    }
+
+    /// Whether this is still the scene the app started with, untouched and
+    /// never saved: there is nothing in it to keep or to add to.
+    fn untouched(&self) -> bool {
+        self.doc.path.is_none() && !self.unsaved() && !self.doc.history.can_undo() && !self.doc.history.can_redo()
+    }
+
+    /// The window's close button, Alt+F4 or Ctrl+Q. Closes at once unless
+    /// there is unsaved work; then it asks.
+    pub(super) fn close_requested(&mut self, event_loop: &ActiveEventLoop) {
+        if self.args.screenshot.is_some() || !self.unsaved() {
+            event_loop.exit();
+            return;
+        }
+        self.ui.graph.ask(Question::Exit);
+        self.redraw = true;
+    }
+
+    /// The answer to that question. Saving first falls back to Save As for a
+    /// scene with no file yet; if that is cancelled, or the save fails, the
+    /// app stays open rather than close over work that was never written.
+    pub(super) fn quit(&mut self, save: bool) {
+        if save && !self.save_action(false) {
+            return;
+        }
+        self.files.quit = true;
+    }
+
+    /// Whether the app has been told it may close.
+    pub(super) fn quitting(&self) -> bool {
+        self.files.quit
+    }
+
+    // ---- saving
+
+    /// Save, or Save As: asks where if the scene has no file yet. Returns
+    /// whether the scene was written.
+    pub(super) fn save_action(&mut self, save_as: bool) -> bool {
+        let known = self.doc.path.clone().filter(|_| !save_as);
+        let path = known.or_else(|| {
+            let mut dialog = rfd::FileDialog::new().set_title("Save Sculpt").add_filter("Sculpt", &["sclp"]);
+            // Save As starts from the file the scene already has.
+            dialog = match &self.doc.path {
+                Some(current) => {
+                    let dialog = dialog.set_file_name(file_name(current));
+                    match current.parent() {
+                        Some(folder) => dialog.set_directory(folder),
+                        None => dialog,
+                    }
+                }
+                None => dialog.set_file_name("sculpt.sclp"),
+            };
+            dialog.save_file()
+        });
+        let Some(path) = path else { return false };
+        match self.save_scene(&path) {
+            Ok(()) => {
+                let size = std::fs::metadata(&path).map_or(String::new(), |m| format!(" ({:.1} MB)", m.len() as f64 / 1e6));
+                self.status(format!("Saved {}{size}", path.display()), true);
+                self.toast("Saved");
+                self.doc.path = Some(path);
+                true
+            }
+            Err(e) => {
+                self.status(e, false);
+                false
+            }
+        }
+    }
+
+    /// Writes every object to a native file, with the look, the view and the
+    /// mirror settings; instances keep sharing a mesh. The file already there
+    /// is only replaced once the new one is whole.
+    pub(super) fn save_scene(&mut self, path: &Path) -> io::Result<()> {
+        {
+            let scene = &self.doc.scene;
+            let mut ids: Vec<u64> = Vec::new();
+            let mut objects = Vec::new();
+            for o in &scene.objects {
+                let mesh = ids.iter().position(|&id| id == o.mesh).unwrap_or_else(|| {
+                    ids.push(o.mesh);
+                    ids.len() - 1
+                });
+                objects.push(io::SavedObject {
+                    name: o.name.clone(),
+                    visible: o.visible,
+                    mesh,
+                    position: o.position,
+                    rotation: o.rotation,
+                    scale: o.scale,
+                });
+            }
+            let meshes: Vec<&Mesh> = ids.iter().filter_map(|&id| scene.mesh(id, &self.doc.mesh)).collect();
+            if meshes.len() != ids.len() {
+                return Err("The scene is missing a mesh; nothing was saved.".into());
+            }
+            let active = scene.index_of(scene.active_id()).unwrap_or(0);
+            io::save_scene_with(&meshes, &objects, active, &self.details(), path)?;
+        }
+        self.mark_saved();
+        self.note_recent(path, true);
+        Ok(())
+    }
+
+    /// What the file keeps besides the objects: see `io::Details`. A new
+    /// part is one more `set` here and one more `get` in `apply_details`.
+    fn details(&self) -> io::Details {
+        let opts = &self.doc.opts;
+        let matcap = self.ui.assets.matcaps.get(opts.matcap).map_or(String::new(), |m| format!("{}/{}", m.category, m.name));
+        let [x, y, z] = self.doc.sculptor.settings.symmetry;
+        let mut details = io::Details::default();
+        details.set(io::slot::SHADING, &io::Shading::of(opts, matcap));
+        details.set(io::slot::LOOK, &opts.look);
+        details.set(io::slot::CAMERA, &self.doc.camera.saved_view());
+        details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides });
+        details
+    }
+
+    /// Puts an opened file's look, mirror settings and view in place. A part
+    /// the file does not have (it is from before that part was kept) leaves
+    /// the app as it is; with no saved view, the model is framed instead.
+    fn apply_details(&mut self, details: &io::Details) {
+        if let Some(shading) = details.get_over(io::slot::SHADING, &io::Shading::default()) {
+            shading.apply(&mut self.doc.opts);
+            // The picture is looked up by name: the list differs between
+            // computers. One that is not here leaves the matcap alone.
+            let found = self.ui.assets.matcaps.iter().position(|m| format!("{}/{}", m.category, m.name) == shading.matcap);
+            if let Some(index) = found {
+                self.act(Action::Matcap(index));
+                self.doc.opts.matcap_on = shading.matcap_on;
+            }
+        }
+        if let Some(look) = details.get_over(io::slot::LOOK, &Look::default()) {
+            self.set_look(look);
+        }
+        if let Some(mirror) = details.get::<io::Mirror>(io::slot::MIRROR) {
+            self.doc.sculptor.settings.symmetry = [mirror.x, mirror.y, mirror.z];
+            self.doc.opts.symmetry_guides = mirror.guides;
+        }
+        let view = details.get::<SavedView>(io::slot::CAMERA);
+        if !view.is_some_and(|view| self.doc.camera.restore_view(&view)) {
+            self.frame_view();
+        }
+        self.sync_view();
+        self.redraw = true;
+    }
+
+    /// Takes on a saved look. The HDRI picture itself is not in the file,
+    /// only where it was: if it is still there it is loaded again, and if
+    /// not the settings are kept with a note where the picture should be.
+    fn set_look(&mut self, mut look: Look) {
+        let (wanted, path) = (look.hdri.enabled, look.hdri.path.clone());
+        look.wood.axis = look.wood.axis.clamp(0, 2);
+        look.hdri.loaded = false;
+        look.hdri.failed = false;
+        look.hdri.status = "No HDRI loaded.".into();
+        self.doc.opts.look = look;
+        match path {
+            Some(path) if path.is_file() => self.load_hdri(path),
+            Some(path) => {
+                // Not the picture the last scene was using: that would light
+                // this one wrongly while the note says its own is missing.
+                self.renderer.set_hdri(&self.gpu, None);
+                let hdri = &mut self.doc.opts.look.hdri;
+                hdri.status = format!("Saved HDRI not found: {}", file_name(&path));
+                hdri.failed = true;
+            }
+            None => self.renderer.set_hdri(&self.gpu, None),
+        }
+        // Loading switches the HDRI on; the file says whether it was.
+        self.doc.opts.look.hdri.enabled = wanted;
+    }
+
+    /// Puts `path` at the front of the recent files. `picture` takes a new
+    /// picture for its tile (right after a save); otherwise one is only
+    /// taken if the file has none yet.
+    fn note_recent(&mut self, path: &Path, picture: bool) {
+        self.ui.recent.add(path);
+        if self.ui.recent.keeps_pictures() && (picture || !self.ui.recent.has_picture(path)) {
+            let image = self.picture();
+            self.ui.recent.keep_picture(path, &image);
+        }
+    }
+
+    /// Brings a camera that already frames the scene's bounding box in as
+    /// close as the models themselves allow. A box is a loose fit for
+    /// anything rounded (a ball fills barely half the picture), and a tile is
+    /// small, so the picture is fitted to where the surface really reaches:
+    /// a sample of each mesh's vertices, measured along the camera's axes.
+    fn fit_closely(&self, camera: &mut Camera, aspect: f32) {
+        const SAMPLES: usize = 20_000;
+        let turn = camera.rotation();
+        let (right, up, toward) = (turn * Vec3::X, turn * Vec3::Y, turn * Vec3::Z);
+        let scene = &self.doc.scene;
+        // How far the surface reaches sideways, up and toward the eye.
+        let mut reach = Vec3::ZERO;
+        for o in scene.objects.iter().filter(|o| o.visible) {
+            let Some(mesh) = scene.mesh(o.mesh, &self.doc.mesh) else { continue };
+            let model = o.matrix();
+            let step = (mesh.vertex_count() / SAMPLES).clamp(1, usize::MAX);
+            for p in mesh.positions.iter().step_by(step) {
+                let from = model.transform_point3(*p) - camera.pivot;
+                reach = reach.max(Vec3::new(from.dot(right).abs(), from.dot(up).abs(), from.dot(toward)));
+            }
+        }
+        let tan = camera.tan_half_fov();
+        // A little air around it; the sample may have missed a tip.
+        let fitted = (reach.y / tan).max(reach.x / (tan * aspect)) * 1.12;
+        // Seen in perspective, what is nearer the eye looks bigger.
+        let fitted = if camera.ortho { fitted } else { fitted + reach.z };
+        if fitted.is_finite() && fitted > 1e-5 {
+            // Only ever closer than the box's frame, never farther.
+            camera.distance = fitted.min(camera.distance);
+        }
+    }
+
+    /// A picture of the scene for a recent-file tile: the model alone, from
+    /// the angle it is being looked at, pulled back (or in) until all of it
+    /// fits. No panels, brush ring, guides or tool overlays. Drawn on the
+    /// side, at its own size; the window is not touched.
+    fn picture(&mut self) -> image::RgbaImage {
+        // Twice the tile's size, so scaling it down smooths it.
+        let size = (recent::PICTURE.0 * 2, recent::PICTURE.1 * 2);
+        let extent = Vec2::new(size.0 as f32, size.1 as f32);
+
+        // The meshes as they are now, in case no frame has drawn them yet.
+        let doc = &mut self.doc;
+        self.renderer.sync_mesh(&self.gpu, doc.scene.active_mesh(), &mut doc.mesh, doc.mesh_replaced);
+        let shown: Vec<u64> = doc.scene.objects.iter().map(|o| o.mesh).collect();
+        for (id, mesh) in doc.scene.parked_mut() {
+            if shown.contains(&id) {
+                self.renderer.sync_mesh(&self.gpu, id, mesh, false);
+            }
+        }
+
+        // A camera of its own at the live one's angle, framed on everything.
+        let live = &self.doc.camera;
+        let mut camera = Camera::default();
+        (camera.yaw, camera.pitch, camera.fov_y, camera.ortho) = (live.yaw, live.pitch, live.fov_y, live.ortho);
+        (camera.pivot, camera.distance) = (live.pivot, live.distance);
+        let bounds = self.doc.scene.bounds(&self.doc.mesh);
+        camera.frame(bounds, extent.x / extent.y, false);
+        self.fit_closely(&mut camera, extent.x / extent.y);
+        let view = camera.view(Vec2::ZERO, extent, camera.distance, self.scene_size);
+
+        // The frame's shader inputs are worked out from the app's view and
+        // camera, so those are swapped for a moment.
+        let live_camera = std::mem::replace(&mut self.doc.camera, camera);
+        let live_view = std::mem::replace(&mut self.view, view);
+        let mut globals = self.globals();
+        let look = self.look_uniform();
+        self.doc.camera = live_camera;
+        self.view = live_view;
+        globals.symmetry[..3].fill(0.0);
+
+        let scene = &self.doc.scene;
+        let items: Vec<DrawItem> = scene
+            .objects
+            .iter()
+            .filter(|o| o.visible && !self.spheres_stand_in_for(o.id) && !self.tools_hide(o.id))
+            .map(|o| {
+                let mut model = o.matrix().to_cols_array_2d();
+                model[3][3] = if o.id == scene.active_id() { 1.0 } else { 0.0 };
+                DrawItem { mesh: o.mesh, model }
+            })
+            .collect();
+        let items = self.tools_copies(items);
+
+        // Nothing over the model. The next frame puts each of these back.
+        self.renderer.flash.show(&self.gpu, &globals.view_proj, &[]);
+        self.renderer.spheres.hide();
+        self.renderer.previews.show(&self.gpu, &view, &[]);
+        let wireframe = std::mem::replace(&mut self.renderer.wire.enabled, false);
+
+        let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("recent picture"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.gpu.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target = texture.create_view(&Default::default());
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        self.renderer.draw(&self.gpu, &mut encoder, &target, size, &globals, &look, &self.doc.opts, &items);
+        self.gpu.queue.submit([encoder.finish()]);
+        self.renderer.wire.enabled = wireframe;
+        self.redraw = true;
+        crate::render::read_texture(&self.gpu, &texture)
+    }
+
+    // ---- opening, importing
+
+    /// Open...: pick a `.sclp`, then say how it should come in.
+    pub(super) fn open_action(&mut self) {
+        let pick = rfd::FileDialog::new().set_title("Open Sculpt").add_filter("Sculpt", &["sclp"]).pick_file();
+        if let Some(path) = pick {
+            self.open_chosen(path);
+        }
+    }
+
+    /// A recent file's tile was clicked.
+    pub(super) fn open_recent(&mut self, path: PathBuf) {
+        self.open_chosen(path);
+    }
+
+    /// A `.sclp` has been chosen. In place of the scene or added to it are
+    /// both sensible, so that is asked, with a warning if replacing would put
+    /// unsaved work aside. Only the untouched scene the app starts with is
+    /// replaced without a question: there is nothing in it to keep.
+    fn open_chosen(&mut self, path: PathBuf) {
+        if !path.is_file() {
+            self.ui.recent.remove(&path);
+            self.status(format!("{} is no longer there.", file_name(&path)), false);
+            return;
+        }
+        if self.untouched() {
+            self.open_as(path, OpenHow::Replace);
+        } else {
+            let unsaved = self.unsaved();
+            self.ui.graph.ask(Question::Open { path, unsaved });
+        }
+    }
+
+    /// The answer to that question.
+    pub(super) fn open_as(&mut self, path: PathBuf, how: OpenHow) {
+        match how {
+            OpenHow::Replace => self.load(path, true),
+            OpenHow::Add => self.load(path, false),
+            OpenHow::SaveThenReplace => {
+                // Not saved (cancelled, or it failed): the scene stays.
+                if self.save_action(false) {
+                    self.load(path, true);
+                }
+            }
+        }
+    }
+
+    /// Import...: a model file, or another sculpt whose objects are wanted.
+    pub(super) fn import_action(&mut self) {
+        let pick = rfd::FileDialog::new()
+            .set_title("Import")
+            .add_filter("Models and sculpts", &["obj", "stl", "sclp"])
+            .add_filter("Models", &["obj", "stl"])
+            .add_filter("Sculpt", &["sclp"])
+            .pick_file();
+        if let Some(path) = pick {
+            self.load(path, false);
+        }
+    }
+
+    /// Opens a `.sclp` in place of the scene (`native`), or adds a file to
+    /// it: a model, or the objects of another `.sclp`. Either is one undo
+    /// step. Nothing is asked here: the interface asks first (`open_chosen`),
+    /// and the Claude bridge and the command line have already decided.
+    pub(super) fn load(&mut self, path: PathBuf, native: bool) {
+        if native {
+            self.open_replacing(path);
+        } else if is_native(&path) {
+            self.add_scene(path);
+        } else {
+            self.add_model(path);
+        }
+    }
+
+    /// The file takes the scene's place and becomes the document: its look,
+    /// mirror settings and view come with it, and Save writes back to it.
+    fn open_replacing(&mut self, path: PathBuf) {
+        let saved = match io::load_scene(&path) {
+            Ok(saved) => saved,
+            Err(e) => return self.status(e, false),
+        };
+        let count = saved.objects.len();
+        let mut details = io::Details::default();
+        self.edit_scene(|scene, slot| {
+            details = install(scene, slot, saved);
+            true
+        });
+        self.doc.mesh_replaced = true;
+        self.sync_view();
+        self.apply_details(&details);
+        self.status(format!("Opened {} ({})", path.display(), how_many(count)), true);
+        self.doc.path = Some(path.clone());
+        self.mark_saved();
+        // Its picture is the one from its last save; one is only taken now
+        // if it has none.
+        self.note_recent(&path, false);
+    }
+
+    /// The file's objects join the scene where they were saved. Nothing else
+    /// of the file is used: the look, the view and the document stay the
+    /// scene's own, as in the Unity app.
+    fn add_scene(&mut self, path: PathBuf) {
+        let saved = match io::load_scene(&path) {
+            Ok(saved) => saved,
+            Err(e) => return self.status(e, false),
+        };
+        let count = saved.objects.len();
+        self.edit_scene(|scene, slot| {
+            append(scene, slot, saved);
+            true
+        });
+        self.doc.mesh_replaced = true;
+        self.frame_view();
+        self.status(format!("Added {} from {}", how_many(count), file_name(&path)), true);
+    }
+
+    fn add_model(&mut self, path: PathBuf) {
+        // An OBJ is fitted to the size of the scene's first object (as Unity does).
+        let first = self.doc.scene.objects.first().and_then(|o| self.doc.scene.mesh(o.mesh, &self.doc.mesh));
+        let first_half_size = first.map(|m| m.bounds().size() * 0.5);
+        match import_mesh(&path, first_half_size) {
+            Ok((mesh, at)) => {
+                let (tris, verts) = (mesh.triangle_count(), mesh.vertex_count());
+                let size = mesh.bounds().size().to_array().map(|s| sculpt_geom::units::format(s, sculpt_geom::LengthUnit::Millimetres, false));
+                let name = stem(&path);
+                self.edit_scene(|scene, slot| {
+                    scene.add(&name, mesh, slot);
+                    scene.active_mut().position = at;
+                    true
+                });
+                self.frame_view();
+                let message = format!(
+                    "Added {} ({tris} triangles, {verts} vertices, {} x {} x {} mm)",
+                    path.display(),
+                    size[0],
+                    size[1],
+                    size[2]
+                );
+                self.status(message, true);
+            }
+            Err(e) => self.status(e, false),
+        }
+    }
+
+    // ---- visual checks
+
+    /// Brings up something of this file's to look at with `--screenshot`:
+    /// `recent` fills the File card's recent tiles, `ask-exit`, `ask-open`
+    /// and `ask-open-clean` put up the questions, and `play` runs
+    /// `files_play` first. Everything it writes goes under the temp folder.
+    pub(super) fn files_demo(&mut self, what: &str) {
+        let folder = std::env::temp_dir().join("sculpt_files_demo");
+        let _ = std::fs::remove_dir_all(&folder);
+        if let Err(e) = std::fs::create_dir_all(&folder) {
+            log::error!("{e}");
+            return;
+        }
+        // The pictures too: never beside the user's own.
+        self.ui.recent.restore(Vec::new(), Some(folder.join("thumbnails")));
+        match what {
+            "play" => self.files_play(&folder),
+            "ask-exit" => self.ui.graph.ask(Question::Exit),
+            "ask-open" | "ask-open-clean" => {
+                let path = folder.join("dragon head.sclp");
+                self.ui.graph.ask(Question::Open { path, unsaved: what == "ask-open" });
+            }
+            _ => {
+                // The Objects card shut, as if it had been left that way, so
+                // the File card under it is in view.
+                let shut = std::collections::BTreeMap::from([("Objects".to_owned(), false)]);
+                prefs::cards::restore(&self.egui_ctx, &shut);
+                // The same sculpt saved from four sides, under four names.
+                let names = ["base mesh", "crab claw", "dragon head", "lure v3"];
+                for (i, name) in names.into_iter().enumerate() {
+                    self.doc.camera.yaw = 25.0 + 90.0 * i as f32;
+                    self.sync_view();
+                    let path = folder.join(format!("{name}.sclp"));
+                    match self.save_scene(&path) {
+                        Ok(()) => self.doc.path = Some(path),
+                        Err(e) => log::error!("{e}"),
+                    }
+                }
+                self.doc.camera.yaw = 25.0;
+                self.sync_view();
+                self.status("Saved lure v3.sclp", true);
+            }
+        }
+    }
+
+    /// Works the file code the way a person would, in the real app, and
+    /// prints what came of each step: a check that needs no one at the
+    /// tablet. Run it with the demo strokes (`--demo --demo-files play`).
+    fn files_play(&mut self, folder: &Path) {
+        fn say(what: &str, ok: bool) {
+            println!("{} {what}", if ok { "ok  " } else { "FAIL" });
+        }
+        let (first, second) = (folder.join("first.sclp"), folder.join("second.sclp"));
+        let strokes = self.doc.history.steps().0;
+        say("demo strokes are unsaved work", strokes > 0 && self.unsaved() && !self.untouched());
+
+        // Save: clean, in the recent files, with a picture.
+        let look = &mut self.doc.opts.look;
+        look.finish = crate::look::Finish::Metal;
+        look.metal.preset = 2;
+        look.lighting = 6;
+        look.depth_of_field = true;
+        look.focus_distance = 3.5;
+        self.doc.opts.matcap_on = false;
+        self.doc.opts.base_color = [0.8, 0.3, 0.1];
+        self.doc.sculptor.settings.symmetry = [true, false, true];
+        (self.doc.camera.yaw, self.doc.camera.pitch, self.doc.camera.ortho) = (140.0, -20.0, true);
+        let saved_view = self.doc.camera.saved_view();
+        let saved = self.save_scene(&first);
+        self.doc.path = Some(first.clone());
+        say("save writes the file", saved.is_ok() && first.is_file());
+        say("a saved scene is not unsaved", !self.unsaved());
+        say("the save is the newest recent file", self.ui.recent.paths().first().is_some_and(|p| p.ends_with("first.sclp")));
+        say("and has a picture", self.ui.recent.has_picture(&first));
+        say("nothing is left beside it", !folder.join("first.sclp.tmp").exists());
+
+        // Undo makes it unsaved, redo clean again; a new stroke unsaved.
+        self.act(Action::Undo);
+        say("undo after a save is unsaved work", self.unsaved());
+        self.act(Action::Redo);
+        say("redo back to the save is clean", !self.unsaved());
+        self.act(Action::New(crate::mesh::primitives::Primitive::Cube));
+        say("adding a shape is unsaved work", self.unsaved());
+        let count = self.doc.scene.objects.len();
+        let second_saved = self.save_scene(&second);
+        say("a second file saves", second_saved.is_ok() && !self.unsaved());
+
+        // Change everything the file keeps, then open the first again.
+        let look = &mut self.doc.opts.look;
+        look.finish = crate::look::Finish::None;
+        look.lighting = 0;
+        look.depth_of_field = false;
+        self.doc.opts.matcap_on = true;
+        self.doc.sculptor.settings.symmetry = [false; 3];
+        (self.doc.camera.yaw, self.doc.camera.ortho) = (10.0, false);
+        self.load(first.clone(), true);
+        let opts = &self.doc.opts;
+        say("opening puts back the object list", self.doc.scene.objects.len() == count - 1);
+        say(
+            "and the finish, lighting and depth of field",
+            opts.look.finish == crate::look::Finish::Metal
+                && opts.look.metal.preset == 2
+                && opts.look.lighting == 6
+                && opts.look.depth_of_field
+                && opts.look.focus_distance == 3.5,
+        );
+        say("and the material", !opts.matcap_on && opts.base_color == [0.8, 0.3, 0.1]);
+        say("and the mirror axes", self.doc.sculptor.settings.symmetry == [true, false, true]);
+        say("and the view", self.doc.camera.saved_view() == saved_view);
+        say("the opened file is the document, and clean", self.doc.path.as_deref() == Some(first.as_path()) && !self.unsaved());
+        say("it is the newest recent file again", self.ui.recent.paths().first().is_some_and(|p| p.ends_with("first.sclp")));
+        self.act(Action::Undo);
+        say("undo brings the scene before it back", self.doc.scene.objects.len() == count);
+        self.act(Action::Redo);
+
+        // Add: the second file's objects join, nothing else changes.
+        let before = self.doc.scene.objects.len();
+        self.load(second.clone(), false);
+        let names: Vec<&str> = self.doc.scene.objects.iter().map(|o| o.name.as_str()).collect();
+        let mut distinct = names.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        say("adding a sculpt brings its objects in", names.len() == before + count);
+        say("under names of their own", distinct.len() == names.len());
+        say("the document is still the first file", self.doc.path.as_deref() == Some(first.as_path()));
+        say("and it now has unsaved work", self.unsaved());
+        say("its look stayed", self.doc.opts.look.finish == crate::look::Finish::Metal);
+
+        // The questions.
+        self.ui.graph.answer(false);
+        self.open_chosen(second.clone());
+        say("opening over unsaved work asks", self.ui.graph.asking() && self.doc.path.as_deref() == Some(first.as_path()));
+        self.ui.graph.answer(false);
+        say("Esc leaves the scene alone", !self.ui.graph.asking() && self.doc.scene.objects.len() == before + count);
+        let gone = folder.join("gone.sclp");
+        self.ui.recent.add(&gone);
+        self.open_recent(gone.clone());
+        say("a recent file that has gone is dropped, not opened", !self.ui.recent.paths().contains(&gone) && !self.ui.graph.asking());
+        say("closing would ask", self.unsaved() && !self.quitting());
+        self.quit(false);
+        say("Exit Without Saving closes", self.quitting());
+        self.files.quit = false;
+
+        // The settings: brush tuning and the rest survive a write and a read.
+        let home = Home::at(&folder.join("settings"));
+        self.doc.opts.ui_scale = 1.25;
+        self.doc.sculptor.settings.radius_px = 77.0;
+        self.doc.sculptor.settings.per_brush[crate::sculpt::Brush::Crease.index()].strength = 0.66;
+        let written = self.prefs_now();
+        let wrote = home.save(&written);
+        say("the settings file writes", wrote.is_ok() && home.load() == written);
+        self.doc.opts.ui_scale = 1.0;
+        self.doc.sculptor.settings.radius_px = 20.0;
+        let read = home.load();
+        self.apply_prefs(&read);
+        say(
+            "and reading it puts the settings back",
+            self.doc.opts.ui_scale == 1.25
+                && self.doc.sculptor.settings.radius_px == 77.0
+                && self.doc.sculptor.settings.per_brush[crate::sculpt::Brush::Crease.index()].strength == 0.66
+                && self.ui.recent.paths() == written.recent,
+        );
+        self.ui.recent.restore(written.recent, Some(folder.join("thumbnails")));
+        self.doc.opts.ui_scale = 1.0;
+    }
+}

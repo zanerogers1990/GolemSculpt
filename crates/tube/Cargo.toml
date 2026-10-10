@@ -1,0 +1,13 @@
+[package]
+name = "sculpt-tube"
+version = "0.1.0"
+edition = "2024"
+description = "The Tube tool: tubes drawn along curves and fused into the model."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+egui = { workspace = true }
+sculpt-geom = { path = "../geom" }
+sculpt-toolkit = { path = "../toolkit" }
+sculpt-volume = { path = "../volume" }

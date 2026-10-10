@@ -1,0 +1,112 @@
+//! `--demo-tool array[:what]`: the tool in states worth a screenshot, set up
+//! through the same functions the buttons and the pen call.
+//!
+//! | what | shows |
+//! | --- | --- |
+//! | (none), `circle` | Eight copies of the selected object round a circle, tapering as in the Unity design picture |
+//! | `line` | A row of bricks, shrinking toward the end |
+//! | `curve` | Bricks along a hand-drawn S, shrinking toward the end |
+//! | `away` | The circle with the tool put away: the copies stay on screen |
+//! | `made` | The circle made real as one object |
+//! | `separate` | The circle made real as separate objects |
+//!
+//! `line`, `curve` hide the selected object and add a brick in its place, so
+//! the way copies turn to follow a path can be seen; a sphere looks the same
+//! whichever way it faces.
+
+use glam::{Quat, Vec2, Vec3};
+use sculpt_geom::Aabb;
+use sculpt_toolkit::testing::cube;
+use sculpt_toolkit::{Command, Ctx, NewObject, ObjectId, Placement};
+
+use crate::finish::Apply;
+use crate::tool::ArrayTool;
+
+pub fn demo(tool: &mut ArrayTool, cx: &mut Ctx, what: &str) {
+    match what {
+        "line" => line(tool, cx),
+        "curve" => curve(tool, cx),
+        "away" => {
+            circle(tool, cx);
+            cx.finish();
+        }
+        "made" => made(tool, cx, Apply::One),
+        "separate" => made(tool, cx, Apply::Separate),
+        _ => circle(tool, cx),
+    }
+}
+
+/// A brick standing in for the selected object, to the left of the middle of
+/// the view so the path has room to run to the right. The old object is hidden.
+fn brick(cx: &mut Ctx) -> ObjectId {
+    let before = cx.scene().active();
+    let at = -cx.view.right * 1.9 - cx.view.up * 0.4;
+    let placement = Placement { position: at, rotation: Quat::IDENTITY, scale: Vec3::new(0.6, 1.0, 0.35) };
+    let receipt = cx.commit(
+        "Demo Brick",
+        vec![
+            Command::Show { object: before, visible: false },
+            Command::Add(NewObject::new("Brick", cube(0.5)).placed(placement)),
+        ],
+    );
+    receipt.added[0]
+}
+
+fn taper(tool: &mut ArrayTool, cx: &mut Ctx, end: f32) {
+    tool.edit(cx, "Array End Size", false, |a| a.settings.end_scale = end);
+}
+
+fn circle(tool: &mut ArrayTool, cx: &mut Ctx) {
+    tool.make_circle(cx);
+    taper(tool, cx, 0.45);
+    fit(tool, cx);
+}
+
+fn line(tool: &mut ArrayTool, cx: &mut Ctx) {
+    let object = brick(cx);
+    let start = cx.scene().info(object).map_or(Vec3::ZERO, |info| info.placement.position);
+    tool.make_line(cx);
+    // Stretched across the view and aimed a little up, as dragging the end point does.
+    let end = start + cx.view.right * 3.8 + cx.view.up * 0.7;
+    tool.edit(cx, "Move Array Point", false, |a| _ = a.set_point_world(1, end, start));
+    tool.edit(cx, "Array Count", false, |a| a.settings.count = 7);
+    taper(tool, cx, 0.4);
+    fit(tool, cx);
+}
+
+fn curve(tool: &mut ArrayTool, cx: &mut Ctx) {
+    let object = brick(cx);
+    let start = cx.scene().info(object).map_or(Vec3::ZERO, |info| info.placement.position);
+    let view = cx.view;
+    // An S, rising from the brick and settling to the right, as screen
+    // positions: drawn through the same code a pen stroke goes through.
+    let stroke: Vec<Vec2> = (0..=60)
+        .filter_map(|i| {
+            let t = i as f32 / 60.0;
+            let across = 3.8 * t;
+            let up = 1.1 * (t * std::f32::consts::TAU).sin() * (1.0 - 0.35 * t);
+            view.project(start + view.right * across + view.up * up)
+        })
+        .collect();
+    tool.draw_stroke(cx, &stroke);
+    taper(tool, cx, 0.4);
+    fit(tool, cx);
+}
+
+fn made(tool: &mut ArrayTool, cx: &mut Ctx, apply: Apply) {
+    circle(tool, cx);
+    tool.apply(cx, apply);
+}
+
+/// Brings the camera round to take in the whole array.
+fn fit(tool: &ArrayTool, cx: &mut Ctx) {
+    let object = tool.target(cx);
+    let Some(live) = tool.arrays.get(object) else { return };
+    let Some(info) = cx.scene().info(object) else { return };
+    let reach = cx.scene().bounds(object).size().max_element();
+    let mut bounds = Aabb::EMPTY;
+    for placement in &live.layout {
+        bounds.grow(info.placement.position + placement.offset);
+    }
+    cx.frame_view(bounds.expanded(reach * 0.8));
+}

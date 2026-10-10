@@ -1,0 +1,10 @@
+[package]
+name = "sculpt-symmetry"
+version = "0.1.0"
+edition = "2024"
+description = "Symmetry maps, mirror and weld, symmetrize, mirror repeaters."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+sculpt-geom = { path = "../geom" }

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sculpt": {
+      "command": "cmd",
+      "args": ["/c", "D:\\Sculptingapp2\\Sculpt-mcp.bat"]
+    }
+  }
+}

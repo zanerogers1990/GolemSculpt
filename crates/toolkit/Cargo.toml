@@ -1,0 +1,10 @@
+[package]
+name = "sculpt-toolkit"
+version = "0.1.0"
+edition = "2024"
+description = "What a tool sees of the app: the interface every tool crate is written against."
+
+[dependencies]
+glam = { workspace = true }
+egui = { workspace = true }
+sculpt-geom = { path = "../geom" }

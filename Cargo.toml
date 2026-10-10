@@ -1,0 +1,69 @@
+[package]
+name = "sculpt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+egui-winit = "0.36"
+env_logger = "0.11.11"
+glam = { version = "0.34", features = ["bytemuck"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "hdr", "exr"] }
+log = "0.4.34"
+pollster = "1.0.1"
+rayon = "1.12.0"
+rfd = "0.17.2"
+sculpt-array = { path = "crates/array" }
+sculpt-cut = { path = "crates/cut" }
+sculpt-geom = { path = "crates/geom" }
+sculpt-keys = { path = "crates/keys" }
+sculpt-lathe = { path = "crates/lathe" }
+sculpt-measure = { path = "crates/measure" }
+sculpt-region = { path = "crates/region" }
+sculpt-symmetry = { path = "crates/symmetry" }
+sculpt-toolkit = { path = "crates/toolkit" }
+sculpt-tube = { path = "crates/tube" }
+sculpt-volume = { path = "crates/volume" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wgpu = "30"
+winit = "0.30"
+
+# Sculpting is unusable without optimisation, so even `cargo run` builds the
+# hot code optimised; only our own crate keeps fast incremental compiles.
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+panic = "abort"
+
+# The app is this package. Geometry and tools live in their own crates under
+# `crates/`, each built and tested on its own (see crates/README.md). A plain
+# `cargo build` or `cargo test` here still means the app alone.
+[workspace]
+members = [
+    "crates/geom",
+    "crates/volume",
+    "crates/cut",
+    "crates/symmetry",
+    "crates/lathe",
+    "crates/array",
+    "crates/toolkit",
+    "crates/measure",
+    "crates/tube",
+    "crates/keys",
+    "crates/region",
+]
+
+[workspace.dependencies]
+egui = "0.36"
+glam = { version = "0.34", features = ["bytemuck"] }
+rayon = "1.12.0"

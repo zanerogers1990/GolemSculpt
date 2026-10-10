@@ -1,0 +1,14 @@
+[package]
+name = "sculpt-keys"
+version = "0.1.0"
+edition = "2024"
+description = "The Keys tool: joints that register the pieces of a split model."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+egui = { workspace = true }
+sculpt-geom = { path = "../geom" }
+sculpt-toolkit = { path = "../toolkit" }
+sculpt-volume = { path = "../volume" }
+sculpt-cut = { path = "../cut" }
