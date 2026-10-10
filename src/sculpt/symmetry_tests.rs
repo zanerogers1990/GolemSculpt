@@ -1210,6 +1210,107 @@ fn every_brush_stays_symmetric_under_radial_symmetry() {
     }
 }
 
+// ------------------------------------------------------- dynamic topology
+
+/// How far the surface is from being the same under every copy of `group`,
+/// around the vertices `verts`: the distance from where each copy carries
+/// each of them to the nearest point of the surface. The mean and the worst.
+///
+/// The surface, not the vertices: dynamic topology splits whichever of two
+/// equal edges has the lower numbers first, so the triangles of two sectors
+/// need not match once it has been at work.
+fn surface_error(mesh: &Mesh, group: &SymmetryGroup, verts: impl Iterator<Item = usize>) -> (f32, f32) {
+    let (mut sum, mut worst, mut count) = (0.0f64, 0.0f32, 0usize);
+    let mut leaves = Vec::new();
+    for v in verts {
+        for op in group.iter().skip(1) {
+            let image = op.apply(mesh.positions[v]);
+            // A sphere that reaches the nearest point found has every
+            // triangle that could be nearer in the leaves it touches.
+            let (mut reach, mut nearest) = (0.002f32, f32::MAX);
+            while nearest > reach {
+                reach *= 2.0;
+                assert!(reach < BALL_RADIUS, "vertex {v} has nothing where a copy of it should be");
+                leaves.clear();
+                mesh.bvh.leaves_in_sphere(image, reach, &mut leaves);
+                nearest = leaves
+                    .iter()
+                    .flat_map(|&leaf| mesh.bvh.leaves[leaf as usize].tri_range())
+                    .map(|t| {
+                        let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[mesh.indices[t * 3 + k] as usize]);
+                        sculpt_geom::tri::closest_point(image, a, b, c).distance(image)
+                    })
+                    .fold(f32::MAX, f32::min);
+            }
+            sum += nearest as f64;
+            worst = worst.max(nearest);
+            count += 1;
+        }
+    }
+    ((sum / count.max(1) as f64) as f32, worst)
+}
+
+/// A stroke that adds detail as it goes (dynamic topology), under six
+/// repeats: through the axis and next to it, where every copy's patch of new
+/// triangles lies over every other's, and clear of it, where each copy has a
+/// patch of its own. Every copy gets its detail, the mesh stays one closed
+/// skin with everything kept about it in step, the six sectors keep the same
+/// shape, and undo takes the stroke and its triangles away again exactly.
+#[test]
+fn a_radial_stroke_that_adds_detail_adds_it_under_every_copy_and_undoes_exactly() {
+    use crate::mesh::dyntopo::tests::{assert_closed_manifold, assert_sound};
+
+    let mut ball = Ball::new();
+    let view = view_from_above(&ball.mesh);
+    let (vertices, indices) = (ball.mesh.vertex_count(), ball.mesh.indices.clone());
+    let group = RADIAL_6.group();
+    let partners = ball.partners_under(&group);
+    for brush in [Brush::Clay, Brush::Standard] {
+        for from_axis in [0.0, 0.6, 6.0] {
+            let label = format!("{brush:?} with dynamic topology at {from_axis}r");
+            let mut sculptor = sculptor_with(brush);
+            RADIAL_6.set(&mut sculptor.settings);
+            sculptor.dyntopo.enabled = true;
+            // Edges of 0.0048 under the brush, on a ball whose own are 0.006 to 0.008.
+            sculptor.dyntopo.detail = 0.08;
+            let points = stroke_points(from_axis * BRUSH_RADIUS, STROKE_FRAMES);
+            let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points).expect("the stroke did nothing");
+            assert!(matches!(&delta, StrokeDelta::Positions { topology: Some(_), .. }), "{label}: no detail was added");
+            assert!(!sculptor.dyntopo.at_limit);
+            assert_closed_manifold(&ball.mesh);
+            assert_sound(&ball.mesh);
+            assert!(ball.mesh.positions.iter().all(|p| p.is_finite()));
+
+            // As much detail in each sixth of a turn as in any other.
+            let mut sectors = [0usize; 6];
+            for p in &ball.mesh.positions[vertices..] {
+                let turn = (p.z.atan2(p.x) - STROKE_AZIMUTH).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+                sectors[(turn * 6.0 + 0.5) as usize % 6] += 1;
+            }
+            let (fewest, most) = (*sectors.iter().min().unwrap(), *sectors.iter().max().unwrap());
+            assert!(fewest > 150, "{label}: new vertices by sector {sectors:?}");
+            assert!((most - fewest) as f32 <= 0.03 * most as f32, "{label}: new vertices by sector {sectors:?}");
+
+            // The same shape in every sector: the vertices the ball began
+            // with against their partners, and the surface at the new ones
+            // (every fifth, which is thousands of them).
+            let moved = ball.displacement();
+            let pair = pair_error(&ball.mesh, &partners);
+            let (mean, worst) = surface_error(&ball.mesh, &group, (vertices..ball.mesh.vertex_count()).step_by(5));
+            println!("{label}: {sectors:?} new vertices, moved {moved:.2e}, pair {pair:.2e}, surface {mean:.2e} / {worst:.2e}");
+            assert!(moved > 1e-3, "{label}: the stroke only refined");
+            assert!(pair < 0.02 * moved, "{label}: a vertex and its partner are {pair:.2e} apart after a stroke of {moved:.2e}");
+            assert!(mean < 0.002 * moved && worst < 0.02 * moved, "{label}: surface {mean:.2e} / {worst:.2e}");
+
+            ball.undo(Some(delta));
+            assert!(ball.mesh.positions == ball.start, "{label}: undo left vertices behind, or moved");
+            assert!(ball.mesh.indices == indices, "{label}: undo did not give back the triangles");
+            assert!(ball.mesh.mask.len() == vertices && ball.mesh.mask.iter().all(|&m| m == 0.0));
+        }
+        assert_sound(&ball.mesh);
+    }
+}
+
 /// What strokes cost under radial symmetry on a million triangles, through
 /// the axis (where every copy meets every other) and clear of it:
 /// `cargo test --release timing_of_radial_strokes -- --ignored --nocapture`.

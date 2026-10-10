@@ -29,6 +29,7 @@ use crate::ui::{self, Cursor, UiState, theme};
 use crate::{io, remesh};
 
 mod bridge;
+mod dyntopo;
 mod recording;
 mod faces;
 mod files;
@@ -82,6 +83,9 @@ pub struct Args {
     /// Hide half of the active object's faces after the demo strokes (for
     /// visual checks of hidden faces).
     pub demo_hide: bool,
+    /// Pull a long shape out of a coarse ball and work along it with dynamic
+    /// topology on, wireframe showing (for visual checks; see app/dyntopo.rs).
+    pub demo_dyntopo: bool,
     /// Stand a figure in the scene and pose it: `hover`, `bend`, `chain`...
     /// (for visual checks of the Pose brush; see app/pose.rs).
     pub demo_pose: Option<String>,
@@ -428,6 +432,9 @@ impl Running {
         }
         if running.args.demo {
             running.demo_strokes();
+        }
+        if running.args.demo_dyntopo {
+            running.dyntopo_demo();
         }
         if let Some(what) = running.args.demo_pose.clone() {
             running.pose_demo(&what);
@@ -1439,6 +1446,7 @@ impl Running {
         self.sync_view();
 
         // Sculpt: every pointer sample since the last frame, in order.
+        self.dyntopo_demo_frame();
         let sculpt_start = Instant::now();
         if self.doc.sculptor.is_active() {
             let doc = &mut self.doc;

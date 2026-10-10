@@ -183,6 +183,27 @@ struct MeshBuffers {
     index_count: u32,
     /// `Mesh::visibility_version` of the faces in `indices`.
     visibility: u64,
+    /// `Mesh::topology_version` of the faces in `indices`.
+    topology: u64,
+    /// How many vertices the vertex buffers have room for, and how many
+    /// corners `indices` has. Exactly what the mesh has, until dynamic
+    /// topology outgrows them: then they are made half as big again, so a
+    /// stroke that adds a few hundred vertices a frame is not a new set of
+    /// buffers, and the whole mesh sent again, every frame.
+    vertex_room: u32,
+    index_room: u32,
+}
+
+/// A buffer with room for `room` bytes, holding `bytes` at its start.
+fn roomy_buffer(gpu: &Gpu, label: &str, bytes: &[u8], room: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: room.max(bytes.len() as u64).max(4),
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(&buffer, 0, bytes);
+    buffer
 }
 
 /// An index buffer holding `corners`. It is never made empty: a mesh with
@@ -637,9 +658,13 @@ impl Renderer {
     /// what changed.
     pub fn sync_mesh(&mut self, gpu: &Gpu, id: u64, mesh: &mut Mesh, rebuild: bool) {
         mesh.track_curvature(self.want_curvature);
-        // Faces were hidden or shown since the last frame: the wireframe's
-        // lines are of the old set, so they go, and are built again below.
-        if self.meshes.get(&id).is_some_and(|b| b.visibility != mesh.visibility_version()) {
+        // Faces were hidden or shown since the last frame, or dynamic
+        // topology split some: the wireframe's lines are of the old set, so
+        // they go, and are built again below.
+        let stale = |b: &MeshBuffers| {
+            b.visibility != mesh.visibility_version() || b.topology != mesh.topology_version()
+        };
+        if self.meshes.get(&id).is_some_and(stale) {
             self.wire.retain(|other| other != id);
         }
         if rebuild || self.meshes.get(&id).is_none_or(|b| b.uid != mesh.uid) {
@@ -694,6 +719,9 @@ impl Renderer {
             indices: index_buffer(gpu, &shown),
             index_count: shown.len() as u32,
             visibility: mesh.visibility_version(),
+            topology: mesh.topology_version(),
+            vertex_room: mesh.vertex_count() as u32,
+            index_room: shown.len().max(3) as u32,
         };
         debug_assert_eq!(buffers.index_count as usize, mesh.visible_triangle_count() * 3);
         self.meshes.insert(id, buffers);
@@ -705,6 +733,31 @@ impl Renderer {
         let dirty = mesh.take_dirty();
         let Some(buffers) = self.meshes.get_mut(&id) else { return };
         let mut bytes = 0;
+        // Dynamic topology added more vertices than the buffers hold: new
+        // ones with room to spare, and every vertex sent again.
+        let count = mesh.vertex_count() as u32;
+        let outgrown = count > buffers.vertex_room;
+        if outgrown {
+            let room = count + count / 2;
+            let vertex = wgpu::BufferUsages::VERTEX;
+            let make = |label, data: &[u8], stride: u64| roomy_buffer(gpu, label, data, room as u64 * stride, vertex);
+            buffers.positions = make("positions", bytemuck::cast_slice(&mesh.positions), 12);
+            buffers.normals = make("normals", bytemuck::cast_slice(&mesh.normals), 12);
+            buffers.mask = make("mask", bytemuck::cast_slice(&mesh.mask), 4);
+            // Neutral all the way to the end while no finish reads it, so the
+            // vertices still to come are neutral too.
+            let neutral;
+            let curv: &[f32] = if mesh.curv.len() == mesh.vertex_count() {
+                &mesh.curv
+            } else {
+                neutral = vec![0.5f32; room as usize];
+                &neutral
+            };
+            buffers.curv = make("curvature", bytemuck::cast_slice(curv), 4);
+            buffers.vertex_room = room;
+            bytes += count as usize * 32;
+        }
+        let dirty = if outgrown { crate::mesh::DirtyRanges { triangles: dirty.triangles, ..Default::default() } } else { dirty };
         for r in &dirty.positions {
             let data: &[u8] = bytemuck::cast_slice(&mesh.positions[r.start as usize..r.end as usize]);
             gpu.queue.write_buffer(&buffers.positions, r.start as u64 * 12, data);
@@ -728,15 +781,39 @@ impl Renderer {
             }
         }
         // Faces were hidden or shown: the vertices stay where they are, and
-        // only the list of faces to draw is sent again.
-        if buffers.visibility != mesh.visibility_version() {
+        // only the list of faces to draw is sent again. The same when
+        // triangles changed while some are hidden, since the list holds only
+        // the ones that show and so has no fixed place for any of them.
+        let split = buffers.topology != mesh.topology_version();
+        if buffers.visibility != mesh.visibility_version() || (split && mesh.any_hidden()) {
             let shown = mesh.visible_indices();
             buffers.indices = index_buffer(gpu, &shown);
             buffers.index_count = shown.len() as u32;
+            buffers.index_room = shown.len().max(3) as u32;
             buffers.visibility = mesh.visibility_version();
             debug_assert_eq!(buffers.index_count as usize, mesh.visible_triangle_count() * 3);
             bytes += shown.len() * 4;
+        } else if split {
+            // Dynamic topology rewrote some triangles and added others. With
+            // nothing hidden the list is the mesh's own, triangle for
+            // triangle, so only those are sent, unless they no longer fit.
+            let corners = mesh.indices.len() as u32;
+            if corners > buffers.index_room {
+                let room = corners + corners / 2;
+                let data: &[u8] = bytemuck::cast_slice(&mesh.indices);
+                buffers.indices = roomy_buffer(gpu, "indices", data, room as u64 * 4, wgpu::BufferUsages::INDEX);
+                buffers.index_room = room;
+                bytes += data.len();
+            } else {
+                for r in &dirty.triangles {
+                    let data: &[u8] = bytemuck::cast_slice(&mesh.indices[r.start as usize * 3..r.end as usize * 3]);
+                    gpu.queue.write_buffer(&buffers.indices, r.start as u64 * 12, data);
+                    bytes += data.len();
+                }
+            }
+            buffers.index_count = corners;
         }
+        buffers.topology = mesh.topology_version();
         if bytes > 0 {
             self.last_upload_bytes = bytes;
         }

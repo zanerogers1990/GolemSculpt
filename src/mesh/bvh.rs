@@ -13,6 +13,11 @@
 use glam::Vec3;
 use rayon::prelude::*;
 
+use super::lists::Lists;
+
+mod grow;
+pub use grow::LeafRuns;
+
 pub const LEAF_MAX_TRIS: usize = 64;
 const LEAF_BIT: u32 = 1 << 31;
 const NO_PARENT: u32 = u32::MAX;
@@ -125,11 +130,14 @@ pub struct Hit {
 pub struct Bvh {
     pub nodes: Vec<Node>,
     pub leaves: Vec<Leaf>,
-    /// Leaves that share at least one vertex with a leaf (symmetric), CSR.
-    nbr_off: Vec<u32>,
-    nbr: Vec<u32>,
+    /// Leaves that share at least one vertex with a leaf (symmetric).
+    nbr: Lists,
     /// Owning leaf of each vertex.
     pub vert_leaf: Vec<u32>,
+    /// Set once dynamic topology has changed the mesh: a leaf may then own a
+    /// vertex that none of its own triangles uses, so its bounds have to take
+    /// in its vertices as well as its triangles (see bvh/grow.rs).
+    loose: bool,
     /// Scratch for refits: last refit generation that touched each node.
     stamp: Vec<u32>,
     generation: u32,
@@ -278,11 +286,11 @@ impl Bvh {
         for i in 0..leaves.len() {
             nbr_off[i + 1] += nbr_off[i];
         }
-        let nbr: Vec<u32> = pairs.iter().map(|&(_, o)| o).collect();
+        let nbr = Lists::from_offsets(&nbr_off, pairs.iter().map(|&(_, o)| o).collect());
 
         let stamp = vec![0u32; nodes.len()];
         let mut bvh =
-            Bvh { nodes, leaves, nbr_off, nbr, vert_leaf, stamp, generation: 0, scratch: Vec::new() };
+            Bvh { nodes, leaves, nbr, vert_leaf, loose: false, stamp, generation: 0, scratch: Vec::new() };
         let all: Vec<u32> = (0..bvh.leaves.len() as u32).collect();
         bvh.refit_leaves(&all, &new_positions, &new_indices, false);
         Built { bvh, positions: new_positions, indices: new_indices, vert_remap, tri_order: ids }
@@ -290,17 +298,22 @@ impl Bvh {
 
     #[inline]
     pub fn leaf_neighbours(&self, leaf: u32) -> &[u32] {
-        &self.nbr[self.nbr_off[leaf as usize] as usize..self.nbr_off[leaf as usize + 1] as usize]
+        self.nbr.row(leaf as usize)
     }
 
     pub fn bounds(&self) -> Aabb {
         self.nodes.first().map_or(Aabb::EMPTY, |n| n.bounds)
     }
 
-    fn leaf_bounds(leaf: &Leaf, positions: &[Vec3], indices: &[u32]) -> Aabb {
+    fn leaf_bounds(leaf: &Leaf, positions: &[Vec3], indices: &[u32], loose: bool) -> Aabb {
         let mut b = Aabb::EMPTY;
         for &v in &indices[leaf.tri_start as usize * 3..leaf.tri_end as usize * 3] {
             b.grow(positions[v as usize]);
+        }
+        if loose {
+            for &p in &positions[leaf.vert_start as usize..leaf.vert_end as usize] {
+                b.grow(p);
+            }
         }
         b
     }
@@ -323,7 +336,7 @@ impl Bvh {
         let bounds: Vec<Aabb> = leaves
             .par_iter()
             .with_min_len(64)
-            .map(|&l| Self::leaf_bounds(&self.leaves[l as usize], positions, indices))
+            .map(|&l| Self::leaf_bounds(&self.leaves[l as usize], positions, indices, self.loose))
             .collect();
 
         self.generation = self.generation.wrapping_add(1);

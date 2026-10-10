@@ -122,6 +122,8 @@ impl Running {
         opts.remesh_resolution = kept.remesh_resolution();
         opts.quad_target = kept.quad_target();
         opts.new_shape_tris = kept.starting_detail();
+        self.doc.sculptor.dyntopo.enabled = kept.dynamic_topology;
+        self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
         self.doc.tools.unit = kept.length_unit();
         kept.brush.apply(&mut self.doc.sculptor.settings);
         prefs::cards::restore(&self.egui_ctx, &kept.cards);
@@ -145,6 +147,8 @@ impl Running {
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
             starting_detail: opts.new_shape_tris,
+            dynamic_topology: self.doc.sculptor.dyntopo.enabled,
+            dynamic_topology_detail: self.doc.sculptor.dyntopo.detail,
             recent: self.ui.recent.paths().to_vec(),
         }
     }
