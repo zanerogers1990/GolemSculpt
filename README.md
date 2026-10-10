@@ -791,32 +791,42 @@ Windows comes with).
 
 ## What is here, and what is not yet
 
-Ported from the Unity app: the nine brushes above with their settings, mask
-painting and mask operations, mirror symmetry on X / Y / Z, voxel remesh, quad remesh,
-undo / redo, matcaps, the lit materials and finishes, lighting presets, HDRI
-lighting and post effects (see Look below), cavity, the view gizmo, the brush
-wheel, the two-panel interface, and multiple objects with the scene graph
-(add shapes, show / hide, rename, clone, instance, reorder), and SSpheres
-(sphere blockout with a live skin, symmetry, posing, attaching to an object,
-and Make Skin).
+Ported from the Unity app, each described in its own section above:
 
-Also ported: tubes (see Tube above) and box / lasso hide (see Mask, Hide,
-Trim, Split and Extract, and Hidden parts, above). A tube is drawn along a
-stroke, shaped by its points, and fused into the model or kept as an object of
-its own; the Hide tool hides part of an object with a box or lasso.
+- **Sculpting**: the ten brushes with their settings (the Pose brush is built
+  on Blender's rather than the Unity app's), mask painting and mask
+  operations, mirror symmetry on X / Y / Z and radial symmetry, dynamic
+  topology, voxel remesh, quad remesh, hidden parts, and undo / redo.
+- **Objects**: the scene graph (add shapes, show / hide, rename, clone,
+  instance, reorder), join and the booleans, live mirror copies, and the
+  transform gizmo and view gizmo.
+- **Tools**: SSpheres (with the gizmo's arrows on a sphere), Measure, Array,
+  Lathe, Tube, Keys, and Mask, Hide, Trim, Split and Extract.
+- **Look**: matcaps, the lit materials and finishes, glow, lighting presets,
+  HDRI lighting, backdrops and the post effects, cavity included.
+- **Files and recording**: `.sclp` files, OBJ and STL import and export,
+  recent files, the turntable with its 360 loop as a video or as pictures,
+  and the timelapse.
+- **Interface**: the two panels, the brush wheel, the clean view, tooltips
+  and interface size.
 
-Quad remesh is ported too: **Quad Remesh** in the Remesh card rebuilds the
-selected object as about the number of quads on the **Quads** slider, even in
-size and following the form. It is one undo step, and OBJ export then writes
-the quads themselves. The **Wireframe** tick box at the bottom of the viewport
-draws the edges of every face (the quads after a quad remesh, the triangles
-otherwise); a quad remesh turns it on. The result ignores mirror symmetry. The
-quads are kept in `.sclp` files.
+A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
+each start with a clear mask and everything showing.
 
-Not ported yet: the Pose brush, radial symmetry, dynamic topology, the gizmo
-on an SSphere and live mirror copies.
-The turntable and the timelapse are ported (see Turntable and Timelapse above);
-a 360 loop is saved as PNG pictures only, not yet as a video.
+Not ported yet:
+
+- Symmetry settings are one set for the whole scene, worked out in each
+  object's own space. The Unity app kept them per object and could also
+  mirror across the world's planes.
+- Mask, Hide, Trim and Split do not act through an array's copies (they do
+  through instances and live mirror copies).
+- The gizmo's arrows on a selected point of an array's path.
+- A tube repeated round the radial axis, and **Radial Symmetry on Create**
+  in the Lathe.
+
+SSpheres, arrays, unmerged tubes, rulers and planned keys are scaffolds: they
+are not kept in `.sclp` files, so make the skin, finish the array or merge the
+tube before closing the app.
 
 Left out on purpose: the Unity app's mold maker and hard-surface tool.
 
