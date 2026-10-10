@@ -4,7 +4,10 @@
 //! A `.sclp` keeps the whole scene exactly: every mesh as raw arrays, then
 //! one JSON section for everything else (objects, look, camera, tool state).
 //! Its layout, and how to add to it, are set out above `SCENE_MAGIC` below.
-//! Saving never harms the file already there: see `replace_file`.
+//! Saving and exporting never harm the file already there: each writes the new
+//! file beside the old one and swaps it in only when whole (see `replace_file`),
+//! and each writes a point that is not a number mended, never the model on
+//! screen (see `repair.rs`).
 //!
 //! For the mesh formats:
 //!
@@ -23,6 +26,7 @@
 //! An export bakes the object's position, rotation and scale into the file, so
 //! what reaches the slicer is what is on screen.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -41,6 +45,11 @@ use crate::mesh::{Mesh, Polys};
 pub type Result<T> = std::result::Result<T, String>;
 
 mod tool_data;
+mod repair;
+#[cfg(test)]
+mod damage_tests;
+
+pub use repair::{note_opened, note_saved};
 
 /// A model as read from a file, already in the app's axes and units.
 pub struct RawMesh {
@@ -901,12 +910,18 @@ pub struct SavedScene {
     /// The look, camera and tool state the file carried. Empty for a file
     /// from before these were kept.
     pub details: Details,
+    /// How many points the file held that were not numbers, and were put
+    /// back in order as it was read (see `repair.rs`).
+    pub repaired: usize,
 }
 
 // ---- the one-mesh file from before scenes existed
 
 /// Native save: the exact mesh and its mask, as raw arrays. Loads back
-/// instantly and loses nothing, unlike a round trip through OBJ.
+/// instantly and loses nothing, unlike a round trip through OBJ. This is the
+/// old one-mesh layout, kept so the tests can write the file a reader must
+/// still open; it is written straight to `path` and the app never calls it
+/// (the app saves scenes: see [`save_scene_with`]).
 #[cfg_attr(not(test), allow(dead_code))] // the app saves whole scenes; this is the old one-mesh file
 pub fn save_native(mesh: &Mesh, path: &Path) -> Result<()> {
     let io = |e: std::io::Error| format!("Could not write {}: {e}", path.display());
@@ -920,7 +935,13 @@ pub fn save_native(mesh: &Mesh, path: &Path) -> Result<()> {
     w.flush().map_err(io)
 }
 
+#[allow(dead_code)] // `load_fixed` is the way in; this is the one-mesh file on its own
 pub fn load_native(path: &Path) -> Result<Mesh> {
+    load_native_counted(path).map(|(mesh, _)| mesh)
+}
+
+/// [`load_native`], also saying how many damaged points it put in order.
+fn load_native_counted(path: &Path) -> Result<(Mesh, usize)> {
     let bad = || format!("{} is not a sculpt file", path.display());
     let bytes = std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
     if bytes.len() < 24 || &bytes[..8] != NATIVE_MAGIC {
@@ -940,18 +961,16 @@ pub fn load_native(path: &Path) -> Result<Mesh> {
     let floats = |at: usize, n: usize| -> Vec<f32> {
         bytes[at..at + n * 4].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
     };
-    let positions: Vec<Vec3> =
+    let mut positions: Vec<Vec3> =
         floats(24, verts * 3).chunks_exact(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
     let at = 24 + verts * 12;
     let index_data: Vec<u32> = bytes[at..at + indices * 4]
         .chunks_exact(4)
         .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
         .collect();
-    let mask = floats(at + indices * 4, verts);
-    if positions.iter().any(|p| !p.is_finite()) {
-        return Err(bad());
-    }
-    Ok(Mesh::new(positions, index_data, Some(mask)))
+    let mut mask = floats(at + indices * 4, verts);
+    let repaired = repair::repair_points(&mut positions, &index_data, &mut mask);
+    Ok((Mesh::new(positions, index_data, Some(mask)), repaired))
 }
 
 // ---- writing a scene
@@ -963,24 +982,33 @@ fn block(w: &mut impl Write, tag: &[u8; 4], length: usize) -> std::io::Result<()
 
 /// Native save of every object: each mesh once (exact, with its mask, its
 /// quads and which of its faces are hidden), then the object list. The file already at `path` is replaced
-/// only once the new one is whole (see [`replace_file`]).
+/// only once the new one is whole (see [`replace_file`]). A point that is not a number is written mended,
+/// so the file always opens; see [`save_scene_with`].
 #[cfg_attr(not(test), allow(dead_code))] // the app always has details to keep
 pub fn save_scene(meshes: &[&Mesh], objects: &[SavedObject], active: usize, path: &Path) -> Result<()> {
-    save_scene_with(meshes, objects, active, &Details::default(), path)
+    save_scene_with(meshes, objects, active, &Details::default(), path).map(|_| ())
 }
 
 /// [`save_scene`], with the look, camera and tool state to keep alongside.
+///
+/// A point that is not a number (NaN or infinite) would make the file refuse
+/// to open, so the file is written with such points mended (see `repair.rs`)
+/// and the model in memory is left as it is. Saving must neither lose the work
+/// nor write a file that cannot be read back; returns how many points were
+/// mended so the caller can say so.
 pub fn save_scene_with(
     meshes: &[&Mesh],
     objects: &[SavedObject],
     active: usize,
     details: &Details,
     path: &Path,
-) -> Result<()> {
+) -> Result<usize> {
     // Never over a sculpt from the Unity app, which this app cannot write.
     crate::unity_import::refuse_to_overwrite(path)?;
     let info = details.document(objects, active);
-    replace_file(path, |w| write_scene(w, meshes, &info))
+    let mended = meshes.iter().map(|m| repair::damaged_points(m)).sum();
+    replace_file(path, |w| write_scene(w, meshes, &info))?;
+    Ok(mended)
 }
 
 /// The bytes of a scene file: the magic, each mesh's blocks, then `info`,
@@ -989,7 +1017,12 @@ fn write_scene(w: &mut impl Write, meshes: &[&Mesh], info: &[u8]) -> std::io::Re
     w.write_all(SCENE_MAGIC)?;
     for (number, mesh) in meshes.iter().enumerate() {
         let number = (number as u32).to_le_bytes();
-        let positions: &[u8] = bytemuck::cast_slice(&mesh.positions);
+        let mended = repair::mended(mesh);
+        let (points, mask_values) = match &mended {
+            Some((positions, mask)) => (&positions[..], &mask[..]),
+            None => (&mesh.positions[..], &mesh.mask[..]),
+        };
+        let positions: &[u8] = bytemuck::cast_slice(points);
         let indices: &[u8] = bytemuck::cast_slice(&mesh.indices);
         block(w, MESH, 16 + positions.len() + indices.len())?;
         w.write_all(&(mesh.positions.len() as u64).to_le_bytes())?;
@@ -998,8 +1031,8 @@ fn write_scene(w: &mut impl Write, meshes: &[&Mesh], info: &[u8]) -> std::io::Re
         w.write_all(indices)?;
         // Most meshes have nothing masked, and then a mask is four bytes a
         // vertex of nothing.
-        if mesh.mask.len() == mesh.positions.len() && mesh.mask.iter().any(|&m| m != 0.0) {
-            let mask: &[u8] = bytemuck::cast_slice(&mesh.mask);
+        if mask_values.len() == points.len() && mask_values.iter().any(|&m| m != 0.0) {
+            let mask: &[u8] = bytemuck::cast_slice(mask_values);
             block(w, MASK, 4 + mask.len())?;
             w.write_all(&number)?;
             w.write_all(mask)?;
@@ -1038,7 +1071,19 @@ struct LoadedMesh {
 }
 
 impl LoadedMesh {
-    fn build(self) -> Mesh {
+    /// The mesh, and how many damaged points were put in order on the way:
+    /// a file is never refused for a point that is not a number.
+    fn build(mut self) -> (Mesh, usize) {
+        let mut no_mask = Vec::new();
+        let repaired = repair::repair_points(
+            &mut self.positions,
+            &self.indices,
+            self.mask.as_deref_mut().unwrap_or(&mut no_mask),
+        );
+        (self.build_sound(), repaired)
+    }
+
+    fn build_sound(self) -> Mesh {
         let verts = self.positions.len();
         let sound = |p: &Polys| {
             p.start.first() == Some(&0)
@@ -1093,8 +1138,10 @@ impl Loaded {
     /// Builds the meshes (their spatial index, adjacency and normals: the
     /// slow part of opening a large scene), several at once.
     fn into_scene(self) -> SavedScene {
-        let meshes = self.meshes.into_par_iter().map(LoadedMesh::build).collect();
-        SavedScene { meshes, objects: self.objects, active: self.active, details: self.details }
+        let built: Vec<(Mesh, usize)> = self.meshes.into_par_iter().map(LoadedMesh::build).collect();
+        let repaired = built.iter().map(|(_, n)| n).sum();
+        let meshes = built.into_iter().map(|(mesh, _)| mesh).collect();
+        SavedScene { meshes, objects: self.objects, active: self.active, details: self.details, repaired }
     }
 }
 
@@ -1230,9 +1277,6 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
     // The JSON goes in last, so a file cut short anywhere is missing it.
     let info = info.ok_or_else(bad)?;
     let Ok(Value::Object(mut root)) = serde_json::from_slice::<Value>(&info) else { return Err(bad()) };
-    if meshes.par_iter().any(|m| m.positions.par_iter().any(|p| !p.is_finite())) {
-        return Err(bad());
-    }
     let Some(Value::Array(entries)) = root.remove("objects") else { return Err(bad()) };
     let mut objects = Vec::new();
     let mut kept = Vec::new();
@@ -1283,7 +1327,9 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
         let name = path.file_stem().map_or("Sculpt".into(), |s| s.to_string_lossy().into_owned());
         let only =
             SavedObject { name, visible: true, mesh: 0, position: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE };
-        return Ok(SavedScene { meshes: vec![load_native(path)?], objects: vec![only], active: 0, details: Details::default() });
+        let (mesh, repaired) = load_native_counted(path)?;
+        let details = Details::default();
+        return Ok(SavedScene { meshes: vec![mesh], objects: vec![only], active: 0, details, repaired });
     }
     if bytes.len() < 20 || (&bytes[..8] != SCENE_MAGIC_FIXED && &bytes[..8] != SCENE_MAGIC_PLACED) {
         return Err(bad());
@@ -1305,17 +1351,16 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
     let (mesh_count, object_count, active) = (head[0] as usize, head[1] as usize, head[2] as usize);
     // Counts come from the file: never reserve by them, only read what is there.
     let mut meshes = Vec::new();
+    let mut repaired = 0;
     for _ in 0..mesh_count {
         let sizes = take(16)?;
         let verts = u64::from_le_bytes(sizes[..8].try_into().unwrap()) as usize;
         let indices = u64::from_le_bytes(sizes[8..].try_into().unwrap()) as usize;
         let floats = f32s(take(verts.checked_mul(12).ok_or_else(bad)?)?);
-        let positions: Vec<Vec3> = floats.chunks_exact(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
+        let mut positions: Vec<Vec3> = floats.chunks_exact(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
         let index_data = u32s(take(indices.checked_mul(4).ok_or_else(bad)?)?);
-        let mask = f32s(take(verts.checked_mul(4).ok_or_else(bad)?)?);
-        if positions.iter().any(|p| !p.is_finite()) {
-            return Err(bad());
-        }
+        let mut mask = f32s(take(verts.checked_mul(4).ok_or_else(bad)?)?);
+        repaired += repair::repair_points(&mut positions, &index_data, &mut mask);
         meshes.push(Mesh::new(positions, index_data, Some(mask)));
     }
     let mut objects = Vec::new();
@@ -1341,7 +1386,7 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
     if objects.is_empty() || active >= objects.len() {
         return Err(bad());
     }
-    Ok(SavedScene { meshes, objects, active, details: Details::default() })
+    Ok(SavedScene { meshes, objects, active, details: Details::default(), repaired })
 }
 
 fn nothing_to_export(mesh: &Mesh) -> Result<()> {
@@ -1359,7 +1404,7 @@ fn nothing_to_export(mesh: &Mesh) -> Result<()> {
 /// right-handed with Y up, like this app. A quad-remeshed mesh goes out as its
 /// quads.
 #[allow(dead_code)] // the app writes placed copies (`export_obj_placed`); this is the one-place form
-pub fn export_obj(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
+pub fn export_obj(mesh: &Mesh, model: Mat4, path: &Path) -> Result<usize> {
     export_obj_placed(mesh, &[("", model)], path)
 }
 
@@ -1367,27 +1412,73 @@ pub fn export_obj(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
 /// its live mirror copies): one `o` block of its own for each, under the name
 /// it is given, so what reaches the other program is what is on screen. A
 /// single place is written as `export_obj` does, with no `o` line.
-pub fn export_obj_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> Result<()> {
+///
+/// Returns how many points of the mesh were not numbers and were written
+/// mended (see [`export_points`]), so the caller can say so.
+pub fn export_obj_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> Result<usize> {
     nothing_to_export(mesh)?;
-    let io = |e: std::io::Error| format!("Could not write {}: {e}", path.display());
-    let mut w = BufWriter::with_capacity(1 << 20, File::create(path).map_err(io)?);
-    writeln!(w, "# Exported from Sculpt").map_err(io)?;
-    // OBJ numbers its vertices through the whole file, so each place carries
-    // on from the last.
-    let mut base = 0;
-    for &(name, model) in places {
-        if places.len() > 1 {
-            writeln!(w, "o {name}").map_err(io)?;
+    let (points, mended) = export_points(mesh);
+    replace_file(path, |w| {
+        writeln!(w, "# Exported from Sculpt")?;
+        // OBJ numbers its vertices through the whole file, so each place carries
+        // on from the last.
+        let mut base = 0;
+        for &(name, model) in places {
+            if places.len() > 1 {
+                writeln!(w, "o {name}")?;
+            }
+            write_object_of(w, mesh, &points, model, base)?;
+            base += mesh.positions.len() as u32;
         }
-        write_object(&mut w, mesh, model, base).map_err(io)?;
-        base += mesh.positions.len() as u32;
+        Ok(())
+    })?;
+    Ok(mended)
+}
+
+/// The points of a mesh as an export writes them: the mesh's own, or, when
+/// some are not numbers, a mended copy with normals worked out afresh. A
+/// slicer or another modeller chokes on "NaN" in a file, so an export is
+/// written from the copy, as a save is (see `repair.rs`); the mesh on screen is
+/// never changed. The count is how many points were mended.
+struct Points<'a> {
+    positions: Cow<'a, [Vec3]>,
+    normals: Cow<'a, [Vec3]>,
+}
+
+fn export_points(mesh: &Mesh) -> (Points<'_>, usize) {
+    let Some((positions, _)) = repair::mended(mesh) else {
+        return (Points { positions: Cow::Borrowed(&mesh.positions), normals: Cow::Borrowed(&mesh.normals) }, 0);
+    };
+    let normals = vertex_normals(&positions, &mesh.indices);
+    let points = Points { positions: Cow::Owned(positions), normals: Cow::Owned(normals) };
+    (points, repair::damaged_points(mesh))
+}
+
+/// Area-weighted vertex normals of a triangle list; a corner naming no point is passed over.
+fn vertex_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
+    let mut sums = vec![Vec3::ZERO; positions.len()];
+    for t in indices.chunks_exact(3) {
+        let [a, b, c] = [t[0] as usize, t[1] as usize, t[2] as usize];
+        if a.max(b).max(c) >= positions.len() {
+            continue;
+        }
+        let area_normal = (positions[b] - positions[a]).cross(positions[c] - positions[a]);
+        for i in [a, b, c] {
+            sums[i] += area_normal;
+        }
     }
-    w.flush().map_err(io)
+    sums.into_iter().map(|n| n.normalize_or_zero()).collect()
+}
+
+/// [`write_object_of`] for a mesh whose points are all numbers.
+#[cfg(test)]
+fn write_object(w: &mut impl Write, mesh: &Mesh, model: Mat4, base: u32) -> std::io::Result<()> {
+    write_object_of(w, mesh, &export_points(mesh).0, model, base)
 }
 
 /// The vertices, normals and faces of `mesh` placed by `model`, numbered from `base`.
-fn write_object(w: &mut impl Write, mesh: &Mesh, model: Mat4, base: u32) -> std::io::Result<()> {
-    for p in &mesh.positions {
+fn write_object_of(w: &mut impl Write, mesh: &Mesh, points: &Points, model: Mat4, base: u32) -> std::io::Result<()> {
+    for p in points.positions.iter() {
         let q = model.transform_point3(*p);
         writeln!(w, "v {} {} {}", q.x, q.y, q.z)?;
     }
@@ -1396,9 +1487,9 @@ fn write_object(w: &mut impl Write, mesh: &Mesh, model: Mat4, base: u32) -> std:
     let linear = Mat3::from_mat4(model);
     let determinant = linear.determinant();
     let normal_matrix = if determinant.abs() > 1e-20 { linear.inverse().transpose() } else { linear };
-    let with_normals = mesh.normals.len() == mesh.positions.len();
+    let with_normals = points.normals.len() == points.positions.len();
     if with_normals {
-        for n in &mesh.normals {
+        for n in points.normals.iter() {
             let q = (normal_matrix * *n).normalize_or_zero();
             writeln!(w, "vn {:.5} {:.5} {:.5}", q.x, q.y, q.z)?;
         }
@@ -1442,47 +1533,56 @@ fn write_face(w: &mut impl Write, corners: &[u32], reversed: bool, with_normals:
 /// top of this file). Triangles keep their winding, so the surface stays
 /// outward-facing.
 #[allow(dead_code)] // as `export_obj`
-pub fn export_stl(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
+pub fn export_stl(mesh: &Mesh, model: Mat4, path: &Path) -> Result<usize> {
     export_stl_placed(mesh, &[model], path)
 }
 
 /// [`export_stl`] for a mesh drawn in several places at once (an object and
 /// its live mirror copies), all in the one file, as the model on screen.
-pub fn export_stl_placed(mesh: &Mesh, models: &[Mat4], path: &Path) -> Result<()> {
+/// Returns how many damaged points were written mended, as [`export_obj_placed`].
+pub fn export_stl_placed(mesh: &Mesh, models: &[Mat4], path: &Path) -> Result<usize> {
     nothing_to_export(mesh)?;
+    let (points, mended) = export_points(mesh);
     // The count is four bytes in the file; an array of a heavy mesh can ask for more than that.
     let triangles = u32::try_from(mesh.triangle_count() * models.len())
         .map_err(|_| "That is too many triangles for an STL file (4 billion). Lower the array's count.".to_owned())?;
-    let io = |e: std::io::Error| format!("Could not write {}: {e}", path.display());
-    let mut w = BufWriter::with_capacity(1 << 20, File::create(path).map_err(io)?);
-    // Must not start with "solid", or readers that sniff the format by that
-    // word take this binary file for an ASCII one.
-    let mut header = [0u8; STL_HEADER];
-    let note = b"Exported from Sculpt (millimetres, Z up)";
-    header[..note.len()].copy_from_slice(note);
-    w.write_all(&header).map_err(io)?;
-    w.write_all(&triangles.to_le_bytes()).map_err(io)?;
-    for model in models {
-        let points: Vec<Vec3> = mesh.positions.iter().map(|&p| to_stl(model.transform_point3(p))).collect();
-        let mirrored = Mat3::from_mat4(*model).determinant() < 0.0;
-        for t in mesh.indices.chunks_exact(3) {
-            let (a, mut b, mut c) = (points[t[0] as usize], points[t[1] as usize], points[t[2] as usize]);
-            if mirrored {
-                (b, c) = (c, b);
-            }
-            // From the corners as written, so it cannot disagree with their order.
-            let normal = (b - a).cross(c - a).normalize_or_zero();
-            let mut facet = [0u8; STL_FACET];
-            for (slot, v) in [normal, a, b, c].iter().enumerate() {
-                for (axis, value) in v.to_array().iter().enumerate() {
-                    let at = slot * 12 + axis * 4;
-                    facet[at..at + 4].copy_from_slice(&value.to_le_bytes());
-                }
-            }
-            w.write_all(&facet).map_err(io)?;
+    replace_file(path, |w| {
+        // Must not start with "solid", or readers that sniff the format by that
+        // word take this binary file for an ASCII one.
+        let mut header = [0u8; STL_HEADER];
+        let note = b"Exported from Sculpt (millimetres, Z up)";
+        header[..note.len()].copy_from_slice(note);
+        w.write_all(&header)?;
+        w.write_all(&triangles.to_le_bytes())?;
+        for model in models {
+            write_stl_place(w, mesh, &points, *model)?;
         }
+        Ok(())
+    })?;
+    Ok(mended)
+}
+
+/// The facets of `mesh` (its triangles, at `points`) placed by `model`, in STL's axes.
+fn write_stl_place(w: &mut impl Write, mesh: &Mesh, points: &Points, model: Mat4) -> std::io::Result<()> {
+    let points: Vec<Vec3> = points.positions.iter().map(|&p| to_stl(model.transform_point3(p))).collect();
+    let mirrored = Mat3::from_mat4(model).determinant() < 0.0;
+    for t in mesh.indices.chunks_exact(3) {
+        let (a, mut b, mut c) = (points[t[0] as usize], points[t[1] as usize], points[t[2] as usize]);
+        if mirrored {
+            (b, c) = (c, b);
+        }
+        // From the corners as written, so it cannot disagree with their order.
+        let normal = (b - a).cross(c - a).normalize_or_zero();
+        let mut facet = [0u8; STL_FACET];
+        for (slot, v) in [normal, a, b, c].iter().enumerate() {
+            for (axis, value) in v.to_array().iter().enumerate() {
+                let at = slot * 12 + axis * 4;
+                facet[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        w.write_all(&facet)?;
     }
-    w.flush().map_err(io)
+    Ok(())
 }
 
 /// What the save dialog offers as a file name: the object's name and the time,
@@ -2517,10 +2617,8 @@ mod tests {
         let mut stray = bytes.clone();
         stray[parts[1].1.start..parts[1].1.start + 4].copy_from_slice(&9u32.to_le_bytes());
         refused("a mask for no mesh", &stray);
-        // A position that is not a number would spread through every brush.
-        let mut nan = bytes.clone();
-        nan[parts[0].1.start + 16..parts[0].1.start + 20].copy_from_slice(&f32::NAN.to_le_bytes());
-        refused("a vertex that is not a number", &nan);
+        // A position that is not a number would spread through every brush; it is
+        // mended as the file is read, not refused (see `damage_tests.rs`).
         // JSON that is not JSON, or names a mesh the file does not have.
         let rewrite = |info: &[u8]| {
             let mut out = bytes[..parts[2].1.start - 12].to_vec();

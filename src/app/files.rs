@@ -55,20 +55,35 @@ pub(super) struct State {
     clean: Option<Mark>,
     /// The user has said the app may close.
     quit: bool,
+    /// How many damaged points the last save wrote mended (see `io::save_scene_with`).
+    mended_on_save: usize,
+    /// How many damaged points the file last put in place of the scene had, mended as it was read.
+    repaired_on_open: usize,
 }
 
 impl State {
     pub(super) fn new(screenshot: bool) -> State {
         let home = Home::for_run(screenshot);
         let kept = home.load();
+        let next_check = Instant::now() + SETTINGS_CHECK;
         // `clean` is set once the scene the app starts with is in place (`mark_saved`).
-        State { home, kept, next_check: Instant::now() + SETTINGS_CHECK, clean: None, quit: false }
+        State { home, kept, next_check, clean: None, quit: false, mended_on_save: 0, repaired_on_open: 0 }
     }
 }
 
 /// A file's name without its folders, for a status line.
 fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// What the status line says when the file named on the command line could not
+/// be opened: which file, why in plain words, and what the app shows instead.
+pub(super) fn start_up_failure(file: &std::path::Path, error: &str) -> String {
+    if !file.exists() {
+        let name = file.file_name().map_or_else(|| file.display().to_string(), |n| n.to_string_lossy().into_owned());
+        return format!("{name} is not there, so nothing was opened. Starting with a new sphere instead.");
+    }
+    format!("{}. Starting with a new sphere instead.", error.trim_end_matches('.'))
 }
 
 fn how_many(count: usize) -> String {
@@ -355,7 +370,8 @@ impl Running {
         match self.save_scene(&path) {
             Ok(()) => {
                 let size = std::fs::metadata(&path).map_or(String::new(), |m| format!(" ({:.1} MB)", m.len() as f64 / 1e6));
-                self.status(format!("Saved {}{size}", path.display()), true);
+                let note = io::note_saved(self.files.mended_on_save).map_or(String::new(), |note| format!(". {note}"));
+                self.status(format!("Saved {}{size}{note}", path.display()), true);
                 self.toast("Saved");
                 self.doc.path = Some(path);
                 true
@@ -371,10 +387,11 @@ impl Running {
     /// mirror settings; instances keep sharing a mesh. The file already there
     /// is only replaced once the new one is whole.
     pub(super) fn save_scene(&mut self, path: &Path) -> io::Result<()> {
-        {
+        let mended = {
             let (meshes, objects, active) = self.scene_for_file()?;
-            io::save_scene_with(&meshes, &objects, active, &self.details(), path)?;
-        }
+            io::save_scene_with(&meshes, &objects, active, &self.details(), path)?
+        };
+        self.files.mended_on_save = mended;
         let now = self.history_mark();
         self.file().written(path, now);
         self.note_recent(path, true);
@@ -718,6 +735,8 @@ impl Running {
         };
         // A sculpt from the Unity app says so, and what it could not bring.
         let note = unity_import::status_note(&details, true).map_or(String::new(), |note| format!(". {note}"));
+        let repaired = io::note_opened(self.files.repaired_on_open);
+        let note = note + &repaired.map_or(String::new(), |note| format!(". {note}"));
         self.status(format!("Opened {} ({}){note}", path.display(), how_many(count)), true);
         // Its picture is the one from its last save; one is only taken now
         // if it has none.
@@ -734,6 +753,7 @@ impl Running {
     pub(super) fn replace_scene(&mut self, path: &Path, document: bool) -> io::Result<(usize, io::Details)> {
         let saved = io::load_scene(path)?;
         let count = saved.objects.len();
+        self.files.repaired_on_open = saved.repaired;
         let before = self.history_mark();
         let before = self.file().state(before);
         let mut details = io::Details::default();
@@ -761,6 +781,7 @@ impl Running {
         };
         let count = saved.objects.len();
         let note = unity_import::status_note(&saved.details, false).map_or(String::new(), |note| format!(". {note}"));
+        let note = note + &io::note_opened(saved.repaired).map_or(String::new(), |note| format!(". {note}"));
         let (details, mut rows) = (saved.details.clone(), Vec::new());
         self.edit_scene(|scene, slot| {
             rows = append(scene, slot, saved);
@@ -898,7 +919,7 @@ impl Running {
     /// knows of its own file alone: a file for a scripted check to open.
     pub(super) fn write_copy(&self, path: &Path) -> io::Result<()> {
         let (meshes, objects, active) = self.scene_for_file()?;
-        io::save_scene_with(&meshes, &objects, active, &self.details(), path)
+        io::save_scene_with(&meshes, &objects, active, &self.details(), path).map(|_| ())
     }
 
     /// Works the file code the way a person would, in the real app, and
@@ -1028,5 +1049,29 @@ impl Running {
         );
         self.ui.recent.restore(written.recent, Some(folder.join("thumbnails")));
         self.doc.opts.ui_scale = 1.0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_that_will_not_open_at_start_up_is_named_and_explained() {
+        let folder = std::env::temp_dir().join("sculpt_start_up_failure");
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let missing = folder.join("not_here.sclp");
+        let _ = std::fs::remove_file(&missing);
+        let said = start_up_failure(&missing, &io::load_scene(&missing).err().unwrap());
+        assert!(said.starts_with("not_here.sclp is not there"), "{said}");
+        assert!(!said.contains("os error"), "plain words, not an error code: {said}");
+
+        let broken = folder.join("broken.sclp");
+        std::fs::write(&broken, b"SCLP0004 and then nothing a scene could be made of").unwrap();
+        let said = start_up_failure(&broken, &io::load_scene(&broken).err().unwrap());
+        assert!(said.contains("broken.sclp") && said.contains("not opened"), "{said}");
+        assert!(said.ends_with("Starting with a new sphere instead."), "{said}");
+        assert!(!said.contains(".."), "{said}");
     }
 }

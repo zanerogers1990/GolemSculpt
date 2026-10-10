@@ -47,7 +47,7 @@ fn stretched(from: &Path, to: &Path) -> io::Result<()> {
         object.scale *= Vec3::new(0.7, 1.5, 0.7);
     }
     let meshes: Vec<&Mesh> = saved.meshes.iter().collect();
-    io::save_scene_with(&meshes, &saved.objects, saved.active, &saved.details, to)
+    io::save_scene_with(&meshes, &saved.objects, saved.active, &saved.details, to).map(|_| ())
 }
 
 /// The files of the check. `first` and `second` are put back as they were at
@@ -73,7 +73,7 @@ impl Running {
     /// file, and whether it has unsaved changes, stay as they are.
     fn write_aside(&self, path: &Path) -> io::Result<()> {
         let (meshes, objects, active) = self.scene_for_file()?;
-        io::save_scene_with(&meshes, &objects, active, &self.details(), path)
+        io::save_scene_with(&meshes, &objects, active, &self.details(), path).map(|_| ())
     }
 
     /// Save (Ctrl + S), short of the box it puts up for a scene with no file

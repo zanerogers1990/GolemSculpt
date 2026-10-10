@@ -903,8 +903,9 @@ impl Running {
             "obj" => {
                 let places = self.export_places();
                 let places: Vec<(&str, glam::Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
-                io::export_obj_placed(&self.doc.mesh, &places, &path)?;
-                Ok(format!("Exported \"{name}\"{} to {}", self.export_note(), path.display()))
+                let (result, mended) = Self::split_mended(io::export_obj_placed(&self.doc.mesh, &places, &path));
+                result?;
+                Ok(format!("Exported \"{name}\"{} to {}{mended}", self.export_note(), path.display()))
             }
             "stl" => {
                 // The same export as the button's, without its question: nobody is there to

@@ -9,7 +9,9 @@ Double-click `Sculpt.bat`. The first run builds the app (a minute or two);
 after that it starts instantly. The program itself is
 `target\release\sculpt.exe`.
 
-For pen pressure, tick **Enable Windows Ink** in the Huion driver.
+For pen pressure, tick **Enable Windows Ink** in the Huion driver. Lifting the
+pen does not add a last, harder bit to the stroke: it ends at the pressure the
+pen last had (a mouse has no pressure and always sculpts at full strength).
 
 ## Controls
 
@@ -780,9 +782,26 @@ pair; after that they can be moved apart and the joints stay on them.
   the picture.) A `.sclp` saved before symmetry belonged to objects holds one
   setting for the whole scene: it opens with that setting given to every
   object in it, in each object's own space, which is how it was applied then.
-- **Saving never harms the file already there.** The new file is written in
-  full beside the old one and only then takes its place, so a full disk or a
-  crash part-way leaves the old file as it was.
+- **Saving and exporting never harm the file already there.** A save and an
+  export (OBJ or STL) are each written in full beside the old file, under the
+  same name with `.tmp` added, and only then take its place, so a full disk or
+  a crash part-way leaves the old file as it was.
+- **Damaged points are repaired, never refused.** Now and then a point of a
+  model ends up with no position at all (it is "not a number"). A save or an
+  export writes such a point at the average of the points around it, so the
+  file always opens and a slicer never meets a NaN, and says so in the status
+  line; the model on screen is not changed. A file that already holds one
+  (from an older version, or edited by hand) opens with the point moved
+  there, the same way, and the status line says how many were repaired. The
+  file is not turned away, and the rest of the sculpt is untouched. A Unity
+  `.sculpt` with such a point is still refused, and the message says so in
+  plain words: the file has a point with no position, and the way on is to
+  open it in the Unity app and save it again there if that app still can, or
+  else to go back to an earlier save. An OBJ or STL with one just leaves out
+  the triangles that touch it.
+- A file the app is started with (named on its command line) that is missing
+  or cannot be read says so in the status line, with the file's name, and the
+  app starts with a new sphere.
 - **Open** asks how the file should come in: in place of the scene, or with
   its objects added to it. Either is one undo step (undoing an Open brings back
   the scene as it was, live arrays included; see Array). If the scene has changes
@@ -1073,10 +1092,12 @@ The **Objects** card at the top of the Scene panel is the scene graph.
 - Double-click a name to rename it (or use the field under the list).
 - Press and hold a row and it lifts out of the list; drag it up or down and
   let go to move it. Near the top or bottom edge a long list scrolls.
-- **Clone** makes an independent copy, with the same symmetry settings.
+- **Clone** makes an independent copy, with the same symmetry settings, and
+  with the mask, the hidden parts and the quads of a quad remesh as they were.
   **Instance** makes a linked copy that shares the mesh (shown in blue):
   sculpt one and all change, and they share one symmetry (see Symmetry).
-  **Make Unique** unlinks one.
+  **Make Unique** unlinks one (its own copy keeps the mask, hidden parts and
+  quads too).
 - **Mirror** (its own section, under Selected Object) gives the selected
   object live copies of itself across the world's planes, through the world's
   centre: tick X, Y and / or Z and press **Mirror**. There is one copy for each

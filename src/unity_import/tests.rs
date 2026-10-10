@@ -1390,7 +1390,9 @@ fn a_file_whose_parts_do_not_add_up_is_refused() {
     assert!(refused(&wild.bytes(), "negative corner.sculpt").contains("is damaged"));
     let mut hole = sculpt.clone();
     hole.objects[1].vertices[2].y = f32::NAN;
-    assert!(refused(&hole.bytes(), "not a number.sculpt").contains("is damaged"));
+    let message = refused(&hole.bytes(), "not a number.sculpt");
+    assert!(message.contains("has a point with no position"), "{message}");
+    assert!(message.contains("saving it there again") && message.contains("an earlier save"), "{message}");
 
     // Nothing in it at all.
     let empty = Sculpt::new(Vec::new());

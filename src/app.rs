@@ -404,14 +404,19 @@ impl Running {
         // The look, view and mirror settings of a file opened here; put in
         // place once the app is up (`files_start`).
         let mut opened = None;
+        // What the status line says once the app is up: a file named on the
+        // command line that would not open must not fail without a word.
+        let mut open_status = None;
         if let Some(file) = &args.open {
             if is_native(file) {
                 match io::load_scene(file) {
                     Ok(saved) => {
+                        let note = io::note_opened(saved.repaired);
                         opened = Some(install(&mut scene, &mut mesh, saved));
                         path = Some(file.clone());
+                        open_status = note.map(|note| (format!("Opened {}. {note}", file.display()), true));
                     }
-                    Err(e) => log::error!("{e}"),
+                    Err(e) => open_status = Some((files::start_up_failure(file, &e), false)),
                 }
             } else {
                 match import_mesh(file, None) {
@@ -420,7 +425,7 @@ impl Running {
                         scene = Scene::new(&stem(file));
                         scene.active_mut().position = at;
                     }
-                    Err(e) => log::error!("{e}"),
+                    Err(e) => open_status = Some((files::start_up_failure(file, &e), false)),
                 }
             }
         }
@@ -497,6 +502,10 @@ impl Running {
         running.scene_changed();
         running.sync_view();
         running.files_start(opened);
+        if let Some((text, ok)) = open_status {
+            log::warn!("{text}");
+            running.status(text, ok);
+        }
         if running.args.demo_scene {
             running.demo_scene();
         }
@@ -1282,8 +1291,9 @@ impl Running {
                     let places = self.export_places();
                     let places: Vec<(&str, glam::Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
                     let result = io::export_obj_placed(&self.doc.mesh, &places, &path);
+                    let (result, mended) = Self::split_mended(result);
                     let note = self.export_note();
-                    self.report(result, format!("Exported \"{name}\"{note} to {}", path.display()));
+                    self.report(result, format!("Exported \"{name}\"{note} to {}{mended}", path.display()));
                 }
             }
             // Checking and exporting for printing are in app/print_check.rs.
@@ -1291,6 +1301,14 @@ impl Running {
             Action::ExportStlAnyway => self.export_stl_now(),
             Action::CheckForPrinting => self.check_for_printing(),
         }
+    }
+
+    /// An export's result as success or failure, and the sentence to add to its status line
+    /// when damaged points were written mended (empty when none were).
+    fn split_mended(result: io::Result<usize>) -> (io::Result<()>, String) {
+        let mended = result.as_ref().map_or(0, |&count| count);
+        let note = io::note_saved(mended).map_or(String::new(), |note| format!(". {note}"));
+        (result.map(|_| ()), note)
     }
 
     fn report(&mut self, result: io::Result<()>, ok: String) {

@@ -196,9 +196,13 @@ impl Running {
     pub(super) fn export_stl_to(&mut self, path: &Path) -> Result<String, String> {
         let name = self.doc.scene.active().name.clone();
         let models: Vec<glam::Mat4> = self.export_places().into_iter().map(|(_, m)| m).collect();
-        io::export_stl_placed(&self.doc.mesh, &models, path)?;
+        // A damaged point is written mended, and the line says so (as Save's does).
+        let (result, mended) = Self::split_mended(io::export_stl_placed(&self.doc.mesh, &models, path));
+        result?;
         let note = self.export_note();
-        let mut text = format!("Exported \"{name}\"{note} to {} (millimetres, Z up).", path.display());
+        // The sentence about mended points ends itself; without one the line still needs its stop.
+        let stop = if mended.is_empty() { "." } else { "" };
+        let mut text = format!("Exported \"{name}\"{note} to {} (millimetres, Z up){mended}{stop}", path.display());
         let faults = printable::faults(&printable::census(&self.doc.mesh));
         if let Some(faults) = &faults {
             text += &format!(" It has {faults}, so it may not print.");

@@ -419,6 +419,66 @@ fn the_first_pen_stroke_of_a_session_opens_at_full_pressure() {
     assert!((sculptor.stroke.as_ref().unwrap().pressure - 1.0).abs() < 1e-6);
 }
 
+/// A stroke's samples as a pen sends them: the same pressure all the way, then
+/// the lift, which carries a position but no pressure.
+fn pen_stroke_pressures(lift: Option<f32>, down: Option<f32>) -> Vec<f32> {
+    let mut mesh = sphere(20_000);
+    let view = view_of(&mesh);
+    let mut sculptor = Sculptor::default();
+    sculptor.settings.brush = Brush::Inflate;
+    let at = |i: usize, pressure| PointerSample {
+        pos: SIZE * 0.5 + Vec2::new(i as f32 * 3.0, 0.0),
+        pressure,
+        time: 20.0 + i as f64 / 240.0,
+    };
+    assert!(sculptor.begin(&mut mesh, &view, at(0, down), false, false));
+    let mut seen = vec![sculptor.stroke.as_ref().unwrap().pressure];
+    for i in 1..=6 {
+        sculptor.sample(&mut mesh, &view, at(i, down));
+        seen.push(sculptor.stroke.as_ref().unwrap().pressure);
+    }
+    // The pen leaves the tablet.
+    sculptor.sample(&mut mesh, &view, at(7, lift));
+    seen.push(sculptor.stroke.as_ref().unwrap().pressure);
+    sculptor.end(&mut mesh, &view);
+    seen
+}
+
+/// The lift of a pen has no pressure of its own. It used to count as a mouse
+/// and so as full strength: one last segment at full pressure at the end of a
+/// light stroke.
+#[test]
+fn the_lift_of_a_pen_does_not_add_a_full_pressure_segment() {
+    let seen = pen_stroke_pressures(None, Some(0.3));
+    let (lift, before) = (seen[seen.len() - 1], seen[seen.len() - 2]);
+    assert!(before < 0.8, "the stroke itself is light: {before}");
+    assert!(lift <= before + 1e-6, "the lift ({lift}) must not press harder than the sample before it ({before})");
+}
+
+/// A mouse never reports pressure, and must go on sculpting at full strength,
+/// even straight after a pen stroke has left the pen's filter holding a low value.
+#[test]
+fn a_mouse_stroke_is_still_full_strength_after_a_light_pen_stroke() {
+    let mut mesh = sphere(20_000);
+    let view = view_of(&mesh);
+    let mut sculptor = Sculptor::default();
+    sculptor.settings.brush = Brush::Inflate;
+    let pen = |i: usize| PointerSample { pos: SIZE * 0.5, pressure: Some(0.2), time: 30.0 + i as f64 / 240.0 };
+    assert!(sculptor.begin(&mut mesh, &view, pen(0), false, false));
+    for i in 1..=30 {
+        sculptor.sample(&mut mesh, &view, pen(i));
+    }
+    sculptor.end(&mut mesh, &view);
+    assert!(sculptor.pen.smoothed < 0.4, "the filter holds the pen's light touch");
+
+    let mouse = |i: usize| PointerSample { pos: SIZE * 0.5, pressure: None, time: 31.0 + i as f64 / 240.0 };
+    assert!(sculptor.begin(&mut mesh, &view, mouse(0), false, false));
+    assert_eq!(sculptor.stroke.as_ref().unwrap().pressure, 1.0);
+    sculptor.sample(&mut mesh, &view, mouse(1));
+    assert_eq!(sculptor.stroke.as_ref().unwrap().pressure, 1.0);
+    sculptor.end(&mut mesh, &view);
+}
+
 // ------------------------------------------------------------------- Move
 
 /// Two balls of radius 0.2 with a 0.04 gap between them, one each side of

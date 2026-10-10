@@ -234,25 +234,38 @@ fn read_array<T: bytemuck::Pod>(r: &mut impl Read, count: usize) -> std::io::Res
     Ok(values)
 }
 
+/// Why an object's arrays could not be used, which decides what the message says.
+enum Flaw {
+    /// The arrays do not add up: short, or a corner naming a vertex that is not there.
+    Damaged,
+    /// A coordinate that is not a number.
+    NotANumber,
+}
+
 /// One object's arrays. The caller has checked that they are all in the file.
-fn read_object(r: &mut BufReader<File>, entry: &ObjectEntry) -> Option<RawObject> {
+fn read_object(r: &mut BufReader<File>, entry: &ObjectEntry) -> Result<RawObject, Flaw> {
     let (verts, corners) = (entry.vertex_count as usize, entry.triangle_index_count as usize);
-    let positions: Vec<Vec3> = read_array(r, verts).ok()?;
+    let short = |_| Flaw::Damaged;
+    let positions: Vec<Vec3> = read_array(r, verts).map_err(short)?;
     // The normals: every mesh works its own out when it is built.
-    r.seek_relative(verts as i64 * 12).ok()?;
-    let indices: Vec<u32> = read_array(r, corners).ok()?;
-    let mask = if entry.has_mask { Some(read_array::<f32>(r, verts).ok()?) } else { None };
+    r.seek_relative(verts as i64 * 12).map_err(short)?;
+    let indices: Vec<u32> = read_array(r, corners).map_err(short)?;
+    let mask = if entry.has_mask { Some(read_array::<f32>(r, verts).map_err(short)?) } else { None };
     let hidden = if entry.has_hidden {
-        let flags: Vec<u8> = read_array(r, corners / 3).ok()?;
+        let flags: Vec<u8> = read_array(r, corners / 3).map_err(short)?;
         Some(flags.iter().map(|&flag| flag != 0).collect())
     } else {
         None
     };
-    // A coordinate that is not a number, or a corner that names no vertex,
-    // is a damaged file; Unity refused those too.
-    let sound = positions.par_iter().with_min_len(1 << 14).all(|p| p.is_finite())
-        && indices.par_iter().with_min_len(1 << 14).all(|&i| (i as usize) < verts);
-    sound.then_some(RawObject { positions, indices, mask, hidden })
+    // A corner that names no vertex, or a coordinate that is not a number, is
+    // a damaged file and is refused (a `.sclp` is mended instead: see `io/repair.rs`).
+    if !indices.par_iter().with_min_len(1 << 14).all(|&i| (i as usize) < verts) {
+        return Err(Flaw::Damaged);
+    }
+    if !positions.par_iter().with_min_len(1 << 14).all(|p| p.is_finite()) {
+        return Err(Flaw::NotANumber);
+    }
+    Ok(RawObject { positions, indices, mask, hidden })
 }
 
 impl RawObject {
@@ -445,6 +458,16 @@ fn damaged(path: &Path) -> String {
     format!("{} is damaged (it ends early, or its parts do not add up), so it was not opened.", path.display())
 }
 
+/// The message for a sculpt with a point that has no position: what is wrong
+/// and the two things left to try.
+fn no_position(path: &Path) -> String {
+    format!(
+        "{} has a point with no position in it, so it was not opened. If the Unity app can still open it, saving \
+         it there again may clear the point; if not, the only way back is an earlier save of the sculpt.",
+        path.display()
+    )
+}
+
 /// Opens a Unity sculpt.
 #[allow(dead_code)] // the app comes in through `io::load_scene`; this is the way in for the extras
 pub fn load(path: &Path) -> io::Result<Imported> {
@@ -501,7 +524,11 @@ fn read(file: File, path: &Path) -> io::Result<Imported> {
     }
     let mut raw = Vec::with_capacity(header.objects.len());
     for entry in &header.objects {
-        raw.push(read_object(&mut r, entry).ok_or_else(bad)?);
+        let object = read_object(&mut r, entry).map_err(|flaw| match flaw {
+            Flaw::Damaged => bad(),
+            Flaw::NotANumber => no_position(path),
+        });
+        raw.push(object?);
     }
     Ok(convert(header, raw))
 }
@@ -683,7 +710,7 @@ fn convert(header: Header, raw: Vec<RawObject>) -> Imported {
     // part of opening a large scene, so they are built several at once.
     let meshes = raw.into_par_iter().map(RawObject::build).collect();
     Imported {
-        scene: SavedScene { meshes, objects: rows, active, details },
+        scene: SavedScene { meshes, objects: rows, active, details, repaired: 0 },
         extras: Extras {
             objects: extras,
             brush: header.brush,

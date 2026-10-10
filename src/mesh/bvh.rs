@@ -8,7 +8,11 @@
 //!   * normals/bounds are recomputed leaf-by-leaf in parallel without locks,
 //!   * the GPU upload after a dab is a few `write_buffer` calls over ranges.
 //!
-//! During a stroke the tree is only refitted (bounds updated), never rebuilt.
+//! During a stroke the tree is refitted (bounds updated). Under dynamic topology
+//! it also grows: new triangles and vertices become leaves of their own beside
+//! the old ones, and an old leaf keeps the triangles and vertices it had (see
+//! `bvh/grow.rs`, which also lays the tree out again over the same leaves when
+//! growth makes it too deep). It is built from scratch only when a mesh is built.
 
 use glam::Vec3;
 use rayon::prelude::*;

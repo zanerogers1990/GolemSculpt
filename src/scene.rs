@@ -20,7 +20,7 @@ use sculpt_geom::TriMesh;
 use sculpt_symmetry::MirrorRepeater;
 
 use crate::mesh::bvh::Aabb;
-use crate::mesh::{Mesh, StrokeDelta};
+use crate::mesh::{Mesh, Polys, StrokeDelta};
 
 mod mirror;
 mod places;
@@ -151,8 +151,26 @@ pub struct Scene {
     symmetry: HashMap<u64, Symmetry>,
 }
 
+/// An independent copy of a mesh with everything the user can see of it: its
+/// mask, the faces hidden with the box or lasso, and the quads a quad remesh
+/// left. (Building a mesh reorders its vertices and triangles, so the hidden
+/// flags and the quads' corners are carried over through the same renumbering.)
 fn duplicate(mesh: &Mesh) -> Mesh {
-    Mesh::new(mesh.positions.clone(), mesh.indices.clone(), Some(mesh.mask.clone()))
+    let hidden = mesh.hidden_triangles().unwrap_or(&[]);
+    let (mut copy, moved) = Mesh::new_mapped_with_hidden(
+        mesh.positions.clone(),
+        mesh.indices.clone(),
+        Some(mesh.mask.clone()),
+        hidden,
+    );
+    if let Some(polys) = &mesh.polys {
+        let corners: Vec<u32> =
+            polys.indices.iter().map(|&i| moved.get(i as usize).copied().unwrap_or(u32::MAX)).collect();
+        if !corners.contains(&u32::MAX) {
+            copy.polys = Some(Polys { start: polys.start.clone(), indices: corners });
+        }
+    }
+    copy
 }
 
 impl Scene {
@@ -1416,5 +1434,130 @@ mod tests {
         // A copy made unique is a mesh of its own, at rest as it is.
         scene.make_unique(&mut mesh);
         assert!(!scene.can_reset(&mesh));
+    }
+
+    /// A flat grid of quads, each also given as its two triangles, so a mesh
+    /// can carry both quads and hidden faces.
+    fn quad_grid() -> Mesh {
+        let side = 5u32;
+        let positions: Vec<Vec3> =
+            (0..side * side).map(|i| Vec3::new((i % side) as f32, (i / side) as f32, 0.0)).collect();
+        let (mut indices, mut start, mut corners) = (Vec::new(), vec![0u32], Vec::new());
+        for y in 0..side - 1 {
+            for x in 0..side - 1 {
+                let a = y * side + x;
+                let quad = [a, a + 1, a + side + 1, a + side];
+                indices.extend_from_slice(&[quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
+                corners.extend_from_slice(&quad);
+                start.push(corners.len() as u32);
+            }
+        }
+        let (mut mesh, moved) = Mesh::new_mapped(positions, indices, None);
+        let corners = corners.iter().map(|&c| moved[c as usize]).collect();
+        mesh.polys = Some(Polys { start, indices: corners });
+        mesh.hide(&[0, 1, 2, 9, 10]);
+        for v in 0..mesh.mask.len() {
+            mesh.mask[v] = (v % 3) as f32 * 0.25;
+        }
+        mesh
+    }
+
+    /// Each face's corners as exact positions, so two meshes can be compared
+    /// whatever order they number their vertices in.
+    fn faces_by_position<'a>(mesh: &Mesh, faces: impl Iterator<Item = &'a [u32]>) -> Vec<Vec<[u32; 3]>> {
+        let mut all: Vec<Vec<[u32; 3]>> = faces
+            .map(|corners| {
+                let mut face: Vec<[u32; 3]> =
+                    corners.iter().map(|&i| mesh.positions[i as usize].to_array().map(f32::to_bits)).collect();
+                face.sort_unstable();
+                face
+            })
+            .collect();
+        all.sort_unstable();
+        all
+    }
+
+    fn quads(mesh: &Mesh) -> Vec<Vec<[u32; 3]>> {
+        let polys = mesh.polys.as_ref().expect("the quads are there");
+        faces_by_position(mesh, polys.start.windows(2).map(|f| &polys.indices[f[0] as usize..f[1] as usize]))
+    }
+
+    fn hidden(mesh: &Mesh) -> Vec<Vec<[u32; 3]>> {
+        let flags = mesh.hidden_triangles().expect("the hidden faces are there");
+        faces_by_position(mesh, mesh.indices.chunks_exact(3).zip(flags).filter(|(_, h)| **h).map(|(t, _)| t))
+    }
+
+    fn masked(mesh: &Mesh) -> Vec<([u32; 3], u32)> {
+        let mut all: Vec<_> =
+            mesh.positions.iter().zip(&mesh.mask).map(|(p, m)| (p.to_array().map(f32::to_bits), m.to_bits())).collect();
+        all.sort_unstable();
+        all
+    }
+
+    fn assert_same_as(copy: &Mesh, original: &Mesh, what: &str) {
+        assert_eq!(copy.positions.len(), original.positions.len(), "{what}: vertices");
+        assert_eq!(copy.hidden_triangle_count(), original.hidden_triangle_count(), "{what}: hidden faces");
+        assert!(original.hidden_triangle_count() > 0);
+        assert_eq!(hidden(copy), hidden(original), "{what}: the same faces hidden");
+        assert_eq!(quads(copy), quads(original), "{what}: the same quads");
+        assert_eq!(masked(copy), masked(original), "{what}: the mask");
+    }
+
+    #[test]
+    fn a_clone_keeps_hidden_faces_quads_and_mask() {
+        let original = quad_grid();
+        let reference = duplicate(&original);
+        assert_same_as(&reference, &original, "duplicate");
+
+        let mut mesh = quad_grid();
+        let mut scene = Scene::new("Grid");
+        let mut history = History::default();
+        history.target = scene.active_mesh();
+        let first = scene.active_id();
+        let before = scene.state();
+        let copy = scene.clone_active(&mut mesh);
+        history.push_scene(before);
+        // The copy is the active object and its mesh is in the slot.
+        assert_eq!(scene.active_id(), copy);
+        assert_same_as(&mesh, &original, "the clone");
+        // The original, parked, is as it was.
+        let parked = scene.mesh(scene.get(first).unwrap().mesh, &mesh).unwrap();
+        assert_same_as(parked, &original, "the object cloned");
+
+        // Undo removes the copy, redo brings it back with the same parts.
+        assert!(history.step_scene(true, &mut scene, &mut mesh));
+        assert_eq!(scene.objects.len(), 1);
+        assert_same_as(&mesh, &original, "after undo");
+        assert!(history.step_scene(false, &mut scene, &mut mesh));
+        assert_eq!(scene.objects.len(), 2);
+        assert_same_as(&mesh, &original, "after redo");
+    }
+
+    #[test]
+    fn make_unique_keeps_hidden_faces_quads_and_mask() {
+        let original = quad_grid();
+        let mut mesh = quad_grid();
+        let mut scene = Scene::new("Grid");
+        let mut history = History::default();
+        history.target = scene.active_mesh();
+        let twin = scene.instance_active();
+        // An instance shares the very mesh: nothing is copied, nothing lost.
+        assert_eq!(scene.get(twin).unwrap().mesh, scene.active().mesh);
+        assert_same_as(&mesh, &original, "the instance");
+
+        let before = scene.state();
+        let shared = scene.active_mesh();
+        assert!(scene.make_unique(&mut mesh));
+        history.push_scene(before);
+        assert_ne!(scene.active_mesh(), shared);
+        assert_same_as(&mesh, &original, "the made-unique mesh");
+        let other = scene.objects.iter().find(|o| o.mesh == shared).unwrap().mesh;
+        assert_same_as(scene.mesh(other, &mesh).unwrap(), &original, "the mesh left to the other object");
+
+        assert!(history.step_scene(true, &mut scene, &mut mesh));
+        assert_eq!(scene.active_mesh(), shared);
+        assert_same_as(&mesh, &original, "after undo");
+        assert!(history.step_scene(false, &mut scene, &mut mesh));
+        assert_same_as(&mesh, &original, "after redo");
     }
 }

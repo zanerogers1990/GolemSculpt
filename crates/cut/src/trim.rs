@@ -2,14 +2,16 @@
 //! deletes what falls on one side, and closes the opening it leaves.
 //!
 //! Why not the voxel boolean. A boolean could express this: build a prism from
-//! the dragged shape and subtract it. But it works by sampling both operands
-//! into a signed distance field and re-meshing the result, which replaces the
-//! whole object's topology with an evenly spaced lattice. Trim is supposed to
-//! leave the surface being sculpted exactly as it was and only touch the
-//! boundary, and a cut whose crispness is limited by the voxel size is
-//! precisely what makes voxel booleans read as soft. So this cuts the
-//! triangles directly: every triangle away from the cut survives untouched,
-//! and the ones that straddle it are split exactly on the boundary.
+//! the dragged shape and subtract it. But it works on a lattice
+//! (`sculpt_volume::boolean`): both solids are scan-converted onto one grid
+//! and the result is extracted from it, which rebuilds the whole object as an
+//! evenly spaced lattice and loses anything finer than one cell. (Its seams are
+//! crisp, since they come from exact crossings and not from a blended distance
+//! field; the cost is the resampling, not the look of the cut.) Trim is
+//! supposed to leave the surface being sculpted exactly as it was and only
+//! touch the boundary. So this cuts the triangles directly: every triangle
+//! away from the cut survives untouched, and the ones that straddle it are
+//! split exactly on the boundary.
 //!
 //! Where the cut is. The classification is the same screen-space test the hide
 //! and mask gestures use (`ScreenRegion::contains` after

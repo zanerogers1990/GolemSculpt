@@ -8,6 +8,9 @@ mod lists;
 pub mod primitives;
 pub mod visibility;
 
+#[cfg(test)]
+mod guard_tests;
+
 pub use visibility::VisibilityDelta;
 
 use std::ops::Range;
@@ -480,6 +483,15 @@ impl Mesh {
     /// Brings the curvature of the vertices in `leaves` up to date after they
     /// (or their neighbours) moved.
     fn update_curvature(&mut self, leaves: &[u32]) {
+        // The leaves' vertex ranges index both arrays through `SharedMut`;
+        // dynamic topology grows them with the mesh, and they must stay as long.
+        assert!(
+            self.curv_raw.len() == self.positions.len() && self.curv.len() == self.positions.len(),
+            "the curvature arrays ({}, {}) are not as long as the mesh ({} vertices)",
+            self.curv_raw.len(),
+            self.curv.len(),
+            self.positions.len()
+        );
         let (positions, normals, vv, bvh) = (&self.positions, &self.normals, &self.vv, &self.bvh);
         let (scale, mean) = (self.curv_scale, self.curv_mean);
         let ring = |v: usize| vv.row(v);

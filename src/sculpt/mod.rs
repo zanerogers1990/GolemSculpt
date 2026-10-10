@@ -352,7 +352,7 @@ impl Settings {
 pub struct PointerSample {
     /// Physical pixels in the window.
     pub pos: Vec2,
-    /// Pen pressure 0..1, or `None` for a mouse.
+    /// Pen pressure 0..1, or `None` for a mouse (and for the pen's lift, which a stroke reads as the pen still).
     pub pressure: Option<f32>,
     /// Seconds since the app started.
     pub time: f64,
@@ -427,6 +427,9 @@ pub struct Sculptor {
     /// Held between strokes: resetting it makes every stroke open with a
     /// spike of strength.
     pen: PenPressure,
+    /// Whether the stroke in progress began with a pressure reading, which only
+    /// a pen gives. Its later samples without one (the lift) are the pen still.
+    pen_stroke: bool,
     /// The curvature baseline of the meshes Clay has worked on, by
     /// `Mesh::uid`, newest last.
     curvature: Vec<(u64, CurvatureBase)>,
@@ -550,7 +553,10 @@ impl Sculptor {
 
     fn shape_pressure(&mut self, sample: &PointerSample) -> f32 {
         self.pen.step(sample.pressure, sample.time);
-        if sample.pressure.is_none() {
+        // A mouse never reports pressure and sculpts at full strength. A pen's
+        // lift carries none either, and must not count as a mouse: it takes the
+        // value the pen held.
+        if sample.pressure.is_none() && !self.pen_stroke {
             return 1.0;
         }
         // An exponent above 1 keeps the response gentle near zero, which is
@@ -610,6 +616,7 @@ impl Sculptor {
             layer_height: s.layer_height,
             mask_hardness: s.mask_hardness,
         };
+        self.pen_stroke = sample.pressure.is_some();
         let pressure = self.shape_pressure(&sample);
         let bounds = mesh.bounds();
         self.dyntopo.begin(brush, mask, bounds.size().max_element());
