@@ -711,7 +711,11 @@ mod tests {
             names,
             [
                 "Ball", "Ball_MirrorX", "Ball_Array2", "Ball_Array3", "Ball_Array4", "Ball_Array5", "Ball_Array6",
-                "Ball_Array2MirrorX", "Ball_Array3MirrorX", "Ball_Array4MirrorX", "Ball_Array5MirrorX", "Ball_Array6MirrorX",
+                "Ball_Array2MirrorX",
+                "Ball_Array3MirrorX",
+                "Ball_Array4MirrorX",
+                "Ball_Array5MirrorX",
+                "Ball_Array6MirrorX",
             ]
         );
         let object = scene.active().clone();
@@ -722,7 +726,9 @@ mod tests {
         assert_eq!(scene.export_note(&object), " with its mirror copy and its 10 array copies");
 
         // The object's own volume, and what each place must come to: the matrix scales volume by its determinant.
-        let local = volume(&mesh.positions, &mesh.indices.chunks_exact(3).map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect::<Vec<_>>());
+        let faces: Vec<[usize; 3]> =
+            mesh.indices.chunks_exact(3).map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect();
+        let local = volume(&mesh.positions, &faces);
         assert!(local > 0.0);
         let tris = mesh.triangle_count();
 
@@ -735,7 +741,8 @@ mod tests {
             assert_eq!((vertices.len(), faces.len()), (mesh.vertex_count(), tris), "{name}");
             let wanted = local * model.determinant().abs() as f64;
             let got = volume(vertices, faces);
-            assert!(got > 0.0 && (got - wanted).abs() < 2e-3 * wanted, "{name}: volume {got}, wanted {wanted}: wound the wrong way out?");
+            let right = got > 0.0 && (got - wanted).abs() < 2e-3 * wanted;
+            assert!(right, "{name}: volume {got}, wanted {wanted}: wound the wrong way out?");
             // Where it is: every vertex is the mesh's through the place's matrix (as written, to the digits OBJ keeps).
             for (v, expected) in vertices.iter().zip(through(&mesh.positions, *model)) {
                 assert!(v.distance(expected) < 1e-4, "{name}: a vertex is {v}, not {expected}");
@@ -753,20 +760,23 @@ mod tests {
             let c = |i: usize| f32::from_le_bytes(f[12 + k * 12 + i * 4..16 + k * 12 + i * 4].try_into().unwrap());
             Vec3::new(c(0), c(1), c(2))
         };
-        let facets: Vec<[Vec3; 3]> = bytes[84..].chunks_exact(50).map(|f| [corner(f, 0), corner(f, 1), corner(f, 2)]).collect();
+        let facets: Vec<[Vec3; 3]> =
+            bytes[84..].chunks_exact(50).map(|f| [corner(f, 0), corner(f, 1), corner(f, 2)]).collect();
         for (n, model) in models.iter().enumerate() {
             let half = &facets[n * tris..(n + 1) * tris];
             let signed: f64 =
                 half.iter().map(|t| t[0].as_dvec3().dot(t[1].as_dvec3().cross(t[2].as_dvec3())) / 6.0).sum();
             // Millimetres: ten to the unit, so a thousand times the volume.
             let wanted = local * model.determinant().abs() as f64 * 1000.0;
-            assert!(signed > 0.0 && (signed - wanted).abs() < 2e-3 * wanted, "{}: STL volume {signed}, wanted {wanted}", names[n]);
+            let right = signed > 0.0 && (signed - wanted).abs() < 2e-3 * wanted;
+            assert!(right, "{}: STL volume {signed}, wanted {wanted}", names[n]);
             // And its box is the mesh's through the matrix, then to STL's axes: (x, y, z) -> (x, -z, y) x 10.
             let corners: Vec<Vec3> = half.iter().flatten().copied().collect();
             let expected: Vec<Vec3> =
                 through(&mesh.positions, *model).iter().map(|p| Vec3::new(p.x, -p.z, p.y) * 10.0).collect();
             let (got, want) = (bounds(&corners), bounds(&expected));
-            assert!(got.0.distance(want.0) < 1e-2 && got.1.distance(want.1) < 1e-2, "{}: box {got:?}, wanted {want:?}", names[n]);
+            let same = got.0.distance(want.0) < 1e-2 && got.1.distance(want.1) < 1e-2;
+            assert!(same, "{}: box {got:?}, wanted {want:?}", names[n]);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

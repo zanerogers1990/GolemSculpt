@@ -562,7 +562,11 @@ fn array_of(entry: &ArrayEntry) -> Option<LiveArray> {
         points: points.into_iter().map(axes::point).collect(),
         placements: placements
             .iter()
-            .map(|p| ArrayPlacement { offset: axes::point(p.offset), rotation: axes::rotation(p.rotation), scale: p.scale })
+            .map(|p| ArrayPlacement {
+                offset: axes::point(p.offset),
+                rotation: axes::rotation(p.rotation),
+                scale: p.scale,
+            })
             .collect(),
     })
 }

@@ -566,7 +566,9 @@ fn survives_a_save(path: &Path, opened: &SavedScene) {
     // The arrays: on the same rows, and the same arrays.
     let arrays = |scene: &SavedScene| -> Vec<Option<ArrayState>> {
         (0..rows)
-            .map(|row| scene.details.get_tool_object(row, io::slot::ARRAY).and_then(|a| sculpt_array::state_from_saved(&a)))
+            .map(|row| {
+                scene.details.get_tool_object(row, io::slot::ARRAY).and_then(|a| sculpt_array::state_from_saved(&a))
+            })
             .collect()
     };
     assert_eq!(arrays(&again), arrays(opened), "the arrays in {}", saved_to.display());
@@ -661,7 +663,8 @@ fn live_array_sits_where_unity_drew_it(
     let kept = &extra.array.as_ref().expect("the importer kept where Unity drew the copies").placements;
     assert_eq!(kept.len(), tool_layout.len());
     for (k, (a, b)) in kept.iter().zip(&tool_layout).enumerate() {
-        let (offset, turn, size) = (a.offset.distance(b.offset), a.rotation.angle_between(b.rotation), (a.scale - b.scale).abs());
+        let offset = a.offset.distance(b.offset);
+        let (turn, size) = (a.rotation.angle_between(b.rotation), (a.scale - b.scale).abs());
         assert!(offset < 1e-4 && turn < 1e-4 && size < 1e-5, "{name}: copy {k} placement: {offset} {turn} {size}");
         worst_placement = worst_placement.max(offset as f64);
     }

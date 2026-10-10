@@ -720,7 +720,8 @@ fn a_live_array_comes_in_live_and_its_copies_sit_where_unity_drew_them() {
 
     // Live copies, laid out by the tool, are where the Unity app drew every one of them.
     for (row, source) in [(0, &link), (1, &petal)] {
-        assert!(copies_sit_where_unity_drew_them(&opened, row, source, 1e-5), "{} is not where Unity drew it", source.name);
+        let there = copies_sit_where_unity_drew_them(&opened, row, source, 1e-5);
+        assert!(there, "{} is not where Unity drew it", source.name);
     }
     // The petals really do go round: the second is nowhere near the first.
     let (first, second) = (live_copy(&opened, 1, 0), live_copy(&opened, 1, 1));
@@ -769,7 +770,8 @@ fn a_live_array_comes_in_live_and_its_copies_sit_where_unity_drew_them() {
 fn a_circle_about_any_axis_keeps_every_copy_where_unity_drew_it() {
     let mut checked = 0;
     for axis in 0..3 {
-        for (sweep, count, follow, end_scale) in [(360.0, 8, true, 1.0), (360.0, 5, false, 0.5), (100.0, 4, true, 1.8)] {
+        let cases = [(360.0, 8, true, 1.0), (360.0, 5, false, 0.5), (100.0, 4, true, 1.8)];
+        for (sweep, count, follow, end_scale) in cases {
             let mut gear = marker("Gear", Vec3::ZERO).placed(
                 Vec3::new(0.5, 1.0, -2.0),
                 Quat::from_euler(glam::EulerRot::YXZ, 0.7, -0.4, 0.3),
@@ -821,7 +823,13 @@ fn a_line_or_a_curve_keeps_every_copy_where_unity_drew_it() {
         (2, true, true, true, wave(6)),
         (2, true, true, false, wave(7)),
         (2, false, false, true, wave(9)),
-        (2, false, true, true, vec![Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0), Vec3::new(3.0, 1.0, 0.5), Vec3::new(3.0, -2.0, 3.0)]),
+        (
+            2,
+            false,
+            true,
+            true,
+            vec![Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0), Vec3::new(3.0, 1.0, 0.5), Vec3::new(3.0, -2.0, 3.0)],
+        ),
     ] {
         let mut strap = marker("Strap", Vec3::ZERO).placed(
             Vec3::new(-1.0, 0.5, 0.25),
@@ -1095,8 +1103,8 @@ fn the_status_line_says_what_it_is_and_what_was_left_behind() {
     let replaced = status_note(&opened.scene.details, true).unwrap();
     assert_eq!(
         replaced,
-        "It is a sculpt from the Unity app: saving makes a .sclp and leaves that file as it is. Left behind: an array on \
-         \"Link\" that this app cannot read; the Unity app's brush settings."
+        "It is a sculpt from the Unity app: saving makes a .sclp and leaves that file as it is. Left behind: an \
+         array on \"Link\" that this app cannot read; the Unity app's brush settings."
     );
     // Added to a scene, only what its objects lost matters: no settings were ever going to be taken.
     let added = status_note(&opened.scene.details, false).unwrap();

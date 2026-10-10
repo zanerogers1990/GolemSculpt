@@ -66,7 +66,7 @@ fn how_many(count: usize) -> String {
 /// names nothing in the scene has yet, and selects the first of them.
 /// Objects that shared a mesh in the file still share it. Gives back the row
 /// of the file and the id in the scene of each object that was added.
-fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) -> Vec<(usize, u64)> {
+pub(super) fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) -> Vec<(usize, u64)> {
     let mut added = Vec::new();
     let mut meshes: Vec<Option<Mesh>> = saved.meshes.into_iter().map(Some).collect();
     // For each mesh of the file, the first object added that shows it.
@@ -704,6 +704,8 @@ impl Running {
             "play" => self.files_play(&folder),
             // The same for a sculpt from the Unity app named on the command line (app/unity.rs).
             "unity" => self.unity_play(&folder),
+            // Arrays the Array tool holds, through a save, an open, an undo and an add (app/file_arrays.rs).
+            "array" => self.arrays_play(&folder),
             "ask-exit" => self.ui.graph.ask(Question::Exit),
             "ask-open" | "ask-open-clean" => {
                 let path = folder.join("dragon head.sclp");

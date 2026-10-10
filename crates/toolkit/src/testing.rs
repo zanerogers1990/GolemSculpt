@@ -762,7 +762,8 @@ impl Bench {
     /// order, for `load_tool`.
     pub fn open(&mut self, objects: Vec<(&str, TriMesh)>) -> Vec<ObjectId> {
         let old = self.doc.objects();
-        let mut commands: Vec<Command> = objects.into_iter().map(|(name, mesh)| Command::Add(NewObject::new(name, mesh))).collect();
+        let mut commands: Vec<Command> =
+            objects.into_iter().map(|(name, mesh)| Command::Add(NewObject::new(name, mesh))).collect();
         commands.extend(old.into_iter().map(|object| Command::Delete { object }));
         self.call(|cx| cx.commit("Open", commands)).added
     }
@@ -1302,7 +1303,7 @@ mod tests {
         assert!(bench.redo_scene());
         assert_eq!(bench.doc.objects(), opened);
 
-        // A row with no object (a file entry the scene did not take) is left out, and a file that has nothing is still announced.
+        // A row with no object (an entry the scene did not take) is left out, and a file with nothing is announced.
         let mut other = Labeller::default();
         bench.load_tool(&mut other, &opened[..1], saved, Arrival::Added);
         assert_eq!(other.labels.len(), 1);

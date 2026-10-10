@@ -17,6 +17,8 @@
 //! | `point` | The column with the end of its path picked: the gizmo's arrows sit on it |
 //! | `arrows` | The same after the arrows were dragged sideways: the end swings out and every copy follows |
 //! | `start` | The arrows on the square start point, dragged to the left: the object and its array move together |
+//! | `as-is` | Nothing is made: the tool comes up on the arrays a file brought, the first object with one selected |
+//! | `several` | Three objects with an array each: a ring, a curve, a mirrored column; what `--demo-files array` saves |
 //!
 //! `line`, `curve` hide the selected object and add a brick in its place, so
 //! the way copies turn to follow a path can be seen; a sphere looks the same
@@ -51,6 +53,8 @@ pub fn demo(tool: &mut ArrayTool, cx: &mut Ctx, what: &str) {
             tool.picked = None;
             tool.copy = Some(CopyPick { object, copy: 2, side: 1 });
         }
+        "as-is" => as_is(tool, cx),
+        "several" => several(tool, cx),
         "posed" => posed(tool, cx, false),
         "onpath" => posed(tool, cx, true),
         _ => circle(tool, cx),
@@ -137,6 +141,67 @@ fn posed(tool: &mut ArrayTool, cx: &mut Ctx, back: bool) {
         tool.copies_onto_path(cx);
     }
     fit_both_sides(tool, cx);
+}
+
+/// The tool up on the arrays the scene has already, with none made: the first object that has one
+/// is selected, so that its path and handles show, and its copies are framed.
+fn as_is(tool: &mut ArrayTool, cx: &mut Ctx) {
+    let Some(object) = cx.scene().objects().into_iter().find(|&object| tool.arrays.has(object)) else { return };
+    cx.commit("Demo Select", vec![Command::Select { object }]);
+    fit(tool, cx);
+}
+
+/// An object put in the scene at `at`, made the selected one.
+fn stand(cx: &mut Ctx, name: &str, at: Vec3, scale: Vec3, mirror: Option<MirrorRepeater>) -> ObjectId {
+    let placement = Placement { position: at, rotation: Quat::IDENTITY, scale };
+    cx.commit("Demo Object", vec![Command::Add(NewObject::new(name, cube(0.5)).placed(placement).mirrored(mirror))])
+        .added[0]
+}
+
+/// Three objects, each with an array of its own, to be saved and opened: a ring of copies on the
+/// sphere the scene starts with, a curve on a brick below it (the second row of the list, and
+/// the selected object), and on a post to the side a column that is mirrored across a plane
+/// of its own. Every kind of array a file keeps, on objects that are not all first.
+fn several(tool: &mut ArrayTool, cx: &mut Ctx) {
+    circle(tool, cx);
+    let sphere = cx.scene().active();
+
+    let brick = stand(cx, "Brick", Vec3::new(-2.0, -5.5, 0.0), Vec3::new(0.6, 1.0, 0.35), None);
+    let start = cx.scene().info(brick).map_or(Vec3::ZERO, |info| info.placement.position);
+    let view = cx.view;
+    let stroke: Vec<Vec2> = (0..=60)
+        .filter_map(|i| {
+            let t = i as f32 / 60.0;
+            let up = 1.1 * (t * std::f32::consts::TAU).sin() * (1.0 - 0.35 * t);
+            view.project(start + view.right * 4.2 * t + view.up * up)
+        })
+        .collect();
+    tool.draw_stroke(cx, &stroke);
+    taper(tool, cx, 0.4);
+
+    let across = MirrorRepeater::new(1, Vec3::new(8.0, 0.0, 0.0));
+    let foot = Vec3::new(5.5, -4.0, 0.0);
+    let post = stand(cx, "Post", foot, Vec3::new(0.5, 0.5, 0.5), across);
+    tool.make_line(cx);
+    tool.edit(cx, "Move Array Point", false, |a| _ = a.set_point_world(1, Vec3::new(5.5, 1.0, 0.0), foot));
+    tool.edit(cx, "Array Count", false, |a| a.settings.count = 5);
+    taper(tool, cx, 0.6);
+
+    // The brick, whose path and handles are the ones shown; the camera takes in all three.
+    cx.commit("Demo Select", vec![Command::Select { object: brick }]);
+    let mut bounds = Aabb::EMPTY;
+    for object in [sphere, brick, post] {
+        let Some(live) = tool.arrays.get(object) else { continue };
+        let Some(info) = cx.scene().info(object) else { continue };
+        for placement in &live.layout {
+            let at = info.placement.position + placement.offset;
+            bounds.grow(at);
+            if object == post {
+                bounds.grow(Vec3::new(16.0 - at.x, at.y, at.z));
+            }
+        }
+    }
+    cx.frame_view(bounds.expanded(2.0));
 }
 
 /// Brings the camera round to take in the array and its reflection.

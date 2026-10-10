@@ -7,8 +7,8 @@
 //! tool has since changed reads what it can of it (`Saved` is read leniently by
 //! the tool).
 
-use serde_json::{Map, Number, Value};
 use sculpt_toolkit::Saved;
+use serde_json::{Map, Number, Value};
 
 use super::{Details, OBJECT_FIELDS};
 
@@ -38,7 +38,9 @@ pub fn from_json(value: &Value) -> Saved {
         Value::Number(n) => n.as_f64().map_or(Saved::Null, Saved::Number),
         Value::String(text) => Saved::Text(text.clone()),
         Value::Array(items) => Saved::List(items.iter().map(from_json).collect()),
-        Value::Object(fields) => Saved::Fields(fields.iter().map(|(name, value)| (name.clone(), from_json(value))).collect()),
+        Value::Object(fields) => {
+            Saved::Fields(fields.iter().map(|(name, value)| (name.clone(), from_json(value))).collect())
+        }
     }
 }
 

@@ -39,7 +39,20 @@
 //! positive end. The circle in `Design/Array/array_circle.png` runs
 //! counter-clockwise from the object on screen, with the camera on the axis's
 //! positive side, which is this app's front view looking down -Z at a circle
-//! about Z; the layout reproduces that without any sign change.
+//! about Z; the layout reproduces that without any sign change. The one place
+//! the two handednesses part is a file from the Unity app, whose scene comes in
+//! with X negated: a path's copies still land where they were drawn (their
+//! frames are made of cross products, which turn over with the mirror just as a
+//! rotation seen in it does), but a circle about Y or Z, being a fixed turn about
+//! a fixed axis, runs the other way round. `ArraySettings::sweep` can therefore be
+//! negative, meaning the same arc run from the other side, and the importer sets
+//! it so for a circle about Y or Z.
+//!
+//! An array is kept in the scene's `.sclp` file with its object: the tool saves
+//! and loads it through the toolkit's `Tool::save_object` and `load_objects` (the
+//! file's shape is in `saved.rs`, also what the Unity importer writes), and an
+//! Open that replaces the scene ends the tool's history but leaves every array
+//! where it is, keyed by an object Undo can bring back.
 
 pub mod bake;
 pub mod layout;

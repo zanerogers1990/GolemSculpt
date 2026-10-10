@@ -457,7 +457,9 @@ pub fn place_import(raw: &mut RawMesh, first_half_size: Option<Vec3>) -> Vec3 {
 //         (u32, one more of them than faces), the corners (u32 each).
 //   HIDE  after its mesh, if any of its faces are hidden: the mesh's number
 //         (u32), then a byte per triangle, 1 for hidden.
-//   INFO  last, once: everything else, as JSON (see `Details`).
+//   INFO  last, once: everything else, as JSON (see `Details`). What a hosted
+//         tool keeps for an object (an array) is a field of that object's
+//         entry named by the tool's id: see `io/tool_data.rs`.
 //
 // All numbers are little-endian. A reader steps over blocks whose tag it does
 // not know and JSON fields it does not know, and fills in whatever is

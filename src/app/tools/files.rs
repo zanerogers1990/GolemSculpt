@@ -225,7 +225,12 @@ mod tests {
         // As the app reads it, too: the same objects, in the same places.
         let (old, new) = (io::load_scene(&plain).unwrap(), io::load_scene(&arrayed).unwrap());
         assert_eq!(old.objects.len(), new.objects.len());
-        assert!(old.objects.iter().zip(&new.objects).all(|(a, b)| (&a.name, a.mesh, a.position) == (&b.name, b.mesh, b.position)));
+        assert!(
+            old.objects
+                .iter()
+                .zip(&new.objects)
+                .all(|(a, b)| (&a.name, a.mesh, a.position) == (&b.name, b.mesh, b.position))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -266,6 +271,47 @@ mod tests {
         assert!(read[0].is_none() && read[1].is_none());
         assert_eq!(read[2].as_ref().map(|a| a.settings.count), Some(ArraySettings::MAX_COUNT));
         assert_eq!(read.len(), 3);
+    }
+
+    #[test]
+    fn an_array_on_an_instance_is_kept_on_the_instances_row_and_the_instance_stays_linked() {
+        let dir = folder("instance");
+        let (mut scene, mut slot) = scene_of(2);
+        let first = scene.objects[0].id;
+        scene.select(first, &mut slot);
+        let instance = scene.instance_active();
+        let row = scene.index_of(instance).unwrap();
+        assert!(row > 0 && scene.objects[row].mesh == scene.objects[0].mesh, "an instance of the first object");
+
+        // The Unity app never put an array on an instance; this app may, and so may a file.
+        let mut tools = Tools::default();
+        give(&mut tools, &scene, &[(row, array(ArrayKind::Line, 4))]);
+        let path = dir.join("instance.sclp");
+        save(&scene, &slot, &tools, &path);
+
+        let mut fresh = Tools::default();
+        let opened = open(&path, &mut fresh);
+        let arrays = kept(&fresh, &opened);
+        assert_eq!(
+            arrays.iter().map(Option::is_some).collect::<Vec<_>>(),
+            kept(&tools, &scene).iter().map(Option::is_some).collect::<Vec<_>>()
+        );
+        assert!(arrays[row].is_some() && arrays[0].is_none(), "on the instance, not on the object it shows");
+        assert_eq!(opened.objects[row].mesh, opened.objects[0].mesh, "still linked");
+
+        // Added to a scene, the instance and its array come in together.
+        let added = scene_of(1).0;
+        let (mut target, mut slot) = (added, ball());
+        let mut tools = Tools::default();
+        let loaded = io::load_scene(&path).unwrap();
+        let (details, count, before) = (loaded.details.clone(), loaded.objects.len(), target.objects.len());
+        let rows = crate::app::files::append(&mut target, &mut slot, loaded);
+        assert_eq!(rows.len(), count);
+        tools.restore_from_file(&rows, &details, Arrival::Added);
+        let now = kept(&tools, &target);
+        assert_eq!(now.len(), before + count);
+        assert_eq!(now.iter().flatten().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

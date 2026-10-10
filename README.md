@@ -334,7 +334,8 @@ click on one picks the object, and Mask, Hide, Trim and Split act through them
 2. Reshape it with the handles. **Copies** sets how many, **End Size** tapers
    or grows the run, **Middle Size** swells or pinches it, and the ticks
    choose whether copies turn to follow the path, are spaced by size, or close
-   into a loop. A circle also has the world axis it goes round and a Sweep.
+   into a loop. A circle also has the world axis it goes round, a Sweep and a
+   box to go the other way round (the same arc, run from the other side).
 3. **Mirror to the other side** (X, Y, Z) repeats the object and every copy
    on the other side of the scene's centre. It is the object's own live Mirror
    (the Mirror section of the Objects card, see Objects) within reach: the
@@ -400,14 +401,41 @@ reflected, and a stroke or a shape works through both as it does on the object.
 Mask, Hide, Trim and Split are described with them below.
 
 Dragging on the background orbits (except while Draw Curve is on). Arrays are
-the tool's, not the scene's: they are not saved in `.sclp` files yet, and while
-the tool is up Z steps the array's own edits first, then the scene's. The
-exceptions are a pose, Copies Back onto the Path and a mirror switch: each is a
-step of the scene's history (it changes the object, or its mirror), but Z
-takes it back in order with the array's own edits, and the array follows when
-the scene takes one back, even with the tool away. Moving the object by its
-square start point is a step of the scene's alone, which Z reaches after the
-array's own edits.
+the tool's, not the scene's, and while the tool is up Z steps the array's own
+edits first, then the scene's. The exceptions are a pose, Copies Back onto the
+Path and a mirror switch: each is a step of the scene's history (it changes the
+object, or its mirror), but Z takes it back in order with the array's own
+edits, and the array follows when the scene takes one back, even with the tool
+away. Moving the object by its square start point is a step of the scene's
+alone, which Z reaches after the array's own edits.
+
+**Arrays in files.** An array is saved in the `.sclp` file with its object, so
+closing the app does not lose it: save, close, open, and it is there, live, on
+the same object, with its settings, its path, its pose and its mirror. The file
+keeps what makes the copies (the kind, the count, the sizes, the ticks, the
+axis and sweep, and the path's points as offsets from the object), as the
+Unity app's did. The pose needs nothing of its own: it is the object's saved
+place and the path's first point; and the mirror is the object's own live
+mirror, which the file already keeps. Every object keeps its own array, whichever
+row it is on and however many there are. A file saved before this opens as it
+did, with no arrays, and a file with arrays opens in an older version of the
+app with its objects and without them.
+
+- **Open** (in place of the scene) gives each array to the object of the same
+  row in the file. The arrays of the scene it replaced are not thrown away:
+  Undo brings that scene back with its arrays as they were, and Redo brings
+  the file's. The Array tool's own undo steps end at an Open, so while the tool
+  is up the first Z undoes the Open itself, not an array edit to an object that
+  is no longer there.
+- **Import** adds the file's arrays to its objects as they join the scene. The
+  scene's own arrays, and the tool's steps, are untouched, and one Undo takes
+  the added objects and their arrays away.
+- A file that is damaged or from a newer version costs the array that cannot be
+  read and nothing else: a kind this version does not know, fewer than two
+  points, or a point that is not a place means no array; a count outside 2 to
+  100 or a size out of range is brought into range, and a path of more than 256
+  points is cut to 256; a setting that is missing or is not a number is what a
+  new array starts with.
 
 ## Lathe
 
@@ -618,7 +646,7 @@ pair; after that they can be moved apart and the joints stay on them.
 
 - **Save / Open** use `.sclp`, which keeps the whole sculpt: every object
   (its exact mesh and mask, hidden faces, quads, name, position and
-  visibility; instances stay linked; live mirrors stay on) and how it was left: the material and
+  visibility; instances stay linked; live mirrors and live arrays stay on) and how it was left: the material and
   finish, lighting, HDRI, background and effects, the camera view, the
   mirror axes and radial symmetry. Reopening a file puts all of it back. (An
   HDRI is kept as the path of its picture, not the picture.)
@@ -626,7 +654,8 @@ pair; after that they can be moved apart and the joints stay on them.
   full beside the old one and only then takes its place, so a full disk or a
   crash part-way leaves the old file as it was.
 - **Open** asks how the file should come in: in place of the scene, or with
-  its objects added to it. Either is one undo step. If the scene has changes
+  its objects added to it. Either is one undo step (undoing an Open brings back
+  the scene as it was, live arrays included; see Array). If the scene has changes
   that are not saved it says so, and offers to save first. So does closing the
   app (the window's close button, Alt + F4 or Ctrl + Q); with nothing unsaved
   it just closes. "Unsaved" means something was sculpted, added, moved or
@@ -636,7 +665,7 @@ pair; after that they can be moved apart and the joints stay on them.
   with a picture of the model taken when it was saved. Click one to open it.
   A file that has been moved or deleted drops out of the tiles.
 - **Import** adds an `.obj` or `.stl` model to the scene, centred, or the
-  objects of another `.sclp` where they were saved. An STL comes
+  objects of another `.sclp` where they were saved, with their live arrays. An STL comes
   in at its real size (millimetres, Z up; one unit is 10 mm, so a 10 mm ball is
   one unit across), welded into one connected surface, with inside-out
   triangles turned the right way. An OBJ is fitted to the size of the first
@@ -648,9 +677,12 @@ pair; after that they can be moved apart and the joints stay on them.
   material and finish, lighting, HDRI, background and effects; the camera
   view; and the object that was selected, whose mirror axes and radial
   symmetry become the scene's. Dynamic topology is set as the file left it.
-  A live array comes in as linked copies of its object, where the array had
-  them. The status line says what a file could not bring: an array's handles,
-  each object's separate symmetry, the Unity app's brush settings.
+  A live array comes in live: the object has its array, handles and all,
+  and the copies are where the Unity app drew them (a circle round Y or Z
+  is set to go the other way round, which is how it is the same circle in
+  this app's flipped axes). The status line says what a file could not bring:
+  each object's separate symmetry, the Unity app's brush settings, an array of
+  a kind this app does not know.
   **The Unity file is never written to.** Save on such a scene asks where to
   put a `.sclp`, offering the same name, and that `.sclp` is the document
   from then on. A file that is damaged, or from a newer Unity format than
@@ -663,9 +695,12 @@ pair; after that they can be moved apart and the joints stay on them.
   turned upright for a slicer (the model's up is the bed's Z, its front faces
   the front of the bed, nothing mirrored). The OBJ keeps the app's own units
   and axes, and a quad-remeshed object goes out as its quads. The live mirror
-  copies of an object are part of the model on screen and go out with it: the
-  STL holds them all in one file, the OBJ writes each as an object of its own
-  ("Cube_MirrorX"). The save box
+  copies of an object, and the copies of its live array, are part of the model
+  on screen and go out with it, each the right way out: the STL holds them
+  all in one file, the OBJ writes each as an object of its own ("Cube_MirrorX",
+  "Cube_Array3", and "Cube_Array3MirrorX" for that copy's reflection, as the
+  Unity app named them). An array of a very heavy object can ask for more
+  triangles than an STL can hold (4 billion), and is refused in words. The save box
   offers `<object name>_<date>_<time>` as the file name. The size conversion
   lives in one place, `crates/geom/src/units.rs`.
 - **The app remembers how you left it**: interface size, tooltips on or off,
@@ -678,7 +713,9 @@ A `.sclp` is the meshes as raw arrays (so a heavy scene saves and loads as
 fast as the disk allows) followed by one JSON section for everything else.
 Files from earlier versions of the app still open. The layout, and how to
 keep something new in it without changing the format, are set out in
-`src/io.rs`.
+`src/io.rs`. What a tool keeps for an object (an array's settings and points)
+is one more field of that object's entry in the JSON, under the tool's name
+(`"array"`), which a version that does not know it steps over.
 
 ## Look
 
@@ -894,8 +931,8 @@ Not ported yet:
   object's own space. The Unity app kept them per object and could also
   mirror across the world's planes.
 
-SSpheres, arrays, unmerged tubes, rulers and planned keys are scaffolds: they
-are not kept in `.sclp` files, so make the skin, finish the array or merge the
+SSpheres, unmerged tubes, rulers and planned keys are scaffolds: they
+are not kept in `.sclp` files, so make the skin or merge the
 tube before closing the app.
 
 Left out on purpose: the Unity app's mold maker and hard-surface tool.
@@ -923,6 +960,8 @@ sculpt.exe --screenshot out.png --demo-tool array:mirror  # a mirrored column of
 sculpt.exe --screenshot out.png --demo-tool hide:array    # a shape drawn over one copy of an array (the Array tool lays a column out first): the same hole in every copy; also mask:array, trim:array, split:array
 sculpt.exe --screenshot out.png --demo-tool array:point   # the gizmo's arrows on the end point of the path; array:arrows drags them sideways, array:start puts them on the square start point and drags that; array:arrow drags an arrow with the pointer and Z, printing a line per check
 sculpt.exe --demo-tool array:stroke                       # brush strokes begun on an array's copies by way of the pointer routines; prints a line per check (ok / FAIL), add --screenshot out.png to see the result
+sculpt.exe --screenshot out.png --demo-tool array:several --demo-files array   # three arrays (a ring, a curve, a mirrored column) saved, opened, undone, redone, added and exported; prints a line per check; the picture is the reopened scene
+sculpt.exe --screenshot out.png --demo-tool array:as-is some.sculpt            # the Array tool up on the arrays a file brought with it (a Unity sculpt that has one): the first object with an array is selected, its path and handles show
 sculpt.exe --screenshot out.png --demo-tool tube:radial   # a horn repeated six times round Y; also tube:mirror, tube:radial-mirror (three repeats and a mirror), tube:surface, tube:object (kept separate), tube:merged, tube:radial-merged
 sculpt.exe --screenshot out.png --demo-tool lathe:radial  # Create with Radial Symmetry on Create ticked (the vase gets the radial guides); also lathe:created, lathe:edit, lathe:bowl, lathe:ring, lathe:sketch
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)

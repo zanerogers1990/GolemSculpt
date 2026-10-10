@@ -114,7 +114,10 @@ fn opening_a_file_ends_the_tools_history_but_keeps_the_arrays_for_undo_to_bring_
     let new = bench.open(vec![("Only", cube(0.5))]);
     let saved = vec![Some(crate::state_to_saved(&before[2]))];
     bench.load_tool(&mut tool, &new, saved, Arrival::Replaced);
-    assert!(!tool.can_undo(false) && !tool.can_undo(true), "no step of the tool is left to answer Z before the scene's");
+    assert!(
+        !tool.can_undo(false) && !tool.can_undo(true),
+        "no step of the tool is left to answer Z before the scene's"
+    );
     assert_eq!(tool.state(new[0]), before[2]);
 
     // The first Z undoes the Open itself, not an array edit of an object that is not there.
@@ -186,11 +189,7 @@ fn damaged_input_loads_what_it_can_and_never_fails() {
     let ids: Vec<ObjectId> = (0..8).map(|i| bench.add(&format!("O{i}"), cube(0.5))).collect();
     let point = |x: f32| Saved::numbers(&[x, 0.0, 0.0]);
     let line = |count: Saved, second: Saved| {
-        Saved::fields([
-            ("kind", 1.into()),
-            ("count", count),
-            ("points", Saved::List(vec![point(0.0), second])),
-        ])
+        Saved::fields([("kind", 1.into()), ("count", count), ("points", Saved::List(vec![point(0.0), second]))])
     };
     let objects = vec![
         (ids[0], line(0.into(), point(4.0))),

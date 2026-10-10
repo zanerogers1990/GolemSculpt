@@ -275,7 +275,8 @@ mod tests {
     #[test]
     fn a_sweep_keeps_its_direction_and_is_limited_in_size() {
         let mut s = ArraySettings::new(ArrayKind::Radial);
-        for (given, kept) in [(-90.0, -90.0), (-1000.0, -360.0), (-0.2, -1.0), (0.2, 1.0), (-0.0, 1.0), (f32::NEG_INFINITY, 360.0)] {
+        let cases = [(-90.0, -90.0), (-1000.0, -360.0), (-0.2, -1.0), (0.2, 1.0), (-0.0, 1.0), (f32::NEG_INFINITY, 360.0)];
+        for (given, kept) in cases {
             s.sweep = given;
             assert_eq!(s.clamped().sweep, kept, "{given}");
         }

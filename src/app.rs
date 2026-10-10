@@ -32,6 +32,7 @@ mod bridge;
 mod dyntopo;
 mod recording;
 mod faces;
+mod file_arrays;
 mod files;
 mod live_copies;
 mod masked;

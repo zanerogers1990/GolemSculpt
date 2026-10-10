@@ -224,7 +224,10 @@ mod tests {
         }
         let read = from_saved(&saved).expect("a curve");
         let s = read.settings;
-        assert_eq!((s.end_scale, s.mid_scale, s.axis, s.sweep), (ArraySettings::MIN_SCALE, ArraySettings::MAX_SCALE, 2, 360.0));
+        assert_eq!(
+            (s.end_scale, s.mid_scale, s.axis, s.sweep),
+            (ArraySettings::MIN_SCALE, ArraySettings::MAX_SCALE, 2, 360.0)
+        );
         assert_eq!(read.points.len(), ArrayState::MAX_POINTS);
         assert!(read.points.iter().all(|p| p.abs().max_element() <= ArrayState::MAX_REACH));
         // And it lays out without fuss.
