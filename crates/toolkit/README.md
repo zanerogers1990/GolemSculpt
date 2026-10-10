@@ -84,7 +84,7 @@ change things. Nothing is kept between calls; hold ids, not references.
 | `cx.time`, `cx.dt`, `cx.active` | Seconds; whether this tool is the one up |
 | `cx.mirror`, `cx.unit`, `cx.tips`, `cx.clean_view` | Brush mirror axes; mm or inches (`sculpt_geom::units` formats and parses); tooltips on; panels hidden (draw no handles) |
 | `cx.radial_count`, `cx.radial_axis`, `cx.symmetry()` | Radial symmetry (repeats round an axis; 1 is off); every copy a stroke is made as, mirrors and turns together, as a `SymmetryGroup` |
-| `cx.scene()` | `objects()`, `active()`, `selected()` (every selected object, the active one first), `info(id)` (name, visible, placement, live mirror, mesh id, counts), `mesh(id)` (positions, normals, indices, mask, hidden-face flags **as slices**, object space), `raycast(&ray)`, `raycast_object(id, &ray)`, `raycast_placed(id, &model, &ray)`, `bounds(id)` |
+| `cx.scene()` | `objects()`, `active()`, `selected()` (every selected object, the active one first), `info(id)` (name, visible, placement, live mirror, copies tools keep, mesh id, counts), `mesh(id)` (positions, normals, indices, mask, hidden-face flags **as slices**, object space), `raycast(&ray)`, `raycast_object(id, &ray)`, `raycast_placed(id, &model, &ray)`, `bounds(id)` |
 | `cx.pick(px)` | The visible surface under a pixel: object, position, normal, distance |
 
 Screen positions are physical pixels, y down. Sizes meant in interface points
@@ -148,6 +148,35 @@ for each place in `placements()` and keep the nearest hit; it takes any matrix,
 so it picks a copy of the tool's own (one copy of an array) the same way.
 A clone, an instance or a piece cut from a mirrored object is not mirrored
 unless the tool says so with `.mirrored(..)`.
+
+**Copies a tool keeps (an array's).** A tool can keep copies of an object on
+screen, and say that they are part of it. They are places the object's mesh is
+shown, like its mirror copies, and every other tool and the app's own pointer
+treat them so: a shape drawn over one acts on the object through it (the region
+tools), a brush stroke begun on one sculpts the object through it, a click on
+one picks the object, and the camera frames them. Say it from `frame`, every
+frame, for as long as the copies are there, up or not (it works like `copies`
+and replaces what the tool said last frame); say nothing and the places are
+gone by the next frame, so a copy that is made real, undone or taken off cannot
+be left behind:
+
+```rust
+draw.live_copies(object, &world_matrices);   // drawn like `copies`, and also places of the object
+// and what another tool reads, in the object's ObjectInfo:
+info.live_copies                             // &[Mat4]: the copies tools keep, not the object's own settings
+info.all_places()                            // Vec<Mat4>: the object, its mirror copies, then those
+```
+
+`placements()` stays the object's own (its flip masks mean something only
+there); `all_places()` is what a shape on screen has to be tried against. A
+copy that is drawn reflected has a negative determinant, as a mirror copy's does
+(an array on a mirrored object has half its copies so). Use `copies` or
+`instances` for a ghost of where something would go, which no one should be able
+to cut or sculpt; and do not say a copy that is only drawn while a drag shows the
+object somewhere the scene does not have it yet (the Array tool leaves those out
+until the drag ends). `Scene::raycast` and `cx.pick` meet these copies too and
+name the object. In tests, `bench.frame(&mut tool)` takes in what the tool said,
+and `bench.live_copies(object, &matrices)` says some directly.
 
 **Hidden faces.** Part of a mesh can be switched off: not drawn, not hit by the
 pointer (`cx.pick`, `raycast`), not touched by brushes. Nothing is removed:
@@ -214,6 +243,7 @@ draw.mesh(&self.preview, Style::solid(color));             // lit, opaque
 draw.mesh(&self.preview, Style::shell(color));             // see-through with a rim
 draw.instances(&self.peg, Style::solid(c).flat(), &mats);  // one mesh, many transforms
 draw.copies(object, &world_matrices);  // a scene object drawn again, with the scene's own material
+draw.live_copies(object, &world_matrices);  // the same, and they count as places of the object (see "Copies a tool keeps")
 draw.hide(object);                     // leave a scene object out this frame (a preview stands in)
 ```
 

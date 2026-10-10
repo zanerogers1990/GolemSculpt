@@ -23,9 +23,11 @@ use crate::mesh::bvh::Aabb;
 use crate::mesh::{Mesh, StrokeDelta};
 
 mod mirror;
+mod places;
 mod symmetry;
 
 pub use mirror::{MirrorCommand, saved_mirror};
+pub use places::TOOL_COPY;
 pub use symmetry::{Guides, Space, Symmetry, saved_symmetry};
 
 /// New shapes are this fraction of the top object's average half-size, as in
@@ -75,9 +77,10 @@ pub struct Picked {
     /// Surface normal, facing the ray origin.
     #[allow(dead_code)]
     pub normal: Vec3,
-    /// Which of the object's live mirror copies the ray met, as its flip mask
-    /// (X = 1, Y = 2, Z = 4); 0 for the object itself.
-    pub copy: u8,
+    /// Which place of the object the ray met: 0 for the object itself, the
+    /// flip mask (X = 1, Y = 2, Z = 4) of one of its live mirror copies, or
+    /// `TOOL_COPY` and up for a copy a tool keeps (see `scene/places.rs`).
+    pub copy: u16,
 }
 
 /// What becomes of the other selected objects once the active one has taken
@@ -119,10 +122,14 @@ pub struct Scene {
     next_id: u64,
     /// The placement of the active mesh a stroke is going through, when that
     /// is not the active object itself: an instance of it, or a live mirror
-    /// copy (the second number is the copy's flip mask, 0 for the object).
-    brush: Option<(u64, u8)>,
+    /// copy or a copy a tool keeps (the second number names the place: 0 for
+    /// the object, a flip mask, or `TOOL_COPY` and up).
+    brush: Option<(u64, u16)>,
     /// The same for the last stroke, which the orbit pivot is measured from.
-    stroked: Option<(u64, u8)>,
+    stroked: Option<(u64, u16)>,
+    /// The copies tools keep of objects, by object, as they last said (see
+    /// `scene/places.rs`). Not saved and not an undo step.
+    tool_places: HashMap<u64, Vec<Mat4>>,
     /// Which side of the active object is selected when it is mirrored: the
     /// flip mask of the live copy the gizmo is on, with the object it was
     /// chosen for. Not an undo step; see `selected_side`.
@@ -169,6 +176,7 @@ impl Scene {
             next_id: 3,
             brush: None,
             stroked: None,
+            tool_places: HashMap::new(),
             side: None,
             local_view: None,
             shown: HashMap::new(),
@@ -816,14 +824,14 @@ impl Scene {
     }
 
     /// Where a stroke is aimed, made safe: the object and which of its
-    /// placements (0, or the flip mask of one of its live mirror copies). An
-    /// aim that is no longer a placement of the active mesh is the active
-    /// object's own.
-    fn placement(&self, at: Option<(u64, u8)>) -> (&Object, u8) {
+    /// placements (0, the flip mask of one of its live mirror copies, or a
+    /// copy a tool keeps). An aim that is no longer a placement of the active
+    /// mesh is the active object's own.
+    fn placement(&self, at: Option<(u64, u16)>) -> (&Object, u16) {
         let active = self.active();
         let found = at.and_then(|(id, copy)| Some((self.get(id)?, copy)));
         match found {
-            Some((o, copy)) if o.mesh == active.mesh && (copy == 0 || o.has_copy(copy)) => (o, copy),
+            Some((o, copy)) if o.mesh == active.mesh && self.has_place(o, copy) => (o, copy),
             _ => (active, 0),
         }
     }
@@ -843,31 +851,34 @@ impl Scene {
     }
 
     /// The matrix the stroke under way maps the pointer through: the
-    /// placement of the object it began on, mirror copies included.
+    /// placement of the object it began on, mirror copies and the copies a
+    /// tool keeps included.
     pub fn brush_matrix(&self) -> Mat4 {
         let (object, copy) = self.placement(self.brush);
-        object.placed_matrix(copy)
+        self.place_matrix(object, copy)
     }
 
-    /// Which placement of `brush_object` the stroke under way is on: the flip
-    /// mask of its live mirror copy, 0 for the object itself.
-    pub fn brush_copy(&self) -> u8 {
+    /// Which placement of `brush_object` the stroke under way is on: 0 for
+    /// the object itself, else the flip mask of its live mirror copy or
+    /// `TOOL_COPY` and up for a copy a tool keeps.
+    pub fn brush_copy(&self) -> u16 {
         self.placement(self.brush).1
     }
 
     /// The same for the last stroke, which the orbit pivot is measured from.
     pub fn stroke_matrix(&self) -> Mat4 {
         let (object, copy) = self.placement(self.stroked);
-        object.placed_matrix(copy)
+        self.place_matrix(object, copy)
     }
 
     /// Sends the stroke about to begin through `id`, a placement of the
     /// active mesh. It stays there until `release_brush`: an instance and its
     /// original can touch, and a stroke that crossed from one to the other
     /// must not change placement half way.
-    /// `copy` is the flip mask of one of the object's live mirror copies, or 0
-    /// for the object itself.
-    pub fn aim_brush(&mut self, id: u64, copy: u8) {
+    /// `copy` is 0 for the object itself, the flip mask of one of its live
+    /// mirror copies, or `TOOL_COPY` and up for a copy a tool keeps (an
+    /// array's), as `Picked::copy` says.
+    pub fn aim_brush(&mut self, id: u64, copy: u16) {
         let own = id == self.active && copy == 0;
         self.brush = (!own && self.shows_active_mesh(id)).then_some((id, copy));
         self.stroked = self.brush;
@@ -915,8 +926,9 @@ impl Scene {
         let mut best: Option<(Picked, f32)> = None;
         for o in self.objects.iter().filter(|o| o.visible && wanted(o)) {
             let Some(mesh) = self.mesh(o.mesh, slot) else { continue };
-            // The object itself, then each of its live mirror copies.
-            for (copy, model) in o.placements() {
+            // The object itself, then each of its live mirror copies and the
+            // copies a tool keeps.
+            for (copy, model) in self.places_of(o) {
                 // The ray in the placement's own space, and the hit back out of it.
                 let inverse = model.inverse();
                 let local_dir = inverse.transform_vector3(dir).normalize_or(dir);

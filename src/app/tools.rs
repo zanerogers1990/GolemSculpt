@@ -131,6 +131,11 @@ impl Tools {
         self.infos.get(index).copied()
     }
 
+    /// Which tool has this `Info::id`.
+    pub fn info_index(&self, id: &str) -> Option<usize> {
+        self.infos.iter().position(|info| info.id == id)
+    }
+
     /// Which tool is up, given the app's own tool setting.
     pub fn active(&self, tool: Tool) -> Option<usize> {
         self.active.filter(|_| tool == Tool::Plugin)
@@ -310,6 +315,7 @@ impl kit::Scene for Access<'_> {
             mesh: kit::MeshId(o.mesh),
             placement: kit::Placement { position: o.position, rotation: o.rotation, scale: o.scale },
             mirror: o.mirror,
+            live_copies: self.scene.tool_places(o.id),
             vertices: mesh.map_or(0, Mesh::vertex_count),
             triangles: mesh.map_or(0, Mesh::triangle_count),
         })
@@ -654,7 +660,7 @@ impl Running {
 
     /// Calls tool `index` with the moment as it is now, then does what it
     /// asked of the app.
-    fn tools_call<R>(
+    pub(super) fn tools_call<R>(
         &mut self,
         index: usize,
         pressure: Option<f32>,
@@ -971,6 +977,13 @@ impl Running {
                 Tools::call(&mut self.doc, &self.ui.assets, index, |tool, cx| tool.frame(cx, &mut one));
                 draw.append(one);
             }
+            // The copies tools keep of objects (an array's) are places the
+            // object is shown, for the pointer and for the other tools.
+            let mut places = std::collections::HashMap::<u64, Vec<Mat4>>::new();
+            for (object, copies) in draw.object_places() {
+                places.entry(object.0).or_default().extend(copies.iter().copied());
+            }
+            self.doc.scene.set_tool_places(places);
             self.doc.tools.draw = draw;
         }
         self.renderer.previews.show(&self.gpu, &self.view, self.doc.tools.draw.previews());
@@ -1029,7 +1042,13 @@ impl Running {
         if what == "check" {
             return self.tools_check(index);
         }
+        if self.demo_with_array(index, id, what) {
+            return;
+        }
         self.tools_call(index, None, |tool, cx| tool.demo(cx, what));
+        // A glide the demo asked for is over before the picture is taken, so that
+        // the gizmo and the overlay are drawn from the camera that ends up there.
+        self.doc.camera.update(10.0);
         self.sync_view();
     }
 

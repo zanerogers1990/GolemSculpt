@@ -214,17 +214,22 @@ impl Scene {
 
     // ---- bounds ------------------------------------------------------------------
 
-    /// World bounds of an object and its live mirror copies: all of what is on
-    /// screen for it, which is what framing and the camera's reach go by.
-    /// (`bounds_of` is the object alone, which is what the gizmo is sized to.)
+    /// World bounds of an object, its live mirror copies and the copies tools
+    /// keep of it (an array's): all of what is on screen for it, which is what
+    /// framing and the camera's reach go by, as the Unity app's go by every
+    /// copy. (`bounds_of` is the object alone, which is what the gizmo is
+    /// sized to.)
     pub fn shown_bounds_of(&self, object: &Object, slot: &Mesh) -> Aabb {
         let own = self.bounds_of(object, slot);
-        let Some(mesh) = self.mesh(object.mesh, slot).filter(|_| object.mirror.is_some()) else { return own };
+        let kept = self.tool_places(object.id);
+        let copies = object.mirror.is_some() || !kept.is_empty();
+        let Some(mesh) = self.mesh(object.mesh, slot).filter(|_| copies) else { return own };
         let local = mesh.bounds();
         if local.is_empty() {
             return own;
         }
-        object.placements().skip(1).fold(own, |all, (_, model)| Aabb::union(all, box_through(local, &model)))
+        let others = object.placements().skip(1).map(|(_, model)| model).chain(kept.iter().copied());
+        others.fold(own, |all, model| Aabb::union(all, box_through(local, &model)))
     }
 
     // ---- files ---------------------------------------------------------------------

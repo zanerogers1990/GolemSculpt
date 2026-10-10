@@ -18,7 +18,13 @@
 //! where each copy is drawn through each side of the mirror, and which is under
 //! the pointer). Clicking a copy puts the transform gizmo on it, and posing it
 //! poses them all; Copies Back onto the Path and the mirror buttons change the
-//! object in the scene along with the array (`pose.rs`).
+//! object in the scene along with the array (`pose.rs`). Clicking a point of the
+//! path puts the gizmo's arrows on that instead, to slide it along an axis
+//! (`arrows.rs`).
+//!
+//! The copies are said to be places of the object, not only drawn: the region
+//! tools cut through them and the brushes sculpt through them, as in the Unity
+//! app (`Draw::live_copies`, in `tool.rs`).
 //!
 //! Everything is relative to the object the array repeats. Handle points are
 //! offsets from its position in world axes, and a copy's placement is an offset,
@@ -43,6 +49,7 @@ mod state;
 mod types;
 
 mod arrays;
+mod arrows;
 mod copies;
 mod demo;
 mod edit;
@@ -62,6 +69,8 @@ mod tests;
 mod tool_tests;
 #[cfg(test)]
 mod copy_tests;
+#[cfg(test)]
+mod arrow_tests;
 
 pub use bake::{MAX_COMBINED_VERTICES, bake, bake_array, bake_normals, local_matrices};
 pub use copies::{Place, drawn as drawn_copies, places as copy_places};
