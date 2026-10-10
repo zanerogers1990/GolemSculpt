@@ -61,6 +61,11 @@ fn whole(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_owned())
 }
 
+/// Whether two paths name the same file, however each was written.
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    same(&whole(a), &whole(b))
+}
+
 /// File name of the picture for `path`: a hash of the path (FNV-1a), since a
 /// path is not itself a usable file name.
 fn picture_name(path: &Path) -> String {

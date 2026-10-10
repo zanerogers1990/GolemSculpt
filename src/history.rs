@@ -2,7 +2,10 @@
 //! kilobytes for a typical stroke); operations that replace the whole mesh
 //! (remesh, import, new shape) keep the previous mesh itself, so stepping
 //! across them is instant. Edits to the object list (add, delete, rename,
-//! reorder...) keep the list as it was.
+//! reorder...) keep the list as it was. A step that put one file's scene in
+//! place of another's (an Open, a restored recovery copy) also keeps which
+//! file the scene on its other side belongs to (`FileState`), so that the
+//! file comes back with the objects.
 //!
 //! Mesh steps remember which mesh they belong to, so undo can bring that
 //! mesh back to hand before stepping.
@@ -22,10 +25,25 @@ pub enum Edit {
     Scene(Box<SceneState>),
 }
 
+/// The file of the scene on the other side of a step that changed which
+/// file the scene belongs to. Undo of an Open brings back the objects that
+/// were there before it; without this the name of the opened file would stay
+/// behind, and Save would write the old scene over the file just opened.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileState {
+    /// That scene's file; `None` if it has none.
+    pub path: Option<std::path::PathBuf>,
+    /// Whether that scene is what its file holds.
+    pub saved: bool,
+}
+
 struct Step {
     edit: Edit,
     /// The mesh a stroke or replace applies to.
     mesh: u64,
+    /// Only on a step that changed which file the scene belongs to: the file
+    /// on its other side (see `keep_file`).
+    file: Option<FileState>,
 }
 
 /// What the next undo or redo step will touch.
@@ -95,7 +113,7 @@ impl History {
         crate::timelapse::activity::edited();
         self.edits += 1;
         self.redo.clear();
-        self.undo.push_back(Step { edit, mesh: self.target });
+        self.undo.push_back(Step { edit, mesh: self.target, file: None });
         self.trim();
     }
 
@@ -143,10 +161,35 @@ impl History {
             return false;
         }
         let step = if undo { self.undo.pop_back() } else { self.redo.pop() };
-        let Some(Step { edit: Edit::Scene(state), mesh }) = step else { return false };
-        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh };
+        let Some(Step { edit: Edit::Scene(state), mesh, file }) = step else { return false };
+        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh, file };
         if undo { self.redo.push(step) } else { self.undo.push_back(step) }
         true
+    }
+
+    /// Says that the step just recorded changed which file the scene belongs
+    /// to; `before` is the file of the scene it replaced.
+    pub fn keep_file(&mut self, before: FileState) {
+        if let Some(step) = self.undo.back_mut() {
+            step.file = Some(before);
+        }
+    }
+
+    /// Call after a step back (`undo`) or forward. If the step just taken
+    /// changed which file the scene belongs to, gives back the file of the
+    /// scene now arrived at, and keeps `here`, the file of the scene just
+    /// left, for the way back.
+    pub fn cross_file(&mut self, undo: bool, here: impl FnOnce() -> FileState) -> Option<FileState> {
+        let taken = if undo { self.redo.last_mut() } else { self.undo.back_mut() };
+        let kept = taken?.file.as_mut()?;
+        Some(std::mem::replace(kept, here()))
+    }
+
+    /// The files kept for the scenes that undo and redo can still reach
+    /// across such steps. A save looks through them: a file that has just
+    /// been written no longer holds any scene but the one that was saved.
+    pub fn kept_files(&mut self) -> impl Iterator<Item = &mut FileState> {
+        self.undo.iter_mut().chain(&mut self.redo).filter_map(|step| step.file.as_mut())
     }
 
     /// Records that the whole mesh was replaced; `previous` is the old one.
@@ -170,7 +213,7 @@ impl History {
         }
         let step = self.undo.pop_back()?;
         let (edit, replaced) = Self::flip(step.edit, mesh, true);
-        self.redo.push(Step { edit, mesh: step.mesh });
+        self.redo.push(Step { edit, mesh: step.mesh, file: step.file });
         Some(replaced)
     }
 
@@ -180,7 +223,7 @@ impl History {
         }
         let step = self.redo.pop()?;
         let (edit, replaced) = Self::flip(step.edit, mesh, false);
-        self.undo.push_back(Step { edit, mesh: step.mesh });
+        self.undo.push_back(Step { edit, mesh: step.mesh, file: step.file });
         Some(replaced)
     }
 

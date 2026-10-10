@@ -133,7 +133,7 @@ fn main() {
             "--demo-spheres" => opts.demo_spheres = it.next().cloned(),
             // A figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play
             "--demo-pose" => opts.demo_pose = it.next().cloned(),
-            // Saving, opening and the questions about unsaved work: recent | ask-exit | ask-open | ask-open-clean | play
+            // Saving, opening and the questions about unsaved work: recent | ask-exit | ask-open | ask-open-clean | play | open-undo
             "--demo-files" => opts.demo_files = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.

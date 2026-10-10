@@ -726,6 +726,22 @@ pair; after that they can be moved apart and the joints stay on them.
   it just closes. "Unsaved" means something was sculpted, added, moved or
   undone since the last save or open; changing only the look or the view does
   not count.
+- **Undo of an Open brings the file name back too.** The scene from before
+  returns with the file it had (the File card shows its name again, or
+  "Unsaved" if it never had one), so Save writes it where it always went, or
+  asks where; it is never written over the file that was just opened. Whether
+  it had unsaved changes comes back with it: a scene that was saved before
+  the Open has nothing to save after the Undo, and one opened over without
+  saving still has its changes to save. Redo goes the other way: the opened
+  file's name, and nothing unsaved. The same holds after Save As on the
+  opened scene: the new name belongs to that scene, and Undo past the Open
+  still gives the earlier scene its own file. One case counts as unsaved on
+  purpose: if the opened scene was saved over the earlier scene's own file,
+  that file no longer holds the earlier scene, so when Undo brings it back
+  the app treats it as unsaved work and asks before closing. Adding a file's
+  objects (Import, or "Add Its Objects to This Scene") never changes the file
+  name. Undo itself errs on the side of asking: undoing an edit made after a
+  save still counts as unsaved, though the scene is then what the file holds.
 - **Recent**: the File card shows the last six sculpts saved or opened, each
   with a picture of the model taken when it was saved. Click one to open it.
   A file that has been moved or deleted drops out of the tiles.
@@ -787,7 +803,9 @@ pair; after that they can be moved apart and the joints stay on them.
   the others. If the graphics card reports a fault, the same.
   **The next time the app starts it offers the copy:** Restore It puts it in
   place of the scene (one undo step), not yet saved and with no file, so Save
-  asks where it should go, starting from the file it was a copy of. A copy
+  asks where it should go, starting from the file it was a copy of. (Undo of
+  the restore gives the scene from before its own file back, as Undo of an
+  Open does.) A copy
   made as the app stopped may have caught the last change half done, so the
   question says so and offers the last regular copy as well. Discard It
   leaves the scene alone; Not Now (Esc) keeps the copy and asks again next
@@ -1066,6 +1084,7 @@ sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 fr
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-exit | ask-open | ask-open-clean | play
+sculpt.exe --screenshot out.png --demo --demo-files open-undo   # Open, Undo, Redo and Save in every order, looking at what is in the files after each; prints a line per check (name a .sclp or .sculpt to start from that file; open-undo:opened and open-undo:undone stop after an Open, and after its Undo, for a picture of the File card)
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
 SCULPT_UNITY_SAMPLES=folder cargo test unity_import -- --nocapture   # the Unity sculpt reader against every .sculpt in a folder, with what each holds (they are not in the repository)
@@ -1084,7 +1103,10 @@ copies), `answer=restore | earlier | discard | later` (the answer to the
 question at start-up), `message` (the message the app closes with on a fault
 is really put up, and waits to be closed), and steps to take in a numbered
 frame: `stroke@30`, `scene@40` (prints a fingerprint of the scene),
-`save@45`, `quit@50` (a clean exit), `kill@50` (ends the program on the
+`save@45` (to `saved by the check.sclp` in the settings folder), `open@46`
+(opens `to open.sclp` from that folder in place of the scene), `undo@47`,
+`redo@48`, `file@49` (prints the name of the scene's file and whether
+anything is unsaved), `quit@50` (a clean exit), `kill@50` (ends the program on the
 spot), `panic@50`, `stroke-panic@50` (a panic half way through a stroke),
 `job-panic@50` (a panic in a background job, which must come back as an
 error and leave the app running), `graphics-error@50` and `device-lost@50`.

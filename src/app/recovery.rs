@@ -39,7 +39,7 @@ use sculpt_toolkit::{Job, JobCtx};
 
 use super::files::Mark;
 use super::{Drag, Running};
-use crate::doc::Recover;
+use crate::doc::{Action, Recover};
 use crate::io;
 use crate::prefs::{self, Home};
 use crate::recovery::{self, About, Faults, Kept, Outcome, Schedule, Store};
@@ -53,6 +53,9 @@ const CHECK: &str = "SCULPT_TEST_RECOVERY";
 /// In the script of a check: put the closing message up even though the run
 /// is a scripted one.
 const SHOW_MESSAGE: &str = "message";
+
+/// In the script of a check: the file in the settings folder that `open` opens.
+const TO_OPEN: &str = "to open.sclp";
 
 /// A copy that took longer than this to write says so in a toast: the pause
 /// could be felt, and should not be a mystery.
@@ -185,13 +188,13 @@ impl Running {
     /// Puts a recovery copy in place of the scene, as one undo step. The
     /// scene has no file after it and counts as unsaved, so Save asks where
     /// it should go and closing asks first: the copy is never written over
-    /// the user's own file without their say.
+    /// the user's own file without their say. Undo of it gives the scene
+    /// from before its own file back, as Undo of an Open does.
     fn restore(&mut self, kept: &Kept) -> io::Result<usize> {
         // A copy that brings a fault of its own with it must not take the
         // app down: the next start would offer it again and fall the same way.
-        let opened = catch_unwind(AssertUnwindSafe(|| self.replace_scene(&kept.file)));
+        let opened = catch_unwind(AssertUnwindSafe(|| self.replace_scene(&kept.file, false)));
         let (objects, _) = opened.unwrap_or_else(|_| Err(format!("{} could not be opened.", kept.file.display())))?;
-        self.doc.path = None;
         self.recovery.restored = true;
         self.recovery.document = kept.about.document.clone();
         Ok(objects)
@@ -393,10 +396,27 @@ impl Running {
             Step::Save => {
                 let file = Home::for_run(false).folder().map(|dir| dir.join("saved by the check.sclp"));
                 let saved = match file {
-                    Some(file) => self.save_scene(&file),
+                    Some(file) => self.save_scene(&file).map(|()| self.doc.path = Some(file)),
                     None => Err("no settings folder to save in".to_owned()),
                 };
                 println!("save: {saved:?}, unsaved {}", self.unsaved());
+            }
+            Step::Open => match Home::for_run(false).folder().map(|dir| dir.join(TO_OPEN)) {
+                Some(file) => {
+                    self.load(file, true);
+                    println!("open: {}", self.ui.status.0);
+                }
+                None => println!("open: no settings folder to open from"),
+            },
+            Step::Undo | Step::Redo => {
+                self.act(if step == Step::Undo { Action::Undo } else { Action::Redo });
+                let (undo, redo) = self.doc.history.steps();
+                println!("{}: {undo} steps to undo, {redo} to redo", if step == Step::Undo { "undo" } else { "redo" });
+            }
+            Step::File => {
+                let file = self.doc.path.as_ref().and_then(|path| path.file_name());
+                let file = file.map_or("none".into(), |name| name.to_string_lossy());
+                println!("file: {file}, unsaved {}", self.unsaved());
             }
             Step::GraphicsError => {
                 // A texture no wider than nothing: the device refuses it.
@@ -480,6 +500,15 @@ enum Step {
     JobPanic,
     /// Saves the scene, as Save does, to a file in the settings folder.
     Save,
+    /// Opens `to open.sclp` from the settings folder in place of the scene,
+    /// as Open does when told not to save first.
+    Open,
+    /// Undo, as the Z key.
+    Undo,
+    /// Redo.
+    Redo,
+    /// Prints the name of the scene's file and whether anything is unsaved.
+    File,
     /// Asks the graphics device for something it refuses.
     GraphicsError,
     /// Destroys the graphics device, which then reports itself lost.
@@ -498,9 +527,10 @@ enum Step {
 /// - `answer=restore | earlier | discard | later`: answers the question at start-up;
 /// - `message`: the message the app closes with on a fault is put up, as it
 ///   is for a person, and the run waits for it to be closed;
-/// - `stroke@30`, `scene@40`, `save@45`, `panic@50`, `stroke-panic@50`,
-///   `job-panic@50`, `graphics-error@50`, `device-lost@50`, `kill@50`,
-///   `quit@50`: does that in the frame of that number (see [`Step`]).
+/// - `stroke@30`, `scene@40`, `save@45`, `open@46`, `undo@47`, `redo@48`,
+///   `file@49`, `panic@50`, `stroke-panic@50`, `job-panic@50`,
+///   `graphics-error@50`, `device-lost@50`, `kill@50`, `quit@50`: does that
+///   in the frame of that number (see [`Step`]).
 ///
 /// Setting it at all (`on` will do) switches recovery on for a scripted run,
 /// which otherwise keeps no copies. It needs `SCULPT_SETTINGS_DIR` to say where.
@@ -565,6 +595,10 @@ fn step_named(name: &str) -> Option<Step> {
         "stroke-panic" => Step::PanicMidStroke,
         "job-panic" => Step::JobPanic,
         "save" => Step::Save,
+        "open" => Step::Open,
+        "undo" => Step::Undo,
+        "redo" => Step::Redo,
+        "file" => Step::File,
         "graphics-error" => Step::GraphicsError,
         "device-lost" => Step::DeviceLost,
         "kill" => Step::Kill,
@@ -585,6 +619,12 @@ mod tests {
         assert_eq!(script.answer, Some(Some(Recover::Earlier)));
         assert_eq!(script.steps, [(30, Step::Stroke), (40, Step::Scene), (41, Step::PanicMidStroke)]);
         assert_eq!(Script::parse("answer=later").answer, Some(None), "Not Now is an answer too");
+    }
+
+    #[test]
+    fn a_script_can_open_a_file_and_step_through_undo() {
+        let script = Script::parse("open@3,undo@4,file@5,redo@6");
+        assert_eq!(script.steps, [(3, Step::Open), (4, Step::Undo), (5, Step::File), (6, Step::Redo)]);
     }
 
     #[test]

@@ -7,6 +7,9 @@
 //! or opened: something was sculpted, added, moved, undone. Changing only the
 //! look or the view does not count, so trying a matcap and closing the app
 //! asks nothing. (The Unity app has no such flag and asks every time.)
+//!
+//! Which file the scene belongs to, and whether it is unsaved, follow the
+//! scene through Undo and Redo of an Open: see `file_undo.rs`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -16,6 +19,7 @@ use sculpt_toolkit::Arrival;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Fullscreen;
 
+use super::file_undo::File;
 use super::tools::Tools;
 use super::{Running, import_mesh, install, is_native, stem};
 use crate::camera::{Camera, SavedView};
@@ -42,8 +46,8 @@ pub(super) struct State {
     /// The settings as last written or read, to tell when they have changed.
     kept: Prefs,
     next_check: Instant,
-    /// The scene's mark when it was last saved or opened.
-    clean: Mark,
+    /// The scene's mark at which it is what its file holds (see `File::clean`).
+    clean: Option<Mark>,
     /// The user has said the app may close.
     quit: bool,
 }
@@ -52,7 +56,7 @@ impl State {
     pub(super) fn new(screenshot: bool) -> State {
         let home = Home::for_run(screenshot);
         let kept = home.load();
-        State { home, kept, next_check: Instant::now() + SETTINGS_CHECK, clean: (0, 0, 0), quit: false }
+        State { home, kept, next_check: Instant::now() + SETTINGS_CHECK, clean: Some((0, 0, 0)), quit: false }
     }
 }
 
@@ -214,15 +218,47 @@ impl Running {
         (self.doc.history.edits, undo, redo)
     }
 
-    /// The scene is now what its file holds (or what the app started with).
+    /// Start-up: the scene is the one the app starts with, or what the file
+    /// named on the command line holds. Nothing in it is unsaved.
     fn mark_saved(&mut self) {
-        self.files.clean = self.history_mark();
+        self.files.clean = Some(self.history_mark());
     }
 
     /// Whether anything has been done to the scene since it was last saved
-    /// or opened. Undoing back to that point makes it clean again.
+    /// or opened. It errs on the side of asking: the mark counts every step
+    /// ever recorded, and that count never goes back, so undoing an edit made
+    /// after a save still counts as unsaved although the scene is what the
+    /// file holds again. Only Undo and then Redo back to the very point of
+    /// the save is clean. Undo or Redo of an Open is another matter: the
+    /// scene it arrives at is unsaved exactly if it differs from what is in
+    /// its own file (`File::stepped`).
     pub(super) fn unsaved(&self) -> bool {
-        self.history_mark() != self.files.clean
+        Some(self.history_mark()) != self.files.clean
+    }
+
+    /// The scene's file, for `file_undo.rs` to work on.
+    fn file(&mut self) -> File<'_> {
+        File { path: &mut self.doc.path, clean: &mut self.files.clean, history: &mut self.doc.history }
+    }
+
+    /// Undo (`undo`) or Redo has just taken a step: if it was an Open, or a
+    /// restored recovery copy, the scene now on screen gets its own file
+    /// back. `was_saved` is whether the scene had nothing unsaved before the
+    /// step.
+    pub(super) fn file_stepped(&mut self, undo: bool, was_saved: bool) {
+        let now = self.history_mark();
+        if !self.file().stepped(undo, was_saved, now) {
+            return;
+        }
+        // The status line may still say the other file was opened.
+        let unsaved = self.unsaved();
+        let text = match &self.doc.path {
+            Some(path) if unsaved => format!("Back to {}, with changes that are not saved.", file_name(path)),
+            Some(path) => format!("Back to {}.", file_name(path)),
+            None if unsaved => "Back to a scene that is not saved yet: Save (Ctrl + S) asks where to keep it.".into(),
+            None => "Back to the scene from before, which has no file.".into(),
+        };
+        self.status(text, true);
     }
 
     /// Whether this is still the scene the app started with, untouched and
@@ -262,27 +298,41 @@ impl Running {
     /// Save, or Save As: asks where if the scene has no file yet. Returns
     /// whether the scene was written.
     pub(super) fn save_action(&mut self, save_as: bool) -> bool {
-        // A sculpt from the Unity app is never saved over: Save asks where
-        // its .sclp should go, as Save As does, offering the same name.
-        let known = self.doc.path.clone().filter(|path| !save_as && !unity_import::is_unity(path));
-        let path = known.or_else(|| {
-            let mut dialog = rfd::FileDialog::new().set_title("Save Sculpt").add_filter("Sculpt", &["sclp"]);
-            // Save As starts from the file the scene already has; a scene
-            // restored after a crash, from the file it was a copy of.
-            dialog = match &self.doc.path.clone().or_else(|| self.recovered_document()) {
-                Some(current) => {
-                    let unity = unity_import::is_unity(current);
-                    let dialog = dialog.set_file_name(if unity { unity_import::save_name(current) } else { file_name(current) });
-                    match current.parent() {
-                        Some(folder) => dialog.set_directory(folder),
-                        None => dialog,
-                    }
+        match self.save_target(save_as).or_else(|| self.ask_where_to_save()) {
+            Some(path) => self.save_to(path),
+            None => false,
+        }
+    }
+
+    /// The file Save writes to without asking: the scene's own, if it has
+    /// one. A sculpt from the Unity app is never saved over: Save asks where
+    /// its .sclp should go, as Save As does, offering the same name.
+    pub(super) fn save_target(&self, save_as: bool) -> Option<PathBuf> {
+        self.doc.path.clone().filter(|path| !save_as && !unity_import::is_unity(path))
+    }
+
+    /// The box that asks where to save. `None` if it was cancelled.
+    fn ask_where_to_save(&self) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new().set_title("Save Sculpt").add_filter("Sculpt", &["sclp"]);
+        // Save As starts from the file the scene already has; a scene
+        // restored after a crash, from the file it was a copy of.
+        dialog = match &self.doc.path.clone().or_else(|| self.recovered_document()) {
+            Some(current) => {
+                let unity = unity_import::is_unity(current);
+                let dialog = dialog.set_file_name(if unity { unity_import::save_name(current) } else { file_name(current) });
+                match current.parent() {
+                    Some(folder) => dialog.set_directory(folder),
+                    None => dialog,
                 }
-                None => dialog.set_file_name("sculpt.sclp"),
-            };
-            dialog.save_file()
-        });
-        let Some(path) = path else { return false };
+            }
+            None => dialog.set_file_name("sculpt.sclp"),
+        };
+        dialog.save_file()
+    }
+
+    /// Writes the scene to `path`, which is its file from then on, and says
+    /// so. Returns whether it was written.
+    pub(super) fn save_to(&mut self, path: PathBuf) -> bool {
         match self.save_scene(&path) {
             Ok(()) => {
                 let size = std::fs::metadata(&path).map_or(String::new(), |m| format!(" ({:.1} MB)", m.len() as f64 / 1e6));
@@ -306,7 +356,8 @@ impl Running {
             let (meshes, objects, active) = self.scene_for_file()?;
             io::save_scene_with(&meshes, &objects, active, &self.details(), path)?;
         }
-        self.mark_saved();
+        let now = self.history_mark();
+        self.file().written(path, now);
         self.note_recent(path, true);
         // The work is in a file of the user's: the recovery copies have had their day.
         self.recovery_saved();
@@ -641,36 +692,42 @@ impl Running {
     /// The file takes the scene's place and becomes the document: its look,
     /// mirror settings and view come with it, and Save writes back to it.
     fn open_replacing(&mut self, path: PathBuf) {
-        let (count, details) = match self.replace_scene(&path) {
+        let (count, details) = match self.replace_scene(&path, true) {
             Ok(opened) => opened,
             Err(e) => return self.status(e, false),
         };
         // A sculpt from the Unity app says so, and what it could not bring.
         let note = unity_import::status_note(&details, true).map_or(String::new(), |note| format!(". {note}"));
         self.status(format!("Opened {} ({}){note}", path.display(), how_many(count)), true);
-        self.doc.path = Some(path.clone());
-        self.mark_saved();
         // Its picture is the one from its last save; one is only taken now
         // if it has none.
         self.note_recent(&path, false);
     }
 
     /// Puts a file's scene in place of the one that is open, as one undo
-    /// step, with its look, mirror settings and view. Which file is the
-    /// document, and whether the scene counts as saved, is the caller's to
-    /// say: an opened file is both, a restored recovery copy neither. Gives
-    /// back how many objects came, and what else the file kept.
-    pub(super) fn replace_scene(&mut self, path: &Path) -> io::Result<(usize, io::Details)> {
+    /// step, with its look, mirror settings and view. `document` says whether
+    /// the file becomes the scene's own, with nothing unsaved (an Open), or
+    /// the scene is left with no file and counts as unsaved (a restored
+    /// recovery copy). The step keeps the file of the scene it replaces, so
+    /// Undo gives that scene its file back (`file_undo.rs`). Gives back how
+    /// many objects came, and what else the file kept.
+    pub(super) fn replace_scene(&mut self, path: &Path, document: bool) -> io::Result<(usize, io::Details)> {
         let saved = io::load_scene(path)?;
         let count = saved.objects.len();
+        let before = self.history_mark();
+        let before = self.file().state(before);
         let mut details = io::Details::default();
         self.edit_scene(|scene, slot| {
             details = install(scene, slot, saved);
             true
         });
+        // Straight away: it is the step just recorded that keeps it.
+        self.doc.history.keep_file(before);
         self.doc.mesh_replaced = true;
         self.sync_view();
         self.apply_details(&details);
+        let now = self.history_mark();
+        self.file().became(document.then(|| path.to_owned()), now);
         Ok((count, details))
     }
 
@@ -728,8 +785,9 @@ impl Running {
 
     /// Brings up something of this file's to look at with `--screenshot`:
     /// `recent` fills the File card's recent tiles, `ask-exit`, `ask-open`
-    /// and `ask-open-clean` put up the questions, and `play` runs
-    /// `files_play` first. Everything it writes goes under the temp folder.
+    /// and `ask-open-clean` put up the questions, `play` runs `files_play`
+    /// first, and `open-undo` the check of Undo across an Open
+    /// (app/file_undo/play.rs). Everything it writes goes under the temp folder.
     pub(super) fn files_demo(&mut self, what: &str) {
         let folder = std::env::temp_dir().join("sculpt_files_demo");
         let _ = std::fs::remove_dir_all(&folder);
@@ -745,6 +803,8 @@ impl Running {
             "unity" => self.unity_play(&folder),
             // Arrays the Array tool holds, through a save, an open, an undo and an add (app/file_arrays.rs).
             "array" => self.arrays_play(&folder),
+            // What Undo and Redo of an Open do to the scene's file (app/file_undo.rs).
+            "open-undo" | "open-undo:opened" | "open-undo:undone" => self.open_undo_play(&folder, what),
             "ask-exit" => self.ui.graph.ask(Question::Exit),
             "ask-open" | "ask-open-clean" => {
                 let path = folder.join("dragon head.sclp");

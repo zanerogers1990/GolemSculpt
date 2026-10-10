@@ -34,6 +34,7 @@ mod dyntopo;
 mod recording;
 mod faces;
 mod file_arrays;
+mod file_undo;
 mod files;
 mod live_copies;
 mod masked;
@@ -1023,6 +1024,8 @@ impl Running {
         match action {
             Action::Undo | Action::Redo => {
                 let undo = action == Action::Undo;
+                // Asked before the step: the step moves what the answer goes by.
+                let was_saved = !self.unsaved();
                 let doc = &mut self.doc;
                 let next = if undo { doc.history.next_undo() } else { doc.history.next_redo() };
                 let done = match next {
@@ -1045,6 +1048,8 @@ impl Running {
                 };
                 if done {
                     self.scene_changed();
+                    // Across an Open, the file comes with the scene.
+                    self.file_stepped(undo, was_saved);
                     self.toast(if undo { "Undo" } else { "Redo" });
                     // A mesh step has made its object the active one.
                     self.flash.start(self.doc.scene.active_id(), flash::Kind::Undo);
