@@ -550,6 +550,18 @@ impl Scene {
         self.forget_stale_visibility();
     }
 
+    /// The meshes no object shows, each with the bytes it holds (its resting
+    /// shape for Reset Shape included). They are parked here only because an
+    /// undo step may still bring one of their objects back, so they are what
+    /// undo is charged for (`History::settle`). The mesh of an object in the
+    /// list is not among them, however many steps also show it, and a mesh
+    /// several objects shared is here once.
+    pub fn spare_meshes(&self) -> HashMap<u64, usize> {
+        let resting = |id: &u64| self.baselines.get(id).map_or(0, |b| std::mem::size_of_val(b.positions.as_slice()));
+        let spare = self.parked.iter().filter(|(id, _)| self.users(**id) == 0);
+        spare.map(|(id, mesh)| (*id, mesh.memory_bytes() + resting(id))).collect()
+    }
+
     // ---- join and booleans -------------------------------------------------
 
     /// The selected objects and their meshes: the active one first, then the

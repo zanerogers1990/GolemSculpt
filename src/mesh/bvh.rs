@@ -305,6 +305,14 @@ impl Bvh {
         self.nodes.first().map_or(Aabb::EMPTY, |n| n.bounds)
     }
 
+    /// What the tree holds in memory, for `Mesh::memory_bytes`.
+    pub fn bytes(&self) -> usize {
+        std::mem::size_of_val(self.nodes.as_slice())
+            + std::mem::size_of_val(self.leaves.as_slice())
+            + self.nbr.bytes()
+            + (self.vert_leaf.len() + self.stamp.len() + self.scratch.len()) * 4
+    }
+
     fn leaf_bounds(leaf: &Leaf, positions: &[Vec3], indices: &[u32], loose: bool) -> Aabb {
         let mut b = Aabb::EMPTY;
         for &v in &indices[leaf.tri_start as usize * 3..leaf.tri_end as usize * 3] {

@@ -1032,6 +1032,27 @@ The **Objects** card at the top of the Scene panel is the scene graph.
   is saved with the scene all the same (a sculpt saved in Local View opens with
   the rest hidden), so while it differs from the file the scene counts as
   unsaved (see Files).
+- Undo keeps the last 100 steps, and no more memory than a quarter of the
+  computer's (16 GB on a 64 GB machine; never less than 2 GB). An object that
+  was deleted, joined into another or opened over stays in memory, whole, for
+  as long as a step can bring it back, and counts towards that; so does the
+  mesh from before each remesh. A mesh costs about 80 MB a million triangles.
+  When undo holds more than the limit, the oldest steps are let go until it
+  fits, the meshes only they could bring back leave memory straight away, and
+  a line at the bottom of the view says so ("Undo memory is full: 4 oldest
+  steps let go"). It says it once while one edit after another pushes a step
+  out, not at each.
+  - The last three steps are not let go for memory, so a big delete or remesh
+    is not lost to the next stroke. If those three alone are over the limit,
+    the steps before them go as far as the last one that keeps a whole mesh
+    (a delete, a join, a remesh). Strokes made after that one stay: letting a
+    stroke go frees next to nothing.
+  - Twice the limit is the ceiling: over that the last three go too, oldest
+    first. Only the very last step is kept whatever it holds, so the last
+    thing done can always be undone; a step that big is let go by the next
+    edit.
+  - The **Performance** card at the bottom of the Scene panel shows how much
+    undo is holding ("History").
 
 ## Hidden parts
 
@@ -1203,6 +1224,7 @@ cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocaptur
 cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
+SCULPT_UNDO_BYTES=1 sculpt.exe --screenshot out.png --demo   # undo's memory limit set in bytes (here to nothing): the second stroke lets the first go, and the line that says so is showing
 SCULPT_UNITY_SAMPLES=folder cargo test unity_import -- --nocapture   # the Unity sculpt reader against every .sculpt in a folder, with what each holds (they are not in the repository)
 ```
 

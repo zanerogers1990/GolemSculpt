@@ -339,9 +339,9 @@ impl Access<'_> {
             self.history.target = mesh;
             self.sculptor.last_hit = None;
         }
-        // Meshes of deleted objects are kept only while undo can bring them back.
-        let history = &*self.history;
-        self.scene.collect(|id| history.keeps_mesh(id));
+        // Meshes of deleted objects are kept only while undo can bring them
+        // back, and count against what undo may hold.
+        self.history.settle(self.scene);
     }
 
     /// Where the ray meets the object's mesh drawn through `model`: the

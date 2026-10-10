@@ -982,11 +982,18 @@ impl Mesh {
         })
     }
 
+    /// What the mesh holds in memory, near enough: every list that grows with
+    /// the mesh. Undo is charged this for each mesh it keeps (history.rs).
     pub fn memory_bytes(&self) -> usize {
+        // Positions, normals and the stroke-start copies of both; then the
+        // mask, its stroke-start copy and the stroke stamp.
         self.positions.len() * (12 * 4 + 4 * 3)
             + self.indices.len() * 4
+            + (self.curv.len() + self.curv_raw.len() + self.touched.len()) * 4
+            + self.polys.as_ref().map_or(0, |p| (p.start.len() + p.indices.len()) * 4)
             + self.vt.bytes()
             + self.vv.bytes()
+            + self.bvh.bytes()
             + self.hidden.bytes()
             + self.topo.bytes()
     }

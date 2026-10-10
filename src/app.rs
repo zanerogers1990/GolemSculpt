@@ -19,7 +19,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::camera::{self, Camera, View};
 use crate::doc::{Action, Doc, MaskOp, Options, Stats, Tool};
-use crate::history::{History, Next};
+use crate::history::Next;
 use crate::mesh::Mesh;
 use crate::mesh::primitives::{self, Primitive};
 use crate::printable::Cure;
@@ -49,6 +49,7 @@ mod spheres;
 mod symmetry;
 pub(crate) mod tools;
 mod transform;
+mod undo;
 mod unity;
 mod unsaved;
 mod visibility;
@@ -440,7 +441,7 @@ impl Running {
                 mesh,
                 scene,
                 mesh_replaced: true,
-                history: History::default(),
+                history: undo::history(),
                 sculptor: Sculptor::default(),
                 camera,
                 opts,
@@ -988,9 +989,9 @@ impl Running {
             doc.history.target = mesh;
             doc.sculptor.last_hit = None;
         }
-        // Meshes of deleted objects are kept only while undo can bring them back.
-        let history = &doc.history;
-        doc.scene.collect(|id| history.keeps_mesh(id));
+        // Meshes of deleted objects are kept only while undo can bring them
+        // back, and count against what undo may hold.
+        doc.history.settle(&mut doc.scene);
         self.redraw = true;
     }
 
@@ -1537,6 +1538,8 @@ impl Running {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.redraw = false;
+        // What the edits since the last frame have left undo to do.
+        self.undo_upkeep();
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
             return;
