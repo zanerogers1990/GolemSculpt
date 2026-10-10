@@ -1,18 +1,170 @@
 //! Pictures at a size of their own: the offscreen target the viewport is
 //! drawn into for a 360 loop or a timelapse, the lens that keeps a tall or
-//! square picture from cropping what the window shows, and the writer of a
-//! loop's numbered pictures.
+//! square picture from cropping what the window shows, and the writers of a
+//! loop: an MP4 video (video.rs) or numbered pictures.
 //!
 //! The window is never resized for any of it. A [`Target`] is a texture of
 //! the wanted size plus the renderer's working textures at that size (see
 //! `render::Side`), kept apart from the window's so drawing one does not
 //! rebuild the other. The drawing itself is in app/recording.rs.
 
+mod video;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
+pub use self::video::{VideoWriter, partial_name};
 use crate::render::{Gpu, Side};
+use crate::timelapse::mp4;
+
+/// What a recorded loop is saved as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LoopFormat {
+    /// One MP4 file, ready to post or play round and round.
+    #[default]
+    Video,
+    /// A folder of numbered PNG pictures, for editing or compositing.
+    Pictures,
+}
+
+impl LoopFormat {
+    /// What a recording asked for in this format can actually be: the video
+    /// needs the encoder Windows comes with, and falls back to pictures
+    /// where there is none, as the Unity app's did outside the editor.
+    pub fn available(self) -> LoopFormat {
+        if self == LoopFormat::Video && !mp4::SUPPORTED { LoopFormat::Pictures } else { self }
+    }
+
+    /// Where a loop recorded now goes in `folder`: a file named for the time,
+    /// or for pictures a folder of that name, "Turntable_2026-10-10_153012".
+    /// Never a name already taken.
+    pub fn output_in(self, folder: &Path) -> PathBuf {
+        let name = match self {
+            LoopFormat::Video => crate::io::export_file_name("Turntable", "mp4"),
+            LoopFormat::Pictures => stamped("Turntable"),
+        };
+        unused(folder.join(name))
+    }
+}
+
+/// A loop's output as the recording sees it: pictures or a video, taking the
+/// same calls. Neither ever drops a picture; [`LoopSink::ready`] is how the
+/// recording knows to wait.
+pub enum LoopSink {
+    Pictures(LoopWriter),
+    Video(VideoWriter),
+}
+
+impl LoopSink {
+    /// Opens `format`'s output at `path` (a folder for pictures, a file for
+    /// the video) for `total` pictures of `size` at `frame_rate`.
+    pub fn create(
+        format: LoopFormat,
+        path: PathBuf,
+        total: u32,
+        size: (u32, u32),
+        frame_rate: u32,
+    ) -> Result<LoopSink, String> {
+        match format.available() {
+            LoopFormat::Video => VideoWriter::create(path, total, size, frame_rate).map(LoopSink::Video),
+            LoopFormat::Pictures => LoopWriter::create(path, total, size).map(LoopSink::Pictures),
+        }
+    }
+
+    pub fn is_video(&self) -> bool {
+        matches!(self, LoopSink::Video(_))
+    }
+
+    /// The folder of pictures or the video file.
+    pub fn path(&self) -> &Path {
+        match self {
+            LoopSink::Pictures(w) => w.folder(),
+            LoopSink::Video(w) => w.path(),
+        }
+    }
+
+    pub fn total(&self) -> u32 {
+        match self {
+            LoopSink::Pictures(w) => w.total(),
+            LoopSink::Video(w) => w.total(),
+        }
+    }
+
+    /// Pictures handed over so far; the next one is this number.
+    pub fn issued(&self) -> u32 {
+        match self {
+            LoopSink::Pictures(w) => w.issued(),
+            LoopSink::Video(w) => w.issued(),
+        }
+    }
+
+    /// Pictures safely in the output.
+    pub fn written(&self) -> u32 {
+        match self {
+            LoopSink::Pictures(w) => w.written(),
+            LoopSink::Video(w) => w.written(),
+        }
+    }
+
+    /// Whether the next picture can be taken now.
+    pub fn ready(&self) -> bool {
+        match self {
+            LoopSink::Pictures(w) => w.ready(),
+            LoopSink::Video(w) => w.ready(),
+        }
+    }
+
+    /// Every picture has been handed over and the output is whole.
+    pub fn complete(&self) -> bool {
+        match self {
+            LoopSink::Pictures(w) => w.complete(),
+            LoopSink::Video(w) => w.complete(),
+        }
+    }
+
+    /// Nothing is still writing.
+    pub fn settled(&self) -> bool {
+        match self {
+            LoopSink::Pictures(w) => w.settled(),
+            LoopSink::Video(w) => w.settled(),
+        }
+    }
+
+    /// What went wrong, if the output could not be written.
+    pub fn error(&self) -> Option<String> {
+        match self {
+            LoopSink::Pictures(w) => w.error(),
+            LoopSink::Video(w) => w.error(),
+        }
+    }
+
+    pub fn push(&mut self, picture: image::RgbaImage) {
+        match self {
+            LoopSink::Pictures(w) => w.push(picture),
+            LoopSink::Video(w) => w.push(picture),
+        }
+    }
+
+    /// Stops the writing. The recording is over; call [`LoopSink::discard`]
+    /// once the output has [`settled`](LoopSink::settled).
+    pub fn cancel(&self) {
+        match self {
+            LoopSink::Pictures(w) => w.cancel(),
+            LoopSink::Video(w) => w.cancel(),
+        }
+    }
+
+    /// Removes what was written.
+    pub fn discard(self) {
+        match self {
+            LoopSink::Pictures(w) => w.discard(),
+            LoopSink::Video(w) => w.discard(),
+        }
+    }
+}
 
 /// A picture size the encoders will take: H.264 refuses odd sizes, and
 /// nothing sensible is smaller than 64.
@@ -88,6 +240,21 @@ pub fn unused(path: PathBuf) -> PathBuf {
         .map(|n| path.with_file_name(format!("{stem} ({n}){extension}")))
         .find(|candidate| !candidate.exists())
         .unwrap_or(path)
+}
+
+/// The last `parts` names of `path`, "Videos\Sculpt": enough for a line that
+/// says where something went, without the whole drive and user name.
+pub fn tail(path: &Path, parts: usize) -> String {
+    let names: Vec<String> = path
+        .components()
+        .rev()
+        .filter_map(|part| match part {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .take(parts)
+        .collect();
+    names.iter().rev().map(String::as_str).collect::<Vec<_>>().join("\\")
 }
 
 /// Shows a folder in the file manager, making it first if need be.
@@ -263,6 +430,34 @@ mod tests {
         assert_eq!(frame_name(359), "frame_0359.png");
         let name = stamped("Turntable");
         assert!(name.starts_with("Turntable_") && !name.contains('.'), "{name}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_place_is_named_by_its_last_folders() {
+        let folder = Path::new("C:\\Users\\zane\\Videos\\Sculpt");
+        assert_eq!(tail(folder, 2), "Videos\\Sculpt");
+        assert_eq!(tail(&folder.join("Turntable_x"), 3), "Videos\\Sculpt\\Turntable_x");
+        // Shorter than asked for: all there is, without the drive.
+        assert_eq!(tail(Path::new("C:\\Sculpt"), 4), "Sculpt");
+        assert_eq!(tail(Path::new("C:\\"), 2), "");
+    }
+
+    #[test]
+    fn a_loop_is_a_video_unless_asked_otherwise() {
+        assert_eq!(LoopFormat::default(), LoopFormat::Video);
+        assert_eq!(LoopFormat::Pictures.available(), LoopFormat::Pictures);
+        assert_eq!(LoopFormat::Video.available() == LoopFormat::Video, mp4::SUPPORTED);
+
+        let folder = std::env::temp_dir().join("sculpt-loopformat-test-nothing-is-here");
+        let video = LoopFormat::Video.output_in(&folder);
+        let name = video.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("Turntable_") && name.ends_with(".mp4"), "{name}");
+        assert_eq!(video.parent(), Some(folder.as_path()));
+        // Pictures go in a folder of that name, so no extension.
+        let pictures = LoopFormat::Pictures.output_in(&folder);
+        let name = pictures.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(pictures.extension().is_none() && name.starts_with("Turntable_"), "{name}");
     }
 
     #[test]

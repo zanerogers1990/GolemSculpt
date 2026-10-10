@@ -21,7 +21,7 @@ use std::path::Path;
 
 /// A frame rate as a fraction, so 29.97 and 23.976 survive; whole rates come
 /// out as n/1.
-fn rate_fraction(frame_rate: f32) -> (u32, u32) {
+pub fn rate_fraction(frame_rate: f32) -> (u32, u32) {
     let thousandths = ((frame_rate * 1000.0).round() as u32).max(1);
     if thousandths % 1000 == 0 { (thousandths / 1000, 1) } else { (thousandths, 1000) }
 }
@@ -29,7 +29,7 @@ fn rate_fraction(frame_rate: f32) -> (u32, u32) {
 /// When frame `frame` starts, in Media Foundation's 100 ns units. Worked out
 /// from the frame number each time, never added up, so a rate that does not
 /// divide evenly cannot drift.
-fn frame_time(frame: u64, rate: (u32, u32)) -> i64 {
+pub fn frame_time(frame: u64, rate: (u32, u32)) -> i64 {
     (frame as u128 * 10_000_000 * rate.1 as u128 / rate.0 as u128) as i64
 }
 
@@ -75,6 +75,10 @@ mod imp {
     const MF_MT_DEFAULT_STRIDE: Guid = Guid(0x644b_4e48, 0x1e02, 0x4516, [0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6]);
     const MF_MT_ALL_SAMPLES_INDEPENDENT: Guid = Guid(0xc917_3739, 0x5e56, 0x461c, [0xb7, 0x13, 0x46, 0xfb, 0x99, 0x5c, 0xb9, 0x5f]);
     const MF_MT_MPEG2_PROFILE: Guid = Guid(0xad76_a80b, 0x2d5c, 0x4e0b, [0xb3, 0x75, 0x64, 0xe5, 0x20, 0x13, 0x70, 0x36]);
+    // Encoder settings (codecapi.h), handed to the sink writer as attributes.
+    const AV_ENC_MPV_GOP_SIZE: Guid = Guid(0x95f3_1b26, 0x95a4, 0x41aa, [0x93, 0x03, 0x24, 0x6a, 0x7f, 0xc6, 0xee, 0xf1]);
+    const AV_ENC_MPV_DEFAULT_B_PICTURE_COUNT: Guid =
+        Guid(0x8d39_0aac, 0xdc5c, 0x4200, [0xb5, 0x7f, 0x81, 0x4d, 0x04, 0xba, 0xba, 0xb2]);
 
     const MF_VERSION: u32 = 0x0002_0070;
     const COINIT_MULTITHREADED: u32 = 0;
@@ -93,6 +97,7 @@ mod imp {
         fn MFStartup(version: u32, flags: u32) -> Hresult;
         fn MFShutdown() -> Hresult;
         fn MFCreateMediaType(out: *mut Object) -> Hresult;
+        fn MFCreateAttributes(out: *mut Object, initial_size: u32) -> Hresult;
         fn MFCreateSample(out: *mut Object) -> Hresult;
         fn MFCreateMemoryBuffer(max_length: u32, out: *mut Object) -> Hresult;
     }
@@ -185,6 +190,20 @@ mod imp {
         check(unsafe { method::<SetU32Fn>(attributes.0, ATTR_SET_U32)(attributes.0, key, value) }, "describe the video format")
     }
 
+    /// Settings for the encoder itself, as the sink writer wants them: an
+    /// attribute store of codec properties. A keyframe every `keyframe_every`
+    /// frames and no B-frames, which are the two things a loop needs (see
+    /// [`Mp4Writer::create_for_loop`]).
+    fn loop_encoder_settings(keyframe_every: u32) -> Result<Held, String> {
+        let mut out = null_mut();
+        // SAFETY: `out` is a valid place for the new object's pointer.
+        check(unsafe { MFCreateAttributes(&mut out, 2) }, "describe the video encoder")?;
+        let held = Held(out);
+        set_u32(&held, &AV_ENC_MPV_GOP_SIZE, keyframe_every)?;
+        set_u32(&held, &AV_ENC_MPV_DEFAULT_B_PICTURE_COUNT, 0)?;
+        Ok(held)
+    }
+
     /// Sizes and rates are two 32-bit numbers packed into one 64-bit value.
     fn set_pair(attributes: &Held, key: &Guid, high: u32, low: u32) -> Result<(), String> {
         let packed = (high as u64) << 32 | low as u64;
@@ -243,6 +262,42 @@ mod imp {
 
     impl Mp4Writer {
         pub fn create(path: &Path, width: u32, height: u32, frame_rate: f32, bit_rate: u32) -> Result<Mp4Writer, String> {
+            Self::open(path, width, height, frame_rate, bit_rate, None)
+        }
+
+        /// Like [`Mp4Writer::create`], for a video that will be played round
+        /// and round (a turntable loop).
+        ///
+        /// The encoder's own choices cost a loop its last frame. It uses
+        /// B-frames, which the file records by playing every frame one frame
+        /// late with no edit list to take that back out, so the picture starts
+        /// a frame in and the header's length ends a frame before the last
+        /// picture is done. Here there are none, so frame n is stamped and
+        /// shown at n / rate exactly and the frames' own lengths add up to
+        /// exactly frames / rate. (The header can still come out one tick
+        /// short of that, a tick being 1 / (1000 x rate) second, which is how
+        /// the sink writer rounds; the last frame starts well inside it.) And
+        /// a keyframe comes every second (the first frame is always one), so
+        /// scrubbing and jumping back to the start are quick.
+        pub fn create_for_loop(
+            path: &Path,
+            width: u32,
+            height: u32,
+            frame_rate: f32,
+            bit_rate: u32,
+        ) -> Result<Mp4Writer, String> {
+            let keyframe_every = (frame_rate.round() as u32).max(1);
+            Self::open(path, width, height, frame_rate, bit_rate, Some(keyframe_every))
+        }
+
+        fn open(
+            path: &Path,
+            width: u32,
+            height: u32,
+            frame_rate: f32,
+            bit_rate: u32,
+            keyframe_every: Option<u32>,
+        ) -> Result<Mp4Writer, String> {
             if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
                 return Err("A video needs an even width and height.".into());
             }
@@ -284,9 +339,12 @@ mod imp {
                 set_pair(t, &MF_MT_FRAME_RATE, rate.0, rate.1)?;
                 set_pair(t, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)
             })?;
-            // SAFETY: as above; no extra encoder settings are passed.
+            let tuning = keyframe_every.map(loop_encoder_settings).transpose()?;
+            let tuning_object = tuning.as_ref().map_or(null_mut(), |held| held.0);
+            // SAFETY: as above; the last argument is an attribute store that
+            // `tuning` keeps alive past the call, or null.
             check(
-                unsafe { method::<SetInputFn>(writer.0, WRITER_SET_INPUT)(writer.0, stream, input.0, null_mut()) },
+                unsafe { method::<SetInputFn>(writer.0, WRITER_SET_INPUT)(writer.0, stream, input.0, tuning_object) },
                 "set up the video encoder (the picture may be too large for it)",
             )?;
             // SAFETY: an IMFSinkWriter with its stream set up.
@@ -381,6 +439,10 @@ mod imp {
             Err(NEEDS_WINDOWS.into())
         }
 
+        pub fn create_for_loop(_: &Path, _: u32, _: u32, _: f32, _: u32) -> Result<Mp4Writer, String> {
+            Err(NEEDS_WINDOWS.into())
+        }
+
         pub fn write_frame(&mut self, _: impl FnOnce(&mut [u8])) -> Result<(), String> {
             Err(NEEDS_WINDOWS.into())
         }
@@ -412,6 +474,16 @@ pub struct Summary {
     pub height: u32,
     /// Length in seconds, from the movie header.
     pub seconds: f64,
+    /// What the frames' own times add up to, in seconds, from the track's
+    /// sample table. The header's length should agree with it.
+    pub frames_seconds: f64,
+    /// Frames a second: `frames` over `frames_seconds`.
+    pub frame_rate: f64,
+    /// Frames a player can start from (key frames).
+    pub keyframes: u32,
+    /// Frames are stored in a different order from the one they are shown in
+    /// (B-frames), which the file records as a delay before the first picture.
+    pub reordered: bool,
 }
 
 /// Reads [`Summary`] out of an MP4 file.
@@ -419,6 +491,19 @@ pub fn summary(path: &Path) -> std::io::Result<Summary> {
     let data = std::fs::read(path)?;
     let mut out = Summary { ftyp: data.len() >= 8 && &data[4..8] == b"ftyp", ..Default::default() };
     let word = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    // The time scale (ticks a second) and the length in ticks that a `mvhd`
+    // or `mdhd` box starting at `body` holds: version 0 keeps its times in 32
+    // bits, version 1 in 64.
+    let times = |body: usize| -> Option<(u32, u64)> {
+        if data.get(body) == Some(&1) {
+            let high = word(body + 24)? as u64;
+            Some((word(body + 20)?, high << 32 | word(body + 28)? as u64))
+        } else {
+            Some((word(body + 12)?, word(body + 16)? as u64))
+        }
+    };
+    // The track's own clock, and the ticks its frames add up to.
+    let (mut track_scale, mut track_ticks) = (0u32, 0u64);
     // Boxes that only hold other boxes; the rest are read or stepped over.
     const PARENTS: [&[u8; 4]; 5] = [b"moov", b"trak", b"mdia", b"minf", b"stbl"];
     let mut spans = vec![(0usize, data.len())];
@@ -442,17 +527,23 @@ pub fn summary(path: &Path) -> std::io::Result<Summary> {
             if PARENTS.iter().any(|p| p.as_slice() == kind) {
                 spans.push((body, at + size));
             } else if kind == b"mvhd" {
-                // Version 0 keeps its times in 32 bits, version 1 in 64.
-                let wide = data.get(body) == Some(&1);
-                let (scale, length) = if wide {
-                    let high = word(body + 24).unwrap_or(0) as u64;
-                    (word(body + 20), Some(high << 32 | word(body + 28).unwrap_or(0) as u64))
-                } else {
-                    (word(body + 12), word(body + 16).map(u64::from))
-                };
-                if let (Some(scale), Some(length)) = (scale, length) {
+                if let Some((scale, length)) = times(body) {
                     out.seconds = length as f64 / scale.max(1) as f64;
                 }
+            } else if kind == b"mdhd" {
+                track_scale = times(body).map_or(0, |(scale, _)| scale);
+            } else if kind == b"stts" {
+                // Runs of (frames, ticks each), after a version and a count.
+                let runs = word(body + 4).unwrap_or(0) as usize;
+                for run in 0..runs {
+                    let (Some(count), Some(each)) = (word(body + 8 + run * 8), word(body + 12 + run * 8)) else { break };
+                    track_ticks += count as u64 * each as u64;
+                }
+            } else if kind == b"stss" {
+                out.keyframes = word(body + 4).unwrap_or(0);
+            } else if kind == b"ctts" {
+                // Present only when some frame is shown later than it is stored.
+                out.reordered = true;
             } else if kind == b"stsz" {
                 out.frames = out.frames.max(word(body + 8).unwrap_or(0));
             } else if kind == b"tkhd" {
@@ -464,6 +555,10 @@ pub fn summary(path: &Path) -> std::io::Result<Summary> {
             }
             at += size;
         }
+    }
+    if track_scale > 0 && track_ticks > 0 {
+        out.frames_seconds = track_ticks as f64 / track_scale as f64;
+        out.frame_rate = out.frames as f64 / out.frames_seconds;
     }
     Ok(out)
 }
@@ -481,6 +576,23 @@ mod tests {
         assert_eq!(frame_time(30, rate), 10_000_000);
         // An hour in, frame n still starts exactly n thirtieths of a second in.
         assert_eq!(frame_time(108_000, rate), 36_000_000_000);
+    }
+
+    #[test]
+    fn the_rates_a_loop_is_offered_at_are_stamped_without_gaps_or_overlaps() {
+        for fps in [24u32, 30, 60] {
+            let rate = rate_fraction(fps as f32);
+            assert_eq!(rate, (fps, 1));
+            // None of them divides ten million, so a frame is a whole number
+            // of units or one more; whichever, the next frame starts where
+            // this one ends and a whole second is a whole second.
+            assert_eq!(frame_time(fps as u64, rate), 10_000_000);
+            let nominal = 10_000_000.0 / fps as f64;
+            for frame in 0..(fps as u64 * 12) {
+                let length = frame_time(frame + 1, rate) - frame_time(frame, rate);
+                assert!((length as f64 - nominal).abs() < 1.0, "{fps} fps: frame {frame} is {length} long");
+            }
+        }
     }
 
     #[test]

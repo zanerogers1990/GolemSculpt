@@ -88,6 +88,10 @@ pub struct Args {
     /// With `record_loop`: the picture size and how many pictures.
     pub loop_size: Option<(u32, u32)>,
     pub loop_frames: Option<u32>,
+    /// With `record_loop`: frames a second, and stop (cancel, or close the
+    /// app) once this many pictures are in.
+    pub loop_fps: Option<u32>,
+    pub loop_cancel: Option<u32>,
     /// Record a timelapse of a few scripted strokes to this file, then close.
     pub demo_timelapse: Option<PathBuf>,
     /// Save and open scripted scenes, or put up a question about unsaved

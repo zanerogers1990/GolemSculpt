@@ -11,8 +11,13 @@
 //! objects, after the window's frame has gone out: so its size and shape are
 //! the file's and not the window's, and the panels, the brush ring and the
 //! guides cannot be in it.
+//!
+//! A 360 loop is drawn one picture per app frame and goes to a video or to
+//! numbered pictures (`capture::LoopSink`). Neither may lose a picture, so
+//! when the writer is behind the next picture simply waits its turn, with
+//! the camera held where the last one left it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
@@ -22,7 +27,7 @@ use winit::keyboard::KeyCode;
 
 use super::{Drag, Running};
 use crate::camera::{Camera, View};
-use crate::capture::{self, LoopWriter, Target};
+use crate::capture::{self, LoopFormat, LoopSink, Target};
 use crate::render::DrawItem;
 use crate::render::spheres::SkinLook;
 use crate::sculpt::{Brush, PointerSample};
@@ -32,8 +37,8 @@ use crate::timelapse::rig::{Rig, Shot, Subject};
 use crate::timelapse::{self, Phase, Schedule, activity};
 use crate::turntable::{self, POINTER_REST_SECONDS, Progress};
 
-/// How long a loop that was cancelled waits for its picture writers before
-/// the app closes regardless.
+/// How long a loop that was cancelled waits for its writers before the app
+/// closes regardless.
 const CLOSE_WAIT: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
@@ -66,8 +71,10 @@ struct Pose {
 }
 
 struct LoopRun {
-    writer: Option<LoopWriter>,
+    writer: Option<LoopSink>,
     target: Target,
+    /// The video's frame rate, which is the card's unless a script chose.
+    fps: u32,
     /// Frame 0's view. Pitch, distance and pivot are put back every frame,
     /// so a stray drag cannot break the loop.
     start: Pose,
@@ -78,12 +85,12 @@ struct LoopRun {
     /// window's frame is out.
     due: bool,
     /// The recording is over without a loop to show for it; this is why.
-    /// Held until the picture writers have stopped, then they are removed.
+    /// Held until the writers have stopped, then what they wrote is removed.
     ending: Option<String>,
 }
 
 impl Drop for LoopRun {
-    /// Reached with pictures still being written only when the app closes
+    /// Reached with a loop still being written only when the app closes
     /// mid-recording: part of a loop is not a loop, so it is removed.
     fn drop(&mut self) {
         let Some(writer) = self.writer.take() else { return };
@@ -106,7 +113,11 @@ struct TimelapseRun {
 /// `--record-loop` and `--demo-timelapse`: recordings made without a person
 /// at the tablet, to check the pictures and the video by.
 enum Script {
-    Loop { folder: PathBuf, size: (u32, u32), frames: u32, started: bool },
+    /// `path` is a folder for numbered pictures, or a file ending in `.mp4`
+    /// for a video. `stop_after` cancels the loop (or, with
+    /// `SCULPT_DEMO_CAMERA=close`, closes the app) once that many pictures
+    /// are in, to see that nothing is left behind.
+    Loop { path: PathBuf, size: (u32, u32), frames: u32, fps: u32, stop_after: Option<u32>, started: bool },
     /// `frame` is the next step of the scripted session; `since` is when it
     /// began. The steps are paced by the clock (sixty a second), not by the
     /// app's frames, because the timelapse itself runs on real time.
@@ -130,6 +141,31 @@ struct Check {
     failed: u32,
 }
 
+/// What a loop is to be recorded as: where, how, and how many.
+struct LoopStart {
+    path: PathBuf,
+    format: LoopFormat,
+    size: (u32, u32),
+    frames: u32,
+    fps: u32,
+}
+
+/// The stage the self-check ends on.
+const LAST_CHECK_STAGE: u32 = 13;
+
+/// The `.mp4` files in `folder`, finished or not, with what each says of
+/// itself (nothing, for one that cannot be read).
+fn videos_in(folder: &Path) -> Vec<(String, Option<timelapse::mp4::Summary>)> {
+    let Ok(entries) = std::fs::read_dir(folder) else { return Vec::new() };
+    let mut found: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("mp4")))
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), timelapse::mp4::summary(&e.path()).ok()))
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+}
+
 /// How many pictures each loop folder under `folder` holds.
 fn loops_in(folder: &std::path::Path) -> Vec<usize> {
     let Ok(entries) = std::fs::read_dir(folder) else { return Vec::new() };
@@ -140,6 +176,53 @@ fn loops_in(folder: &std::path::Path) -> Vec<usize> {
         .collect();
     counts.sort();
     counts
+}
+
+/// Reads a finished loop video back from disk and says, check by check,
+/// whether it is what was asked for: the frames, the size, the frame rate,
+/// the length (both what the frames add up to and what the header says), and
+/// that the encoder did not delay the picture or leave its working file.
+fn report_video(path: &Path, frames: u32, size: (u32, u32), fps: u32) {
+    let file = match timelapse::mp4::summary(path) {
+        Ok(file) => file,
+        Err(e) => return println!("loop file: {e} ... FAILED"),
+    };
+    println!("loop file: {file:?}");
+    let seconds = frames as f64 / fps as f64;
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    // The header is kept in ticks of 1 / (1000 x fps) second and may be one
+    // short of the frames' own length (see `mp4::Mp4Writer::create_for_loop`).
+    let tick = 1.0 / (1000.0 * fps as f64);
+    let checks = [
+        (format!("{frames} frames"), file.frames == frames),
+        (format!("{} x {}", size.0, size.1), (file.width, file.height) == size),
+        (format!("{fps} frames a second ({:.4} found)", file.frame_rate), near(file.frame_rate, fps as f64)),
+        (
+            format!(
+                "{seconds:.4} s long (the frames come to {:.6}, the header says {:.6})",
+                file.frames_seconds, file.seconds
+            ),
+            near(file.frames_seconds, seconds) && (file.seconds - seconds).abs() <= tick + 1e-9,
+        ),
+        ("no frame shown late (no B-frames)".to_owned(), !file.reordered),
+        (format!("{} key frames", file.keyframes), file.keyframes >= 1),
+        ("no working file left beside it".to_owned(), !capture::partial_name(path).exists()),
+    ];
+    for (what, ok) in checks {
+        println!("loop check: {what} ... {}", if ok { "ok" } else { "FAILED" });
+    }
+}
+
+/// A loop that was cancelled, or failed, leaves nothing: lists whatever is
+/// still under its name.
+fn report_leftovers(path: &Path) {
+    let (Some(folder), Some(stem)) = (path.parent(), path.file_stem()) else { return };
+    let stem = stem.to_string_lossy().into_owned();
+    let found = std::fs::read_dir(folder).into_iter().flatten().flatten();
+    let left: Vec<String> =
+        found.map(|e| e.file_name().to_string_lossy().into_owned()).filter(|name| name.starts_with(&stem)).collect();
+    let ok = if left.is_empty() { "ok" } else { "FAILED" };
+    println!("loop check: nothing of the cancelled loop is left in {} ({left:?}) ... {ok}", folder.display());
 }
 
 /// The scripted timelapse's strokes: brush, radius, from and to (pixels from
@@ -172,7 +255,7 @@ impl Running {
             // What a loop looks like part of the way through recording.
             "recording" => {
                 self.doc.opts.clean_view = true;
-                self.doc.turntable.recording = Some(Progress { written: 37, total: 360 });
+                self.doc.turntable.recording = Some(Progress { written: 37, total: 360, video: true });
             }
             _ => {}
         }
@@ -185,7 +268,9 @@ impl Running {
             }
             let size = self.args.loop_size.unwrap_or((640, 360));
             let frames = self.args.loop_frames.unwrap_or(12).max(2);
-            self.recording.script = Some(Script::Loop { folder, size, frames, started: false });
+            let fps = self.args.loop_fps.unwrap_or(30).clamp(1, 120);
+            let stop_after = self.args.loop_cancel;
+            self.recording.script = Some(Script::Loop { path: folder, size, frames, fps, stop_after, started: false });
         } else if let Some(path) = self.args.demo_timelapse.clone() {
             self.recording.script = Some(Script::Timelapse { path, frame: 0, since: None });
         }
@@ -465,16 +550,23 @@ impl Running {
 
     // ---- 360 loop ----------------------------------------------------------
 
-    /// Records one turn from the view as it is. `script` gives the folder,
-    /// size and number of pictures for a run from the command line.
-    fn start_loop(&mut self, script: Option<(PathBuf, (u32, u32), u32)>) {
+    /// Records one turn from the view as it is. `script` says where, as what,
+    /// at what size and how many pictures for a run from the command line;
+    /// otherwise it is what the Turntable card is set to.
+    fn start_loop(&mut self, script: Option<LoopStart>) {
         if self.recording.looping.is_some() || self.doc.sculptor.is_active() {
             return;
         }
         let settings = self.doc.turntable.settings;
-        let (folder, size, total) = script.unwrap_or_else(|| {
-            let folder = capture::unused(self.recordings_folder().join(capture::stamped("Turntable")));
-            (folder, (settings.loop_width, settings.loop_height), settings.loop_frames())
+        let LoopStart { path, format, size, frames: total, fps } = script.unwrap_or_else(|| {
+            let format = settings.loop_output();
+            LoopStart {
+                path: format.output_in(&self.recordings_folder()),
+                format,
+                size: (settings.loop_width, settings.loop_height),
+                frames: settings.loop_frames(),
+                fps: settings.loop_fps,
+            }
         });
         let size = capture::even_size(size.0, size.1);
         let fail = |app: &mut Running, why: String| {
@@ -484,16 +576,18 @@ impl Running {
         if !self.fits(size) {
             return fail(self, format!("This graphics card cannot draw a {} x {} picture.", size.0, size.1));
         }
-        let writer = match LoopWriter::create(folder, total, size) {
+        let writer = match LoopSink::create(format, path, total, size, fps) {
             Ok(writer) => writer,
             Err(e) => return fail(self, e),
         };
+        let video = writer.is_video();
         let camera = &mut self.doc.camera;
         camera.cancel_glide();
         let start = Pose { yaw: camera.yaw, pitch: camera.pitch, distance: camera.distance, pivot: camera.pivot };
         let run = LoopRun {
             writer: Some(writer),
             target: Target::new(&self.gpu, size),
+            fps,
             start,
             direction: settings.direction(),
             spinning_before: self.doc.turntable.spin.on,
@@ -505,7 +599,7 @@ impl Running {
         // The window shows what is being written, so it gets the clean view
         // too, and no stroke can land on the model mid-turn.
         turntable::set_clean_view(&mut self.doc, true);
-        self.doc.turntable.recording = Some(Progress { written: 0, total });
+        self.doc.turntable.recording = Some(Progress { written: 0, total, video });
         self.doc.turntable.status.clear();
         self.recording.looping = Some(run);
         self.redraw = true;
@@ -538,8 +632,8 @@ impl Running {
             self.draw_capture(&mut run.target, camera);
             writer.push(crate::render::read_texture(&self.gpu, &run.target.texture));
         }
-        let (written, total) = (writer.written(), writer.total());
-        self.doc.turntable.recording = Some(Progress { written, total });
+        let (written, total, video) = (writer.written(), writer.total(), writer.is_video());
+        self.doc.turntable.recording = Some(Progress { written, total, video });
         if run.ending.is_none() {
             if let Some(e) = writer.error() {
                 writer.cancel();
@@ -550,7 +644,7 @@ impl Running {
 
         let outcome = match &run.ending {
             Some(why) if writer.settled() => Some(Err(why.clone())),
-            None if writer.complete() => Some(Ok(writer.folder().to_owned())),
+            None if writer.complete() => Some(Ok(writer.path().to_owned())),
             _ => None,
         };
         let Some(outcome) = outcome else {
@@ -567,13 +661,25 @@ impl Running {
         table.recording = None;
         table.spin.on = run.spinning_before;
         match outcome {
-            Ok(folder) => {
-                let seconds = total as f32 / table.settings.loop_fps.max(1) as f32;
-                let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                table.status = format!("Saved {total} pictures ({seconds:.1} s loop) in {name}");
+            Ok(path) => {
+                let seconds = turntable::loop_seconds(total, run.fps);
+                table.status = if video {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let place = path.parent().map(|p| capture::tail(p, 2)).unwrap_or_default();
+                    format!("Saved {name} ({seconds:.1} s loop, {total} frames) in {place}")
+                } else {
+                    format!("Saved {total} pictures ({seconds:.1} s loop) in {}", capture::tail(&path, 3))
+                };
                 table.status_ok = true;
                 if let Some(Script::Loop { .. }) = self.recording.script {
-                    println!("loop: {total} pictures of {}x{} in {}", run.target.size.0, run.target.size.1, folder.display());
+                    let size = run.target.size;
+                    if video {
+                        let (width, height, fps) = (size.0, size.1, run.fps);
+                        println!("loop: {total} frames of {width}x{height} at {fps} fps in {}", path.display());
+                        report_video(&path, total, size, run.fps);
+                    } else {
+                        println!("loop: {total} pictures of {}x{} in {}", size.0, size.1, path.display());
+                    }
                 }
             }
             Err(why) => {
@@ -741,10 +847,27 @@ impl Running {
     fn script_step(&mut self) {
         let lead_in = self.frames >= SCRIPT_LEAD_IN;
         match &mut self.recording.script {
-            Some(Script::Loop { folder, size, frames, started }) if lead_in && !*started => {
+            Some(Script::Loop { path, size, frames, fps, started, .. }) if lead_in && !*started => {
                 *started = true;
-                let spec = (folder.clone(), *size, *frames);
+                // A file name asks for a video, a folder for pictures.
+                let is_video = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
+                let format = if is_video { LoopFormat::Video } else { LoopFormat::Pictures };
+                let spec = LoopStart { path: path.clone(), format, size: *size, frames: *frames, fps: *fps };
                 self.start_loop(Some(spec));
+            }
+            Some(Script::Loop { stop_after: stop_after @ Some(_), .. }) => {
+                let written = self.recording.looping.as_ref().and_then(|run| run.writer.as_ref()).map(|w| w.written());
+                if written.zip(*stop_after).is_some_and(|(written, at)| written >= at) {
+                    println!("loop: {} pictures are in", written.unwrap_or(0));
+                    *stop_after = None;
+                    if std::env::var("SCULPT_DEMO_CAMERA").is_ok_and(|v| v == "close") {
+                        println!("loop: closing the app mid-recording");
+                        self.recording.close = true;
+                    } else {
+                        println!("loop: cancelling");
+                        self.cancel_loop("Recording cancelled.");
+                    }
+                }
             }
             Some(Script::Timelapse { path, since, .. }) if lead_in && since.is_none() => {
                 *since = Some(Instant::now());
@@ -841,10 +964,11 @@ impl Running {
             None => false,
         };
         if done {
-            if let Some(Script::Loop { .. }) = self.recording.script {
+            if let Some(Script::Loop { path, .. }) = &self.recording.script {
                 let table = &self.doc.turntable;
                 if !table.status_ok {
                     eprintln!("loop: {}", table.status);
+                    report_leftovers(path);
                 }
             } else if !self.doc.timelapse.status_ok {
                 eprintln!("timelapse: {}", self.doc.timelapse.status);
@@ -933,6 +1057,8 @@ impl Running {
                 expect(&format!("the spin eases out ({} frames)", c.frames), c.frames > 3);
                 let s = &mut self.doc.turntable.settings;
                 (s.speed, s.loop_fps, s.loop_width, s.loop_height) = (180.0, 24, 640, 360);
+                // Pictures first; the video is stage 9.
+                s.loop_format = LoopFormat::Pictures;
                 c.yaw = yaw;
                 self.doc.turntable.request = Some(turntable::Request::RecordLoop);
                 c.stage += 1;
@@ -968,14 +1094,54 @@ impl Running {
                 expect("the panels come back", !self.doc.opts.clean_view);
                 c.stage += 1;
             }
+            9 => {
+                // The same again as a video, which is what the card starts on.
+                self.doc.turntable.settings.loop_format = LoopFormat::Video;
+                self.doc.turntable.request = Some(turntable::Request::RecordLoop);
+                c.stage += 1;
+            }
+            10 if c.frames >= 6 => {
+                let writer = self.recording.looping.as_ref().and_then(|run| run.writer.as_ref());
+                let video = writer.is_some_and(|w| w.is_video());
+                expect("Record 360 Loop with MP4 chosen records a video, in the clean view", video && self.doc.opts.clean_view);
+                c.stage += 1;
+            }
+            11 if self.recording.looping.is_none() => {
+                let table = &self.doc.turntable;
+                let finished = table.status_ok && table.recording.is_none();
+                expect(&format!("the video finishes: \"{}\"", table.status), finished);
+                expect("the panels come back", !self.doc.opts.clean_view);
+                expect("the view is back where it started", yaw == c.yaw);
+                let videos = videos_in(&self.recordings_folder());
+                let whole = matches!(videos.as_slice(), [(_, Some(v))] if (v.frames, v.width, v.height) == (48, 640, 360)
+                    && (v.frame_rate - 24.0).abs() < 1e-9 && (v.frames_seconds - 2.0).abs() < 1e-9);
+                expect(&format!("one video of 48 frames, 640 x 360, 24 fps, 2 s is on disk ({videos:?})"), whole);
+                self.doc.turntable.request = Some(turntable::Request::RecordLoop);
+                c.stage += 1;
+            }
+            12 if c.frames >= 5 => {
+                self.key_pressed(event_loop, KeyCode::Escape);
+                let ending = self.recording.looping.as_ref().is_some_and(|run| run.ending.is_some());
+                expect("Esc cancels a video recording", ending);
+                c.stage += 1;
+            }
+            13 if self.recording.looping.is_none() => {
+                let table = &self.doc.turntable;
+                let cancelled = !table.status_ok && table.recording.is_none();
+                expect(&format!("the cancelled video says so: \"{}\"", table.status), cancelled);
+                let videos = videos_in(&self.recordings_folder());
+                expect(&format!("nothing of the cancelled video is left ({} files)", videos.len()), videos.len() == 1);
+                expect("the panels come back", !self.doc.opts.clean_view);
+                c.stage += 1;
+            }
             _ => {}
         }
         c.failed += failed;
         if c.stage != stage {
             (c.frames, c.since) = (0, Instant::now());
         }
-        if c.stage > 8 || c.frames > 1800 {
-            if c.stage <= 8 {
+        if c.stage > LAST_CHECK_STAGE || c.frames > 1800 {
+            if c.stage <= LAST_CHECK_STAGE {
                 println!("check: stage {} never finished ... FAILED", c.stage);
                 c.failed += 1;
             }

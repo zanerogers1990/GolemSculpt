@@ -478,15 +478,33 @@ single-key shortcuts are switched off, a drag orbits, and the pointer hides
 once it has rested for a second and a half.
 
 **Record 360° Loop** saves exactly one turn, starting from the view as it is
-and at the Speed above, as numbered PNG pictures (`frame_0000.png`...) in a
-folder of their own under `Videos\Sculpt`. The last picture flows straight
-back into the first, so it plays as a seamless loop. Pick the shape (16:9,
-1:1, 9:16 or 4K) and 24, 30 or 60 frames a second first; the line under the
-buttons says how many pictures that makes. The pictures are drawn at that size
-whatever size the window is, with no panels or guides in them, and a square or
-upright picture gets a wider lens so nothing at the sides is cropped. The
-window shows progress while it records; **Cancel** or Esc stops it and removes
-what was written. The pictures are large (about 2 MB each at 1080p).
+and at the Speed above, as an **MP4** video in `Videos\Sculpt`
+(`Turntable_<date>_<time>.mp4`), ready to post or to play round and round. Pick
+the shape (16:9, 1:1, 9:16 or 4K) and 24, 30 or 60 frames a second first; the
+line under the buttons says how long the loop is, how many frames it holds and
+what it will be saved as. The frames are drawn at that size whatever size the
+window is, with no panels or guides in them, and a square or upright picture
+gets a wider lens so nothing at the sides is cropped. The window shows progress
+while it records, and afterwards the card says what the file is called and
+where it went. **Cancel** or Esc stops it and removes what was written;
+closing the app part-way does the same. Until it is finished the video is
+called `Turntable_<date>_<time>.recording.mp4`, so a half-written file is never
+mistaken for a loop.
+
+It is a true loop: the video holds one picture for each step of the turn and
+no more, so its frames add up to exactly the turn's length (a 12 second turn at
+30 frames a second is 360 frames, 12.000 seconds) and the last frame flows into
+the first with the same step as any other two, with no repeated frame at the
+join. No frame is ever dropped: if the encoder is behind, the recording waits
+for it.
+The video needs Windows (it uses the video encoder Windows comes with); the
+card offers it only there.
+
+**PNG frames**, the second choice beside **MP4**, saves the same turn as
+numbered pictures (`frame_0000.png`...) in a folder of their own under
+`Videos\Sculpt`, for compositing or a GIF tool. They are large (about 2 MB each
+at 1080p). The Unity app offered the same two choices, with the video as the
+default.
 
 ## Timelapse
 
@@ -548,6 +566,8 @@ sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (S
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
+sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a name ending in .mp4): then reads the file back and checks its frames, size, frame rate and length
+sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 frames (SCULPT_DEMO_CAMERA=close closes the app instead) and checks nothing is left
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-exit | ask-open | ask-open-clean | play
