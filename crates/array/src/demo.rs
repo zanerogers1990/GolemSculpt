@@ -9,6 +9,10 @@
 //! | `away` | The circle with the tool put away: the copies stay on screen |
 //! | `made` | The circle made real as one object |
 //! | `separate` | The circle made real as separate objects |
+//! | `mirror` | A column of copies rising from an object off the middle, mirrored across X: every copy has its reflection |
+//! | `copy` | The same, with a copy on the far side picked: the gizmo's arrows and rings sit on it |
+//! | `posed` | The same after that copy was moved and turned with the gizmo: every copy off the path the same way |
+//! | `onpath` | And then Copies Back onto the Path: the move is undone and the turn stays |
 //!
 //! `line`, `curve` hide the selected object and add a brick in its place, so
 //! the way copies turn to follow a path can be seen; a sphere looks the same
@@ -17,9 +21,10 @@
 use glam::{Quat, Vec2, Vec3};
 use sculpt_geom::Aabb;
 use sculpt_toolkit::testing::cube;
-use sculpt_toolkit::{Command, Ctx, NewObject, ObjectId, Placement};
+use sculpt_toolkit::{Command, Ctx, GizmoPhase, MirrorRepeater, NewObject, ObjectId, Placement, Tool};
 
 use crate::finish::Apply;
+use crate::pose::CopyPick;
 use crate::tool::ArrayTool;
 
 pub fn demo(tool: &mut ArrayTool, cx: &mut Ctx, what: &str) {
@@ -32,8 +37,82 @@ pub fn demo(tool: &mut ArrayTool, cx: &mut Ctx, what: &str) {
         }
         "made" => made(tool, cx, Apply::One),
         "separate" => made(tool, cx, Apply::Separate),
+        "mirror" => _ = mirrored_column(tool, cx),
+        "copy" => {
+            let object = mirrored_column(tool, cx);
+            tool.copy = Some(CopyPick { object, copy: 2, side: 1 });
+        }
+        "posed" => posed(tool, cx, false),
+        "onpath" => posed(tool, cx, true),
         _ => circle(tool, cx),
     }
+}
+
+/// The selected object made smaller and stood to one side of the world's middle,
+/// with a column of copies rising from it, mirrored across X: the array is
+/// repeated at the other side of the scene's centre.
+fn mirrored_column(tool: &mut ArrayTool, cx: &mut Ctx) -> ObjectId {
+    let scene = cx.scene();
+    let object = scene.active();
+    let Some(info) = scene.info(object) else { return object };
+    let reach = scene.bounds(object).size().max_element() * 0.5;
+    let placement = Placement {
+        position: Vec3::new(reach * 1.9, -reach * 1.1, 0.0),
+        rotation: info.placement.rotation,
+        scale: info.placement.scale * 0.6,
+    };
+    let mirror = MirrorRepeater::new(1, Vec3::ZERO);
+    cx.commit("Demo Array Mirror", vec![Command::Place { object, placement }, Command::Mirror { object, mirror }]);
+    tool.make_line(cx);
+    let span = reach * 2.6;
+    tool.edit(cx, "Move Array Point", false, |a| {
+        a.points[1] = Vec3::Y * span;
+        a.settings.count = 6;
+        a.settings.end_scale = 0.6;
+    });
+    fit_both_sides(tool, cx);
+    object
+}
+
+/// The column with the picked mirror copy moved and turned by the gizmo's own
+/// path (the events it sends), and with `back` then put back onto the path.
+fn posed(tool: &mut ArrayTool, cx: &mut Ctx, back: bool) {
+    let object = mirrored_column(tool, cx);
+    let reach = cx.scene().bounds(object).size().max_element();
+    tool.copy = Some(CopyPick { object, copy: 2, side: 1 });
+    tool.refresh_gizmo(cx);
+    for drag in 0..2 {
+        let Some(target) = tool.gizmo().map(|g| g.placement) else { return };
+        let to = if drag == 0 {
+            // Toward the middle and a little up: on the far side that moves the object the other way.
+            Placement { position: target.position + Vec3::new(1.4 * reach, 0.5 * reach, 0.0), ..target }
+        } else {
+            Placement { rotation: Quat::from_rotation_z(0.6) * target.rotation, ..target }
+        };
+        tool.gizmo_event(cx, target, GizmoPhase::Begin);
+        tool.gizmo_event(cx, to, GizmoPhase::Move);
+        tool.gizmo_event(cx, to, GizmoPhase::End);
+        tool.refresh_gizmo(cx);
+    }
+    if back {
+        tool.copies_onto_path(cx);
+    }
+    fit_both_sides(tool, cx);
+}
+
+/// Brings the camera round to take in the array and its reflection.
+fn fit_both_sides(tool: &ArrayTool, cx: &mut Ctx) {
+    let object = tool.target(cx);
+    let Some(live) = tool.arrays.get(object) else { return };
+    let Some(info) = cx.scene().info(object) else { return };
+    let reach = cx.scene().bounds(object).size().max_element();
+    let mut bounds = Aabb::EMPTY;
+    for placement in &live.layout {
+        let at = info.placement.position + placement.offset;
+        bounds.grow(at);
+        bounds.grow(at * Vec3::new(-1.0, 1.0, 1.0));
+    }
+    cx.frame_view(bounds.expanded(reach * 1.2));
 }
 
 /// A brick standing in for the selected object, to the left of the middle of

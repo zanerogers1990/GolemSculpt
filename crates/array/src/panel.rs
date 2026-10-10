@@ -91,6 +91,7 @@ pub fn show(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
                 ("Shift + drag last", "Extend the path"),
                 ("Right-click a point", "Delete it"),
                 ("Delete", "Delete the picked"),
+                ("Click a copy", "Turn or move them all"),
                 ("Click an object", "Switch to it"),
                 ("Esc", "Cancel, stop, leave"),
                 ("Z, Shift + Z", "Undo, redo"),
@@ -208,6 +209,40 @@ fn settings(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, state: &Array
     if s.kind == ArrayKind::Radial {
         circle_controls(tool, ui, cx, &s);
     }
+    mirror_row(tool, ui, cx);
+    copies_back(tool, ui, cx);
+}
+
+/// Mirrors the array across the world's planes: the object's own live mirror,
+/// the one the Mirror section of the Objects card edits, within reach.
+fn mirror_row(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
+    theme::heading(ui, "Mirror to the other side");
+    let axes = tool.mirror_axes(cx);
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 3, 6.0);
+        for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+            let style = ButtonStyle { active: (axes >> axis & 1 != 0).then_some(ACCENT), ..Default::default() };
+            let help = format!(
+                "Repeats the object and every copy on the other side of the scene's centre along world {name} - a \
+                 strap down one side is on the other too. This is the object's own Mirror, so it stays live."
+            );
+            if theme::tip(theme::button(ui, w, name, style), cx.tips, &help).clicked() {
+                tool.toggle_mirror(cx, axis);
+            }
+        }
+    });
+}
+
+/// Undoes any move made by clicking a copy and dragging the gizmo's arrows.
+fn copies_back(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
+    ui.add_enabled_ui(tool.has_copy_offset(cx), |ui| {
+        let r = theme::button(ui, ui.available_width(), "Copies Back onto the Path", ButtonStyle::default());
+        let help = "Undoes any move made by clicking a copy and dragging the gizmo's arrows: every copy sits on the \
+                    path again.";
+        if theme::tip(r, cx.tips, help).clicked() {
+            tool.copies_onto_path(cx);
+        }
+    });
 }
 
 /// A log-scale size slider that snaps to "same size". The new size when it

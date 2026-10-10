@@ -9,7 +9,7 @@
 
 use glam::{Quat, Vec2, Vec3};
 use sculpt_cut::ScreenRegion;
-use sculpt_toolkit::{Command, Ctx, Placement, View};
+use sculpt_toolkit::{Command, Ctx, MirrorRepeater, Placement, View};
 
 use crate::action::Action;
 use crate::extract::Extract;
@@ -81,14 +81,77 @@ fn upright_line(view: &View) -> [Vec2; 2] {
     [Vec2::new(size.x * 0.5, size.y * 0.92), Vec2::new(size.x * 0.5, size.y * 0.08)]
 }
 
+/// The selected object made smaller, stood to one side of the world's middle
+/// and turned, with a live mirror across X, so that its copy stands on the
+/// other side and a shape can be drawn over that copy. Returns the copy as a
+/// target: where it is on screen and how big.
+fn mirrored_copy(cx: &mut Ctx) -> Option<Target> {
+    let scene = cx.scene();
+    let object = scene.active();
+    let info = scene.info(object)?;
+    let bounds = scene.bounds(object);
+    let reach = bounds.size().max_element() * 0.5;
+    let placement = Placement {
+        position: info.placement.position + Vec3::X * reach * 0.8,
+        rotation: Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-0.3),
+        scale: info.placement.scale * 0.55,
+    };
+    let mirror = MirrorRepeater::new(1, Vec3::ZERO);
+    cx.commit("Demo Mirror", vec![Command::Place { object, placement }, Command::Mirror { object, mirror }]);
+    // The copy is where the mesh is drawn through the reflected matrix; its middle is
+    // the middle of the object's reflected across the world's YZ plane.
+    let bounds = cx.scene().bounds(object);
+    let centre = bounds.center() * Vec3::new(-1.0, 1.0, 1.0);
+    let reach = bounds.size().max_element() * 0.5;
+    let at = cx.view.project(centre)?;
+    let edge = cx.view.project(centre + cx.view.right * reach)?;
+    Some(Target { centre, reach, at, radius: at.distance(edge) })
+}
+
+/// The tools over a live mirror copy: a shape drawn over the copy cuts the
+/// one mesh, so the object on the other side shows the same hole, cut or mask.
+fn over_the_copy(tool: &mut Region, cx: &mut Ctx) {
+    let Some(copy) = mirrored_copy(cx) else { return };
+    let real = cx.view;
+    let r = copy.radius;
+    match tool.action() {
+        Action::Hide => {
+            tool.set_shape(cx, Shape::Box);
+            drag(tool, cx, &[copy.at + Vec2::new(-1.05, -0.9) * r, copy.at + Vec2::new(0.1, 0.25) * r]);
+            tool.finish(cx, &real);
+        }
+        Action::Mask => {
+            tool.set_shape(cx, Shape::Lasso);
+            drag(tool, cx, &drawn_loop(copy.at + Vec2::new(-0.2, -0.1) * r, r * 0.55, 1.0));
+            tool.finish(cx, &real);
+        }
+        Action::Trim | Action::Split => {
+            // Seen from the side, as the other cutting demos are, so the cut face shows the real camera.
+            tool.set_shape(cx, Shape::Lasso);
+            let side = side_view(cx, &copy, SIDE_TURN);
+            let centre = side.size * 0.5 + Vec2::new(-0.85, -0.25) * r;
+            drag(tool, cx, &drawn_loop(centre, r * 0.6, 1.0));
+            tool.finish(cx, &side);
+            tool.settle(cx);
+            if tool.action() == Action::Split {
+                move_piece_aside(tool, cx, Vec3::NEG_Y * copy.reach * 1.5);
+            }
+        }
+    }
+}
+
 /// The region tools. Mask: a lasso mid-draw (`box`: a box mid-drag;
 /// `masked`: the lasso applied). Hide: half the model hidden from the side,
 /// so the inside of what is left shows (`lasso`: a hole through the middle;
 /// `drag`: a box mid-drag). Trim: a straight cut showing its flat face
 /// (`lasso`: a bite showing a curved one; `drag`: the line mid-drag). Split:
 /// the model cut in two with the piece moved aside (`drag`: the line
-/// mid-drag).
+/// mid-drag). All four: `mirror` draws the shape over the live mirror copy of
+/// the object, which is put on the other side of the world's middle first.
 pub fn region(tool: &mut Region, cx: &mut Ctx, what: &str) {
+    if what == "mirror" {
+        return over_the_copy(tool, cx);
+    }
     let Some(target) = target(cx) else { return };
     let real = cx.view;
     match (tool.action(), what) {

@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::{Mat3, Vec2};
+use glam::{Mat3, Mat4, Vec2};
 use sculpt_geom::{LengthUnit, TriMesh};
 use sculpt_toolkit as kit;
 use sculpt_toolkit::{Ctx, Draw, Env, Event, Jobs, MeshData, ObjectId, Outbox};
@@ -256,10 +256,11 @@ impl Access<'_> {
         self.scene.collect(|id| history.keeps_mesh(id));
     }
 
-    fn hit(&self, object: &crate::scene::Object, ray: &kit::Ray) -> Option<kit::Hit> {
+    /// Where the ray meets the object's mesh drawn through `model`: the
+    /// object's own matrix, or one of its copies'.
+    fn hit(&self, object: &crate::scene::Object, model: Mat4, ray: &kit::Ray) -> Option<kit::Hit> {
         let mesh = self.scene.mesh(object.mesh, self.mesh)?;
-        // The ray in the object's own space, and the hit back out of it.
-        let model = object.matrix();
+        // The ray in the placement's own space, and the hit back out of it.
         let inverse = model.inverse();
         let local = ray.transformed(&inverse);
         let hit = mesh.raycast(local.origin, local.dir)?;
@@ -284,6 +285,7 @@ impl kit::Scene for Access<'_> {
             active: o.id == self.scene.active_id(),
             mesh: kit::MeshId(o.mesh),
             placement: kit::Placement { position: o.position, rotation: o.rotation, scale: o.scale },
+            mirror: o.mirror,
             vertices: mesh.map_or(0, Mesh::vertex_count),
             triangles: mesh.map_or(0, Mesh::triangle_count),
         })
@@ -325,7 +327,12 @@ impl kit::Scene for Access<'_> {
     }
 
     fn raycast_object(&self, id: ObjectId, ray: &kit::Ray) -> Option<kit::Hit> {
-        self.hit(self.scene.get(id.0)?, ray)
+        let object = self.scene.get(id.0)?;
+        self.hit(object, object.matrix(), ray)
+    }
+
+    fn raycast_placed(&self, id: ObjectId, model: &Mat4, ray: &kit::Ray) -> Option<kit::Hit> {
+        self.hit(self.scene.get(id.0)?, *model, ray)
     }
 
     fn bounds(&self, id: ObjectId) -> sculpt_geom::Aabb {
@@ -347,6 +354,7 @@ impl kit::Document for Access<'_> {
         if let Some(o) = self.scene.get_mut(id) {
             (o.position, o.rotation, o.scale) = (object.placement.position, object.placement.rotation, object.placement.scale);
             o.visible = object.visible;
+            o.mirror = object.mirror;
         }
         if !object.select {
             self.scene.select(previous, self.mesh);
@@ -381,6 +389,11 @@ impl kit::Document for Access<'_> {
         let Some(o) = self.scene.get_mut(object.0) else { return false };
         (o.position, o.rotation, o.scale) = (placement.position, placement.rotation, placement.scale);
         true
+    }
+
+    fn set_mirror(&mut self, object: ObjectId, mirror: Option<kit::MirrorRepeater>) -> bool {
+        let (axes, center) = mirror.map_or((0, glam::Vec3::ZERO), |m| (m.axis_mask, m.center));
+        self.scene.set_mirror(object.0, axes, center)
     }
 
     fn show(&mut self, object: ObjectId, visible: bool) -> bool {

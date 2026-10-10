@@ -29,5 +29,9 @@ pub use scene::{
 pub use tool::{Button, Event, GizmoPhase, GizmoTarget, Info, Key, Mods, RadialItem, Tool};
 pub use view::{Ray, View};
 
+/// An object's live mirror copies, as `ObjectInfo::mirror` and
+/// `Command::Mirror` say them, and the arithmetic of where each copy is.
+pub use sculpt_symmetry::{MirrorCopy, MirrorRepeater};
+
 /// The colour type of overlays, styles and the theme.
 pub use egui::Color32;

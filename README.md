@@ -290,10 +290,18 @@ screen when you go back to sculpting.
    or grows the run, **Middle Size** swells or pinches it, and the ticks
    choose whether copies turn to follow the path, are spaced by size, or close
    into a loop. A circle also has the world axis it goes round and a Sweep.
-3. **One Object** turns the copies into real geometry inside the object (a
+3. **Mirror to the other side** (X, Y, Z) repeats the object and every copy
+   on the other side of the scene's centre. It is the object's own live Mirror
+   (the Mirror section of the Objects card, see Objects) within reach: the
+   same switch, so it stays live, and an object that is already mirrored has
+   its array mirrored from the start. With X and Z ticked there are three
+   reflections of each copy, as there are of the object.
+4. **One Object** turns the copies into real geometry inside the object (a
    remesh then fuses them); **Separate Objects** makes each copy an object of
    its own. Either is one undo step, and Z gives the live array back. Large
    meshes are built on a background job, with the array on screen until it lands.
+   A mirrored array stays mirrored: the object keeps its mirror, and each
+   separate object gets the same live mirror.
 
 | Input (Array up) | Action |
 | --- | --- |
@@ -302,14 +310,33 @@ screen when you go back to sculpting.
 | Click the path | Add a point there, and keep dragging it |
 | Shift + drag the last point | Extend the path from there |
 | Right-click a point, or Delete | Delete it |
+| Click a copy (on either side of a mirror, or the object) | The gizmo's arrows and rings sit on it |
+| Drag the gizmo on a copy | Turn or move them all |
 | Click another object | Switch to it (each object keeps its own array) |
-| Esc | Cancel, then stop drawing, then deselect, then put the tool away |
+| Esc | Cancel, then stop drawing, then let go of the point or the copy, then put the tool away |
+
+**Posing the copies.** Click a copy (off the path: a click on the path adds a
+point) and the gizmo's arrows and rings sit on it; turning or moving that one
+turns or moves them all. Turning it turns the object, and every copy turns the
+same way in place, each in its own frame on the path. Moving it moves the
+object off the path's start and leaves the path where it is in the world, so
+every copy moves the same way in its own frame (turned with the path, scaled
+with its size): a row of links all lifted off a curve, or pushed out from it.
+On a mirrored array a copy on the far side can be picked too: dragging it right
+moves the original left, and a turn is turned the other way. The gizmo has no
+cubes, since a copy's size is set with the sliders. **Copies Back onto the
+Path** (it lights up once copies are off the path) undoes any move made this
+way and leaves a turn.
 
 Dragging on the background orbits (except while Draw Curve is on). Arrays are
 the tool's, not the scene's: they are not saved in `.sclp` files yet, and while
-the tool is up Z steps the array's own edits first, then the scene's. Not
-here yet: clicking a copy to turn or move them all with the gizmo, **Copies
-Back onto the Path**, and mirroring the array across the scene's centre.
+the tool is up Z steps the array's own edits first, then the scene's. The
+exceptions are a pose, Copies Back onto the Path and a mirror switch: each is a
+step of the scene's history (it changes the object, or its mirror), but Z
+takes it back in order with the array's own edits, and the array follows when
+the scene takes one back, even with the tool away. Moving the object by its
+square start point is a step of the scene's alone, which Z reaches after the
+array's own edits.
 
 ## Lathe
 
@@ -438,6 +465,19 @@ mirror axis on, a mask or a hide covers the other side too, and a cut repeats
 there. Each mask, hide, trim, split and extract is one undo step, and a mask
 is carried across a cut. On a large model a cut runs in the background: its
 progress shows at the bottom of the viewport, with a Cancel button.
+
+Every place the selected object is drawn counts, as in the Unity app: a shape
+drawn over one of its **live mirror copies** (see Objects), or over an
+instance of it, or over a mirror copy of an instance, acts on the object
+through that place. A copy is the object's own mesh drawn again, so a box
+over the arm on the far side of a mirrored figure masks, hides, trims or
+splits the arm of the one mesh, and it goes on both sides at once. A shape
+that covers several places at once (a wide box, or a line, which has no end)
+acts through all of them. A split leaves the object where it was, with its
+mirror, cut; the new "Part" is a plain object in the object's own place with
+no mirror of its own, since a piece cut off is not a mirrored object (as in
+the Unity app; the mirror of the part is a Mirror tick away). The copies of an
+Array (the Array tool's, not the scene's) are not under these tools yet.
 
 ## Keys
 
@@ -606,8 +646,9 @@ The **Objects** card at the top of the Scene panel is the scene graph.
   X"), exactly where they were shown. Each is one undo step. Mirrored objects
   are amber in the list. The copies are framed with the model, saved in `.sclp`
   files and written by the exports. A clone or an instance of a mirrored object
-  is not mirrored. Not here yet: a mask, trim or split shape drawn over a copy
-  (those see an object and its instances only).
+  is not mirrored. The Mask, Hide, Trim and Split tools see the copies too: a
+  box, lasso or line drawn over a copy acts on the object through that copy
+  (see the section on those tools below).
 - Copies start on top of the original; **Position** and **Scale** place the
   selected one by numbers, and the Transform gizmo by hand.
 - Every one of these is an undo step, a Join or a boolean included (one
@@ -627,7 +668,9 @@ any other surface. Nothing is cut away.
   three of its corners are under the shape, so a face on the edge stays.
   Ctrl + drag (or a right drag) shows what the shape covers instead, Shift +
   drag hides everything outside it (to isolate a limb), and a click shows
-  everything again. With a mirror axis on, the other side goes too. A drag
+  everything again. With a mirror axis on, the other side goes too, and a box
+  or lasso drawn over a live mirror copy of the object hides through that
+  copy. A drag
   that would hide the whole object is refused, with a line saying so. A box or
   lasso mask leaves hidden parts alone, so hide a limb first and a mask drawn
   over the body in front of it will not reach it.
@@ -751,6 +794,8 @@ sculpt.exe --screenshot out.png --demo-mirror  # the sphere off centre, its live
 sculpt.exe --screenshot out.png --demo-pose bend     # a figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play (bend:close moves the camera in; :soft and :offset change those settings)
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
+sculpt.exe --screenshot out.png --demo-tool trim:mirror   # a shape drawn over the object's live mirror copy: also hide:mirror, mask:mirror, split:mirror
+sculpt.exe --screenshot out.png --demo-tool array:mirror  # a mirrored column of copies; array:copy picks one (the gizmo on it), array:posed moves and turns it, array:onpath puts the move back
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
 sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a name ending in .mp4): then reads the file back and checks its frames, size, frame rate and length
