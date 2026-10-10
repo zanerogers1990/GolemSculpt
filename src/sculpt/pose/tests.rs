@@ -858,6 +858,27 @@ fn a_limb_on_the_radial_axis_does_not_bend_but_twists_resizes_slides_and_stretch
     let mirrored = |s: &mut Settings| s.symmetry = [true, false, false];
     let (mesh, _, _) = posed(&mirrored, grabbed + Vec3::new(FRAC_PI_2 * THICK, 0.0, 0.0), true);
     assert!(moved(&mesh) < 1e-5, "a twist moved a limb that is mirrored as well: {}", moved(&mesh));
+
+    // Two mirror planes that cross along the limb hold it the same way, with
+    // no turns in the symmetry at all: no bend, and no flip past the joint.
+    let crossed = |s: &mut Settings| {
+        s.radial.on = false;
+        s.symmetry = [true, false, true];
+    };
+    for to in [grabbed + Vec3::new(0.5, 0.1, 0.0), Vec3::new(0.3, joint.y - 0.6, THICK)] {
+        let (mesh, _, _) = posed(&crossed, to, false);
+        assert!(moved(&mesh) < 1e-5, "a bend to {to} moved a limb on two mirror planes {}", moved(&mesh));
+    }
+    // One mirror plane alone leaves it free to bend within the plane.
+    let (mesh, _, _) = {
+        let mut mesh = limb();
+        let view = view_of(&mesh, 0.0);
+        let mut sculptor = poser(0.5, |s| s.symmetry = [false, false, true]);
+        let rest = drag(&mut mesh, &mut sculptor, &view, grabbed, grabbed + Vec3::new(0.5, 0.1, 0.0), false);
+        release(&mut mesh, &mut sculptor, &view);
+        (mesh, rest, ())
+    };
+    assert!(moved(&mesh) > 0.1, "a limb on one mirror plane no longer bends within it");
 }
 
 /// Limbs round the axis, one to a copy of the brush (the arms of a starfish):

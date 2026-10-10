@@ -124,7 +124,8 @@ mask or set up first. It works as the Pose brush in Blender does.
   limb that stands on the axis itself (the stem of a vase, the spike on a
   helmet) will not bend, since no bend is the same from every side. It can
   still be twisted about the axis (Ctrl + drag, unless a mirror runs through
-  it as well), resized, slid along the axis and stretched.
+  it as well), resized, slid along the axis and stretched. A limb on the line
+  where two mirror planes cross is held the same way.
 
 ## Symmetry
 
@@ -826,7 +827,7 @@ cargo test --release          # engine tests
 cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
-SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well)
+SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; radial= also works with --demo-mirror and --demo-dyntopo)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances

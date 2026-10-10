@@ -1210,6 +1210,74 @@ fn every_brush_stays_symmetric_under_radial_symmetry() {
     }
 }
 
+// ------------------------------------------------------- live mirror copies
+
+/// A live mirror copy is the object's own mesh drawn again through a
+/// reflected matrix, and a stroke begun on the copy is made through that
+/// matrix. Radial symmetry is in the mesh's own space, so such a stroke
+/// lands under the pointer, on the part of the mesh the copy shows there,
+/// and its repeats go round the object's own axis: wherever the object has
+/// been put and turned, and whichever side of the mirror it was drawn on.
+#[test]
+fn a_radial_stroke_drawn_on_a_live_mirror_copy_goes_round_the_objects_own_axis() {
+    use crate::scene::Scene;
+
+    let mut ball = Ball::new();
+    let mut scene = Scene::new("Ball");
+    let id = scene.active_id();
+    scene.active_mut().position = Vec3::new(1.0, 0.0, 0.0);
+    scene.active_mut().rotation = glam::Quat::from_rotation_y(0.4) * glam::Quat::from_rotation_x(-0.5);
+    assert!(scene.set_mirror(id, 1, Vec3::ZERO));
+    let copy = scene.active().placed_matrix(1);
+    assert!(copy.determinant() < 0.0, "the copy is a reflection");
+    let mut camera = Camera::default();
+    camera.frame(scene.bounds(&ball.mesh), SIZE.x / SIZE.y, false);
+    let view = camera.view(Vec2::ZERO, SIZE, camera.distance, 1.0);
+
+    // A path over the side of the copy that faces the camera, as places on
+    // the mesh: what the copy shows where the pointer goes.
+    let on_mesh: Vec<Vec3> = (0..=STROKE_FRAMES)
+        .map(|i| {
+            let from = Vec3::new(-1.0 - 0.1 + 0.2 * i as f32 / STROKE_FRAMES as f32, 0.15, 3.0);
+            let hit = scene.pick(from, Vec3::NEG_Z, &ball.mesh).expect("the ray meets the copy");
+            assert_eq!((hit.id, hit.copy), (id, 1), "the copy is what is under the pointer");
+            copy.inverse().transform_point3(hit.pos)
+        })
+        .collect();
+
+    for symmetry in [RADIAL_6, RADIAL_4_MIRROR_X] {
+        for brush in [Brush::Clay, Brush::Standard] {
+            // What a press on the copy does in the app: aim, then the copy's own view.
+            scene.aim_brush(id, 1);
+            assert_eq!(scene.brush_matrix(), copy);
+            let local = view.local_to(scene.brush_matrix());
+            let mut sculptor = sculptor_with(brush);
+            symmetry.set(&mut sculptor.settings);
+            let delta = stroke_through(&mut ball.mesh, &mut sculptor, &local, &on_mesh);
+            scene.release_brush();
+            let label = format!("{brush:?} {symmetry:?} on a live mirror copy");
+
+            // Under the pointer: the vertex nearest the middle of the path moved.
+            let middle = on_mesh[STROKE_FRAMES / 2];
+            let nearest = |positions: &[Vec3]| {
+                (0..positions.len()).min_by(|&a, &b| positions[a].distance(middle).total_cmp(&positions[b].distance(middle)))
+            };
+            let under = nearest(&ball.start).unwrap();
+            let raised = ball.mesh.positions[under].distance(ball.start[under]);
+            assert!(raised > 2e-3, "{label}: the surface under the pointer moved {raised:.2e}");
+            // Round the object's own axis: as many vertices moved in each
+            // sixth (or quarter) of a turn about its Y, and the ball is still
+            // the same under every copy of the symmetry.
+            let group = symmetry.group();
+            assert_symmetric(&label, &ball, &ball.partners_under(&group), Tolerance::of(brush));
+            let moved = ball.mesh.positions.iter().zip(&ball.start).filter(|(a, b)| a != b).count();
+            assert!(moved >= 300 * group.len(), "{label}: {moved} vertices moved under {} copies", group.len());
+            ball.undo(delta);
+            assert!(ball.mesh.positions == ball.start);
+        }
+    }
+}
+
 // ------------------------------------------------------- dynamic topology
 
 /// How far the surface is from being the same under every copy of `group`,
@@ -1350,6 +1418,49 @@ fn timing_of_radial_strokes() {
                     line += &format!("  {mean:>7.2} / {worst:<7.2} ({}k verts)", verts / 1000);
                 }
                 println!("{line}");
+            }
+        }
+    }
+}
+
+/// The same with dynamic topology adding detail under every copy, on
+/// 330,000 triangles:
+/// `cargo test --release timing_of_radial_strokes_that_add_detail -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn timing_of_radial_strokes_that_add_detail() {
+    const SCREEN: Vec2 = Vec2::new(1920.0, 1080.0);
+    let mut mesh = primitives::build(Primitive::Sphere, 330_000, 0.5);
+    let mut camera = Camera::default();
+    camera.frame(mesh.bounds(), SCREEN.x / SCREEN.y, false);
+    camera.pitch = 90.0;
+    let symmetries = [
+        ("none", Symmetry { mirror: [false; 3], repeats: 1 }),
+        ("mirror X", Symmetry { mirror: [true, false, false], repeats: 1 }),
+        ("x8", RADIAL_8),
+        ("x32 + mirror X", Symmetry { mirror: [true, false, false], repeats: 32 }),
+    ];
+    let places = [
+        ("through the axis", Vec2::new(-130.0, -40.0), Vec2::new(130.0, 40.0)),
+        ("clear of it", Vec2::new(150.0, 0.0), Vec2::new(250.0, 120.0)),
+    ];
+    println!("Clay at r = 40 px, detail 5%: mean / worst ms per frame of 4 pointer samples");
+    for (place, from, to) in places {
+        for (name, symmetry) in symmetries {
+            for refine in [false, true] {
+                let mut sculptor = Sculptor::default();
+                sculptor.settings.brush = Brush::Clay;
+                sculptor.settings.radius_px = 40.0;
+                sculptor.settings.per_brush[Brush::Clay.index()].strength = 0.5;
+                sculptor.dyntopo.enabled = refine;
+                // Edges of 0.003 under the brush, where the ball's are 0.005.
+                sculptor.dyntopo.detail = 0.05;
+                symmetry.set(&mut sculptor.settings);
+                let path = |t: f32| SCREEN * 0.5 + from.lerp(to, t);
+                // (The stroke is undone again, added triangles and all.)
+                let (mean, worst, verts) = crate::bench::stroke(&mut mesh, &mut sculptor, &camera, path, 40, 4);
+                let what = if refine { "adding detail" } else { "as it is" };
+                println!("{place:>16} {name:>15} {what:>13}  {mean:>7.2} / {worst:<7.2} ({}k verts)", verts / 1000);
             }
         }
     }

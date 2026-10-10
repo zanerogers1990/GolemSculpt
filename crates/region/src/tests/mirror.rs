@@ -597,3 +597,123 @@ fn an_instance_with_a_mirror_of_its_own_is_masked_through_its_copy_too() {
     // The left half of the copy is the instance's far side from the middle: its local +x.
     assert!(positions(&bench, ball).iter().zip(&masked).all(|(p, m)| *m == 0.0 || p.x > -0.3));
 }
+
+// ------------------------------------------------------------- radial symmetry
+
+/// Turns radial symmetry on in the live scene and in every twin. It is in the
+/// object's own space, and a twin's is the object's reflected, so the twin's
+/// axis is the object's reflected as well (turns about a reflected axis are
+/// the same set of turns, counted the other way round).
+fn radial(scenes: &mut Scenes, count: u32, axis: Vec3) {
+    (scenes.live.env.radial_count, scenes.live.env.radial_axis) = (count, axis);
+    for twin in &mut scenes.twins {
+        (twin.bench.env.radial_count, twin.bench.env.radial_axis) = (count, axis * twin.signs);
+    }
+}
+
+/// Radial symmetry and a live mirror copy both multiply what one shape
+/// covers, and they do it in different spaces: the repeats turn the object's
+/// own vertices about its own axis, and the copy is one more place those
+/// vertices are seen. So a vertex is covered when any turn of it, seen through
+/// any place, lies under the shape. Checked here straight from that
+/// statement, and against the baked copies as everywhere else.
+#[test]
+fn a_box_over_a_copy_with_radial_symmetry_masks_every_turn_of_what_the_copy_shows_there() {
+    let tilted = Vec3::new(0.3, 0.9, -0.2).normalize();
+    for (axes, flip, count, axis) in [(1, 1, 6, Vec3::Y), (1 | 4, 5, 6, Vec3::Y), (2, 2, 5, tilted), (1, 0, 4, Vec3::Z)] {
+        let what = format!("mirror {axes}, place {flip}, {count} repeats about {axis}");
+        let mut scenes = Scenes::new(axes);
+        // A bite out of the side of the place, not half of it: small enough
+        // that its turns do not cover the whole ball between them.
+        let c = scenes.centre(flip);
+        let (a, b) = (c + Vec2::new(-40.0, -12.0), c + Vec2::new(-14.0, 12.0));
+
+        scenes.drag_live(Region::mask(), a, b);
+        let alone = mask(&scenes.live, scenes.object).iter().filter(|m| **m > 0.0).count();
+        assert!(alone > 10, "{what}: {alone} masked with no radial symmetry: {:?}", scenes.live.status);
+        assert!(scenes.live.undo_scene());
+
+        radial(&mut scenes, count, axis);
+        let steps = scenes.live.doc.undo_steps();
+        scenes.drag_live(Region::mask(), a, b);
+        let got = mask(&scenes.live, scenes.object);
+        let masked = got.iter().filter(|m| **m > 0.0).count();
+        assert!(masked > 3 * alone, "{what}: {masked} masked, {alone} without the repeats");
+        assert_eq!(scenes.live.doc.undo_steps(), steps + 1, "one step");
+
+        // By the definition: some turn of the vertex, through some place, is
+        // in the box. (A vertex within a twentieth of a pixel of the box's
+        // edge can fall either way to rounding, and is left out.)
+        let turns = crate::screen::symmetry(&scenes.live.env);
+        assert_eq!(turns.len(), count as usize);
+        let places = scenes.live.doc.info(scenes.object).unwrap().placements();
+        let mut judged = 0;
+        for (v, &at) in scenes.rest.iter().enumerate() {
+            let (mut inside, mut on_the_edge) = (false, false);
+            for turn in &turns {
+                for (_, model) in &places {
+                    let px = scenes.live.px(model.transform_point3(turn.apply_point(at)));
+                    let within = (px.x - a.x).min(b.x - px.x).min(px.y - a.y).min(b.y - px.y);
+                    inside |= within > 0.0;
+                    on_the_edge |= within.abs() < 0.05;
+                }
+            }
+            if !on_the_edge {
+                assert_eq!(got[v] > 0.0, inside, "{what}: vertex {v} at {at}");
+                judged += 1;
+            }
+        }
+        assert!(judged > scenes.rest.len() * 9 / 10);
+
+        // And against the copy baked into an object of its own, under the
+        // same symmetry: through every place at once, as for a plain box.
+        let mut expected = vec![0.0f32; got.len()];
+        let all: Vec<u8> = scenes.twins.iter().map(|t| t.flip).collect();
+        for place in all {
+            scenes.drag_twin(place, Region::mask(), a, b);
+            let twin = scenes.twin_of(place);
+            for (e, m) in expected.iter_mut().zip(mask(&twin.bench, twin.object)) {
+                *e = e.max(m);
+            }
+        }
+        assert_eq!(got, expected, "{what}");
+    }
+}
+
+/// The same for a cut. A bite out of the side of the copy, repeated six times
+/// round the object's own axis, takes six bites out of the one mesh: six
+/// times the volume of one, since the repeats are the same bite turned. It is
+/// the cut the same shape makes on the baked copy under the same symmetry,
+/// and the mesh comes out closed and wound as it went in.
+#[test]
+fn a_lasso_trim_over_a_copy_with_radial_symmetry_takes_the_same_bite_all_the_way_round() {
+    for (axes, flip) in [(1, 1), (1 | 4, 5)] {
+        let mut scenes = Scenes::new(axes);
+        let whole = volume_of(&scenes.live, scenes.object);
+        let c = scenes.centre(flip);
+        let bite = circle(c + Vec2::new(-37.0, 3.0), 8.0, 32);
+
+        scenes.stroke_live(lasso_tool(Region::trim()), &bite);
+        let one = whole - volume_of(&scenes.live, scenes.object);
+        assert!(one > whole * 0.002, "axes {axes}: one bite took {one} of {whole}: {:?}", scenes.live.status);
+        assert!(scenes.live.undo_scene());
+        assert_near(volume_of(&scenes.live, scenes.object), whole, 1e-9);
+
+        radial(&mut scenes, 6, Vec3::Y);
+        let steps = scenes.live.doc.undo_steps();
+        scenes.stroke_live(lasso_tool(Region::trim()), &bite);
+        scenes.stroke_twin(flip, lasso_tool(Region::trim()), &bite);
+        assert_closed(&scenes.live, scenes.object);
+        let six = whole - volume_of(&scenes.live, scenes.object);
+        // To a few percent, not exactly: the ball is made of flat faces and
+        // each bite meets different ones, and nothing here keeps two bites
+        // from grazing each other. (5.80 and 5.93 times, as measured.)
+        assert_near(six, 6.0 * one, 0.05);
+        assert_same_cut(&mut scenes, flip);
+        let twin = scenes.twin_of(flip);
+        assert_closed(&twin.bench, twin.object);
+        assert_eq!(scenes.live.doc.undo_steps(), steps + 1, "one step");
+        assert!(scenes.live.undo_scene());
+        assert_near(volume_of(&scenes.live, scenes.object), whole, 1e-9);
+    }
+}

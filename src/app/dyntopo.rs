@@ -70,6 +70,9 @@ impl Running {
         let triangles = if what == "dense" { DENSE_BALL_TRIANGLES } else { BALL_TRIANGLES };
         self.replace_mesh(primitives::build(Primitive::Sphere, triangles, 0.5), false);
         self.doc.opts.wireframe = true;
+        // `SCULPT_DEMO_BRUSH=radial=6` and the like, for a look at detail
+        // being added under every copy of a stroke.
+        self.doc.sculptor.settings.demo_setup(false);
         if what == "instance" {
             let original = self.doc.scene.active_id();
             self.act(Action::InstanceObject);
