@@ -293,7 +293,7 @@ impl ApplicationHandler for App {
 
 impl Running {
     fn new(event_loop: &ActiveEventLoop, args: Args) -> Result<Running, String> {
-        let mut attrs = Window::default_attributes().with_title("Sculpt");
+        let mut attrs = Window::default_attributes().with_title("GolemSculpt");
         attrs = match args.size {
             Some((w, h)) => attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)),
             None => attrs

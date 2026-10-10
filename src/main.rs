@@ -135,7 +135,7 @@ fn main() {
         eprintln!("{e}");
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("Sculpt")
+            .set_title("GolemSculpt")
             .set_description(e)
             .show();
         std::process::exit(1);
