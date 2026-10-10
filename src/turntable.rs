@@ -12,13 +12,18 @@
 //! turn at the turntable's speed: N = round(360 / speed x frames per second)
 //! frames, frame i at the starting angle plus 360 x i / N. Frame N would be
 //! frame 0 again, so it is left out and playback wraps round with one
-//! ordinary step: a seamless loop by construction, not by trimming. The app
-//! side of recording one is in app/recording.rs, the writing in capture.rs.
+//! ordinary step: a seamless loop by construction, not by trimming. In the
+//! video that is N pictures at 1 / fps seconds each, so the frames add up to
+//! exactly N / fps seconds and the last picture ends where the first begins
+//! again. The app side of recording one is in app/recording.rs, the writing in
+//! capture.rs (pictures) and capture/video.rs (the MP4).
 
 use egui::{Align2, Color32, Id, Order, Sense, Stroke, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
+use crate::capture::LoopFormat;
 use crate::doc::Doc;
+use crate::timelapse::mp4;
 use crate::ui::theme::{self, ACCENT, ButtonStyle};
 
 /// Degrees per second.
@@ -59,11 +64,20 @@ pub struct Settings {
     pub loop_height: u32,
     /// Frames per second of a recorded loop.
     pub loop_fps: u32,
+    /// A video, or numbered pictures.
+    pub loop_format: LoopFormat,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { speed: 30.0, reverse: false, loop_width: 1920, loop_height: 1080, loop_fps: 30 }
+        Self {
+            speed: 30.0,
+            reverse: false,
+            loop_width: 1920,
+            loop_height: 1080,
+            loop_fps: 30,
+            loop_format: LoopFormat::Video,
+        }
     }
 }
 
@@ -79,11 +93,21 @@ impl Settings {
             loop_width: self.loop_width.clamp(64, 8192),
             loop_height: self.loop_height.clamp(64, 8192),
             loop_fps: self.loop_fps.clamp(1, 120),
+            loop_format: self.loop_format,
         }
     }
 
-    pub fn seconds_per_turn(&self) -> f32 {
-        360.0 / self.speed.clamp(MIN_SPEED, MAX_SPEED)
+    /// How long a recorded loop plays: its frames at its frame rate. The
+    /// turn takes 360 / speed seconds; the frames are a whole number, so the
+    /// loop is within half a frame of that.
+    pub fn loop_seconds(&self) -> f32 {
+        loop_seconds(self.loop_frames(), self.loop_fps)
+    }
+
+    /// What Record will make, in this build: the chosen format, or pictures
+    /// where there is no video encoder.
+    pub fn loop_output(&self) -> LoopFormat {
+        self.loop_format.available()
     }
 
     /// Which way yaw runs: negative moves the camera to its own right.
@@ -101,6 +125,11 @@ impl Settings {
 pub fn loop_frame_count(speed: f32, fps: u32) -> u32 {
     let turn_seconds = 360.0 / speed.clamp(MIN_SPEED, MAX_SPEED);
     (turn_seconds * fps.max(1) as f32).round().max(2.0) as u32
+}
+
+/// How long `frames` pictures play at `fps`, in seconds.
+pub fn loop_seconds(frames: u32, fps: u32) -> f32 {
+    frames as f32 / fps.max(1) as f32
 }
 
 /// The yaw of frame `frame` in a loop of `total` frames that starts at
@@ -151,6 +180,9 @@ impl Spin {
 pub struct Progress {
     pub written: u32,
     pub total: u32,
+    /// The loop is going into a video, which takes a moment to close once
+    /// every picture is in it.
+    pub video: bool,
 }
 
 /// What the card's buttons ask the app to do; it picks these up each frame.
@@ -292,18 +324,38 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
                     }
                 }
             });
+            // Without the video encoder there is only one thing to record.
+            if mp4::SUPPORTED {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let w = theme::row_width(ui, 2, 4.0);
+                    let formats = [
+                        (LoopFormat::Video, "MP4", "One H.264 video file, ready to post or to play round and round."),
+                        (
+                            LoopFormat::Pictures,
+                            "PNG frames",
+                            "A folder of numbered PNG pictures, for compositing, editing or a GIF tool.",
+                        ),
+                    ];
+                    for (format, label, what) in formats {
+                        let active = (s.loop_format == format).then_some(ACCENT);
+                        let style = ButtonStyle { active, height: 24.0, ..Default::default() };
+                        if tip(theme::button(ui, w, label, style), what).clicked() {
+                            s.loop_format = format;
+                        }
+                    }
+                });
+            }
         });
         // What Record will make, so the length and the number of frames are
         // known before committing to it.
+        let output = match s.loop_output() {
+            LoopFormat::Video => "MP4 video",
+            LoopFormat::Pictures => "PNG pictures",
+        };
         theme::hint(
             ui,
-            &format!(
-                "{} x {}, {:.1} s, {} frames, PNG pictures",
-                s.loop_width,
-                s.loop_height,
-                s.seconds_per_turn(),
-                s.loop_frames()
-            ),
+            &format!("{} x {}, {:.1} s, {} frames, {output}", s.loop_width, s.loop_height, s.loop_seconds(), s.loop_frames()),
         );
 
         let (label, style) = match recording {
@@ -311,7 +363,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
             None => ("Record 360\u{b0} Loop", ButtonStyle { active: Some(ACCENT), ..Default::default() }),
         };
         let record = theme::button(ui, ui.available_width(), label, style);
-        if tip(record, "Saves exactly one turn, starting from the view as it is now and at the speed above, as numbered pictures. The last one flows straight back into the first: a seamless loop. The panels hide while it records. Esc cancels.").clicked() {
+        if tip(record, "Saves exactly one turn, starting from the view as it is now and at the speed above, as an MP4 video or numbered PNG pictures, as chosen. The last picture flows straight back into the first: a seamless loop. The panels hide while it records. Esc cancels.").clicked() {
             doc.turntable.request = Some(if recording.is_some() { Request::CancelLoop } else { Request::RecordLoop });
         }
         if let Some(p) = recording {
@@ -345,7 +397,7 @@ pub fn recording_overlay(ctx: &egui::Context, doc: &mut Doc) {
             p.rect_stroke(rect, 8.0, theme::hairline(), egui::StrokeKind::Inside);
             let done = progress.written >= progress.total;
             let text = if done {
-                "Saving the last pictures...".to_owned()
+                (if progress.video { "Finishing the video..." } else { "Saving the last pictures..." }).to_owned()
             } else {
                 format!("Recording 360\u{b0} loop   {} / {}", progress.written, progress.total)
             };
@@ -405,6 +457,64 @@ mod tests {
         }
     }
 
+    /// When each picture of a loop video starts, as the video's writer stamps
+    /// it (100 ns units), with the end of the video last.
+    fn video_times(frames: u32, fps: u32) -> Vec<i64> {
+        let rate = mp4::rate_fraction(fps as f32);
+        (0..=frames).map(|i| mp4::frame_time(i as u64, rate)).collect()
+    }
+
+    #[test]
+    fn a_loop_video_is_one_turn_with_no_frame_twice() {
+        for speed in [MIN_SPEED, 7.0, 30.0, 45.0, 90.0, MAX_SPEED] {
+            for fps in FRAME_RATES {
+                let frames = loop_frame_count(speed, fps);
+                let what = format!("{speed} degrees/s at {fps} fps, {frames} frames");
+                // Frame `frames` is the end of the video, not a picture in it.
+                let times = video_times(frames, fps);
+                assert_eq!(times.len(), frames as usize + 1);
+                assert_eq!(times[0], 0, "{what}: the first picture is at the start");
+
+                // Every picture lasts one frame, back to back with the next.
+                let frame = 1e7 / fps as f64;
+                for pair in times.windows(2) {
+                    assert!(((pair[1] - pair[0]) as f64 - frame).abs() < 1.0, "{what}: steps of {}", pair[1] - pair[0]);
+                }
+                // So the frames as stamped add up to exactly frames / fps, with
+                // nothing lost from the closing picture ...
+                let length = times[frames as usize] as f64 / 1e7;
+                assert!((length - frames as f64 / fps as f64).abs() < 1e-7, "{what}: {length} s");
+                assert!((length - loop_seconds(frames, fps) as f64).abs() < 1e-3, "{what}");
+                // ... and that is one turn at the speed asked for, to within
+                // half a frame of rounding.
+                assert!((length - 360.0 / speed as f64).abs() <= 0.5 / fps as f64 + 1e-9, "{what}: {length} s");
+
+                // The view is at the same angle however it is worked out: from
+                // the picture's number or from its time in the video, so a
+                // player that plays round and round turns at a steady speed
+                // across the join.
+                let start = 25.0f32;
+                for i in 0..frames {
+                    let by_time = 360.0 * times[i as usize] as f64 / times[frames as usize] as f64;
+                    let by_number = loop_yaw(start, 1.0, i, frames) as f64 - start as f64;
+                    assert!((by_time - by_number).abs() < 1e-3, "{what}: picture {i} is at {by_number} or {by_time}");
+                }
+                // The last picture is one step short of the first, and the
+                // first is not there twice.
+                let step = 360.0 / frames as f32;
+                let last = loop_yaw(start, 1.0, frames - 1, frames);
+                assert!(((last - start) - (360.0 - step)).abs() < 1e-2, "{what}");
+                let angles: Vec<f32> = (0..frames).map(|i| loop_yaw(start, 1.0, i, frames).rem_euclid(360.0)).collect();
+                let first = angles[0];
+                let again = angles[1..].iter().any(|a| (a - first).abs() <= step * 0.5);
+                assert!(!again, "{what}: the first picture comes round again");
+            }
+        }
+        // The default loop: 12 seconds, 360 pictures.
+        let default = Settings::default();
+        assert_eq!((default.loop_frames(), default.loop_seconds()), (360, 12.0));
+    }
+
     #[test]
     fn the_spin_eases_in_and_out() {
         let settings = Settings { speed: 60.0, ..Default::default() };
@@ -462,9 +572,24 @@ mod tests {
 
     #[test]
     fn settings_from_a_file_are_brought_into_range() {
-        let wild = Settings { speed: 9000.0, reverse: true, loop_width: 3, loop_height: 100_000, loop_fps: 0 };
+        let wild = Settings {
+            speed: 9000.0,
+            reverse: true,
+            loop_width: 3,
+            loop_height: 100_000,
+            loop_fps: 0,
+            loop_format: LoopFormat::Pictures,
+        };
         let fitted = wild.in_range();
-        assert_eq!(fitted, Settings { speed: MAX_SPEED, reverse: true, loop_width: 64, loop_height: 8192, loop_fps: 1 });
+        let expected = Settings {
+            speed: MAX_SPEED,
+            reverse: true,
+            loop_width: 64,
+            loop_height: 8192,
+            loop_fps: 1,
+            loop_format: LoopFormat::Pictures,
+        };
+        assert_eq!(fitted, expected);
         assert_eq!(Settings { speed: f32::NAN, ..Default::default() }.in_range(), Settings::default());
         assert_eq!(Settings::default().in_range(), Settings::default());
         // A file that only mentions the speed keeps the rest as built in.

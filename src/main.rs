@@ -103,10 +103,13 @@ fn main() {
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,
-            // Record a short 360 loop into this folder, then close: 12 pictures at 640x360 unless told otherwise.
+            // Record a short 360 loop, then close: 12 pictures at 640x360 and 30 fps unless told otherwise.
+            // A folder gets numbered pictures, a name ending in .mp4 gets a video.
             "--record-loop" => opts.record_loop = it.next().map(PathBuf::from),
             "--loop-size" => opts.loop_size = it.next().and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))),
             "--loop-frames" => opts.loop_frames = it.next().and_then(|s| s.parse().ok()),
+            "--loop-fps" => opts.loop_fps = it.next().and_then(|s| s.parse().ok()),
+            "--loop-cancel" => opts.loop_cancel = it.next().and_then(|s| s.parse().ok()),
             // Sculpt a few scripted strokes while recording a timelapse to this file, then close.
             "--demo-timelapse" => opts.demo_timelapse = it.next().map(PathBuf::from),
             // Shading settings for visual checks, e.g. "matcap=off,finish=metal:rust".
