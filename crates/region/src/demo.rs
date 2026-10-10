@@ -96,10 +96,8 @@ fn mirrored_copy(cx: &mut Ctx) -> Option<Target> {
         rotation: Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-0.3),
         scale: info.placement.scale * 0.55,
     };
-    cx.commit(
-        "Demo Mirror",
-        vec![Command::Place { object, placement }, Command::Mirror { object, mirror: MirrorRepeater::new(1, Vec3::ZERO) }],
-    );
+    let mirror = MirrorRepeater::new(1, Vec3::ZERO);
+    cx.commit("Demo Mirror", vec![Command::Place { object, placement }, Command::Mirror { object, mirror }]);
     // The copy is where the mesh is drawn through the reflected matrix; its middle is
     // the middle of the object's reflected across the world's YZ plane.
     let bounds = cx.scene().bounds(object);

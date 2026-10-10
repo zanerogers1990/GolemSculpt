@@ -219,10 +219,18 @@ screen when you go back to sculpting.
    or grows the run, **Middle Size** swells or pinches it, and the ticks
    choose whether copies turn to follow the path, are spaced by size, or close
    into a loop. A circle also has the world axis it goes round and a Sweep.
-3. **One Object** turns the copies into real geometry inside the object (a
+3. **Mirror to the other side** (X, Y, Z) repeats the object and every copy
+   on the other side of the scene's centre. It is the object's own live Mirror
+   (the Mirror section of the Objects card, see Objects) within reach: the
+   same switch, so it stays live, and an object that is already mirrored has
+   its array mirrored from the start. With X and Z ticked there are three
+   reflections of each copy, as there are of the object.
+4. **One Object** turns the copies into real geometry inside the object (a
    remesh then fuses them); **Separate Objects** makes each copy an object of
    its own. Either is one undo step, and Z gives the live array back. Large
    meshes are built on a background job, with the array on screen until it lands.
+   A mirrored array stays mirrored: the object keeps its mirror, and each
+   separate object gets the same live mirror.
 
 | Input (Array up) | Action |
 | --- | --- |
@@ -231,14 +239,33 @@ screen when you go back to sculpting.
 | Click the path | Add a point there, and keep dragging it |
 | Shift + drag the last point | Extend the path from there |
 | Right-click a point, or Delete | Delete it |
+| Click a copy (on either side of a mirror, or the object) | The gizmo's arrows and rings sit on it |
+| Drag the gizmo on a copy | Turn or move them all |
 | Click another object | Switch to it (each object keeps its own array) |
-| Esc | Cancel, then stop drawing, then deselect, then put the tool away |
+| Esc | Cancel, then stop drawing, then let go of the point or the copy, then put the tool away |
+
+**Posing the copies.** Click a copy (off the path: a click on the path adds a
+point) and the gizmo's arrows and rings sit on it; turning or moving that one
+turns or moves them all. Turning it turns the object, and every copy turns the
+same way in place, each in its own frame on the path. Moving it moves the
+object off the path's start and leaves the path where it is in the world, so
+every copy moves the same way in its own frame (turned with the path, scaled
+with its size): a row of links all lifted off a curve, or pushed out from it.
+On a mirrored array a copy on the far side can be picked too: dragging it right
+moves the original left, and a turn is turned the other way. The gizmo has no
+cubes, since a copy's size is set with the sliders. **Copies Back onto the
+Path** (it lights up once copies are off the path) undoes any move made this
+way and leaves a turn.
 
 Dragging on the background orbits (except while Draw Curve is on). Arrays are
 the tool's, not the scene's: they are not saved in `.sclp` files yet, and while
-the tool is up Z steps the array's own edits first, then the scene's. Not
-here yet: clicking a copy to turn or move them all with the gizmo, **Copies
-Back onto the Path**, and mirroring the array across the scene's centre.
+the tool is up Z steps the array's own edits first, then the scene's. The
+exceptions are a pose, Copies Back onto the Path and a mirror switch: each is a
+step of the scene's history (it changes the object, or its mirror), but Z
+takes it back in order with the array's own edits, and the array follows when
+the scene takes one back, even with the tool away. Moving the object by its
+square start point is a step of the scene's alone, which Z reaches after the
+array's own edits.
 
 ## Lathe
 
@@ -676,6 +703,7 @@ sculpt.exe --screenshot out.png --demo-mirror  # the sphere off centre, its live
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo-tool trim:mirror   # a shape drawn over the object's live mirror copy: also hide:mirror, mask:mirror, split:mirror
+sculpt.exe --screenshot out.png --demo-tool array:mirror  # a mirrored column of copies; array:copy picks one (the gizmo on it), array:posed moves and turns it, array:onpath puts the move back
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes

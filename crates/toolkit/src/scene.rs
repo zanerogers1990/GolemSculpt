@@ -90,7 +90,8 @@ impl ObjectInfo<'_> {
         let model = self.matrix();
         let mut places = vec![(0, model)];
         if let Some(mirror) = self.mirror {
-            places.extend(mirror.copies().into_iter().map(|copy| (copy.flip_mask, copy.matrix(&model, mirror.center))));
+            let copies = mirror.copies();
+            places.extend(copies.into_iter().map(|copy| (copy.flip_mask, copy.matrix(&model, mirror.center))));
         }
         places
     }

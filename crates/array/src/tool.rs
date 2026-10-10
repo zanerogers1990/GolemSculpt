@@ -18,22 +18,31 @@
 //! | Click the path | Add a point there, and keep dragging it |
 //! | Shift + drag the last point | Extend the path from there |
 //! | Right-click a point, or Delete | Delete it |
+//! | Click a copy | The gizmo's arrows and rings sit on it: turning or moving it does the same to every copy |
 //! | Click another object | Switch to it |
-//! | Esc | Cancel the gesture, then stop drawing, then deselect, then leave |
+//! | Esc | Cancel the gesture, then stop drawing, then let go of the point or copy, then leave |
 //! | Z, Shift + Z | Step the array's own history |
 //!
 //! Y brings the tool up and puts it away. A drag on empty background orbits.
 //! Arrays are the tool's, not the scene's: they are not saved in `.sclp` files
 //! yet, and they have their own Z while the tool is up (the scene's takes over
 //! when the tool's history is empty, or the tool is away).
+//!
+//! An object with a live mirror has its array mirrored with it (`copies.rs`),
+//! and a copy on either side can be picked. What posing a copy, putting the
+//! copies back on the path and the mirror buttons change is the object in the
+//! scene as well as the array, so each is a step of the scene's history that
+//! the tool's own history knows of, in order (`pose.rs`).
 
-use glam::{Mat4, Vec3};
-use sculpt_toolkit::{Button, Ctx, Draw, Event, Info, Key, ObjectId, Placement, Tool};
+use glam::Vec3;
+use sculpt_toolkit::{Button, Ctx, Draw, Event, GizmoTarget, Info, Key, ObjectId, Placement, Tool};
 
 use crate::arrays::{Arrays, History};
+use crate::copies;
 use crate::finish::{Building, Retired};
 use crate::gestures::{Gesture, Hover, Note};
 use crate::picture::{self, Marks, Picture};
+use crate::pose::{CopyPick, Posing};
 use crate::state::ArrayState;
 use crate::types::Pose;
 
@@ -52,6 +61,14 @@ pub struct ArrayTool {
     pub(crate) shift: Option<(ObjectId, Vec3)>,
     /// The handle picked in the viewport.
     pub(crate) picked: Option<usize>,
+    /// The copy picked in the viewport, which the gizmo sits on. A point and a
+    /// copy are never picked together.
+    pub(crate) copy: Option<CopyPick>,
+    /// A gizmo drag of that copy in progress.
+    pub(crate) posing: Option<Posing>,
+    /// What the gizmo sits on, worked out each frame (`Tool::gizmo` has no
+    /// context to work it out from).
+    pub(crate) pose_gizmo: Option<GizmoTarget>,
     pub(crate) hover: Hover,
     /// The next drag in the viewport draws a curve.
     pub(crate) armed: bool,
@@ -84,6 +101,16 @@ impl ArrayTool {
     /// The handle that is picked, if any.
     pub fn picked(&self) -> Option<usize> {
         self.picked
+    }
+
+    /// The copy the gizmo sits on, if one is picked.
+    pub fn picked_copy(&self) -> Option<CopyPick> {
+        self.copy
+    }
+
+    /// Whether a gizmo drag of a copy is in progress.
+    pub fn is_posing(&self) -> bool {
+        self.posing.is_some()
     }
 
     /// Whether the next drag draws a curve.
@@ -119,7 +146,7 @@ impl ArrayTool {
         } else if !self.arrays.has(target) {
             "Pick Line, Circle or Draw Curve to repeat the selected object."
         } else {
-            "Drag the points to reshape the array. Click the path to add a point."
+            "Drag the points to reshape the array. Click a copy to turn or move them all."
         }
     }
 
@@ -132,7 +159,9 @@ impl ArrayTool {
         }
         self.cancel_gesture();
         self.commit_edit();
+        self.finish_pose(cx);
         self.picked = None;
+        self.copy = None;
         self.armed = false;
         self.hover = Hover::default();
         self.last_target = Some(target);
@@ -148,19 +177,16 @@ impl ArrayTool {
             if !info.visible {
                 continue;
             }
-            let mut pose = pose_of(info.placement);
-            // The square start point being dragged: the object is drawn where
-            // the drag has it (as copy 0), the real one left out.
-            let first = match self.shift.filter(|(moved, _)| *moved == object) {
-                Some((_, by)) => {
-                    pose.position += by;
-                    draw.hide(object);
-                    0
-                }
-                None => 1,
-            };
-            let matrices: Vec<Mat4> =
-                live.layout[first.min(live.layout.len())..].iter().map(|p| p.world_matrix(&pose)).collect();
+            // The square start point or a copy being dragged: the object is
+            // drawn where the drag has it (as copy 0), the real one left out.
+            // Its own mirror copies go with it when it is left out, so they
+            // are drawn here as the mirror's side of copy 0.
+            let placement = self.drawn_placement(&info);
+            let first = if placement == info.placement { 1 } else { 0 };
+            if first == 0 {
+                draw.hide(object);
+            }
+            let matrices = copies::drawn(&live.layout, &pose_of(placement), info.mirror, first);
             draw.copies(object, &matrices);
         }
     }
@@ -170,10 +196,7 @@ impl ArrayTool {
     fn draw_overlay(&self, cx: &Ctx, draw: &mut Draw) {
         let object = self.target(cx);
         if let (Some(live), Some(info)) = (self.arrays.get(object), cx.scene().info(object)) {
-            let mut origin = info.placement.position;
-            if let Some((_, by)) = self.shift.filter(|(moved, _)| *moved == object) {
-                origin += by;
-            }
+            let origin = self.drawn_placement(&info).position;
             let dragging = self.is_dragging();
             let marks = Marks {
                 picked: self.picked,
@@ -190,7 +213,13 @@ impl ArrayTool {
     /// highlight and the click that adds a point.
     fn refresh_hover(&mut self, cx: &Ctx) {
         self.hover = Hover::default();
-        if !cx.active || !cx.hovering || self.is_dragging() || self.armed || self.building.is_some() {
+        if !cx.active
+            || !cx.hovering
+            || self.is_dragging()
+            || self.posing.is_some()
+            || self.armed
+            || self.building.is_some()
+        {
             return;
         }
         let object = self.target(cx);
@@ -227,11 +256,15 @@ impl Tool for ArrayTool {
         cx.status(hint, true);
     }
 
-    fn leave(&mut self, _cx: &mut Ctx) {
+    fn leave(&mut self, cx: &mut Ctx) {
         self.cancel_gesture();
         self.commit_edit();
+        // A drag of the gizmo that is cut short ends where it is.
+        self.finish_pose(cx);
         self.armed = false;
         self.picked = None;
+        self.copy = None;
+        self.pose_gizmo = None;
         self.hover = Hover::default();
     }
 
@@ -248,6 +281,10 @@ impl Tool for ArrayTool {
                 true
             }
             Event::Click(Button::Left) => self.click(cx, cx.pointer),
+            Event::Gizmo(placement, phase) => {
+                self.gizmo_event(cx, placement, phase);
+                true
+            }
             Event::KeyDown(Key::Escape) => self.escape(cx),
             Event::KeyDown(Key::Delete | Key::Backspace) => self.delete_key(cx),
             Event::Undo => self.undo(cx),
@@ -256,14 +293,20 @@ impl Tool for ArrayTool {
         }
     }
 
+    fn gizmo(&self) -> Option<GizmoTarget> {
+        self.pose_gizmo
+    }
+
     fn frame(&mut self, cx: &mut Ctx, draw: &mut Draw) {
         // A job started here keeps running if the user goes back to
         // sculpting, so its result is collected whether or not the tool is up.
         self.land_finished(cx);
         self.notice_undone_applies(cx);
+        self.notice_scene_steps(cx);
         self.sync_target(cx);
         self.close_edit_when_due(cx);
         self.refresh_hover(cx);
+        self.refresh_gizmo(cx);
         self.draw_copies(cx, draw);
         if cx.active && !cx.clean_view {
             self.draw_overlay(cx, draw);

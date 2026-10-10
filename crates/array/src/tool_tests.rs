@@ -381,10 +381,10 @@ fn a_click_on_another_object_switches_to_it_without_an_undo_step() {
     let second = bench.add("Other", cube(0.2));
     bench.call(|cx| cx.commit("Select", vec![Command::Select { object: first }]));
     bench.call(|cx| {
-        cx.commit("Place", vec![Command::Place { object: second, placement: Placement::at(Vec3::new(0.0, -1.2, 0.0)) }])
+        cx.commit("Place", vec![Command::Place { object: second, placement: Placement::at(Vec3::new(1.8, 0.0, 0.0)) }])
     });
     let steps = bench.doc.undo_steps();
-    bench.click(&mut tool, bench.px(Vec3::new(0.0, -1.2, 0.2)), Button::Left);
+    bench.click(&mut tool, bench.px(Vec3::new(1.8, 0.0, 0.2)), Button::Left);
     assert_eq!(bench.doc.active(), second);
     assert_eq!(bench.doc.undo_steps(), steps);
     // Its handles are not the first object's, and the first keeps its array.
@@ -928,7 +928,7 @@ fn the_demos_make_what_they_say() {
 // ---- the panel, clicked ---------------------------------------------------------------------
 
 /// The panel on a screen as wide as the real one, driven with pointer events.
-struct Panel {
+pub(crate) struct Panel {
     ctx: egui::Context,
     last: Option<egui::FullOutput>,
 }
@@ -936,13 +936,13 @@ struct Panel {
 const SCREEN: egui::Vec2 = egui::vec2(300.0, 1400.0);
 
 impl Panel {
-    fn new() -> Panel {
+    pub(crate) fn new() -> Panel {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         Panel { ctx, last: None }
     }
 
-    fn run(&mut self, bench: &mut Bench, tool: &mut ArrayTool, events: Vec<egui::Event>) {
+    pub(crate) fn run(&mut self, bench: &mut Bench, tool: &mut ArrayTool, events: Vec<egui::Event>) {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
             events,
@@ -988,7 +988,7 @@ impl Panel {
     }
 
     /// A click on the button or label whose text is `wanted`.
-    fn click(&mut self, bench: &mut Bench, tool: &mut ArrayTool, wanted: &str) {
+    pub(crate) fn click(&mut self, bench: &mut Bench, tool: &mut ArrayTool, wanted: &str) {
         self.run(bench, tool, vec![]);
         let at = self.text(wanted) + egui::vec2(4.0, 4.0);
         self.run(bench, tool, Panel::press(at));

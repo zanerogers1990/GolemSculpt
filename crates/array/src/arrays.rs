@@ -8,7 +8,8 @@
 
 use std::collections::BTreeMap;
 
-use sculpt_toolkit::ObjectId;
+use glam::Vec3;
+use sculpt_toolkit::{MirrorRepeater, ObjectId, Placement, Scene};
 
 use crate::layout::compute;
 use crate::state::ArrayState;
@@ -67,6 +68,72 @@ pub struct Step {
     pub label: &'static str,
     pub before: ArrayState,
     pub after: ArrayState,
+    /// Set when part of the edit is a step of the scene's history rather than
+    /// the tool's own (see [`Scened`]).
+    pub scene: Option<Scened>,
+}
+
+impl Step {
+    /// An edit made to the array alone.
+    pub fn array(object: ObjectId, label: &'static str, before: ArrayState, after: ArrayState) -> Step {
+        Step { object, label, before, after, scene: None }
+    }
+}
+
+/// The part of an edit that lives in the scene: the object was carried off or
+/// back onto the path of its array (a `Place`), or its live mirror was
+/// switched. The scene has its own undo, so the tool cannot take such a step
+/// back itself. It keeps the step in its history all the same, for two
+/// reasons. One is order: Z answers the newest edit, whichever history it
+/// is in, so a step of the scene that is on top is left to the scene's Z
+/// instead of the tool's own older steps being undone first. The other is the
+/// array's half of the edit, if there is one (carrying the object shifts the
+/// array's points the other way, so the path stays where it is in the
+/// world): when the scene undoes or redoes the object's half, the tool sees
+/// it in the object and does the array's half to match.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scened {
+    /// The object went from placement `from` to `to`, and the points of the
+    /// array were moved by `-by` to go with it (`by` is zero when they were
+    /// not: a turn, say).
+    Placed { from: Placement, to: Placement, by: Vec3 },
+    /// The object's live mirror went from one setting to the other.
+    Mirrored { from: Option<MirrorRepeater>, to: Option<MirrorRepeater> },
+}
+
+/// Which change of the scene a step is, so that steps about one thing are
+/// weighed together and those about another are not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Placed,
+    Mirrored,
+}
+
+impl Scened {
+    pub fn kind(&self) -> Kind {
+        match self {
+            Scened::Placed { .. } => Kind::Placed,
+            Scened::Mirrored { .. } => Kind::Mirrored,
+        }
+    }
+
+    /// Whether the scene has the step done right now: `Some(true)` when the
+    /// object is as the step left it, `Some(false)` when as it found it,
+    /// `None` when it is neither (something else has moved it since) or the
+    /// object is gone. Exact equality: the scene gives an object back the very
+    /// numbers it had.
+    pub fn in_effect(&self, scene: &dyn Scene, object: ObjectId) -> Option<bool> {
+        let info = scene.info(object)?;
+        let (before, after) = match *self {
+            Scened::Placed { from, to, .. } => (info.placement == from, info.placement == to),
+            Scened::Mirrored { from, to } => (info.mirror == from, info.mirror == to),
+        };
+        match (before, after) {
+            (_, true) => Some(true),
+            (true, false) => Some(false),
+            (false, false) => None,
+        }
+    }
 }
 
 /// An edit still being made: a drag, or a run of slider ticks that will be one
@@ -148,7 +215,7 @@ mod tests {
     fn a_new_step_clears_the_redo_stack_and_forgetting_an_object_drops_only_its_steps() {
         let mut history = History::default();
         let step =
-            |object: u64| Step { object: ObjectId(object), label: "x", before: ArrayState::none(), after: line() };
+            |object: u64| Step::array(ObjectId(object), "x", ArrayState::none(), line());
         history.push(step(1));
         history.push(step(2));
         history.redo.push(step(1));
@@ -163,7 +230,7 @@ mod tests {
     fn the_history_is_bounded() {
         let mut history = History::default();
         for _ in 0..HISTORY_LIMIT + 50 {
-            history.push(Step { object: ObjectId(1), label: "x", before: ArrayState::none(), after: line() });
+            history.push(Step::array(ObjectId(1), "x", ArrayState::none(), line()));
         }
         assert_eq!(history.undo.len(), HISTORY_LIMIT);
     }

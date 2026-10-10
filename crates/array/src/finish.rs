@@ -211,11 +211,18 @@ impl ArrayTool {
             Built::One(mesh) => vec![Command::Replace { object: start.object, mesh }],
             Built::Separate(pieces) => {
                 // Hidden if the object is, so a copy does not appear out of nowhere.
-                let visible = cx.scene().info(start.object).is_some_and(|info| info.visible);
+                let info = cx.scene().info(start.object);
+                let visible = info.is_some_and(|info| info.visible);
+                // A mirrored array stays mirrored: each new object gets the same live
+                // mirror, so the other side shows them as it showed the copies.
+                let mirror = info.and_then(|info| info.mirror);
                 pieces
                     .into_iter()
                     .map(|piece| {
-                        let object = NewObject::new(piece.name, piece.mesh).placed(piece.placement).unselected();
+                        let object = NewObject::new(piece.name, piece.mesh)
+                            .placed(piece.placement)
+                            .unselected()
+                            .mirrored(mirror);
                         Command::Add(if visible { object } else { object.hidden() })
                     })
                     .collect()

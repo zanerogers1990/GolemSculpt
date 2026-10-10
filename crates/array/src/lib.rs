@@ -37,12 +37,14 @@ mod state;
 mod types;
 
 mod arrays;
+mod copies;
 mod demo;
 mod edit;
 mod finish;
 mod gestures;
 mod panel;
 mod picture;
+mod pose;
 mod simplify;
 mod tool;
 
@@ -52,10 +54,14 @@ mod testing;
 mod tests;
 #[cfg(test)]
 mod tool_tests;
+#[cfg(test)]
+mod copy_tests;
 
 pub use bake::{MAX_COMBINED_VERTICES, bake, bake_array, bake_normals, local_matrices};
+pub use copies::{Place, drawn as drawn_copies, places as copy_places};
 pub use finish::Apply;
 pub use layout::{axis_vector, compute as compute_layout, radial_arc, scale_at};
+pub use pose::CopyPick;
 pub use state::ArrayState;
 pub use tool::{ArrayTool, tool};
 pub use types::{ArrayKind, ArrayPlacement, ArraySettings, Pose};

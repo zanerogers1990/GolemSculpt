@@ -20,6 +20,7 @@ use sculpt_toolkit::{Command, Ctx, ObjectId};
 
 use crate::make;
 use crate::picture::{self, CurveHit, Picture};
+use crate::pose::Clicked;
 use crate::tool::ArrayTool;
 
 /// How far (interface points) the pointer must move before a press on a
@@ -119,6 +120,8 @@ impl ArrayTool {
 
         if let Some(mut index) = picture::pick_handle(&cx.view, &state, origin, px, self.picked) {
             self.picked = Some(index);
+            // The gizmo is on a point or on a copy, not both.
+            self.copy = None;
             let last = state.points.len() - 1;
             let extend =
                 cx.mods.shift && state.settings.is_path() && !state.settings.closed && index == last && index > 0;
@@ -331,6 +334,7 @@ impl ArrayTool {
         self.armed = armed;
         if armed {
             self.picked = None;
+            self.copy = None;
             self.hover = Hover::default();
             self.say(
                 cx,
@@ -346,6 +350,7 @@ impl ArrayTool {
         let mut stroke = Stroke { object, plane_point: origin, world: Vec::new(), start: px, last: px, pixels: 0.0 };
         add_sample(cx, &mut stroke, px);
         self.picked = None;
+        self.copy = None;
         self.gesture = Gesture::Draw(stroke);
         true
     }
@@ -397,25 +402,34 @@ impl ArrayTool {
 
     // ---- the rest of the input ---------------------------------------------
 
-    /// A click on something that is not a handle (those press): another object
-    /// is switched to, empty space lets go of the picked handle.
+    /// A click on something that is not a handle (those press): a copy of the
+    /// selected object's array puts the gizmo on it, another object is switched
+    /// to, empty space lets go of the picked handle and copy.
     pub(crate) fn click(&mut self, cx: &mut Ctx, px: Vec2) -> bool {
         if self.building.is_some() {
             return false;
         }
-        let target = self.target(cx);
-        if let Some(hit) = cx.pick(px).filter(|hit| hit.object != target) {
-            let name = cx.scene().info(hit.object).map(|info| info.name.to_owned()).unwrap_or_default();
-            cx.commit("Select", vec![Command::Select { object: hit.object }]);
-            self.say(cx, format!("Now repeating {name}."), true);
-            return true;
+        match self.what_is_under(cx, px) {
+            Clicked::Copy(pick) => {
+                self.select_copy(cx, pick);
+                true
+            }
+            Clicked::Object(object) => {
+                let name = cx.scene().info(object).map(|info| info.name.to_owned()).unwrap_or_default();
+                cx.commit("Select", vec![Command::Select { object }]);
+                self.say(cx, format!("Now repeating {name}."), true);
+                true
+            }
+            Clicked::Nothing => {
+                let (point, copy) = (self.picked.take(), self.copy.take());
+                point.is_some() || copy.is_some()
+            }
         }
-        self.picked.take().is_some()
     }
 
     /// Esc: cancels the gesture, then stops drawing, then lets go of the
-    /// picked point. False when there is nothing of that, so the app puts the
-    /// tool away.
+    /// picked point, then of the picked copy. False when there is nothing of
+    /// that, so the app puts the tool away.
     pub(crate) fn escape(&mut self, cx: &mut Ctx) -> bool {
         if self.cancel_gesture() {
             self.say(cx, "Cancelled.", true);
@@ -426,7 +440,7 @@ impl ArrayTool {
             self.say(cx, "Drawing cancelled.", true);
             return true;
         }
-        self.picked.take().is_some()
+        self.picked.take().is_some() || self.copy.take().is_some()
     }
 }
 
