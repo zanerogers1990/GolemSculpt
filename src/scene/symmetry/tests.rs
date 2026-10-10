@@ -643,6 +643,30 @@ fn a_file_keeps_every_objects_own_symmetry() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// An object's entry of a file holds its symmetry and whatever a tool keeps
+/// for it (a live array) side by side, and neither gets in the other's way.
+#[test]
+fn an_objects_symmetry_and_its_live_array_are_kept_side_by_side() {
+    let mesh = ball(600);
+    let mut scene = Scene::new("Petal");
+    let around = Radial { on: true, count: 9, ..Radial::default() };
+    scene.set_symmetry(scene.active_id(), Symmetry { radial: around, space: Space::World, ..mirror(false, true, false) });
+    let kept = scene.active_symmetry();
+
+    let mut details = io::Details::default();
+    scene.keep_symmetry(&mut details);
+    let array = sculpt_toolkit::Saved::fields([("kind", 2.into()), ("count", 12.into())]);
+    details.set_tool_object(0, io::slot::ARRAY, &array);
+    let path = temp("symmetry_and_array.sclp");
+    io::save_scene_with(&[&mesh], &rows(&scene), 0, &details, &path).expect("the file writes");
+
+    let (opened, _, details) = open(&path);
+    assert_eq!(opened.active_symmetry(), kept);
+    let count = |saved: &sculpt_toolkit::Saved| saved.get("count").and_then(sculpt_toolkit::Saved::whole);
+    assert_eq!(details.get_tool_object(0, io::slot::ARRAY).as_ref().and_then(count), Some(12));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A file from before symmetry belonged to objects holds one setting for the
 /// scene. That was every object's in turn (it applied to whichever was
 /// selected, in its own space), so every object of the file gets it.

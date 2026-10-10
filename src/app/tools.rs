@@ -27,6 +27,8 @@ use crate::scene::{Scene, SceneState};
 use crate::sculpt::{Radial, RadialAxis, Sculptor};
 use crate::ui::assets::Assets;
 
+mod files;
+
 /// Every hosted tool, in the order of their buttons. Adding a tool is one
 /// line here (and its crate in Cargo.toml).
 fn registry() -> Vec<Box<dyn kit::Tool>> {

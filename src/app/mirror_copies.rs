@@ -61,27 +61,18 @@ impl Running {
         items
     }
 
-    /// The active object and its live mirror copies as the places an export
-    /// writes, with the names they go under: the copies are part of the model
-    /// on screen. The object comes first, in its own place.
+    /// The active object, its live mirror copies and the copies tools keep of it (an
+    /// array's) as the places an export writes, with the names they go under: all of them
+    /// are part of the model on screen. The object comes first, in its own place.
     pub(super) fn export_places(&self) -> Vec<(String, Mat4)> {
-        let object = self.doc.scene.active();
-        let name = object.name.replace(' ', "_");
-        let copies = object.mirror.map_or_else(Vec::new, |m| m.copies());
-        let mut places = vec![(name.clone(), object.matrix())];
-        places.extend(
-            copies.iter().map(|c| (format!("{name}_Mirror{}", c.axis_name()), object.placed_matrix(c.flip_mask))),
-        );
-        places
+        let scene = &self.doc.scene;
+        scene.export_places(scene.active())
     }
 
-    /// What an export's status line adds when the object has live copies.
+    /// What an export's status line adds when the object has copies.
     pub(super) fn export_note(&self) -> String {
-        match self.doc.scene.active().mirror.map_or(0, |m| m.copy_count()) {
-            0 => String::new(),
-            1 => " with its mirror copy".to_owned(),
-            n => format!(" with its {n} mirror copies"),
-        }
+        let scene = &self.doc.scene;
+        scene.export_note(scene.active())
     }
 
     /// The pulse of an object that was picked or undone, on its copies too.
@@ -677,6 +668,136 @@ mod tests {
         let (a, b) = (solid(&facets[..tris]), solid(&facets[tris..]));
         assert!(a > 0.0 && (a - b).abs() < 1e-4 * a, "{a} and {b}: a copy came out inside out");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The copies of a real array as the Array tool says them: a ring of six round a centre to the right of the
+    /// object, turning as they go round and shrinking toward the last, then the same again through the object's
+    /// mirror.
+    fn ring_of_copies(scene: &Scene) -> Vec<Mat4> {
+        use sculpt_array::{ArrayKind, ArraySettings, Pose, compute_layout, drawn_copies};
+        let object = scene.active();
+        let mut settings = ArraySettings::new(ArrayKind::Radial);
+        (settings.count, settings.axis, settings.end_scale) = (6, 2, 0.5);
+        let layout = compute_layout(&settings, &[Vec3::ZERO, Vec3::new(1.8, 0.0, 0.0)]);
+        drawn_copies(&layout, &Pose::new(object.position, object.rotation, object.scale), object.mirror, 1)
+    }
+
+    /// Where a mesh's vertices are through a matrix.
+    fn through(points: &[Vec3], m: Mat4) -> Vec<Vec3> {
+        points.iter().map(|&p| m.transform_point3(p)).collect()
+    }
+
+    fn bounds(points: &[Vec3]) -> (Vec3, Vec3) {
+        points.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
+    }
+
+    #[test]
+    fn an_export_of_an_arrayed_object_writes_every_copy_in_its_place_and_the_right_way_out() {
+        let dir = folder("export array");
+        let (mesh, mut scene) = (ball(), Scene::new("Ball"));
+        let id = scene.active_id();
+        placed(scene.active_mut());
+        scene.set_mirror(id, 1, Vec3::ZERO);
+        let copies = ring_of_copies(&scene);
+        assert_eq!(copies.len(), 10, "five copies, and their reflections");
+        scene.set_tool_places(std::collections::HashMap::from([(id, copies.clone())]));
+
+        // What is written: the object, its mirror, then each copy of the run and the same through the mirror.
+        let places = scene.export_places(scene.active());
+        let names: Vec<&str> = places.iter().map(|p| p.0.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Ball", "Ball_MirrorX", "Ball_Array2", "Ball_Array3", "Ball_Array4", "Ball_Array5", "Ball_Array6",
+                "Ball_Array2MirrorX",
+                "Ball_Array3MirrorX",
+                "Ball_Array4MirrorX",
+                "Ball_Array5MirrorX",
+                "Ball_Array6MirrorX",
+            ]
+        );
+        let object = scene.active().clone();
+        let models: Vec<Mat4> = places.iter().map(|p| p.1).collect();
+        assert_eq!(models[0], object.matrix());
+        assert_eq!(models[1], object.placed_matrix(1));
+        assert_eq!(models[2..], copies[..]);
+        assert_eq!(scene.export_note(&object), " with its mirror copy and its 10 array copies");
+
+        // The object's own volume, and what each place must come to: the matrix scales volume by its determinant.
+        let faces: Vec<[usize; 3]> =
+            mesh.indices.chunks_exact(3).map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect();
+        let local = volume(&mesh.positions, &faces);
+        assert!(local > 0.0);
+        let tris = mesh.triangle_count();
+
+        let obj = dir.join("array.obj");
+        let named: Vec<(&str, Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+        io::export_obj_placed(&mesh, &named, &obj).unwrap();
+        let blocks = objects_of(&std::fs::read_to_string(&obj).unwrap());
+        assert_eq!(blocks.iter().map(|b| b.0.as_str()).collect::<Vec<_>>(), names);
+        for ((name, vertices, faces), model) in blocks.iter().zip(&models) {
+            assert_eq!((vertices.len(), faces.len()), (mesh.vertex_count(), tris), "{name}");
+            let wanted = local * model.determinant().abs() as f64;
+            let got = volume(vertices, faces);
+            let right = got > 0.0 && (got - wanted).abs() < 2e-3 * wanted;
+            assert!(right, "{name}: volume {got}, wanted {wanted}: wound the wrong way out?");
+            // Where it is: every vertex is the mesh's through the place's matrix (as written, to the digits OBJ keeps).
+            for (v, expected) in vertices.iter().zip(through(&mesh.positions, *model)) {
+                assert!(v.distance(expected) < 1e-4, "{name}: a vertex is {v}, not {expected}");
+            }
+        }
+        // The reflected places really are reflections, so the check above is worth something.
+        assert_eq!(models.iter().filter(|m| m.determinant() < 0.0).count(), 6);
+
+        // The STL holds all twelve one after the other, in millimetres and Z up, each a solid.
+        let stl = dir.join("array.stl");
+        io::export_stl_placed(&mesh, &models, &stl).unwrap();
+        let bytes = std::fs::read(&stl).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize, 12 * tris);
+        let corner = |f: &[u8], k: usize| {
+            let c = |i: usize| f32::from_le_bytes(f[12 + k * 12 + i * 4..16 + k * 12 + i * 4].try_into().unwrap());
+            Vec3::new(c(0), c(1), c(2))
+        };
+        let facets: Vec<[Vec3; 3]> =
+            bytes[84..].chunks_exact(50).map(|f| [corner(f, 0), corner(f, 1), corner(f, 2)]).collect();
+        for (n, model) in models.iter().enumerate() {
+            let half = &facets[n * tris..(n + 1) * tris];
+            let signed: f64 =
+                half.iter().map(|t| t[0].as_dvec3().dot(t[1].as_dvec3().cross(t[2].as_dvec3())) / 6.0).sum();
+            // Millimetres: ten to the unit, so a thousand times the volume.
+            let wanted = local * model.determinant().abs() as f64 * 1000.0;
+            let right = signed > 0.0 && (signed - wanted).abs() < 2e-3 * wanted;
+            assert!(right, "{}: STL volume {signed}, wanted {wanted}", names[n]);
+            // And its box is the mesh's through the matrix, then to STL's axes: (x, y, z) -> (x, -z, y) x 10.
+            let corners: Vec<Vec3> = half.iter().flatten().copied().collect();
+            let expected: Vec<Vec3> =
+                through(&mesh.positions, *model).iter().map(|p| Vec3::new(p.x, -p.z, p.y) * 10.0).collect();
+            let (got, want) = (bounds(&corners), bounds(&expected));
+            let same = got.0.distance(want.0) < 1e-2 && got.1.distance(want.1) < 1e-2;
+            assert!(same, "{}: box {got:?}, wanted {want:?}", names[n]);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_export_without_an_array_is_what_it_was() {
+        let mut scene = Scene::new("Ball");
+        let id = scene.active_id();
+        let object = scene.active().clone();
+        assert_eq!(scene.export_places(&object).iter().map(|p| p.0.as_str()).collect::<Vec<_>>(), ["Ball"]);
+        assert_eq!(scene.export_note(&object), "");
+        scene.set_mirror(id, 1 | 2, Vec3::ZERO);
+        let object = scene.active().clone();
+        let places = scene.export_places(&object);
+        assert_eq!(places.len(), 4);
+        assert_eq!(scene.export_note(&object), " with its 3 mirror copies");
+        // One copy, no mirror: a run of two.
+        let mut scene = Scene::new("Cube Ball");
+        let id = scene.active_id();
+        scene.set_tool_places(std::collections::HashMap::from([(id, vec![Mat4::from_translation(Vec3::X)])]));
+        let places = scene.export_places(&scene.active().clone());
+        assert_eq!(places.iter().map(|p| p.0.as_str()).collect::<Vec<_>>(), ["Cube_Ball", "Cube_Ball_Array2"]);
+        assert_eq!(scene.export_note(scene.active()), " with its array copy");
     }
 
     #[test]

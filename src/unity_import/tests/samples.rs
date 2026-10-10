@@ -266,7 +266,7 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
         );
         println!("   saved {} by Unity {}", root["savedUtc"], root["unityVersion"]);
 
-        // Rows: each object, then its instances, then the copies of its array.
+        // Rows: each object, then its instances. An array adds no rows: it is the object's own.
         let mut row = 0;
         let mut first_rows = Vec::new();
         for (index, source) in plain.iter().enumerate() {
@@ -393,13 +393,8 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
                 );
             }
 
-            // Its linked copies: instances, then the copies of a live array.
+            // Its instances, and its live mirror.
             let instances = entry["instances"].as_array().map_or(0, Vec::len);
-            let array = &entry["array"];
-            let copies = match (array["kind"].as_i64().unwrap_or(0), array["points"].as_array().map_or(0, Vec::len)) {
-                (1..=3, 2..) => array["count"].as_i64().unwrap().clamp(2, 100) as usize - 1,
-                _ => 0,
-            };
             let axes = entry["mirrorRepeaterAxes"].as_i64().unwrap_or(0) & 7;
             let mirror = crate::scene::saved_mirror(&scene.details, row);
             assert_eq!(mirror.map_or(0, |m| m.axis_mask as i64), axes, "{name} / {}: live mirror", object.name);
@@ -437,9 +432,10 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
                     assert_eq!((own.mirror, own.space), (axes, crate::scene::Space::Local), "{name} / {known}");
                 }
             }
-            for linked in 1..=instances + copies {
+            for linked in 1..=instances {
                 let copy = &scene.objects[row + linked];
                 assert_eq!(copy.mesh, index, "{name}: \"{}\" shares the mesh of \"{}\"", copy.name, object.name);
+                assert!(!copy.name.contains("(Array"), "{name}: a copy of an array came in as a linked copy");
                 assert_eq!(
                     crate::scene::saved_symmetry(&scene.details, row + linked),
                     Some(own),
@@ -447,12 +443,6 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
                     copy.name,
                     object.name
                 );
-                if linked > instances {
-                    assert_eq!(
-                        crate::scene::saved_mirror(&scene.details, row + linked).map_or(0, |m| m.axis_mask as i64),
-                        axes
-                    );
-                }
                 println!(
                     "   [{}] \"{}\": linked copy of \"{}\" at {:.4?}",
                     row + linked,
@@ -461,7 +451,8 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
                     copy.position.to_array()
                 );
             }
-            row += 1 + instances + copies;
+            live_array_sits_where_unity_drew_it(&name, entry, scene, row, source, &opened.extras.objects[index]);
+            row += 1 + instances;
         }
         assert_eq!(row, scene.objects.len(), "{name}: every row accounted for");
         let selected = root["primarySelectionIndex"].as_i64().unwrap_or(-1).clamp(0, plain.len() as i64 - 1) as usize;
@@ -552,15 +543,16 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
                 "{name}: object {index}"
             );
             if let Some(array) = &extra.array {
-                println!(
-                    "        array {:?}, {} points, copies in rows {:?}",
-                    array.settings,
-                    array.points.len(),
-                    array.rows
-                );
+                println!("        array {:?}, {} points", array.settings, array.points.len());
             }
         }
         println!("   left behind: {:?}", opened.left_behind);
+        let mentions_arrays = |notes: &[String]| notes.iter().any(|note| note.to_lowercase().contains("array"));
+        assert!(
+            !mentions_arrays(&opened.left_behind.objects) && !mentions_arrays(&opened.left_behind.settings),
+            "{name}: an array is not left behind any more: {:?}",
+            opened.left_behind
+        );
 
         drop(plain);
         survives_a_save(&path, &opened.scene);
@@ -613,4 +605,117 @@ fn survives_a_save(path: &Path, opened: &SavedScene) {
         "the settings in {}",
         saved_to.display()
     );
+    // The arrays: on the same rows, and the same arrays.
+    let arrays = |scene: &SavedScene| -> Vec<Option<ArrayState>> {
+        (0..rows)
+            .map(|row| {
+                scene.details.get_tool_object(row, io::slot::ARRAY).and_then(|a| sculpt_array::state_from_saved(&a))
+            })
+            .collect()
+    };
+    assert_eq!(arrays(&again), arrays(opened), "the arrays in {}", saved_to.display());
+    println!("   {} live array(s) kept by the save", arrays(&again).iter().flatten().count());
 }
+
+/// The object's live array, if it has one, against the file: it is there on the object's own row
+/// (and no other), it is the file's array in this app's axes, and its copies, laid out by the
+/// Array tool's own layout, sit where the Unity app drew them. "Where Unity drew them" is worked
+/// out here from the file's numbers and the Unity app's arithmetic alone (`ArrayLayout.Compute`
+/// on the file's own settings and points, then `ArrayRepeater.SyncViews`' transform rule, then X
+/// negated as Unity's exporters did), never from the importer's `placements`, which are checked
+/// against the tool's layout too. The copy is compared by the box it fills and its centre.
+fn live_array_sits_where_unity_drew_it(
+    name: &str,
+    entry: &Value,
+    scene: &SavedScene,
+    row: usize,
+    source: &Plain,
+    extra: &ObjectExtras,
+) {
+    let object = &scene.objects[row];
+    let array = &entry["array"];
+    let file_points: Vec<Vec3> =
+        array["points"].as_array().map_or(Vec::new(), |points| points.iter().map(vector).collect());
+    let has_one = matches!(array["kind"].as_i64().unwrap_or(0), 1..=3) && file_points.len() >= 2;
+    let live = scene.details.get_tool_object(row, io::slot::ARRAY).and_then(|a| sculpt_array::state_from_saved(&a));
+    assert_eq!(live.is_some(), has_one, "{name} / {}: a live array exactly where the file has one", object.name);
+    let Some(live) = live else { return };
+    let kind = array["kind"].as_i64().unwrap_or(0) as i32;
+    assert_eq!(live.settings.kind.id(), kind);
+    assert_eq!(live.settings.count as i64, array["count"].as_i64().unwrap().clamp(2, 100));
+    assert_eq!(live.points.len(), file_points.len());
+    for (here, there) in live.points.iter().zip(&file_points) {
+        assert_eq!(*here, Vec3::new(0.0 - there.x, there.y, there.z), "{name}: a handle point is the file's, flipped");
+    }
+
+    // The file's settings, in Unity's axes, and where Unity drew each copy.
+    let settings = ArraySettings {
+        kind: ArrayKind::from_id(kind),
+        count: array["count"].as_i64().unwrap() as i32,
+        end_scale: array["endScale"].as_f64().unwrap_or(1.0) as f32,
+        mid_scale: array["midScale"].as_f64().unwrap_or(1.0) as f32,
+        closed: array["closed"].as_bool().unwrap_or(false),
+        follow: array["follow"].as_bool().unwrap_or(true),
+        space_by_size: array["spaceBySize"].as_bool().unwrap_or(true),
+        axis: array["axis"].as_i64().unwrap_or(1) as i32,
+        sweep: array["sweep"].as_f64().unwrap_or(360.0) as f32,
+    };
+    let unity_layout = sculpt_array::compute_layout(&settings, &file_points);
+    let tool_layout = sculpt_array::compute_layout(&live.settings, &live.points);
+    assert_eq!(unity_layout.len(), tool_layout.len());
+
+    let (position, rotation, scale) = (vector(&entry["position"]), turn(&entry["rotation"]), vector(&entry["scale"]));
+    let mut used = vec![false; source.vertices.len()];
+    source.triangles.iter().for_each(|&i| used[i as usize] = true);
+    let pose = sculpt_array::Pose::new(object.position, object.rotation, object.scale);
+    let mesh = &scene.meshes[object.mesh];
+    let (mut worst_box, mut worst_placement) = (0.0_f64, 0.0_f64);
+    for (k, (unity_copy, tool_copy)) in unity_layout.iter().zip(&tool_layout).enumerate() {
+        // Unity's: the object's place plus the copy's offset, the copy's turn before the object's,
+        // the object's scale times the copy's.
+        let drawn = Mat4::from_scale_rotation_translation(
+            scale * unity_copy.scale,
+            unity_copy.rotation * rotation,
+            position + unity_copy.offset,
+        )
+        .as_dmat4();
+        let (lo, hi, centre, _) = extent(
+            source
+                .vertices
+                .par_iter()
+                .zip(&used)
+                .filter(|(_, used)| **used)
+                .map(|(v, _)| drawn.transform_point3(v.as_dvec3()))
+                .map(|w| DVec3::new(-w.x, w.y, w.z)),
+        );
+        // The tool's: the same mesh in this app, through the copy's matrix.
+        let model = tool_copy.world_matrix(&pose).as_dmat4();
+        let (lo_here, hi_here, centre_here, _) =
+            extent(mesh.positions.par_iter().map(|p| model.transform_point3(p.as_dvec3())));
+        let size = (hi - lo).max_element();
+        let off = (lo - lo_here)
+            .abs()
+            .max_element()
+            .max((hi - hi_here).abs().max_element())
+            .max((centre - centre_here).abs().max_element());
+        assert!(off < 1e-5 * size.max(1.0), "{name} / {}: copy {k} is {off} from where Unity drew it", object.name);
+        worst_box = worst_box.max(off);
+    }
+    // And the importer's own account of where Unity drew them is the tool's layout.
+    let kept = &extra.array.as_ref().expect("the importer kept where Unity drew the copies").placements;
+    assert_eq!(kept.len(), tool_layout.len());
+    for (k, (a, b)) in kept.iter().zip(&tool_layout).enumerate() {
+        let offset = a.offset.distance(b.offset);
+        let (turn, size) = (a.rotation.angle_between(b.rotation), (a.scale - b.scale).abs());
+        assert!(offset < 1e-4 && turn < 1e-4 && size < 1e-5, "{name}: copy {k} placement: {offset} {turn} {size}");
+        worst_placement = worst_placement.max(offset as f64);
+    }
+    println!(
+        "        live {:?} array, {} copies, {} points: every copy within {worst_box:.2e} units of where Unity drew it \
+         (its box and centre), placements within {worst_placement:.2e}",
+        live.settings.kind,
+        tool_layout.len(),
+        live.points.len()
+    );
+}
+

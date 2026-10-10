@@ -651,8 +651,56 @@ fn every_object_comes_in_with_its_own_symmetry() {
     assert_eq!((before.radial, before.mirror), (Radial::default(), [false, false, true]));
 }
 
+/// The array a row of an opened file keeps, as the Array tool reads it back.
+fn live_array(details: &Details, row: usize) -> Option<ArrayState> {
+    details.get_tool_object(row, io::slot::ARRAY).and_then(|saved| sculpt_array::state_from_saved(&saved))
+}
+
+/// Where the Unity app drew copy `k` of `source`'s array (`ArrayRepeater.SyncViews`): the object's
+/// position plus the copy's offset, the copy's turn before the object's, the object's scale times
+/// the copy's; every vertex of the object's mesh through that, in this app's axes (what the Unity
+/// exporters write). Worked out from the fixture's own numbers with Unity's arithmetic, never with
+/// `axes` or the importer's `placements`.
+fn unity_copy(source: &Object, k: usize) -> Vec<Vec3> {
+    let array = source.array.as_ref().unwrap();
+    let settings = ArraySettings {
+        kind: ArrayKind::from_id(array.kind),
+        count: array.count,
+        end_scale: array.end_scale,
+        mid_scale: array.mid_scale,
+        closed: array.closed,
+        follow: array.follow,
+        space_by_size: array.space_by_size,
+        axis: array.axis,
+        sweep: array.sweep,
+    };
+    let layout = sculpt_array::compute_layout(&settings, &array.points);
+    let copy = &layout[k];
+    let drawn =
+        |v: Vec3| source.position + copy.offset + (copy.rotation * source.rotation) * (source.scale * copy.scale * v);
+    unity_points(source, drawn)
+}
+
+/// Where the Array tool puts copy `k` of the array the opened file kept for `row`: the object's mesh
+/// through the copy's matrix, given the object's place in this app.
+fn live_copy(opened: &Imported, row: usize, k: usize) -> Vec<Vec3> {
+    let scene = &opened.scene;
+    let state = live_array(&scene.details, row).expect("the object has an array");
+    let layout = sculpt_array::compute_layout(&state.settings, &state.points);
+    let object = &scene.objects[row];
+    let pose = sculpt_array::Pose::new(object.position, object.rotation, object.scale);
+    let world = layout[k].world_matrix(&pose);
+    scene.meshes[object.mesh].positions.iter().map(|&v| world.transform_point3(v)).collect()
+}
+
+/// Whether the tool's copies of `row`'s array sit where Unity drew them, all of them, within `tolerance`.
+fn copies_sit_where_unity_drew_them(opened: &Imported, row: usize, source: &Object, tolerance: f32) -> bool {
+    let count = source.array.as_ref().unwrap().count.clamp(2, 100) as usize;
+    (0..count).all(|k| same_points(&live_copy(opened, row, k), &unity_copy(source, k), tolerance))
+}
+
 #[test]
-fn the_copies_of_a_live_array_come_in_as_linked_copies_where_unity_drew_them() {
+fn a_live_array_comes_in_live_and_its_copies_sit_where_unity_drew_them() {
     // A run of four along a slanted line, each copy half as big again as the last.
     let mut link = marker("Link", Vec3::ZERO).placed(
         Vec3::new(1.0, 0.0, 0.5),
@@ -675,62 +723,58 @@ fn the_copies_of_a_live_array_come_in_as_linked_copies_where_unity_drew_them() {
     let sculpt = Sculpt::new(vec![link.clone(), petal.clone()]);
     let opened = open(&sculpt, "arrays.sculpt");
     let scene = &opened.scene;
-    let names: Vec<&str> = scene.objects.iter().map(|o| o.name.as_str()).collect();
-    assert_eq!(
-        names,
-        ["Link", "Link (Array 2)", "Link (Array 3)", "Link (Array 4)", "Petal", "Petal (Array 2)", "Petal (Array 3)"]
-    );
-    assert_eq!(scene.meshes.len(), 2, "the copies share their object's mesh");
-    assert_eq!(scene.objects.iter().map(|o| o.mesh).collect::<Vec<_>>(), [0, 0, 0, 0, 1, 1, 1]);
 
-    for (first_row, source) in [(0, &link), (4, &petal)] {
-        // Where the Unity app drew copy k (ArrayRepeater.SyncViews): the
-        // object's position plus the copy's offset, the copy's turn after the
-        // object's, the object's scale times the copy's.
-        let array = source.array.as_ref().unwrap();
-        let settings = ArraySettings {
-            kind: ArrayKind::from_id(array.kind),
-            count: array.count,
-            end_scale: array.end_scale,
-            mid_scale: array.mid_scale,
-            closed: array.closed,
-            follow: array.follow,
-            space_by_size: array.space_by_size,
-            axis: array.axis,
-            sweep: array.sweep,
-        };
-        let layout = sculpt_array::compute_layout(&settings, &array.points);
-        assert_eq!(layout.len(), array.count as usize);
-        for (k, copy) in layout.iter().enumerate() {
-            let drawn = |v: Vec3| {
-                source.position + copy.offset + (copy.rotation * source.rotation) * (source.scale * copy.scale * v)
-            };
-            assert!(
-                same_points(&world_points(scene, first_row + k), &unity_points(source, drawn), 1e-4),
-                "{} copy {k} is not where Unity drew it",
-                source.name
-            );
-        }
+    // The object is the only row: its copies are the Array tool's to draw, not linked copies.
+    let names: Vec<&str> = scene.objects.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["Link", "Petal"]);
+    assert_eq!(scene.meshes.len(), 2);
+    assert!(opened.left_behind.objects.is_empty(), "nothing of an array is left behind: {:?}", opened.left_behind);
+    assert_eq!(status_note(&scene.details, false), None);
+
+    // The arrays are on their own rows, in the form the Array tool saves its own.
+    let line = live_array(&scene.details, 0).expect("the link's array");
+    let ring = live_array(&scene.details, 1).expect("the petal's array");
+    assert_eq!((line.settings.kind, line.settings.count, line.settings.end_scale), (ArrayKind::Line, 4, 2.5));
+    assert_eq!(line.points, [Vec3::ZERO, Vec3::new(-6.0, 3.0, 0.0)], "handle points go through the flip");
+    assert_eq!((ring.settings.kind, ring.settings.count, ring.settings.axis), (ArrayKind::Radial, 3, 1));
+    assert_eq!(ring.points, [Vec3::ZERO, Vec3::new(3.0, 0.0, 0.0)]);
+    assert_eq!(ring.settings.sweep, -240.0, "about Y the circle runs the other way once X is negated");
+
+    // Live copies, laid out by the tool, are where the Unity app drew every one of them.
+    for (row, source) in [(0, &link), (1, &petal)] {
+        let there = copies_sit_where_unity_drew_them(&opened, row, source, 1e-5);
+        assert!(there, "{} is not where Unity drew it", source.name);
     }
     // The petals really do go round: the second is nowhere near the first.
-    assert!(scene.objects[5].position.distance(scene.objects[4].position) > 3.0);
+    let (first, second) = (live_copy(&opened, 1, 0), live_copy(&opened, 1, 1));
+    assert!(first[0].distance(second[0]) > 3.0);
 
-    // The link's copies are mirrored with it, as Unity mirrored an array.
-    for row in 0..4 {
-        assert_eq!(crate::scene::saved_mirror(&scene.details, row).map(|m| m.axis_mask), Some(1), "row {row}");
+    // Without the sweep turned round they would not be (that is why it is): the circle's copies swap places.
+    let mut unturned = ring.clone();
+    unturned.settings.sweep = 240.0;
+    let layout = sculpt_array::compute_layout(&unturned.settings, &unturned.points);
+    let object = &scene.objects[1];
+    let pose = sculpt_array::Pose::new(object.position, object.rotation, object.scale);
+    let wrong: Vec<Vec3> =
+        scene.meshes[1].positions.iter().map(|&v| layout[1].world_matrix(&pose).transform_point3(v)).collect();
+    assert!(!same_points(&wrong, &unity_copy(&petal, 1), 1e-2), "the unturned circle should be wrong");
+
+    // The mirror is the object's own, as it always was; the array is not mirrored by hand.
+    assert_eq!(crate::scene::saved_mirror(&scene.details, 0).map(|m| m.axis_mask), Some(1));
+    assert!(crate::scene::saved_mirror(&scene.details, 1).is_none());
+
+    // The importer's account of where Unity drew the copies is the tool's layout.
+    for (row, extra) in opened.extras.objects.iter().enumerate() {
+        let kept = extra.array.as_ref().unwrap();
+        let state = live_array(&scene.details, row).unwrap();
+        assert_eq!((kept.settings, &kept.points), (state.settings, &state.points));
+        let tool = sculpt_array::compute_layout(&state.settings, &state.points);
+        assert_eq!(kept.placements.len(), tool.len());
+        for (k, (a, b)) in kept.placements.iter().zip(&tool).enumerate() {
+            assert!(a.offset.distance(b.offset) < 1e-4, "row {row} copy {k}: {:?} and {:?}", a.offset, b.offset);
+            assert!(a.rotation.angle_between(b.rotation) < 1e-4 && (a.scale - b.scale).abs() < 1e-6);
+        }
     }
-    assert!(crate::scene::saved_mirror(&scene.details, 4).is_none());
-
-    // The arrays themselves are kept for the day a file here can hold one.
-    let kept = opened.extras.objects[0].array.as_ref().unwrap();
-    assert_eq!((kept.settings.kind, kept.settings.count, kept.rows.as_slice()), (ArrayKind::Line, 4, &[1, 2, 3][..]));
-    assert_eq!(kept.points, [Vec3::ZERO, Vec3::new(-6.0, 3.0, 0.0)]);
-    assert_eq!(opened.extras.objects[1].row, 4);
-    let left = &opened.left_behind.objects;
-    assert!(
-        left.iter().any(|line| line.contains("\"Link\"") && line.contains("its 3 copies came in as linked copies")),
-        "{left:?}"
-    );
 
     // An array with too few points, or of a kind from a newer Unity build, is left off, as Unity left it.
     let mut odd = sculpt.clone();
@@ -738,7 +782,117 @@ fn the_copies_of_a_live_array_come_in_as_linked_copies_where_unity_drew_them() {
     odd.objects[1].array.as_mut().unwrap().kind = 9;
     let opened = open(&odd, "odd arrays.sculpt");
     assert_eq!(opened.scene.objects.len(), 2);
+    assert!(live_array(&opened.scene.details, 0).is_none() && live_array(&opened.scene.details, 1).is_none());
     assert!(opened.left_behind.objects.iter().any(|line| line.contains("\"Petal\"")));
+}
+
+/// A circle about each axis, whole and in part, with and without turning the copies and with a
+/// taper: every one of them is where the Unity app drew it.
+#[test]
+fn a_circle_about_any_axis_keeps_every_copy_where_unity_drew_it() {
+    let mut checked = 0;
+    for axis in 0..3 {
+        let cases = [(360.0, 8, true, 1.0), (360.0, 5, false, 0.5), (100.0, 4, true, 1.8)];
+        for (sweep, count, follow, end_scale) in cases {
+            let mut gear = marker("Gear", Vec3::ZERO).placed(
+                Vec3::new(0.5, 1.0, -2.0),
+                Quat::from_euler(glam::EulerRot::YXZ, 0.7, -0.4, 0.3),
+                Vec3::new(1.0, 0.6, 1.4),
+            );
+            gear.array = Some(Array {
+                kind: 3,
+                count,
+                axis,
+                sweep,
+                follow,
+                end_scale,
+                mid_scale: 1.3,
+                points: vec![Vec3::new(0.0, 0.2, 0.0), Vec3::new(-2.0, 1.0, 1.5)],
+                ..Array::line(0, Vec3::ZERO)
+            });
+            let opened = open(&Sculpt::new(vec![gear.clone()]), "gear.sculpt");
+            let state = live_array(&opened.scene.details, 0).unwrap();
+            assert_eq!(state.settings.sweep, if axis == 0 { sweep } else { -sweep }, "axis {axis}: the direction");
+            assert!(
+                copies_sit_where_unity_drew_them(&opened, 0, &gear, 1e-5),
+                "axis {axis}, {count} copies over {sweep} degrees, follow {follow}"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 9);
+}
+
+/// Paths of every shape, open and closed, with the copies turned to follow them or not: the layout
+/// is the same arithmetic in both apps, and the flip leaves it as it was.
+#[test]
+fn a_line_or_a_curve_keeps_every_copy_where_unity_drew_it() {
+    let wave = |n: usize| -> Vec<Vec3> {
+        let mut points: Vec<Vec3> = (0..n)
+            .map(|i| {
+                let t = i as f32 / n as f32 * std::f32::consts::TAU;
+                Vec3::new(3.0 * t.cos(), 1.5 * (2.0 * t).sin() + 0.1 * i as f32, 2.0 * t.sin())
+            })
+            .collect();
+        points[0] = Vec3::ZERO;
+        points
+    };
+    let mut checked = 0;
+    for (kind, closed, follow, by_size, points) in [
+        (1, false, true, true, vec![Vec3::ZERO, Vec3::new(5.0, 2.0, -1.0)]),
+        (1, false, false, false, vec![Vec3::new(0.3, 0.0, 0.0), Vec3::new(-5.0, 2.0, 1.0)]),
+        (2, false, true, true, wave(5)),
+        (2, true, true, true, wave(6)),
+        (2, true, true, false, wave(7)),
+        (2, false, false, true, wave(9)),
+        (
+            2,
+            false,
+            true,
+            true,
+            vec![Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0), Vec3::new(3.0, 1.0, 0.5), Vec3::new(3.0, -2.0, 3.0)],
+        ),
+    ] {
+        let mut strap = marker("Strap", Vec3::ZERO).placed(
+            Vec3::new(-1.0, 0.5, 0.25),
+            Quat::from_euler(glam::EulerRot::YXZ, -0.9, 0.2, 0.5),
+            Vec3::new(0.8, 1.0, 1.2),
+        );
+        strap.array = Some(Array {
+            kind,
+            count: 9,
+            closed,
+            follow,
+            space_by_size: by_size,
+            end_scale: 0.6,
+            mid_scale: 1.4,
+            points,
+            ..Array::line(0, Vec3::ZERO)
+        });
+        let opened = open(&Sculpt::new(vec![strap.clone()]), "strap.sculpt");
+        assert!(
+            copies_sit_where_unity_drew_them(&opened, 0, &strap, 1e-5),
+            "kind {kind}, closed {closed}, follow {follow}, by size {by_size}"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 7);
+}
+
+/// What a hostile file can put in the array entry costs the array and never the file.
+#[test]
+fn a_damaged_array_entry_is_left_off_and_the_rest_of_the_file_opens() {
+    let mut sculpt = Sculpt::new(vec![marker("A", Vec3::ZERO), marker("B", Vec3::X), marker("C", Vec3::Y)]);
+    sculpt.objects[0].array = Some(Array { count: 1_000_000, ..Array::line(0, Vec3::X * 4.0) }); // count of a line
+    sculpt.objects[1].array = Some(Array { count: 0, ..Array::line(0, Vec3::X * 4.0) });
+    sculpt.objects[2].array = Some(Array { points: vec![Vec3::ZERO], ..Array::line(5, Vec3::X) }); // nothing to aim at
+    let opened = open(&sculpt, "damaged arrays.sculpt");
+    assert_eq!(opened.scene.objects.len(), 3);
+    let counts: Vec<Option<i32>> =
+        (0..3).map(|row| live_array(&opened.scene.details, row).map(|a| a.settings.count)).collect();
+    assert_eq!(counts, [Some(100), Some(2), None], "a count is brought into range; one point is no array");
+    assert_eq!(opened.left_behind.objects.len(), 1, "{:?}", opened.left_behind);
+    assert!(opened.left_behind.objects[0].contains("\"C\""));
 }
 
 // ---------------------------------------------------------------- the look, the settings
@@ -964,24 +1118,33 @@ fn settings_that_do_not_read_cost_only_themselves() {
 
 #[test]
 fn the_status_line_says_what_it_is_and_what_was_left_behind() {
+    // An array of a kind from a newer Unity build is the one thing of an array that is left behind.
     let mut link = marker("Link", Vec3::ZERO);
-    link.array = Some(Array::line(2, Vec3::X * 4.0));
+    link.array = Some(Array { kind: 9, ..Array::line(2, Vec3::X * 4.0) });
     let opened = open(&Sculpt::new(vec![link]), "status.sculpt");
     let replaced = status_note(&opened.scene.details, true).unwrap();
     assert_eq!(
         replaced,
-        "It is a sculpt from the Unity app: saving makes a .sclp and leaves that file as it is. Left behind: the live array \
-         on \"Link\" (its copy came in as a linked copy, without the array's handles); the Unity app's brush settings."
+        "It is a sculpt from the Unity app: saving makes a .sclp and leaves that file as it is. Left behind: an \
+         array on \"Link\" that this app cannot read; the Unity app's brush settings."
     );
     // Added to a scene, only what its objects lost matters: no settings were ever going to be taken.
     let added = status_note(&opened.scene.details, false).unwrap();
-    assert_eq!(
-        added,
-        "Left behind: the live array on \"Link\" (its copy came in as a linked copy, without the array's handles)."
-    );
+    assert_eq!(added, "Left behind: an array on \"Link\" that this app cannot read.");
     let plain = open(&Sculpt::new(vec![marker("Plain", Vec3::ZERO)]), "status plain.sculpt");
     assert!(status_note(&plain.scene.details, false).is_none());
     assert!(status_note(&Details::default(), true).is_none(), "nothing to say about a .sclp");
+
+    // A readable array is not left behind: the object has it.
+    let mut live = marker("Live", Vec3::ZERO);
+    live.array = Some(Array::line(2, Vec3::X * 4.0));
+    let opened = open(&Sculpt::new(vec![live]), "status live.sculpt");
+    assert_eq!(status_note(&opened.scene.details, false), None);
+    assert_eq!(
+        status_note(&opened.scene.details, true).unwrap(),
+        "It is a sculpt from the Unity app: saving makes a .sclp and leaves that file as it is. Left behind: the Unity \
+         app's brush settings."
+    );
 }
 
 #[test]

@@ -40,6 +40,8 @@ use crate::mesh::{Mesh, Polys};
 
 pub type Result<T> = std::result::Result<T, String>;
 
+mod tool_data;
+
 /// A model as read from a file, already in the app's axes and units.
 pub struct RawMesh {
     pub positions: Vec<Vec3>,
@@ -455,7 +457,9 @@ pub fn place_import(raw: &mut RawMesh, first_half_size: Option<Vec3>) -> Vec3 {
 //         (u32, one more of them than faces), the corners (u32 each).
 //   HIDE  after its mesh, if any of its faces are hidden: the mesh's number
 //         (u32), then a byte per triangle, 1 for hidden.
-//   INFO  last, once: everything else, as JSON (see `Details`).
+//   INFO  last, once: everything else, as JSON (see `Details`). What a hosted
+//         tool keeps for an object (an array) is a field of that object's
+//         entry named by the tool's id: see `io/tool_data.rs`.
 //
 // All numbers are little-endian. A reader steps over blocks whose tag it does
 // not know and JSON fields it does not know, and fills in whatever is
@@ -629,14 +633,14 @@ pub mod slot {
     pub const MIRROR: &str = "mirror";
 
     // Per object, under its row of the object list. `SYMMETRY` is written and
-    // read by `scene/symmetry.rs` and `MIRROR_COPIES` by `scene/mirror.rs`;
-    // `ARRAY` is for a feature that is still being ported: nothing writes it
-    // yet, the name is only spoken for.
+    // read by `scene/symmetry.rs` and `MIRROR_COPIES` by `scene/mirror.rs`.
+    // `ARRAY` is the Array tool's: what a hosted tool keeps for an object
+    // goes under the tool's id (`app/tools/files.rs`), and that id is this
+    // name.
     /// `scene::Symmetry`: an object's own mirror axes, radial symmetry and
     /// whether they sit in its own space or the world's.
     pub const SYMMETRY: &str = "symmetry";
     /// A live array of the object: kind, count, handle points.
-    #[allow(dead_code)]
     pub const ARRAY: &str = "array";
     /// Live mirror copies: axes, and the point their planes pass through.
     pub const MIRROR_COPIES: &str = "mirror_copies";
@@ -1444,6 +1448,9 @@ pub fn export_stl(mesh: &Mesh, model: Mat4, path: &Path) -> Result<()> {
 /// its live mirror copies), all in the one file, as the model on screen.
 pub fn export_stl_placed(mesh: &Mesh, models: &[Mat4], path: &Path) -> Result<()> {
     nothing_to_export(mesh)?;
+    // The count is four bytes in the file; an array of a heavy mesh can ask for more than that.
+    let triangles = u32::try_from(mesh.triangle_count() * models.len())
+        .map_err(|_| "That is too many triangles for an STL file (4 billion). Lower the array's count.".to_owned())?;
     let io = |e: std::io::Error| format!("Could not write {}: {e}", path.display());
     let mut w = BufWriter::with_capacity(1 << 20, File::create(path).map_err(io)?);
     // Must not start with "solid", or readers that sniff the format by that
@@ -1452,8 +1459,7 @@ pub fn export_stl_placed(mesh: &Mesh, models: &[Mat4], path: &Path) -> Result<()
     let note = b"Exported from Sculpt (millimetres, Z up)";
     header[..note.len()].copy_from_slice(note);
     w.write_all(&header).map_err(io)?;
-    let triangles = mesh.triangle_count() * models.len();
-    w.write_all(&(triangles as u32).to_le_bytes()).map_err(io)?;
+    w.write_all(&triangles.to_le_bytes()).map_err(io)?;
     for model in models {
         let points: Vec<Vec3> = mesh.positions.iter().map(|&p| to_stl(model.transform_point3(p))).collect();
         let mirrored = Mat3::from_mat4(*model).determinant() < 0.0;

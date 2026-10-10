@@ -92,8 +92,10 @@ fn compute_radial(settings: &ArraySettings, points: &[Vec3], sizes: &[f32]) -> V
     let axis = axis_vector(settings.axis);
     // How far the object sits off the path's start: see the module remarks.
     let shift = -origin;
-    let full = settings.sweep >= 359.99;
-    let step = if full { 360.0 / count as f32 } else { settings.sweep / (count - 1) as f32 };
+    // Negative goes the other way round (see `ArraySettings::sweep`).
+    let direction = if settings.sweep < 0.0 { -1.0 } else { 1.0 };
+    let size = settings.sweep.abs();
+    let step = direction * if size >= 359.99 { 360.0 / count as f32 } else { size / (count - 1) as f32 };
 
     (0..count)
         .map(|i| {

@@ -13,6 +13,7 @@ pub mod ctx;
 pub mod draw;
 pub mod example;
 pub mod jobs;
+pub mod saved;
 pub mod scene;
 pub mod testing;
 pub mod theme;
@@ -22,6 +23,7 @@ pub mod view;
 pub use ctx::{Ctx, Env, Outbox, RadialChange};
 pub use draw::{Draw, Label, Look, Overlay, Preview, PreviewData, PreviewDraw, Run, Shape, Style};
 pub use jobs::{Baker, Job, JobCtx, Jobs};
+pub use saved::{Arrival, Saved};
 pub use scene::{
     Baked, Command, Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Receipt,
     Scene, Symmetry,

@@ -123,6 +123,7 @@ impl Running {
         println!("     {}", self.ui.status.0);
         say("the Unity sculpt is the document, with nothing unsaved", !self.unsaved());
         let before = self.kept();
+        let arrays = self.kept_arrays();
         println!(
             "     {} objects, {} meshes, {} triangles",
             before.objects.len(),
@@ -173,6 +174,12 @@ impl Running {
         for o in &scene.objects {
             println!("     symmetry of {:?}: {}", o.name, scene.symmetry(o.id).summary());
         }
+        say(
+            "the same live arrays, on the same objects",
+            self.kept_arrays() == arrays,
+        );
+        let held: Vec<_> = arrays.iter().flatten().map(|a| (a.settings.kind, a.settings.count, a.points.len())).collect();
+        println!("     {} live array(s): {held:?}", held.len());
         if after != before {
             println!("     before: {:?}\n     after:  {:?}", before.objects, after.objects);
         }
@@ -223,6 +230,9 @@ impl Running {
                 "where they were, linked, mirrored and each with its own symmetry as they were, under names of their own",
                 placed && linked && names.len() == 2 * count,
             );
+            // Each added object brings its own array, and the scene's are as they were.
+            let now = self.kept_arrays();
+            say("their live arrays come with them", now[..count] == arrays[..] && now[count..] == arrays[..]);
         }
         say(
             "the document is still the .sclp, now with unsaved work, and its look stayed",

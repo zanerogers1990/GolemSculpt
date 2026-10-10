@@ -32,6 +32,8 @@ pub trait Tool {
     fn radial(&self) -> Vec<RadialItem> { vec![] }            // hold-Space wheel tiles
     fn can_undo(&self, redo: bool) -> bool { false }          // own history, for the Undo / Redo buttons
     fn gizmo(&self) -> Option<GizmoTarget> { None }           // something of yours for the transform gizmo to sit on
+    fn save_object(&self, object: ObjectId) -> Option<Saved> { None }   // what the file keeps for an object
+    fn load_objects(&mut self, objects: Vec<(ObjectId, Saved)>, arrival: Arrival) {}   // a file's objects came in
     fn demo(&mut self, cx: &mut Ctx, what: &str) {}           // --demo-tool
 }
 ```
@@ -245,6 +247,73 @@ and `can_undo`. When that stack is empty the press falls through to the scene.
 undone. Keep the ids from your commit; in `frame`, an added object that no
 longer `exists`, or a mesh id that is back to the old one, means the user pressed
 Z: hand the scaffold back.
+
+## Keeping something in the scene's file
+
+A tool's scaffold is the tool's, not the scene's, so the file code knows nothing
+of it. Two hooks let a tool keep what it holds **for an object** in the `.sclp`
+all the same, and neither the toolkit nor the file code learns what is inside:
+
+```rust
+#[derive(Default)]
+pub struct Counter { counts: std::collections::BTreeMap<ObjectId, i32> }
+
+impl Tool for Counter {
+    // ... info and the rest ...
+    fn save_object(&self, object: ObjectId) -> Option<Saved> {
+        let count = self.counts.get(&object)?;                  // None: nothing to keep for this object
+        Some(Saved::fields([("count", (*count).into())]))
+    }
+
+    fn load_objects(&mut self, objects: Vec<(ObjectId, Saved)>, _arrival: Arrival) {
+        for (object, saved) in objects {
+            let Some(count) = saved.get("count").and_then(Saved::whole) else { continue };   // a stranger's input
+            self.counts.insert(object, count.clamp(2, 100));
+        }
+    }
+}
+```
+
+`crates/toolkit/tests/readme.rs` compiles and drives this one too.
+
+- **`Saved`** is the shapes JSON has (`Null`, `Bool`, `Number`, `Text`, `List`,
+  `Fields`) and nothing else. Build one with `Saved::fields([(name, value)])`,
+  `Saved::numbers(&[x, y, z])` and `.into()` from `bool`, `i32`, `f32`, `f64`,
+  `&str`; read one with `get(name)`, `number()`, `whole()`, `bool()`, `text()`,
+  `list()`, `array::<3>()`. Every reader says `None` for the wrong kind, and a
+  number that is not a number is no number. An `f32` is written as the shortest
+  decimal that reads back as the same `f32`.
+- **The name in the file is `Info::id`.** The app writes what `save_object`
+  returns into that object's entry of the file's JSON under the tool's id (the
+  Array tool's is `"array"`), asked of every tool for every object on every
+  save. A version of the app that has never heard of the id steps over the field,
+  and a file from before it has none; the format notes are above `SCENE_MAGIC` in
+  `src/io.rs`.
+- **Rows, not ids.** A file keeps objects by their row in the list, and `ObjectId`
+  is the scene's, so it is not the same one after a save and an open. The app
+  keeps the two together: you are asked about an id on the way out and handed
+  new ids on the way in. Keep to what is the object's own to the tool (an
+  array's settings and path); where the object stands is saved with the object.
+- **`load_objects`** is called on every tool each time a file comes in, after
+  the objects are in the scene, with an empty list when the file has nothing of
+  yours. `Arrival::Added` (Import) joined the file's objects to the scene: leave
+  everything else as it is. `Arrival::Replaced` (Open) took the place of the whole
+  scene, which Undo brings back as it was. Ids are never used again, so keep what
+  you hold for the objects that were there and they are found again when Undo
+  brings them back, and Redo brings the file's. What you must do on a
+  `Replaced` is end any history of your own: its steps are for objects that are no
+  longer there, and your Z would otherwise answer before the scene's, which holds
+  the Open.
+- **Treat what you are handed as a stranger's file.** A damaged value is skipped
+  or brought into range, never a reason to fail, hang or allocate: a count of a
+  billion, a point that is NaN, a million points, a kind you have never heard of.
+  Say what you accept and put it through the same clamping you use for anything
+  typed (the Array tool's `ArrayState::sanitized`).
+
+In tests, `bench.save_tool(&tool)` is what the app would write (one `Option<Saved>` per object,
+in list order), `bench.open(vec![(name, mesh)..])` opens a "file" (new objects in place of
+every object, one undo step, new ids) and `bench.load_tool(&mut tool, &ids, saved, arrival)`
+hands the tool what a file kept for them; `bench.undo_scene()` then takes the open back.
 
 ## Drawing
 
@@ -494,8 +563,12 @@ impl Tool for Dropper {
   (Measure does) or when the tool comes up.
 - **Previews in the scene's own material.** Preview meshes are lit clay or a
   shell; only `draw.copies` of a real object uses the scene material.
-- **Tool state in `.sclp` files and in the scene's undo history.** A scaffold
-  lives in the tool, is not saved, and has its own Z while the tool is up.
+- **A tool's state in the scene's undo history.** A scaffold lives in the tool
+  and has its own Z while the tool is up (it can be saved in the file: see
+  "Keeping something in the scene's file"), and the two histories are not
+  interleaved: the scene's Z answers when the tool's is empty or the tool is away.
+  Scene-wide settings of a tool (as opposed to what it keeps for an object) have no
+  place in the file yet.
 - **The Claude bridge** (`src/mcp.rs`) does not know hosted tools.
 
 One compiler rule from `crates/README.md` worth repeating: rustc 1.99 miscompiles
