@@ -13,6 +13,11 @@
 //!     which is what the shape looks like when triangles are no object.
 //!   - `instance`: an instance of the ball stands beside it from the start,
 //!     and shows the same refined mesh.
+//!   - `mirror`: the ball stands off the middle with its live mirror copy
+//!     beside it, and the refining strokes are drawn on the copy, through the
+//!     window's own pointer routines. Both sides have to show the detail:
+//!     where the strokes were drawn on the copy, and at the reflected place
+//!     on the ball.
 //!   - `undo`: the refining stroke is undone again, which has to give back
 //!     the stretched shape as it was.
 //!   - `live`: the refining stroke is fed to the app a few samples a frame,
@@ -25,10 +30,13 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use glam::{Vec2, Vec3};
+use winit::event::MouseButton;
+use winit::keyboard::ModifiersState;
 
 use super::Running;
 use crate::doc::Action;
 use crate::mesh::primitives::{self, Primitive};
+use crate::scene::MirrorCommand;
 use crate::sculpt::{Brush, PointerSample};
 
 /// Triangles of the ball the run starts from: few enough that each one can be
@@ -68,6 +76,9 @@ impl Running {
             self.doc.scene.active_mut().position = Vec3::new(0.0, -1.3, 0.0);
             self.act(Action::SelectObject(original));
         }
+        if what == "mirror" {
+            return self.dyntopo_demo_on_a_copy();
+        }
         self.sync_view();
 
         // The ball's centre and radius on screen: the strokes are laid out
@@ -97,6 +108,64 @@ impl Running {
             self.act(Action::Undo);
         }
         self.dyntopo_demo_frame_shape();
+    }
+
+    /// The `mirror` variant: the ball to one side, its live mirror copy on
+    /// the other, and two refining strokes pressed and dragged on the copy
+    /// the way the window would feed them.
+    fn dyntopo_demo_on_a_copy(&mut self) {
+        self.doc.scene.active_mut().position = Vec3::new(0.7, 0.0, 0.0);
+        self.act(Action::Mirror(MirrorCommand::Set(1)));
+        let bounds = self.doc.scene.bounds(&self.doc.mesh);
+        self.doc.camera.frame(bounds, self.view.size.x / self.view.size.y.max(1.0), false);
+        self.sync_view();
+        self.doc.sculptor.dyntopo.enabled = true;
+        self.input.inside = true;
+        self.input.mods = ModifiersState::empty();
+
+        // The copy's middle and radius on screen.
+        let copy = self.doc.scene.active().placed_matrix(1);
+        let on_screen = |p: Vec3| self.view.project(copy.transform_point3(p));
+        let (Some(centre), Some(top)) = (on_screen(Vec3::ZERO), on_screen(Vec3::Y * 0.5)) else { return };
+        let ball = centre.distance(top);
+        let strokes = [
+            (Brush::Inflate, 0.12, Vec2::new(-0.5, -0.35), Vec2::new(0.35, -0.45)),
+            (Brush::Clay, 0.6, Vec2::new(-0.45, 0.3), Vec2::new(0.4, 0.2)),
+        ];
+        for (brush, strength, from, to) in strokes {
+            self.dyntopo_demo_brush(brush, 0.22 * ball, strength);
+            let (from, to) = (centre + from * ball, centre + to * ball);
+            self.pointer_moved(from, None);
+            self.sync_view();
+            self.pointer_pressed(MouseButton::Left, None);
+            if !self.doc.sculptor.is_active() {
+                eprintln!("demo-dyntopo: the {} stroke began off the copy at {from}", brush.name());
+            }
+            for i in 1..=STROKE_SAMPLES {
+                self.pointer_moved(from.lerp(to, i as f32 / STROKE_SAMPLES as f32), None);
+                if i % 4 == 0 {
+                    self.dyntopo_demo_tick();
+                }
+            }
+            self.pointer_released(MouseButton::Left);
+        }
+        // The brush ring would be wherever the real pointer happens to be;
+        // leave it out of the picture.
+        self.input.inside = false;
+        self.sync_view();
+    }
+
+    /// What a frame does for a stroke under way, without the drawing: the
+    /// pointer samples that have come in go to the brush, and the normals
+    /// the next dabs read are brought up to date. A stroke fed all at once
+    /// would run into the brushes' ceiling of dabs per frame and stop short.
+    fn dyntopo_demo_tick(&mut self) {
+        let doc = &mut self.doc;
+        for sample in self.input.samples.drain(..) {
+            doc.sculptor.sample(&mut doc.mesh, &self.local, sample);
+        }
+        doc.sculptor.frame(&mut doc.mesh, &self.local, 1.0 / 60.0);
+        doc.mesh.flush_normals();
     }
 
     /// Once a frame: hands the `live` variant's stroke its next few samples,

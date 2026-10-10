@@ -141,8 +141,9 @@ else. It starts off, and the app remembers how you left it.
 - A stroke that added detail is one undo step like any other: undo takes the
   added triangles away again and redo puts them back.
 - Masked surface is left alone, and a new vertex takes its mask from the two
-  it was made between. Hidden parts are not refined. Instances share the
-  refined mesh. A mirrored stroke refines both sides.
+  it was made between. Hidden parts are not refined. Instances and live
+  mirror copies show the refined mesh, and a stroke drawn on one of them
+  refines under the pointer. A mirrored stroke refines both sides.
 - A quad-remeshed object stops being quads the first time a brush refines
   it (undoing that stroke brings them back): from then on its wireframe
   shows triangles, and OBJ export writes triangles.
@@ -785,7 +786,7 @@ cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic 
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
-sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | undo | live for more)
+sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
 sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"

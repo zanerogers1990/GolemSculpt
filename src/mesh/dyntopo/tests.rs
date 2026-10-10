@@ -1073,6 +1073,9 @@ fn the_brushes_that_deposit_or_carve_refine_and_the_others_do_not() {
             assert!(mesh.indices == triangles);
         }
     }
+    // Move and Pose hold vertex numbers from press to release: the mesh
+    // must be the same mesh all through their drags.
+    assert!(!dyntopo::refines(Brush::Move) && !dyntopo::refines(Brush::Pose));
     assert!(
         Brush::ALL
             .into_iter()
@@ -1484,6 +1487,89 @@ fn an_instance_sharing_the_mesh_shows_the_refined_mesh() {
     assert_sound(&mesh);
     sent.follow(&mut mesh);
     sent.assert_matches(&mesh, "after the stroke through the instance");
+}
+
+/// A live mirror copy is the object's own mesh drawn again through a
+/// reflected matrix, and a press on the copy sculpts through that matrix. A
+/// refining stroke begun there has to add its detail under the pointer, on
+/// the part of the mesh the copy shows there, and both sides have to show it.
+#[test]
+fn a_refining_stroke_begun_on_a_mirror_copy_lands_under_the_pointer() {
+    let mut mesh = fixture();
+    let mut scene = Scene::new("Ball");
+    let id = scene.active_id();
+    scene.active_mut().position = Vec3::new(1.0, 0.0, 0.0);
+    scene.active_mut().rotation = glam::Quat::from_rotation_y(0.4);
+    assert!(scene.set_mirror(id, 1, Vec3::ZERO));
+    let copy = scene.active().placed_matrix(1);
+    assert!(copy.determinant() < 0.0, "the copy is a reflection");
+    let mut camera = Camera::default();
+    camera.frame(scene.bounds(&mesh), SIZE.x / SIZE.y, false);
+    let view = camera.view(Vec2::ZERO, SIZE, camera.distance, 1.0);
+    let mut sent = Sent::new(&mut mesh);
+
+    // A path over the part of the copy that faces the camera, as places on
+    // the mesh and as the pixels they are drawn at through the copy.
+    let on_mesh: Vec<Vec3> = (0..=30)
+        .map(|i| {
+            let world = Vec3::new(-1.0 - 0.2 + 0.4 * i as f32 / 30.0, 0.1, 3.0);
+            let hit = scene.pick(world, Vec3::NEG_Z, &mesh).expect("the ray meets the copy");
+            assert_eq!((hit.id, hit.copy), (id, 1), "the copy is what is under the pointer");
+            copy.inverse().transform_point3(hit.pos)
+        })
+        .collect();
+    let pixel = |i: usize| view.project(copy.transform_point3(on_mesh[i])).unwrap();
+
+    // What a press on the copy does in the app: aim, then the copy's own view.
+    scene.aim_brush(id, 1);
+    assert_eq!(scene.brush_matrix(), copy);
+    let local = view.local_to(scene.brush_matrix());
+    let before = mesh.vertex_count();
+    let mut sculptor = refining_sculptor(Brush::Inflate, 0.08);
+    // Raising the surface only a little, so what is added stays by the path.
+    sculptor.settings.per_brush[Brush::Inflate.index()].strength = 0.1;
+    let sample = |i: usize| PointerSample { pos: pixel(i), pressure: None, time: i as f64 / 240.0 };
+    assert!(sculptor.begin(&mut mesh, &local, sample(0), false, false), "the press missed the copy");
+    for i in 1..on_mesh.len() {
+        sculptor.sample(&mut mesh, &local, sample(i));
+        if i % 4 == 0 {
+            sculptor.frame(&mut mesh, &local, 1.0 / 60.0);
+            sent.follow(&mut mesh);
+            sent.assert_matches(&mesh, "mid-stroke on the copy");
+        }
+    }
+    let delta = sculptor.end(&mut mesh, &local).expect("the stroke changed the mesh");
+    scene.release_brush();
+    sent.follow(&mut mesh);
+    sent.assert_matches(&mesh, "after the stroke on the copy");
+    assert!(mesh.vertex_count() > before + 100);
+    assert_closed_manifold(&mesh);
+    assert_sound(&mesh);
+
+    // Every vertex the stroke added is by the path, where the pointer went.
+    for v in before..mesh.vertex_count() {
+        let from_path = on_mesh.iter().map(|p| p.distance(mesh.positions[v])).fold(f32::MAX, f32::min);
+        assert!(from_path < 0.08 * 1.15 + 0.1, "vertex {v} was added {from_path} from the stroke");
+    }
+    // A ray down the middle of the stroke meets raised, refined surface on
+    // the copy, and the same on the object itself at the reflected place.
+    let middle = copy.transform_point3(on_mesh[15]);
+    let on_copy = scene.pick(Vec3::new(middle.x, middle.y, 3.0), Vec3::NEG_Z, &mesh).unwrap();
+    assert_eq!(on_copy.copy, 1);
+    assert!(on_copy.pos.z > middle.z + 0.002, "the stroke raised the surface under the pointer");
+    let own = scene.active().matrix();
+    let reflected = own.transform_point3(on_mesh[15]);
+    assert!((reflected.x + middle.x).abs() < 1e-5 && (reflected.y - middle.y).abs() < 1e-5);
+    let toward = own.transform_vector3(on_mesh[15]).normalize();
+    let on_object = scene.pick(reflected + toward, -toward, &mesh).unwrap();
+    assert_eq!((on_object.id, on_object.copy), (id, 0));
+    let hit = mesh.raycast(on_mesh[15] * 3.0, -on_mesh[15].normalize()).unwrap();
+    assert!(mesh.corners(hit.tri).iter().any(|&v| v as usize >= before), "the surface there was not refined");
+
+    // And it is one undo step, whichever side it was drawn on.
+    mesh.apply_delta(&delta, true);
+    assert_eq!(mesh.vertex_count(), before);
+    assert_sound(&mesh);
 }
 
 #[test]

@@ -7,8 +7,9 @@
 //! alone, so zooming in and shrinking the brush is how a sculptor asks for
 //! more detail, and nothing balloons outside the stroke. Only the brushes
 //! that deposit or carve refine (Standard, Clay, Crease, Inflate, Flatten,
-//! Layer). Move holds the vertices it grabbed at the press, Snake Hook is
-//! left out as in the Unity app, and Smooth and mask painting have nothing to
+//! Layer). Move and Pose hold the vertices they took hold of at the press
+//! until the release, so the mesh must not change under them; Snake Hook is
+//! left out as in the Unity app; and Smooth and mask painting have nothing to
 //! gain from more triangles.
 
 use glam::Vec3;
