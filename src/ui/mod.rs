@@ -582,7 +582,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
             });
         };
         row(ui, &[
-            ("Open...", Action::Open, "Open a saved sculpt (.sclp), in place of the scene or added to it (Ctrl+O)."),
+            ("Open...", Action::Open, "Open a saved sculpt (.sclp, or a .sculpt from the Unity app), in place of the scene or added to it (Ctrl+O)."),
             ("Save", Action::Save, "Save this sculpt (Ctrl+S)."),
             ("Save As...", Action::SaveAs, "Save under a new name (Ctrl+Shift+S)."),
         ]);
@@ -590,7 +590,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
             (
                 "Import...",
                 Action::Import,
-                "Add an .obj or .stl model to the scene. An STL comes in at its real size (millimetres, Z up); an OBJ is fitted to the first object's size. Either lands at the centre. A .sclp adds its objects where they were saved.",
+                "Add an .obj or .stl model to the scene. An STL comes in at its real size (millimetres, Z up); an OBJ is fitted to the first object's size. Either lands at the centre. A .sclp, or a .sculpt from the Unity app, adds its objects where they were saved.",
             ),
             (
                 "Export OBJ...",

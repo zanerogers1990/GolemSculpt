@@ -26,6 +26,7 @@ use crate::recent;
 use crate::render::DrawItem;
 use crate::scene::Scene;
 use crate::ui::question::Question;
+use crate::unity_import;
 
 /// How often the settings are compared with what is on disk.
 const SETTINGS_CHECK: Duration = Duration::from_secs(1);
@@ -110,6 +111,9 @@ impl Running {
             self.apply_details(&details);
             if let Some(path) = self.doc.path.clone() {
                 self.note_recent(&path, false);
+            }
+            if let Some(note) = unity_import::status_note(&details, true) {
+                self.status(note, true);
             }
         }
         self.mark_saved();
@@ -241,13 +245,16 @@ impl Running {
     /// Save, or Save As: asks where if the scene has no file yet. Returns
     /// whether the scene was written.
     pub(super) fn save_action(&mut self, save_as: bool) -> bool {
-        let known = self.doc.path.clone().filter(|_| !save_as);
+        // A sculpt from the Unity app is never saved over: Save asks where
+        // its .sclp should go, as Save As does, offering the same name.
+        let known = self.doc.path.clone().filter(|path| !save_as && !unity_import::is_unity(path));
         let path = known.or_else(|| {
             let mut dialog = rfd::FileDialog::new().set_title("Save Sculpt").add_filter("Sculpt", &["sclp"]);
             // Save As starts from the file the scene already has.
             dialog = match &self.doc.path {
                 Some(current) => {
-                    let dialog = dialog.set_file_name(file_name(current));
+                    let unity = unity_import::is_unity(current);
+                    let dialog = dialog.set_file_name(if unity { unity_import::save_name(current) } else { file_name(current) });
                     match current.parent() {
                         Some(folder) => dialog.set_directory(folder),
                         None => dialog,
@@ -332,7 +339,12 @@ impl Running {
             shading.apply(&mut self.doc.opts);
             // The picture is looked up by name: the list differs between
             // computers. One that is not here leaves the matcap alone.
-            let found = self.ui.assets.matcaps.iter().position(|m| format!("{}/{}", m.category, m.name) == shading.matcap);
+            let matcaps = &self.ui.assets.matcaps;
+            let found = matcaps
+                .iter()
+                .position(|m| format!("{}/{}", m.category, m.name) == shading.matcap)
+                // A sculpt from the Unity app names the picture alone, without its folder.
+                .or_else(|| matcaps.iter().position(|m| m.name.eq_ignore_ascii_case(&shading.matcap)));
             if let Some(index) = found {
                 self.act(Action::Matcap(index));
                 self.doc.opts.matcap_on = shading.matcap_on;
@@ -348,6 +360,7 @@ impl Running {
             self.doc.sculptor.settings.radial = mirror.radial.sanitized();
             self.doc.opts.symmetry_guides = mirror.guides;
         }
+        unity_import::restore_dynamic_topology(details, &mut self.doc.sculptor.dyntopo);
         let view = details.get::<SavedView>(io::slot::CAMERA);
         if !view.is_some_and(|view| self.doc.camera.restore_view(&view)) {
             self.frame_view();
@@ -507,9 +520,15 @@ impl Running {
 
     // ---- opening, importing
 
-    /// Open...: pick a `.sclp`, then say how it should come in.
+    /// Open...: pick a `.sclp` (or a `.sculpt` from the Unity app), then say
+    /// how it should come in.
     pub(super) fn open_action(&mut self) {
-        let pick = rfd::FileDialog::new().set_title("Open Sculpt").add_filter("Sculpt", &["sclp"]).pick_file();
+        let pick = rfd::FileDialog::new()
+            .set_title("Open Sculpt")
+            .add_filter("Sculpts", &["sclp", unity_import::EXTENSION])
+            .add_filter("Sculpt", &["sclp"])
+            .add_filter("Unity app sculpt", &[unity_import::EXTENSION])
+            .pick_file();
         if let Some(path) = pick {
             self.open_chosen(path);
         }
@@ -556,9 +575,10 @@ impl Running {
     pub(super) fn import_action(&mut self) {
         let pick = rfd::FileDialog::new()
             .set_title("Import")
-            .add_filter("Models and sculpts", &["obj", "stl", "sclp"])
+            .add_filter("Models and sculpts", &["obj", "stl", "sclp", unity_import::EXTENSION])
             .add_filter("Models", &["obj", "stl"])
             .add_filter("Sculpt", &["sclp"])
+            .add_filter("Unity app sculpt", &[unity_import::EXTENSION])
             .pick_file();
         if let Some(path) = pick {
             self.load(path, false);
@@ -595,7 +615,9 @@ impl Running {
         self.doc.mesh_replaced = true;
         self.sync_view();
         self.apply_details(&details);
-        self.status(format!("Opened {} ({})", path.display(), how_many(count)), true);
+        // A sculpt from the Unity app says so, and what it could not bring.
+        let note = unity_import::status_note(&details, true).map_or(String::new(), |note| format!(". {note}"));
+        self.status(format!("Opened {} ({}){note}", path.display(), how_many(count)), true);
         self.doc.path = Some(path.clone());
         self.mark_saved();
         // Its picture is the one from its last save; one is only taken now
@@ -612,13 +634,14 @@ impl Running {
             Err(e) => return self.status(e, false),
         };
         let count = saved.objects.len();
+        let note = unity_import::status_note(&saved.details, false).map_or(String::new(), |note| format!(". {note}"));
         self.edit_scene(|scene, slot| {
             append(scene, slot, saved);
             true
         });
         self.doc.mesh_replaced = true;
         self.frame_view();
-        self.status(format!("Added {} from {}", how_many(count), file_name(&path)), true);
+        self.status(format!("Added {} from {}{note}", how_many(count), file_name(&path)), true);
     }
 
     fn add_model(&mut self, path: PathBuf) {
@@ -666,6 +689,8 @@ impl Running {
         self.ui.recent.restore(Vec::new(), Some(folder.join("thumbnails")));
         match what {
             "play" => self.files_play(&folder),
+            // The same for a sculpt from the Unity app named on the command line (app/unity.rs).
+            "unity" => self.unity_play(&folder),
             "ask-exit" => self.ui.graph.ask(Question::Exit),
             "ask-open" | "ask-open-clean" => {
                 let path = folder.join("dragon head.sclp");

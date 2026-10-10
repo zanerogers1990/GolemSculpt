@@ -582,6 +582,22 @@ pair; after that they can be moved apart and the joints stay on them.
   one unit across), welded into one connected surface, with inside-out
   triangles turned the right way. An OBJ is fitted to the size of the first
   object, as in the Unity app.
+- **Sculpts from the Unity app** (`.sculpt`) open with **Open** and
+  **Import** just as a `.sclp` does, and show in Recent. They arrive the same
+  way round and the same size: every object with its mesh, mask, hidden
+  faces, name, place and visibility; instances and live mirrors; the
+  material and finish, lighting, HDRI, background and effects; the camera
+  view; and the object that was selected, whose mirror axes and radial
+  symmetry become the scene's. Dynamic topology is set as the file left it.
+  A live array comes in as linked copies of its object, where the array had
+  them. The status line says what a file could not bring: an array's handles,
+  each object's separate symmetry, the Unity app's brush settings.
+  **The Unity file is never written to.** Save on such a scene asks where to
+  put a `.sclp`, offering the same name, and that `.sclp` is the document
+  from then on. A file that is damaged, or from a newer Unity format than
+  this app knows, is refused with a message and the scene stays as it was.
+  How the Unity app's axes map onto this app's is set out in
+  `src/unity_import.rs`.
 - **Export OBJ / Export STL for Printing** write the selected object where it
   stands in the scene, with its position, rotation and scale baked in, so an
   instance exports as its own placed copy. The STL is binary, in millimetres,
@@ -857,6 +873,9 @@ sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 fr
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-exit | ask-open | ask-open-clean | play
+sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
+sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
+SCULPT_UNITY_SAMPLES=folder cargo test unity_import -- --nocapture   # the Unity sculpt reader against every .sculpt in a folder, with what each holds (they are not in the repository)
 ```
 
 A run started with any `--option` is a scripted one: it neither reads nor

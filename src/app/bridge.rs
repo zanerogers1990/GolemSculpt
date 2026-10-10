@@ -744,8 +744,8 @@ impl Running {
 
     fn open_file(&mut self, args: &Value) -> Result<String, String> {
         let (path, extension) = Self::path(args)?;
-        if !matches!(extension.as_str(), "sclp" | "obj" | "stl") {
-            return Err("Sculpt opens .sclp files and imports .obj and .stl.".into());
+        if !matches!(extension.as_str(), "sclp" | "sculpt" | "obj" | "stl") {
+            return Err("Sculpt opens .sclp files (and .sculpt files from the Unity app) and imports .obj and .stl.".into());
         }
         if !path.is_file() {
             return Err(format!("There is no file at {}.", path.display()));
