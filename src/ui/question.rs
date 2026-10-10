@@ -1,5 +1,6 @@
 //! The questions the app asks before something that could cost work: delete
-//! this object, close with unsaved changes, open a file over the scene.
+//! this object, close with unsaved changes, open a file over the scene, and
+//! at start-up, whether to bring back the copy a crash left behind.
 //!
 //! One dialog serves them all (the Unity app's is `UIFactory.ShowModal`): the
 //! window dims, the question is put in plain words, and each answer is a
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 use egui::{Id, vec2};
 
 use super::theme::{self, ButtonStyle};
-use crate::doc::{Action, Doc, OpenHow};
+use crate::doc::{Action, Doc, OpenHow, Recover};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Question {
@@ -23,6 +24,12 @@ pub enum Question {
     /// A `.sclp` file was chosen: open it in place of the scene, or add its
     /// objects? `unsaved` says the scene has changes that are not saved.
     Open { path: PathBuf, unsaved: bool },
+    /// At start-up: the app did not close properly last time and a copy of
+    /// the work was kept. `when` is when ("today at 14:35"), `what` what it
+    /// holds; `stopped` says it was made as the app stopped on a fault, and
+    /// `earlier` is when the last regular copy before it was made, if there
+    /// is one to offer instead. (See app/recovery.rs.)
+    Recover { when: Option<String>, what: String, stopped: bool, earlier: Option<String> },
 }
 
 /// One answer: its button, and what it sets in motion. `None` only takes the
@@ -43,11 +50,34 @@ impl Choice {
     fn cancel() -> Choice {
         Choice { label: "Cancel", tint: None, action: None }
     }
+
+    /// Cancel for a question that will be asked again: nothing is given up.
+    fn not_now() -> Choice {
+        Choice { label: "Not Now", tint: None, action: None }
+    }
 }
 
 /// A file's name without its folders, for a sentence.
 fn file_name(path: &std::path::Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// The question about a copy a crash left behind (`Question::Recover`).
+fn recover_words(when: Option<&str>, what: &str, stopped: bool, earlier: Option<&str>) -> String {
+    let when = when.map_or(String::new(), |when| format!(" {when}"));
+    let kept = if stopped {
+        let earlier = earlier.map_or(String::new(), |at| format!(" There is also an earlier copy, from {at}."));
+        format!(
+            "It kept a copy of your work as it stopped,{when} ({what}). \
+             The very last change may be incomplete in it.{earlier}"
+        )
+    } else {
+        format!("It kept a copy of your work,{when} ({what}).")
+    };
+    format!(
+        "GolemSculpt did not close properly last time. {kept} Restore it? \
+         Not Now keeps the copy and asks again next time."
+    )
 }
 
 impl Question {
@@ -74,6 +104,9 @@ impl Question {
             Question::Open { path, unsaved: false } => {
                 format!("Open \"{}\" in place of the scene you have, or add its objects to it?", file_name(path))
             }
+            Question::Recover { when, what, stopped, earlier } => {
+                recover_words(when.as_deref(), what, *stopped, earlier.as_deref())
+            }
         })
     }
 
@@ -99,6 +132,16 @@ impl Question {
                 };
                 choices.push(Choice::new("Add Its Objects to This Scene", None, open(OpenHow::Add)));
                 choices.push(Choice::cancel());
+                choices
+            }
+            Question::Recover { stopped, earlier, .. } => {
+                let mut choices = vec![Choice::new("Restore It", safe, Action::Recover(Recover::Newest))];
+                if *stopped && earlier.is_some() {
+                    let earlier = Action::Recover(Recover::Earlier);
+                    choices.push(Choice::new("Restore the Earlier Copy Instead", None, earlier));
+                }
+                choices.push(Choice::new("Discard It", lossy, Action::Recover(Recover::Discard)));
+                choices.push(Choice::not_now());
                 choices
             }
         }
@@ -157,5 +200,51 @@ impl Question {
             }
         });
         picked.map(|index| choices.into_iter().nth(index).and_then(|choice| choice.action))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels(question: &Question) -> Vec<&'static str> {
+        question.choices().iter().map(|choice| choice.label).collect()
+    }
+
+    const WHEN: &str = "today at 14:35";
+    const WHAT: &str = "\"dragon head.sclp\", 3 objects, 2.1 million triangles";
+
+    fn recover(stopped: bool, earlier: Option<&str>) -> Question {
+        Question::Recover {
+            when: Some(WHEN.to_owned()),
+            what: WHAT.to_owned(),
+            stopped,
+            earlier: earlier.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_question_about_a_copy_restores_on_enter_and_gives_nothing_up_on_esc() {
+        let question = recover(false, None);
+        assert_eq!(labels(&question), ["Restore It", "Discard It", "Not Now"]);
+        assert_eq!(question.default_action(), Some(Action::Recover(Recover::Newest)), "Enter restores");
+        let last = question.choices().pop().unwrap();
+        assert!(last.action.is_none(), "Esc is Not Now: it neither restores nor discards");
+        let text = recover_words(Some(WHEN), WHAT, false, None);
+        assert!(text.contains("did not close properly") && text.contains("today at 14:35"));
+        assert!(text.contains("dragon head.sclp") && !text.contains("incomplete"));
+    }
+
+    #[test]
+    fn a_copy_made_as_the_app_stopped_says_so_and_offers_the_one_before_it() {
+        let question = recover(true, Some("today at 14:32"));
+        assert_eq!(labels(&question), ["Restore It", "Restore the Earlier Copy Instead", "Discard It", "Not Now"]);
+        let text = recover_words(Some(WHEN), WHAT, true, Some("today at 14:32"));
+        assert!(text.contains("as it stopped") && text.contains("may be incomplete"));
+        assert!(text.contains("earlier copy, from today at 14:32"));
+        // With no regular copy before it there is nothing else to offer.
+        let alone = recover(true, None);
+        assert_eq!(labels(&alone), ["Restore It", "Discard It", "Not Now"]);
+        assert!(!recover_words(None, WHAT, true, None).contains("earlier copy"));
     }
 }

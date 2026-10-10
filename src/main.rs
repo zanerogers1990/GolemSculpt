@@ -16,6 +16,7 @@ mod mesh;
 mod prefs;
 mod quadremesh;
 mod recent;
+mod recovery;
 mod remesh;
 mod render;
 mod scene;
@@ -30,6 +31,14 @@ mod unity_import;
 mod util;
 
 use std::path::PathBuf;
+
+// A panic has to unwind, not abort. `[profile.release]` in Cargo.toml says
+// what stands on that; this stops a build that would quietly switch it off.
+#[cfg(panic = "abort")]
+compile_error!(
+    "build with panic = \"unwind\": a panic in a tool's job has to come back as an error, \
+     and one on the interface thread has to reach the recovery copy (see Cargo.toml)"
+);
 
 /// A windowed app has no console of its own; borrow the launching terminal's
 /// so command-line modes can print.
@@ -62,7 +71,11 @@ fn main() {
     if !args.is_empty() {
         attach_console();
     }
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    // The log goes beside the settings, so a scripted run (any `--option`)
+    // writes none unless it was given a settings folder of its own.
+    let home = prefs::Home::for_run(args.iter().any(|a| a == "--screenshot"));
+    recovery::start_log(home.folder().filter(|_| home.writable()));
+    recovery::Logger::install();
 
     if let Some(i) = args.iter().position(|a| a == "--bench") {
         // Optional triangle counts after the flag, e.g. `--bench 1000000`.
@@ -148,6 +161,7 @@ fn main() {
 
     if let Err(e) = app::run(opts) {
         eprintln!("{e}");
+        recovery::log(&format!("The app could not start: {e}"));
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
             .set_title("GolemSculpt")

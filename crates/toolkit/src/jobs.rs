@@ -153,7 +153,10 @@ impl Jobs {
         let slot = result.clone();
         let run = move || {
             // A bug in the work must not take the window with it, nor leave
-            // the tool waiting for ever.
+            // the tool waiting for ever. This only holds while the app is
+            // built to unwind on a panic (`[profile.release]` in the top
+            // Cargo.toml): with `panic = "abort"` the panic ends the whole
+            // program before it ever gets back here.
             let outcome = catch_unwind(AssertUnwindSafe(|| work(&cx)))
                 .unwrap_or_else(|_| Err(format!("{} stopped unexpectedly.", cx.shared.label)));
             *lock(&slot) = Some(outcome);

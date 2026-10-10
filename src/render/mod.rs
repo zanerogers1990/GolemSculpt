@@ -105,6 +105,23 @@ impl Gpu {
         })
     }
 
+    /// Has the device leave word with `faults` of an error nothing caught
+    /// and of the device being lost. Left to itself wgpu answers the first
+    /// with a panic wherever it happens to be standing, and says nothing of
+    /// the second until something else fails. These callbacks may run on
+    /// any thread and cannot touch the scene, so they only note what
+    /// happened; the app finds the note between events, when the scene is
+    /// whole, keeps a copy of it and closes (see app/recovery.rs).
+    pub fn report_faults_to(&self, faults: crate::recovery::Faults) {
+        let errors = faults.clone();
+        self.device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            errors.report(fault_words(&error), &error.to_string());
+        }));
+        self.device.set_device_lost_callback(move |reason, message| {
+            faults.report("The graphics card stopped answering", &format!("device lost ({reason:?}) {message}"));
+        });
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -116,6 +133,16 @@ impl Gpu {
 
     pub fn max_texture_side(&self) -> usize {
         self.device.limits().max_texture_dimension_2d as usize
+    }
+}
+
+/// A graphics error in words for the user: which of the three kinds it is.
+/// (What wgpu itself said goes to the log.)
+fn fault_words(error: &wgpu::Error) -> &'static str {
+    match error {
+        wgpu::Error::OutOfMemory { .. } => "The graphics card ran out of memory",
+        wgpu::Error::Validation { .. } => "The graphics card refused a drawing command",
+        wgpu::Error::Internal { .. } => "The graphics driver reported a fault",
     }
 }
 

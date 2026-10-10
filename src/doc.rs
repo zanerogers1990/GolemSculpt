@@ -156,6 +156,18 @@ pub enum OpenHow {
     Add,
 }
 
+/// What to do with the copy of the scene a crash left behind (see
+/// app/recovery.rs).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Recover {
+    /// Bring back the newest copy.
+    Newest,
+    /// Bring back the last regular copy, not the one made as the app stopped.
+    Earlier,
+    /// Leave it out; its files go once this run has saved or closed.
+    Discard,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Undo,
@@ -195,6 +207,8 @@ pub enum Action {
     OpenAs(PathBuf, OpenHow),
     /// Close the app, saving the scene first if `save` says so.
     Quit { save: bool },
+    /// The answer to the question about a copy a crash left behind.
+    Recover(Recover),
     ExportObj,
     ExportStl,
     Remesh,

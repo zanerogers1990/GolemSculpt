@@ -47,11 +47,21 @@ impl Home {
         if let Some(dir) = std::env::var_os("SCULPT_SETTINGS_DIR").filter(|d| !d.is_empty()) {
             return Home { dir: Some(PathBuf::from(dir)), writable: !screenshot };
         }
-        let scripted = screenshot || std::env::args().skip(1).any(|arg| arg.starts_with("--"));
-        if scripted {
+        if screenshot || scripted() {
             return Home::nowhere();
         }
         Home { dir: user_dir(), writable: true }
+    }
+
+    /// The folder itself, for what else is kept beside the settings: the
+    /// recovery copies and the log (`recovery.rs`).
+    pub fn folder(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
+    /// Whether this run may write in that folder.
+    pub fn writable(&self) -> bool {
+        self.writable
     }
 
     /// Remembers nothing and writes nothing.
@@ -95,6 +105,12 @@ impl Home {
         let text = serde_json::to_string_pretty(prefs).map_err(|e| format!("Could not write the settings: {e}"))?;
         crate::io::replace_file(&file, |w| w.write_all(text.as_bytes()))
     }
+}
+
+/// Whether this run was started with any `--option`: a scripted one, which
+/// keeps out of the user's own folder (see the top of this file).
+pub fn scripted() -> bool {
+    std::env::args().skip(1).any(|arg| arg.starts_with("--"))
 }
 
 /// `%APPDATA%\Sculpt`; elsewhere the usual per-user config folder.

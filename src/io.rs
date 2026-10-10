@@ -1501,7 +1501,7 @@ pub fn export_file_name(object: &str, extension: &str) -> String {
 
 /// Local time as year-month-day_hourminutesecond.
 #[cfg(windows)]
-fn time_stamp() -> String {
+pub(crate) fn time_stamp() -> String {
     #[repr(C)]
     #[derive(Default)]
     struct SystemTime {
@@ -1526,7 +1526,7 @@ fn time_stamp() -> String {
 
 /// Everywhere else there is no clock without a crate, so UTC from the epoch.
 #[cfg(not(windows))]
-fn time_stamp() -> String {
+pub(crate) fn time_stamp() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());

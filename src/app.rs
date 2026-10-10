@@ -4,6 +4,7 @@
 //! every one of them is fed to the stroke, so a slow frame never loses part
 //! of the path or its pen pressure.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -38,6 +39,7 @@ mod live_copies;
 mod masked;
 mod mirror_copies;
 mod pose;
+mod recovery;
 mod selection;
 mod spheres;
 mod symmetry;
@@ -210,6 +212,8 @@ struct Running {
     recording: recording::State,
     /// Settings, recent files and whether the scene has unsaved work.
     files: files::State,
+    /// The copies kept against a crash (see app/recovery.rs).
+    recovery: recovery::State,
     args: Args,
 }
 
@@ -223,7 +227,8 @@ pub struct App {
 pub fn run(args: Args) -> Result<(), String> {
     let event_loop = EventLoop::new().map_err(|e| format!("Could not start the event loop: {e}"))?;
     // A one-frame screenshot run would only take the port from the real app.
-    let bridge = if args.screenshot.is_none() && !args.records() { bridge::start(event_loop.create_proxy()) } else { None };
+    let scripted = args.screenshot.is_some() || args.records() || recovery::checking();
+    let bridge = if scripted { None } else { bridge::start(event_loop.create_proxy()) };
     let mut app = App { args, running: None, error: None, bridge };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     app.error.map_or(Ok(()), Err)
@@ -233,40 +238,82 @@ fn srgb_to_linear(c: [f32; 3]) -> [f32; 3] {
     c.map(|v| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) })
 }
 
+impl App {
+    /// Runs one call of the event loop's. A panic anywhere under it (a bug
+    /// in a brush, a tool, the interface) unwinds to here instead of ending
+    /// the program where it stood; by then nothing is still at work on the
+    /// scene, so what can be kept of it is written to a recovery copy before
+    /// the app closes. Everything the app does on the interface thread runs
+    /// under one of these.
+    fn guarded(&mut self, call: impl FnOnce(&mut App)) {
+        if catch_unwind(AssertUnwindSafe(|| call(self))).is_err() {
+            recovery::stop_after_panic(self.running.as_mut());
+        }
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.running.is_some() {
             return;
         }
-        match Running::new(event_loop, self.args.clone()) {
-            Ok(running) => self.running = Some(running),
+        self.guarded(|app| match Running::new(event_loop, app.args.clone()) {
+            Ok(running) => app.running = Some(running),
             Err(e) => {
-                self.error = Some(e);
+                app.error = Some(e);
                 event_loop.exit();
             }
-        }
+        });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        if let Some(running) = &mut self.running {
-            running.on_event(event_loop, event);
-        }
+        self.guarded(|app| {
+            if let Some(running) = &mut app.running {
+                running.on_event(event_loop, event);
+            }
+        });
     }
 
     /// The Claude bridge woke the loop: it has requests to run.
     fn user_event(&mut self, event_loop: &ActiveEventLoop, _: ()) {
-        if let (Some(bridge), Some(running)) = (&self.bridge, &mut self.running) {
-            bridge.pump(running, event_loop);
-        }
+        self.guarded(|app| {
+            if let (Some(bridge), Some(running)) = (&app.bridge, &mut app.running) {
+                bridge.pump(running, event_loop);
+            }
+        });
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.guarded(|app| app.before_waiting(event_loop));
+    }
+
+    /// The loop is closing, whichever way it was asked to: the last chance
+    /// to write the settings. This is the app closing properly, so the
+    /// recovery copies go: the next start has nothing to ask about.
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.guarded(|app| {
+            if let Some(running) = &mut app.running {
+                running.save_prefs();
+                running.recovery_exit();
+            }
+        });
+    }
+}
+
+impl App {
+    /// Between batches of events: closes if told to, and says when the next
+    /// frame is wanted.
+    fn before_waiting(&mut self, event_loop: &ActiveEventLoop) {
         let Some(running) = &mut self.running else { return };
+        // The graphics card reported a fault: a copy of the scene, and out.
+        running.stop_on_graphics_fault();
         // The question about unsaved work was answered with a way to close.
         if running.quitting() {
             event_loop.exit();
             return;
         }
+        // Every few minutes, a copy of unsaved work against a crash.
+        let copy_at = running.recovery_tick();
         let now = Instant::now();
         if running.repaint_at.is_some_and(|t| t <= now) {
             running.repaint_at = None;
@@ -275,19 +322,15 @@ impl ApplicationHandler for App {
         if running.redraw || running.busy() {
             running.window.request_redraw();
             event_loop.set_control_flow(ControlFlow::Wait);
-        } else if let Some(t) = running.repaint_at {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(t));
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
         }
-    }
-
-    /// The loop is closing, whichever way it was asked to: the last chance
-    /// to write the settings.
-    fn exiting(&mut self, _: &ActiveEventLoop) {
-        if let Some(running) = &mut self.running {
-            running.save_prefs();
-        }
+        // Whichever comes first: the next frame that is wanted, or the next
+        // look at whether a copy is due (which needs no frame).
+        let wake = match (running.repaint_at, copy_at) {
+            (Some(frame), Some(copy)) => Some(frame.min(copy)),
+            (frame, copy) => frame.or(copy),
+        };
+        event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 }
 
@@ -302,7 +345,7 @@ impl Running {
         };
         // A screenshot run opens for a frame while the user may be typing
         // somewhere else: it must not take the keyboard from them.
-        if args.screenshot.is_some() || args.records() {
+        if args.screenshot.is_some() || args.records() || recovery::checking() {
             attrs = attrs.with_active(false);
         }
         let window = Arc::new(
@@ -310,6 +353,9 @@ impl Running {
         );
         disable_pen_gestures(&window);
         let gpu = pollster::block_on(Gpu::new(window.clone()))?;
+        let recovery = recovery::State::new(args.screenshot.is_some());
+        // From here on a fault of the graphics card's is noted, not a panic.
+        gpu.report_faults_to(recovery.faults.clone());
 
         let egui_ctx = egui::Context::default();
         theme::install(&egui_ctx);
@@ -420,6 +466,7 @@ impl Running {
             flash: Default::default(),
             recording: Default::default(),
             files: files::State::new(args.screenshot.is_some()),
+            recovery,
             args,
         };
         running.scene_changed();
@@ -488,6 +535,9 @@ impl Running {
         // first frames (a screenshot is taken in them).
         running.flash.startup(running.args.demo_flash.then(|| running.doc.scene.active_id()));
         running.recording_startup();
+        // Last, over whatever the start-up above put on screen: the question
+        // about a copy of the work that an earlier run left behind.
+        running.recovery_start();
         Ok(running)
     }
 
@@ -497,7 +547,10 @@ impl Running {
 
     /// True while something needs a frame every refresh without new input.
     fn busy(&self) -> bool {
-        self.doc.sculptor.is_active() || self.doc.camera.is_animating() || self.args.screenshot.is_some()
+        self.doc.sculptor.is_active()
+            || self.doc.camera.is_animating()
+            || self.args.screenshot.is_some()
+            || self.recovery_script_running()
     }
 
     /// Whether the pointer is over a panel (or a panel widget is being
@@ -1180,6 +1233,7 @@ impl Running {
             Action::OpenRecent(path) => self.open_recent(path),
             Action::OpenAs(path, how) => self.open_as(path, how),
             Action::Quit { save } => self.quit(save),
+            Action::Recover(answer) => self.recover(answer),
             Action::ExportObj => {
                 let name = self.doc.scene.active().name.clone();
                 let file = io::export_file_name(&name, "obj");
@@ -1550,6 +1604,8 @@ impl Running {
         self.tools_after_ui();
         // Now and then, writes the settings if they have changed.
         self.files_frame();
+        // The steps of a scripted check of recovery, if this run is one.
+        self.recovery_frame();
 
         // Send the mesh changes: a whole mesh if it is new or was replaced,
         // otherwise only the vertex ranges the brush touched.

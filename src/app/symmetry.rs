@@ -129,7 +129,7 @@ impl Running {
 
     /// One scripted Clay stroke on the active object between two places in
     /// the world (each is pulled onto the object's surface along the view).
-    fn symmetry_demo_stroke(&mut self, from: Vec3, to: Vec3) {
+    pub(super) fn symmetry_demo_stroke(&mut self, from: Vec3, to: Vec3) {
         self.sync_view();
         let settings = &mut self.doc.sculptor.settings;
         (settings.brush, settings.mask_mode) = (Brush::Clay, false);

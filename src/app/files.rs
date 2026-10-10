@@ -33,14 +33,17 @@ use crate::unity_import;
 /// How often the settings are compared with what is on disk.
 const SETTINGS_CHECK: Duration = Duration::from_secs(1);
 
+/// Where the scene stands in its own history: steps ever recorded, steps to
+/// undo, steps to redo. Two marks that differ mean the scene has changed.
+pub(super) type Mark = (u64, usize, usize);
+
 pub(super) struct State {
     home: Home,
     /// The settings as last written or read, to tell when they have changed.
     kept: Prefs,
     next_check: Instant,
-    /// The undo history as it stood when the scene was last saved or opened:
-    /// steps ever recorded, steps to undo, steps to redo.
-    clean: (u64, usize, usize),
+    /// The scene's mark when it was last saved or opened.
+    clean: Mark,
     /// The user has said the app may close.
     quit: bool,
 }
@@ -202,7 +205,11 @@ impl Running {
 
     // ---- unsaved work, closing
 
-    fn history_mark(&self) -> (u64, usize, usize) {
+    /// The scene's mark now. This one function is what "the scene has
+    /// changed" means, for the question about unsaved work and for the
+    /// recovery copies (app/recovery.rs) alike: a change that should count
+    /// for both has to move it.
+    pub(super) fn history_mark(&self) -> Mark {
         let (undo, redo) = self.doc.history.steps();
         (self.doc.history.edits, undo, redo)
     }
@@ -260,8 +267,9 @@ impl Running {
         let known = self.doc.path.clone().filter(|path| !save_as && !unity_import::is_unity(path));
         let path = known.or_else(|| {
             let mut dialog = rfd::FileDialog::new().set_title("Save Sculpt").add_filter("Sculpt", &["sclp"]);
-            // Save As starts from the file the scene already has.
-            dialog = match &self.doc.path {
+            // Save As starts from the file the scene already has; a scene
+            // restored after a crash, from the file it was a copy of.
+            dialog = match &self.doc.path.clone().or_else(|| self.recovered_document()) {
                 Some(current) => {
                     let unity = unity_import::is_unity(current);
                     let dialog = dialog.set_file_name(if unity { unity_import::save_name(current) } else { file_name(current) });
@@ -295,38 +303,49 @@ impl Running {
     /// is only replaced once the new one is whole.
     pub(super) fn save_scene(&mut self, path: &Path) -> io::Result<()> {
         {
-            let scene = &self.doc.scene;
-            let mut ids: Vec<u64> = Vec::new();
-            let mut objects = Vec::new();
-            for o in &scene.objects {
-                let mesh = ids.iter().position(|&id| id == o.mesh).unwrap_or_else(|| {
-                    ids.push(o.mesh);
-                    ids.len() - 1
-                });
-                objects.push(io::SavedObject {
-                    name: o.name.clone(),
-                    visible: o.visible,
-                    mesh,
-                    position: o.position,
-                    rotation: o.rotation,
-                    scale: o.scale,
-                });
-            }
-            let meshes: Vec<&Mesh> = ids.iter().filter_map(|&id| scene.mesh(id, &self.doc.mesh)).collect();
-            if meshes.len() != ids.len() {
-                return Err("The scene is missing a mesh; nothing was saved.".into());
-            }
-            let active = scene.index_of(scene.active_id()).unwrap_or(0);
+            let (meshes, objects, active) = self.scene_for_file()?;
             io::save_scene_with(&meshes, &objects, active, &self.details(), path)?;
         }
         self.mark_saved();
         self.note_recent(path, true);
+        // The work is in a file of the user's: the recovery copies have had their day.
+        self.recovery_saved();
         Ok(())
+    }
+
+    /// The scene as a file holds it: each mesh once, the objects naming
+    /// theirs by number (so instances keep sharing one), and the row of the
+    /// active object. Only reads the scene; a recovery copy is written from
+    /// the same (app/recovery.rs).
+    pub(super) fn scene_for_file(&self) -> io::Result<(Vec<&Mesh>, Vec<io::SavedObject>, usize)> {
+        let scene = &self.doc.scene;
+        let mut ids: Vec<u64> = Vec::new();
+        let mut objects = Vec::new();
+        for o in &scene.objects {
+            let mesh = ids.iter().position(|&id| id == o.mesh).unwrap_or_else(|| {
+                ids.push(o.mesh);
+                ids.len() - 1
+            });
+            objects.push(io::SavedObject {
+                name: o.name.clone(),
+                visible: o.visible,
+                mesh,
+                position: o.position,
+                rotation: o.rotation,
+                scale: o.scale,
+            });
+        }
+        let meshes: Vec<&Mesh> = ids.iter().filter_map(|&id| scene.mesh(id, &self.doc.mesh)).collect();
+        if meshes.len() != ids.len() {
+            return Err("The scene is missing a mesh; nothing was saved.".into());
+        }
+        let active = scene.index_of(scene.active_id()).unwrap_or(0);
+        Ok((meshes, objects, active))
     }
 
     /// What the file keeps besides the objects: see `io::Details`. A new
     /// part is one more `set` here and one more `get` in `apply_details`.
-    fn details(&self) -> io::Details {
+    pub(super) fn details(&self) -> io::Details {
         let opts = &self.doc.opts;
         let matcap = self.ui.assets.matcaps.get(opts.matcap).map_or(String::new(), |m| format!("{}/{}", m.category, m.name));
         let mut details = io::Details::default();
@@ -622,10 +641,27 @@ impl Running {
     /// The file takes the scene's place and becomes the document: its look,
     /// mirror settings and view come with it, and Save writes back to it.
     fn open_replacing(&mut self, path: PathBuf) {
-        let saved = match io::load_scene(&path) {
-            Ok(saved) => saved,
+        let (count, details) = match self.replace_scene(&path) {
+            Ok(opened) => opened,
             Err(e) => return self.status(e, false),
         };
+        // A sculpt from the Unity app says so, and what it could not bring.
+        let note = unity_import::status_note(&details, true).map_or(String::new(), |note| format!(". {note}"));
+        self.status(format!("Opened {} ({}){note}", path.display(), how_many(count)), true);
+        self.doc.path = Some(path.clone());
+        self.mark_saved();
+        // Its picture is the one from its last save; one is only taken now
+        // if it has none.
+        self.note_recent(&path, false);
+    }
+
+    /// Puts a file's scene in place of the one that is open, as one undo
+    /// step, with its look, mirror settings and view. Which file is the
+    /// document, and whether the scene counts as saved, is the caller's to
+    /// say: an opened file is both, a restored recovery copy neither. Gives
+    /// back how many objects came, and what else the file kept.
+    pub(super) fn replace_scene(&mut self, path: &Path) -> io::Result<(usize, io::Details)> {
+        let saved = io::load_scene(path)?;
         let count = saved.objects.len();
         let mut details = io::Details::default();
         self.edit_scene(|scene, slot| {
@@ -635,14 +671,7 @@ impl Running {
         self.doc.mesh_replaced = true;
         self.sync_view();
         self.apply_details(&details);
-        // A sculpt from the Unity app says so, and what it could not bring.
-        let note = unity_import::status_note(&details, true).map_or(String::new(), |note| format!(". {note}"));
-        self.status(format!("Opened {} ({}){note}", path.display(), how_many(count)), true);
-        self.doc.path = Some(path.clone());
-        self.mark_saved();
-        // Its picture is the one from its last save; one is only taken now
-        // if it has none.
-        self.note_recent(&path, false);
+        Ok((count, details))
     }
 
     /// The file's objects join the scene where they were saved. Nothing else

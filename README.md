@@ -774,6 +774,38 @@ pair; after that they can be moved apart and the joints stay on them.
   settings, dynamic topology and every brush's tuning. They are kept in
   `%APPDATA%\Sculpt\settings.json`, with the recent files; deleting that file
   puts everything back to how the app first starts.
+- **A crash does not take the session with it.** While the scene has changes
+  that are not saved, the app writes a recovery copy of it every three
+  minutes, in a pause between strokes (about a tenth of a second for four to
+  eight million triangles on a fast disk; a toast says "Recovery copy kept"
+  when it was long enough to feel). The copies are ordinary `.sclp` files in
+  `%APPDATA%\Sculpt\recovery`, in a folder per run of the app; each is a new
+  file, never written over another or over a file of yours, and the newest
+  three are kept (each is the size of a save: about 200 MB for a scene of
+  twelve million triangles). If the app stops on a fault of its own it says so in a
+  message, and first writes one more copy of the scene as it stood, beside
+  the others. If the graphics card reports a fault, the same.
+  **The next time the app starts it offers the copy:** Restore It puts it in
+  place of the scene (one undo step), not yet saved and with no file, so Save
+  asks where it should go, starting from the file it was a copy of. A copy
+  made as the app stopped may have caught the last change half done, so the
+  question says so and offers the last regular copy as well. Discard It
+  leaves the scene alone; Not Now (Esc) keeps the copy and asks again next
+  time.
+  **A clean exit leaves nothing to ask about.** The copies of a run are
+  removed when its scene is saved (the work is in your file now) and when the
+  app is closed in the ordinary way, with or without saving; so are copies
+  from an earlier crash once they have been restored or discarded and this
+  run has saved, written a copy of its own or closed. Until then they stay,
+  and can be opened with Open like any sculpt. A copy is only ever offered if
+  the run that wrote it is no longer running, so a second copy of the app
+  open at the same time does not offer the first one's work. What is lost in
+  the worst case (the power going, the program being killed) is the work
+  since the last copy, three minutes at most. SSpheres, unmerged tubes,
+  rulers and planned keys are not in a copy, as they are not in a save.
+- **What went wrong is written down.** `%APPDATA%\Sculpt\log.txt` gathers the
+  app's warnings and errors and, for a fault, what it was and where in the
+  program; it starts again when it reaches a megabyte.
 
 A `.sclp` is the meshes as raw arrays (so a heavy scene saves and loads as
 fast as the disk allows) followed by one JSON section for everything else.
@@ -985,7 +1017,8 @@ Ported from the Unity app, each described in its own section above:
   HDRI lighting, backdrops and the post effects, cavity included.
 - **Files and recording**: `.sclp` files, OBJ and STL import and export,
   recent files, the turntable with its 360 loop as a video or as pictures,
-  and the timelapse.
+  and the timelapse. Recovery copies against a crash are this app's own: the
+  Unity app has none.
 - **Interface**: the two panels, the brush wheel, the clean view, tooltips
   and interface size.
 
@@ -1042,6 +1075,34 @@ A run started with any `--option` is a scripted one: it neither reads nor
 writes the user's settings file, so a visual check never depends on how the
 app was last left and never leaves its brush settings behind. Set
 `SCULPT_SETTINGS_DIR` to a folder to give such a run settings of its own.
+The same goes for the log (it is written beside the settings, so nowhere
+without that folder) and for recovery: a scripted run keeps no recovery
+copies and offers none, even with a settings folder, unless
+`SCULPT_TEST_RECOVERY` is set, which makes the run a check of recovery
+itself. It is a list separated by commas: `every=0.3` (seconds between
+copies), `answer=restore | earlier | discard | later` (the answer to the
+question at start-up), `message` (the message the app closes with on a fault
+is really put up, and waits to be closed), and steps to take in a numbered
+frame: `stroke@30`, `scene@40` (prints a fingerprint of the scene),
+`save@45`, `quit@50` (a clean exit), `kill@50` (ends the program on the
+spot), `panic@50`, `stroke-panic@50` (a panic half way through a stroke),
+`job-panic@50` (a panic in a background job, which must come back as an
+error and leave the app running), `graphics-error@50` and `device-lost@50`.
+A crash and what follows it, end to end:
+
+```
+export SCULPT_SETTINGS_DIR=D:/some/empty/folder   # every line below needs it
+SCULPT_TEST_RECOVERY=every=0.3,stroke@20,scene@200,stroke@205,scene@210,panic@211 sculpt.exe --size 1600x960 --demo   # two fingerprints, then "stopped: Kept"; log.txt and recovery/ appear in the folder
+SCULPT_TEST_RECOVERY=on sculpt.exe --size 1600x960 --screenshot out.png                     # the question about the copy
+SCULPT_TEST_RECOVERY=answer=restore,scene@5,quit@8 sculpt.exe --size 1600x960               # prints the second fingerprint again; recovery/ is then empty
+cargo test --release timing_of_a_recovery_copy -- --ignored --nocapture                     # what a copy costs at 1M / 4M / 12M triangles
+```
+
+The release build unwinds on a panic (`panic = "unwind"` in `Cargo.toml`)
+rather than aborting: that is what lets a panic in a tool's background job
+come back to the tool as an error, and a panic on the interface thread be
+caught at the event loop so the scene can be written before the app closes.
+A build with `panic = "abort"` is refused (`src/main.rs`).
 
 Tools are added as crates against `sculpt-toolkit`, not wired into the app:
 see `crates/toolkit/README.md`.
