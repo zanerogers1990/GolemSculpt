@@ -12,6 +12,8 @@
 //! mesh near the axis, where their footprints overlap, are handed different
 //! work (see `radial.rs`).
 
+mod layer_corner;
+
 use glam::{Vec2, Vec3};
 use sculpt_geom::{SymmetryGroup, SymmetryOp};
 
@@ -81,7 +83,8 @@ fn mirror_path() -> Vec<Vec2> {
 #[test]
 #[ignore]
 fn mirror_stroke_fingerprints() {
-    let axes = [[true, false, false], [true, true, false], [true, true, true], [false, true, true]];
+    // No symmetry, each plane alone, each pair and all three.
+    let axes: [[bool; 3]; 8] = std::array::from_fn(|set| [set & 1 != 0, set & 2 != 0, set & 4 != 0]);
     for mask in [false, true] {
         for brush in Brush::ALL {
             if mask && brush != Brush::Clay {

@@ -933,6 +933,12 @@ impl Sculptor {
     /// from the same starting state and averaged, which is symmetric by
     /// construction.
     ///
+    /// Near two or three planes at once there are four or eight copies, too
+    /// many orderings to average over. They are each applied to the same
+    /// starting state instead, and their moves added up and shared out by how
+    /// much the copies overlap, as `radial.rs` does for the copies round an
+    /// axis and for the same reasons (a brush that holds a height included).
+    ///
     /// That is the walk over mirror images, the same whether the planes are
     /// the object's own or the world's (`symmetry::Mirrors` says which copy
     /// lies across which plane, and how near a dab is to each). With turns
@@ -1012,12 +1018,23 @@ impl Sculptor {
                     let sum = other;
                     sum.clear();
                     sum.resize(saved.len(), Vec3::ZERO);
+                    // A brush that holds a height is also held to the furthest
+                    // any one copy moved a vertex (see `held_to_furthest`). A
+                    // quarter radius from two planes all four copies cover the
+                    // middle while the set counts as under three, and Layer
+                    // came up 1.37 times its height there.
+                    let holds = p.holds_a_height();
+                    scratch.furthest.clear();
+                    scratch.furthest.resize(if holds { saved.len() } else { 0 }, 0.0);
                     for (n, &op) in group.iter().enumerate() {
                         if n > 0 {
                             restore(mesh, &leaves, saved);
                         }
                         kernels::apply(mesh, &p, &dab.mirrored(op), &leaves, scratch);
                         add_moves(mesh, &leaves, saved, sum);
+                        if holds {
+                            note_furthest(mesh, &leaves, saved, &mut scratch.furthest);
+                        }
                     }
                     let multiplicity: f32 = group
                         .iter()
@@ -1028,8 +1045,11 @@ impl Sculptor {
                         .sum();
                     let scale = 1.0 / multiplicity.max(1.0);
                     restore(mesh, &leaves, saved);
-                    let (saved, sum) = (&*saved, &*sum);
-                    mesh.move_vertices(&leaves, |at, _| Some(saved[at] + sum[at] * scale));
+                    let (saved, sum, furthest) = (&*saved, &*sum, &*scratch.furthest);
+                    mesh.move_vertices(&leaves, |at, _| {
+                        let step = sum[at] * scale;
+                        Some(saved[at] + if holds { kernels::held_to_furthest(step, furthest[at]) } else { step })
+                    });
                 }
             }
 
@@ -1257,6 +1277,19 @@ fn add_moves(mesh: &Mesh, leaves: &[u32], saved: &[Vec3], sum: &mut [Vec3]) {
         let live = &mesh.positions[kernels::owned(&mesh.bvh.leaves[leaves[k] as usize])];
         for ((s, a), b) in part.iter_mut().zip(live).zip(&saved[starts[k]..]) {
             *s += *a - *b;
+        }
+    });
+}
+
+/// Raises `furthest`, the square of the furthest any copy so far has moved
+/// each vertex of `leaves` from `saved`, to how far the copy just applied has.
+fn note_furthest(mesh: &Mesh, leaves: &[u32], saved: &[Vec3], furthest: &mut [f32]) {
+    let (starts, total) = kernels::layout(mesh, leaves);
+    let parts = kernels::stretches(furthest, kernels::spans(&starts, total));
+    kernels::each_stretch(parts, total, |k, part| {
+        let live = &mesh.positions[kernels::owned(&mesh.bvh.leaves[leaves[k] as usize])];
+        for ((f, a), b) in part.iter_mut().zip(live).zip(&saved[starts[k]..]) {
+            *f = f.max((*a - *b).length_squared());
         }
     });
 }

@@ -161,7 +161,8 @@ impl Params {
 
     /// Whether the brush raises the surface to a set height in one dab and
     /// never past it (Layer). Copies of such a dab that overlap must not be
-    /// added up beyond what any one of them asked for; see `radial.rs`.
+    /// added up beyond what any one of them asked for: see `radial.rs`, and
+    /// [`held_to_furthest`], which both walks over a dab's copies use.
     pub fn holds_a_height(&self) -> bool {
         !self.mask && self.brush == Brush::Layer
     }
@@ -173,6 +174,20 @@ impl Params {
             _ => self.radius,
         }
     }
+}
+
+/// The move `step`, which is what the overlapping copies of a dab did to one
+/// vertex, added up and shared out, held to the furthest any one of those
+/// copies moved it (`furthest` is that distance squared). For a brush that
+/// [holds a height](Params::holds_a_height): shared out by one number for the
+/// whole set, the sum comes out longer than any copy's own move wherever more
+/// copies cover a vertex than the set counts as, and such a brush never takes
+/// that back. Held like this it is what the copies would have left applied
+/// one after another, each only topping up the last, with no order to it.
+#[inline]
+pub(super) fn held_to_furthest(step: Vec3, furthest: f32) -> Vec3 {
+    let length = step.length_squared();
+    if length > furthest { step * (furthest / length).sqrt() } else { step }
 }
 
 #[inline]
@@ -443,6 +458,10 @@ fn fill<T: Copy + Default + Send>(
 pub struct Scratch {
     weights: Vec<f32>,
     targets: Vec<Vec3>,
+    /// For the walk over mirrored copies by two or three planes at once
+    /// (`Sculptor::apply_symmetric`), when the brush holds a height: the
+    /// square of the furthest any one copy moved each vertex.
+    pub(super) furthest: Vec<f32>,
 }
 
 /// Totals `add` over every vertex owned by `leaves` that is not hidden. The
@@ -859,7 +878,7 @@ fn relax_passes(mesh: &mut Mesh, leaves: &[u32], scratch: &mut Scratch, amount: 
     let full = amount.floor() as usize;
     let frac = amount - full as f32;
     let passes = full + usize::from(frac > 0.001);
-    let Scratch { weights, targets } = scratch;
+    let Scratch { weights, targets, .. } = scratch;
     let weights = &*weights;
     for pass in 0..passes {
         let factor = if pass < full { 1.0 } else { frac };

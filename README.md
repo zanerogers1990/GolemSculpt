@@ -167,7 +167,9 @@ across Z keeps both, with nothing to re-tick on the way from one to the other.
   close to the radial axis, they are shared out rather than stacked: a stroke
   straight through the axis builds up about as much as the same stroke with
   no symmetry, however many repeats there are, and a Move there slides along
-  the axis instead of being pulled every way at once.
+  the axis instead of being pulled every way at once. Layer does not go
+  past its Layer Height there either: close to the radial axis, and where two
+  or three mirror planes cross, the step is no taller than anywhere else.
 - Every brush follows the selected object's symmetry, mask painting included,
   and so do the Mask, Hide, Trim and Split tools. The Tube tool follows the
   symmetry of the object a tube is drawn on (it draws a tube for each copy).
@@ -1186,7 +1188,7 @@ cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic 
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
 SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
-sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut runs Cut & Mirror, which has no button yet, on a lumpy model and shows it before and after in wireframe, printing a line per check, and cut:alone shows the result by itself)
+sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut runs Cut & Mirror, which has no button yet, on a lumpy model and shows it before and after in wireframe, printing a line per check, and cut:alone shows the result by itself; corner presses Layer once where Mirror X and Y cross and once clear of the crossing, seen from the side, where both steps should be one height, and corner:front shows the same from where the dabs were made)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances

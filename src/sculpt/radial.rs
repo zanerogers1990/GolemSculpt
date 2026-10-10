@@ -40,6 +40,8 @@
 //! axis.) For such a brush the shared-out move is also held to the furthest
 //! any one copy moved the vertex: what the copies would have left applied one
 //! after another, each only topping up the last, but with no order to it.
+//! (Mirror images by two or three planes at once are shared out the same way
+//! and held the same way, in `Sculptor::apply_symmetric`.)
 //!
 //! Which copies can meet is a subgroup of the symmetry, and copies in
 //! different cosets of it never do (`SymmetryGroup::interacting_subgroup`), so
@@ -220,13 +222,9 @@ impl Walk {
             if sum == DVec3::ZERO {
                 return None;
             }
-            let mut step = sum.as_vec3() * scale;
+            let step = sum.as_vec3() * scale;
             // See the module's notes on a brush that holds a height.
-            let length = step.length_squared();
-            if holds && length > furthest {
-                step *= (furthest / length).sqrt();
-            }
-            Some(saved[at] + step)
+            Some(saved[at] + if holds { kernels::held_to_furthest(step, furthest) } else { step })
         });
         mesh.positions_changed(leaves);
     }

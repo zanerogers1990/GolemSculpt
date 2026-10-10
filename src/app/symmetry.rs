@@ -11,7 +11,7 @@
 //! tool, undo, a file), a stroke is made under the symmetry of the object it
 //! lands on.
 
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use sculpt_geom::{MeshAdjacency, MeshEdges};
 use sculpt_symmetry::Axis;
 
@@ -62,11 +62,15 @@ impl Running {
     /// world, and leaves that selected. `select:<name>` builds nothing: it
     /// selects the object of that name in the scene as it is (a file opened
     /// on the command line), for a look at that object's own symmetry. `cut`
-    /// is a different check altogether: see [`Self::cut_and_mirror_demo`].
+    /// and `corner` are different checks altogether: see
+    /// [`Self::cut_and_mirror_demo`] and [`Self::corner_demo`].
     pub(super) fn symmetry_demo(&mut self) {
         let what = std::env::var("SCULPT_DEMO_SYMMETRY").unwrap_or_default();
         if let Some(rest) = what.strip_prefix("cut") {
             return self.cut_and_mirror_demo(rest == ":alone");
+        }
+        if let Some(view) = what.strip_prefix("corner") {
+            return self.corner_demo(view == ":front");
         }
         let shut = ["Brushes", "Clay Settings", "Move Settings"].map(|card| (card.to_owned(), false));
         crate::prefs::cards::restore(&self.egui_ctx, &shut.into_iter().collect());
@@ -208,16 +212,24 @@ impl Running {
         settings.per_brush[Brush::Clay.index()].strength = 0.6;
         let on_screen = |at: Vec3| self.view.project(at);
         let (Some(a), Some(b)) = (on_screen(from), on_screen(to)) else { return };
-        let steps = 40;
+        if !self.demo_stroke_between(a, b) {
+            eprintln!("demo-symmetry: the stroke from {from} missed \"{}\"", self.doc.scene.active().name);
+        }
+    }
+
+    /// One scripted stroke on the active object with the brush as it is set,
+    /// from one place on screen to another: a press and a release, one dab,
+    /// when they are the same place. Returns whether it landed on the object.
+    fn demo_stroke_between(&mut self, a: Vec2, b: Vec2) -> bool {
+        let steps = if a == b { 0 } else { 40 };
         let sample = |i: usize| PointerSample {
-            pos: a.lerp(b, i as f32 / steps as f32),
+            pos: a.lerp(b, i as f32 / steps.max(1) as f32),
             pressure: None,
             time: i as f64 / 240.0,
         };
         let doc = &mut self.doc;
         if !doc.begin_stroke(&self.local, sample(0), false, false) {
-            eprintln!("demo-symmetry: the stroke from {from} missed \"{}\"", doc.scene.active().name);
-            return;
+            return false;
         }
         for i in 1..=steps {
             doc.sculptor.sample(&mut doc.mesh, &self.local, sample(i));
@@ -228,5 +240,52 @@ impl Running {
         if let Some(delta) = doc.sculptor.end(&mut doc.mesh, &self.local) {
             doc.history.push_stroke(delta);
         }
+        true
+    }
+
+    /// `SCULPT_DEMO_SYMMETRY=corner`: Layer where two mirror planes cross.
+    /// The ball with Mirror X and Y on, and the Layer brush at full strength
+    /// pressed once a quarter of its radius from both planes, where its four
+    /// copies all but cover each other. A second press on the X plane, well
+    /// clear of the corner, and its image across Y are there to measure it
+    /// against: each is one copy's worth, the height the brush is set to.
+    ///
+    /// The camera then goes round to the side, where all three stand on the
+    /// outline of the ball. They should be the same height with a flat top;
+    /// the one in the corner standing taller is the four copies piling up.
+    /// `corner:front` leaves the camera where the dabs were made, looking
+    /// down the line the planes cross along.
+    fn corner_demo(&mut self, from_the_front: bool) {
+        self.doc.edit_symmetry(|symmetry| symmetry.mirror = [true, true, false]);
+        let aspect = self.view.size.x / self.view.size.y.max(1.0);
+        let bounds = self.doc.scene.bounds(&self.doc.mesh);
+        self.doc.camera.frame(bounds, aspect, false);
+        (self.doc.camera.yaw, self.doc.camera.pitch) = (0.0, 0.0);
+        self.sync_view();
+
+        let radius = 0.07 * self.view.size.y;
+        let settings = &mut self.doc.sculptor.settings;
+        (settings.brush, settings.mask_mode, settings.radius_px) = (Brush::Layer, false, radius);
+        // A tall step, so that a third more of it is plain to see.
+        settings.layer_height = 0.5;
+        settings.per_brush[Brush::Layer.index()].strength = 1.0;
+        // The planes cross in the middle of the picture, where the ball's Z comes out.
+        let crossing = self.doc.scene.active().matrix().transform_point3(Vec3::Z * 0.5);
+        let Some(corner) = self.view.project(crossing) else { return };
+        for radii in [Vec2::new(0.25, -0.25), Vec2::new(0.0, -2.4)] {
+            let at = corner + radii * radius;
+            if !self.demo_stroke_between(at, at) {
+                eprintln!("demo-symmetry: the Layer dab at {at} missed the ball");
+            }
+        }
+        if !from_the_front {
+            // Close up on the corner: the steps are small beside the ball.
+            let camera = &mut self.doc.camera;
+            (camera.yaw, camera.pitch, camera.pivot) = (-90.0, 0.0, crossing);
+            camera.distance /= 2.4;
+        }
+        // The brush ring is where the last dab was; leave it out of the picture.
+        self.input.inside = false;
+        self.sync_view();
     }
 }
