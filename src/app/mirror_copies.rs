@@ -245,7 +245,7 @@ impl Running {
     /// window feeds, with a brush `radius` pixels across. A press that misses
     /// the model would orbit, so one that does is said, not left to move the
     /// view.
-    fn demo_drag_stroke(&mut self, brush: Brush, strength: f32, radius: f32, from: Vec2, to: Vec2) {
+    pub(super) fn demo_drag_stroke(&mut self, brush: Brush, strength: f32, radius: f32, from: Vec2, to: Vec2) {
         let settings = &mut self.doc.sculptor.settings;
         settings.brush = brush;
         settings.radius_px = radius;

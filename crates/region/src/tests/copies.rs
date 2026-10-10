@@ -293,7 +293,8 @@ fn the_views_are_the_object_its_copies_the_instances_and_then_the_copies_a_tool_
     let views = |bench: &Bench| crate::screen::cut_views(&bench.doc, ball, &view);
     assert_eq!(views(&bench).len(), 1);
 
-    let kept = [Mat4::from_translation(Vec3::X * 2.0), Mat4::from_translation(Vec3::X * 4.0), Mat4::from_translation(Vec3::X * -2.0)];
+    let along = |x: f32| Mat4::from_translation(Vec3::X * x);
+    let kept = [along(2.0), along(4.0), along(-2.0)];
     bench.live_copies(ball, &kept);
     assert_eq!(views(&bench).len(), 4, "the object and the three copies of a tool");
     for (cut, model) in views(&bench).iter().zip(std::iter::once(&Mat4::IDENTITY).chain(&kept)) {
@@ -631,7 +632,8 @@ fn line_through(scenes: &Scenes, a: usize, b: usize) -> (Vec2, Vec2, Vec2) {
     let normal = (q - p).perp().normalize();
     let outward = if normal.dot(mid - centroid) > 0.0 { normal } else { -normal };
     for j in (0..scenes.places.len()).filter(|&j| j != a && j != b) {
-        assert!((all[j] - mid).dot(outward) < -scenes.radius(j), "place {j} is not clear of the line through {a} and {b}");
+        let behind = (all[j] - mid).dot(outward);
+        assert!(behind < -scenes.radius(j), "place {j} is not clear of the line through {a} and {b}");
     }
     // Drawn so that the covered side is on its left.
     let along = Vec2::new(-outward.y, outward.x) * 100.0;
@@ -657,7 +659,8 @@ fn one_line_over_two_places_cuts_the_one_mesh_through_both_in_one_step() {
     let (mut judged, mut cut_away) = (0, 0);
     for &at in &scenes.rest {
         // How far the vertex is on the covered side, in the place that shows it furthest that way.
-        let deepest = scenes.places.iter().map(|m| (scenes.live.px(m.transform_point3(at)) - from).dot(outward)).fold(f32::MIN, f32::max);
+        let over = |m: &Mat4| (scenes.live.px(m.transform_point3(at)) - from).dot(outward);
+        let deepest = scenes.places.iter().map(over).fold(f32::MIN, f32::max);
         if deepest.abs() < 0.05 {
             continue;
         }
@@ -782,6 +785,44 @@ fn a_box_over_a_copy_of_an_array_with_radial_symmetry_masks_every_turn_of_what_t
     assert!(judged > scenes.rest.len() * 9 / 10);
 }
 
+// ---------------------------------------------------------------------- demos
+
+#[test]
+fn the_array_demos_draw_a_shape_over_a_copy_and_the_one_mesh_shows_it() {
+    for what in ["mask", "hide", "trim", "split"] {
+        let mut scenes = Scenes::new(&line());
+        let whole = volume_of(&scenes.live, scenes.object);
+        let mut tool = match what {
+            "mask" => Region::mask(),
+            "hide" => Region::hide(),
+            "trim" => Region::trim(),
+            _ => Region::split(),
+        };
+        scenes.live.enter(&mut tool);
+        scenes.live.call(|cx| tool.demo(cx, "array"));
+        let ball = scenes.object;
+        match what {
+            "mask" => assert!(mask(&scenes.live, ball).iter().any(|m| *m > 0.0), "{what}: {:?}", scenes.live.status),
+            "hide" => assert!(hidden_count(&scenes.live, ball) > 50, "{what}: {:?}", scenes.live.status),
+            _ => {
+                assert!(volume_of(&scenes.live, ball) < whole * 0.98, "{what}: {:?}", scenes.live.status);
+                assert_closed(&scenes.live, ball);
+            }
+        }
+        if what == "split" {
+            assert_eq!(scenes.live.doc.objects().len(), 2, "{:?}", scenes.live.status);
+        }
+    }
+}
+
+#[test]
+fn the_array_demo_has_nothing_to_draw_over_when_no_tool_keeps_copies() {
+    let (mut bench, mut tool, ball) = super::bench(Region::mask());
+    bench.call(|cx| tool.demo(cx, "array"));
+    assert!(mask(&bench, ball).iter().all(|m| *m == 0.0));
+    assert_eq!(bench.doc.undo_steps(), 0);
+}
+
 // ------------------------------------------------------------ the real tool
 
 /// The whole chain, with the Array tool itself keeping the copies: its own
@@ -808,9 +849,10 @@ fn the_array_tool_itself_keeps_copies_the_region_tools_cut_through() {
         // A box over the left half of each copy on screen, one at a time.
         let mut tried = 0;
         for (k, place) in kept.iter().enumerate() {
-            let centre = scenes_live.px(place.transform_point3(Vec3::ZERO));
+            let middle = place.transform_point3(Vec3::ZERO);
+            let centre = scenes_live.px(middle);
             let size = place.determinant().abs().cbrt();
-            let radius = scenes_live.px(place.transform_point3(Vec3::ZERO) + scenes_live.env.view.right * size).distance(centre);
+            let radius = scenes_live.px(middle + scenes_live.env.view.right * size).distance(centre);
             let (a, b) = (centre - Vec2::new(radius, 0.85 * radius), centre + Vec2::new(0.06 * radius, 0.85 * radius));
             if a.x < 0.0 || b.x > 800.0 || a.y < 0.0 || b.y > 600.0 {
                 continue;

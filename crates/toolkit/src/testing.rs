@@ -102,10 +102,9 @@ pub struct TestDoc {
     /// were added (`Bench::select`).
     also: Vec<ObjectId>,
     /// What each tool said with `Draw::live_copies` in its last frame, by the
-    /// tool (the address of the value the bench was handed, 0 for
-    /// `Bench::live_copies`): replaced whole by that tool's next frame, as the
-    /// app replaces everything every frame.
-    declared: Vec<(usize, ObjectId, Vec<Mat4>)>,
+    /// tool (its `Info::id`; empty for `Bench::live_copies`): replaced whole by
+    /// that tool's next frame, as the app replaces everything every frame.
+    declared: Vec<(&'static str, ObjectId, Vec<Mat4>)>,
     /// The same, by object: what `ObjectInfo::live_copies` lends.
     live: HashMap<ObjectId, Vec<Mat4>>,
     next: u64,
@@ -220,7 +219,7 @@ impl TestDoc {
 
     /// Takes in what `key` (a tool) said this frame about copies of objects:
     /// whatever it said before is replaced, what the other tools said kept.
-    fn declare(&mut self, key: usize, said: &[(ObjectId, Vec<Mat4>)]) {
+    fn declare(&mut self, key: &'static str, said: &[(ObjectId, Vec<Mat4>)]) {
         self.declared.retain(|(from, _, _)| *from != key);
         self.declared.extend(said.iter().map(|(object, copies)| (key, *object, copies.clone())));
         self.gather();
@@ -557,9 +556,9 @@ impl Bench {
     /// this is called again for the object (with an empty list to take them
     /// away); no tool's frame touches them.
     pub fn live_copies(&mut self, object: ObjectId, copies: &[Mat4]) {
-        self.doc.declared.retain(|(from, said, _)| !(*from == 0 && *said == object));
+        self.doc.declared.retain(|(from, said, _)| !(from.is_empty() && *said == object));
         if !copies.is_empty() {
-            self.doc.declared.push((0, object, copies.to_vec()));
+            self.doc.declared.push(("", object, copies.to_vec()));
         }
         self.doc.gather();
     }
@@ -735,9 +734,7 @@ impl Bench {
         let mut draw = Draw::default();
         self.call(|cx| tool.frame(cx, &mut draw));
         self.env.time += self.env.dt as f64;
-        // A reference is never at address 0, which is `Bench::live_copies`' own.
-        let key = (tool as *const dyn Tool).cast::<()>() as usize;
-        self.doc.declare(key, draw.object_places());
+        self.doc.declare(tool.info().id, draw.object_places());
         draw
     }
 
@@ -1167,14 +1164,14 @@ mod tests {
     }
 
     /// A tool that keeps copies of the selected object, as the Array tool does.
-    #[derive(Default)]
     struct Keeper {
+        id: &'static str,
         at: Vec<Mat4>,
     }
 
     impl Tool for Keeper {
         fn info(&self) -> crate::tool::Info {
-            crate::tool::Info { id: "keeper", name: "Keeper", icon: "", tip: "", hotkey: None }
+            crate::tool::Info { id: self.id, name: "Keeper", icon: "", tip: "", hotkey: None }
         }
 
         fn frame(&mut self, cx: &mut Ctx, draw: &mut Draw) {
@@ -1187,7 +1184,7 @@ mod tests {
         let mut bench = Bench::new();
         let a = bench.add("A", cube(0.25));
         let (left, right) = (Mat4::from_translation(Vec3::new(-1.5, 0.0, 0.0)), Mat4::from_translation(Vec3::new(1.5, 0.0, 0.0)));
-        let mut keeper = Keeper { at: vec![left, right] };
+        let mut keeper = Keeper { id: "keeper", at: vec![left, right] };
 
         // Nothing is said before the tool's first frame.
         assert!(bench.doc.info(a).unwrap().live_copies.is_empty());
@@ -1205,7 +1202,7 @@ mod tests {
         }
 
         // A tool's places are its own: another tool's frame leaves them alone, its own replaces them.
-        let mut other = Keeper::default();
+        let mut other = Keeper { id: "other", at: Vec::new() };
         bench.frame(&mut other);
         assert_eq!(bench.doc.info(a).unwrap().live_copies.len(), 2);
         keeper.at.pop();

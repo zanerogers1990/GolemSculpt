@@ -48,6 +48,7 @@ pub fn demo(tool: &mut ArrayTool, cx: &mut Ctx, what: &str) {
         "start" => point(tool, cx, 0, true),
         "copy" => {
             let object = column(tool, cx, true);
+            tool.picked = None;
             tool.copy = Some(CopyPick { object, copy: 2, side: 1 });
         }
         "posed" => posed(tool, cx, false),
@@ -72,10 +73,12 @@ fn column(tool: &mut ArrayTool, cx: &mut Ctx, mirrored: bool) -> ObjectId {
     let mirror = MirrorRepeater::new(1, Vec3::ZERO).filter(|_| mirrored);
     cx.commit("Demo Array Column", vec![Command::Place { object, placement }, Command::Mirror { object, mirror }]);
     tool.make_line(cx);
-    let span = reach * 2.6;
+    // The mirrored column keeps its copies close, a stack; the plain one spaces them out, so
+    // that a shape drawn over one of them is over that one alone.
+    let (span, count) = if mirrored { (reach * 2.6, 6) } else { (reach * 6.4, 5) };
     tool.edit(cx, "Move Array Point", false, |a| {
         a.points[1] = Vec3::Y * span;
-        a.settings.count = 6;
+        a.settings.count = count;
         a.settings.end_scale = 0.6;
     });
     if mirrored {
@@ -106,7 +109,7 @@ fn point(tool: &mut ArrayTool, cx: &mut Ctx, index: usize, drag: bool) {
         tool.gizmo_event(cx, to, GizmoPhase::End);
         tool.refresh_gizmo(cx);
     }
-    fit(tool, cx);
+    fit_with_room(tool, cx, 2.5);
 }
 
 /// The column with the picked mirror copy moved and turned by the gizmo's own
@@ -114,6 +117,7 @@ fn point(tool: &mut ArrayTool, cx: &mut Ctx, index: usize, drag: bool) {
 fn posed(tool: &mut ArrayTool, cx: &mut Ctx, back: bool) {
     let object = column(tool, cx, true);
     let reach = cx.scene().bounds(object).size().max_element();
+    tool.picked = None;
     tool.copy = Some(CopyPick { object, copy: 2, side: 1 });
     tool.refresh_gizmo(cx);
     for drag in 0..2 {
@@ -214,6 +218,12 @@ fn made(tool: &mut ArrayTool, cx: &mut Ctx, apply: Apply) {
 
 /// Brings the camera round to take in the whole array.
 fn fit(tool: &ArrayTool, cx: &mut Ctx) {
+    fit_with_room(tool, cx, 0.8);
+}
+
+/// The same with `room` object sizes to spare all round, for the gizmo's arms
+/// to have somewhere to be.
+fn fit_with_room(tool: &ArrayTool, cx: &mut Ctx, room: f32) {
     let object = tool.target(cx);
     let Some(live) = tool.arrays.get(object) else { return };
     let Some(info) = cx.scene().info(object) else { return };
@@ -222,5 +232,6 @@ fn fit(tool: &ArrayTool, cx: &mut Ctx) {
     for placement in &live.layout {
         bounds.grow(info.placement.position + placement.offset);
     }
-    cx.frame_view(bounds.expanded(reach * 0.8));
+    cx.frame_view(bounds.expanded(reach * room));
 }
+

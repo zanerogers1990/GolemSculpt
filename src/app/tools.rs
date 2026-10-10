@@ -131,6 +131,11 @@ impl Tools {
         self.infos.get(index).copied()
     }
 
+    /// Which tool has this `Info::id`.
+    pub fn info_index(&self, id: &str) -> Option<usize> {
+        self.infos.iter().position(|info| info.id == id)
+    }
+
     /// Which tool is up, given the app's own tool setting.
     pub fn active(&self, tool: Tool) -> Option<usize> {
         self.active.filter(|_| tool == Tool::Plugin)
@@ -655,7 +660,7 @@ impl Running {
 
     /// Calls tool `index` with the moment as it is now, then does what it
     /// asked of the app.
-    fn tools_call<R>(
+    pub(super) fn tools_call<R>(
         &mut self,
         index: usize,
         pressure: Option<f32>,
@@ -1037,7 +1042,13 @@ impl Running {
         if what == "check" {
             return self.tools_check(index);
         }
+        if self.demo_with_array(index, id, what) {
+            return;
+        }
         self.tools_call(index, None, |tool, cx| tool.demo(cx, what));
+        // A glide the demo asked for is over before the picture is taken, so that
+        // the gizmo and the overlay are drawn from the camera that ends up there.
+        self.doc.camera.update(10.0);
         self.sync_view();
     }
 

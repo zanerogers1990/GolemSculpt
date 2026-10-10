@@ -146,6 +146,28 @@ mod tests {
     }
 
     #[test]
+    fn the_fewest_and_the_most_copies_a_tool_may_keep() {
+        let (mut scene, mesh, id) = row();
+        // None, and one: the codes start at TOOL_COPY and nothing else is a copy.
+        scene.set_tool_places(HashMap::from([(id, Vec::new())]));
+        let object = scene.active().clone();
+        assert!(scene.tool_places(id).is_empty() && !scene.has_place(&object, TOOL_COPY));
+        scene.set_tool_places(HashMap::from([(id, vec![at(2.0)])]));
+        assert!(scene.has_place(&object, TOOL_COPY) && !scene.has_place(&object, TOOL_COPY + 1));
+        assert_eq!(scene.pick(Vec3::new(2.0, 0.0, 5.0), -Vec3::Z, &mesh).map(|p| p.copy), Some(TOOL_COPY));
+
+        // More than the scene takes are cut off at the limit, and the last one it keeps still works.
+        let many: Vec<Mat4> = (0..5000).map(|i| at(2.0 + 2.0 * i as f32)).collect();
+        scene.set_tool_places(HashMap::from([(id, many)]));
+        let kept = scene.tool_places(id).len();
+        assert_eq!(kept, 4096);
+        let last = TOOL_COPY + (kept - 1) as u16;
+        assert!(scene.has_place(&object, last) && !scene.has_place(&object, last + 1));
+        let x = 2.0 + 2.0 * (kept - 1) as f32;
+        assert_eq!(scene.pick(Vec3::new(x, 0.0, 5.0), -Vec3::Z, &mesh).map(|p| p.copy), Some(last));
+    }
+
+    #[test]
     fn the_object_and_a_mirror_copy_keep_their_codes_and_a_tools_copies_come_after() {
         let (mut scene, _mesh, id) = row();
         scene.set_mirror(id, 1, Vec3::ZERO);
@@ -237,8 +259,9 @@ mod tests {
             }
             // Through the object's own matrix those vertices are somewhere else in the picture.
             let own = scene.active().matrix();
-            let away = moved.iter().filter(|&&v| view.project(own.transform_point3(before[v])).unwrap().distance(centre) > 100.0);
-            assert!(away.count() * 2 > moved.len(), "copy {k}: the stroke went through the object instead");
+            let far = |&&v: &&usize| view.project(own.transform_point3(before[v])).unwrap().distance(centre) > 100.0;
+            let away = moved.iter().filter(far).count();
+            assert!(away * 2 > moved.len(), "copy {k}: the stroke went through the object instead");
             scene.release_brush();
             assert_eq!(scene.brush_matrix(), scene.active().matrix());
         }

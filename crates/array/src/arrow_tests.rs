@@ -20,7 +20,8 @@ use crate::ArrayTool;
 fn column(axes: u8) -> (Bench, ArrayTool, ObjectId) {
     let mut bench = Bench::new();
     let object = bench.add("Cube", cube(0.2));
-    bench.call(|cx| cx.commit("Place", vec![Command::Place { object, placement: Placement::at(Vec3::new(1.2, -1.0, 0.0)) }]));
+    let placement = Placement::at(Vec3::new(1.2, -1.0, 0.0));
+    bench.call(|cx| cx.commit("Place", vec![Command::Place { object, placement }]));
     let mut tool = ArrayTool::default();
     bench.enter(&mut tool);
     bench.call(|cx| tool.make_line(cx));
@@ -56,7 +57,8 @@ fn bend() -> (Bench, ArrayTool, ObjectId) {
 fn ring() -> (Bench, ArrayTool, ObjectId) {
     let mut bench = Bench::new();
     let object = bench.add("Cube", cube(0.2));
-    bench.call(|cx| cx.commit("Place", vec![Command::Place { object, placement: Placement::at(Vec3::new(1.2, -0.4, 0.0)) }]));
+    let placement = Placement::at(Vec3::new(1.2, -0.4, 0.0));
+    bench.call(|cx| cx.commit("Place", vec![Command::Place { object, placement }]));
     let mut tool = ArrayTool::default();
     bench.enter(&mut tool);
     bench.call(|cx| tool.make_circle(cx));
@@ -439,6 +441,65 @@ fn the_arrows_are_on_the_straight_side_and_both_sides_follow_the_drag() {
     assert!(bench.undo(&mut tool));
     bench.frame(&mut tool);
     assert_eq!(copies_of(&bench.frame(&mut tool), object), expected_copies(&bench, &tool, object));
+}
+
+// ---- the copies as places of the object --------------------------------------------------------
+
+#[test]
+fn the_copies_are_said_to_be_places_of_the_object_so_the_rest_of_the_app_sees_them() {
+    let (mut bench, mut tool, object) = column(1);
+    let said = bench.doc.info(object).unwrap().live_copies.to_vec();
+    assert_eq!(said, expected_copies(&bench, &tool, object), "exactly the copies it draws");
+    assert_eq!(said.len(), 8, "four copies and their four reflections");
+    assert_eq!(bench.doc.info(object).unwrap().all_places().len(), 2 + 8, "with the object and its own mirror copy");
+
+    // The scene's pointer meets a copy and names the object: the third copy stands 1.0 above it.
+    let third = placement(&bench, object).position + Vec3::new(0.0, 1.0, 0.0);
+    let on_it = bench.px(third + Vec3::new(0.05, 0.0, 0.2));
+    let hit = bench.doc.raycast(&bench.env.view.ray(on_it)).expect("a copy is there");
+    assert_eq!(hit.object, object);
+    assert!((hit.position.z - 0.2).abs() < 1e-4 && hit.position.distance(third) < 0.4, "{:?}", hit.position);
+
+    // Away, the copies are still on screen and still the object's.
+    bench.env.active = false;
+    bench.frame(&mut tool);
+    assert_eq!(bench.doc.info(object).unwrap().live_copies.len(), 8);
+    bench.env.active = true;
+
+    // While a drag shows the object where the scene does not have it yet, they are drawn but not said.
+    let start = bench.px(Vec3::new(1.2, -1.0, 0.0));
+    assert!(bench.press(&mut tool, start, Button::Left));
+    bench.drag_to(&mut tool, start + Vec2::new(0.0, -40.0));
+    let draw = bench.frame(&mut tool);
+    assert!(!copies_of(&draw, object).is_empty(), "drawn");
+    let none_said = draw.object_places().is_empty() && bench.doc.info(object).unwrap().live_copies.is_empty();
+    assert!(none_said, "but not places");
+    bench.release(&mut tool);
+    bench.frame(&mut tool);
+    assert_eq!(bench.doc.info(object).unwrap().live_copies.len(), 8, "and again once the object is where it was put");
+
+    // Hidden, the object has no copies on screen; taken off, none at all.
+    bench.call(|cx| cx.commit("Hide", vec![Command::Show { object, visible: false }]));
+    bench.frame(&mut tool);
+    assert!(bench.doc.info(object).unwrap().live_copies.is_empty());
+    bench.call(|cx| cx.commit("Show", vec![Command::Show { object, visible: true }]));
+    bench.frame(&mut tool);
+    assert_eq!(bench.doc.info(object).unwrap().live_copies.len(), 8);
+    bench.call(|cx| tool.remove(cx));
+    bench.frame(&mut tool);
+    assert!(bench.doc.info(object).unwrap().live_copies.is_empty(), "no array, no places");
+}
+
+#[test]
+fn making_the_copies_real_takes_the_places_away_and_undoing_it_gives_them_back() {
+    let (mut bench, mut tool, object) = column(0);
+    assert_eq!(bench.doc.info(object).unwrap().live_copies.len(), 4);
+    bench.call(|cx| tool.apply(cx, crate::Apply::Separate));
+    bench.frame(&mut tool);
+    assert!(bench.doc.info(object).unwrap().live_copies.is_empty(), "the copies are objects of their own now");
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    assert_eq!(bench.doc.info(object).unwrap().live_copies.len(), 4, "the live array is back, and so are its places");
 }
 
 // ---- the hint -------------------------------------------------------------------------------------

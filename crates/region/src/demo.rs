@@ -108,10 +108,31 @@ fn mirrored_copy(cx: &mut Ctx) -> Option<Target> {
     Some(Target { centre, reach, at, radius: at.distance(edge) })
 }
 
-/// The tools over a live mirror copy: a shape drawn over the copy cuts the
-/// one mesh, so the object on the other side shows the same hole, cut or mask.
-fn over_the_copy(tool: &mut Region, cx: &mut Ctx) {
-    let Some(copy) = mirrored_copy(cx) else { return };
+/// The third of the copies another tool keeps of the selected object (an
+/// array's), as a target: where it is on screen and how big. None when no tool
+/// keeps any, so the demo has nothing to draw a shape over.
+fn kept_copy(cx: &Ctx) -> Option<Target> {
+    let scene = cx.scene();
+    let object = scene.active();
+    let info = scene.info(object)?;
+    let place = *info.live_copies.get(2).or(info.live_copies.last())?;
+    // The middle of the object's box, in its own space, carried to where the copy shows it.
+    let bounds = scene.bounds(object);
+    let own = info.matrix();
+    let centre = place.transform_point3(own.inverse().transform_point3(bounds.center()));
+    let reach = bounds.size().max_element() * 0.5 * (place.determinant() / own.determinant()).abs().cbrt();
+    let at = cx.view.project(centre)?;
+    let edge = cx.view.project(centre + cx.view.right * reach)?;
+    Some(Target { centre, reach, at, radius: at.distance(edge) })
+}
+
+/// The tools over a copy of the object that is not the object: a live mirror
+/// copy (`mirror`) or a copy of an array (`array`, which the host has the Array
+/// tool lay out first). A shape drawn over the copy cuts the one mesh, so the
+/// object and every other copy show the same hole, cut or mask.
+fn over_the_copy(tool: &mut Region, cx: &mut Ctx, what: &str) {
+    let copy = if what == "array" { kept_copy(cx) } else { mirrored_copy(cx) };
+    let Some(copy) = copy else { return };
     let real = cx.view;
     let r = copy.radius;
     match tool.action() {
@@ -147,10 +168,12 @@ fn over_the_copy(tool: &mut Region, cx: &mut Ctx) {
 /// (`lasso`: a bite showing a curved one; `drag`: the line mid-drag). Split:
 /// the model cut in two with the piece moved aside (`drag`: the line
 /// mid-drag). All four: `mirror` draws the shape over the live mirror copy of
-/// the object, which is put on the other side of the world's middle first.
+/// the object, which is put on the other side of the world's middle first;
+/// `array` draws it over a copy of an array of the object, which the app has
+/// the Array tool lay out first (`--demo-tool hide:array`).
 pub fn region(tool: &mut Region, cx: &mut Ctx, what: &str) {
-    if what == "mirror" {
-        return over_the_copy(tool, cx);
+    if what == "mirror" || what == "array" {
+        return over_the_copy(tool, cx, what);
     }
     let Some(target) = target(cx) else { return };
     let real = cx.view;

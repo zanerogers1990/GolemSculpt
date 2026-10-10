@@ -33,6 +33,7 @@ mod dyntopo;
 mod recording;
 mod faces;
 mod files;
+mod live_copies;
 mod masked;
 mod mirror_copies;
 mod pose;
