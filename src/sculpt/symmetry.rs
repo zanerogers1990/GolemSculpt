@@ -42,8 +42,9 @@ use serde::{Deserialize, Serialize};
 use super::Settings;
 use super::kernels::SymOp;
 
-/// The axis radial symmetry repeats round: one of the object's own, or a
-/// direction of the user's choosing.
+/// The axis radial symmetry repeats round: X, Y or Z of the space the
+/// symmetry sits in (the object's own, or the world's), or a direction of the
+/// user's choosing in that space.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RadialAxis {
@@ -70,10 +71,12 @@ impl RadialAxis {
 }
 
 /// Radial symmetry: every stroke repeated `count` times, evenly spaced, round
-/// an axis through the object's origin. It combines with the mirror axes.
+/// an axis through the origin of the space the symmetry sits in. It combines
+/// with the mirror axes.
 ///
-/// Kept in `.sclp` files with the mirror axes (`io::Mirror`), so a field
-/// added here needs a value to start from.
+/// Kept in `.sclp` files with the mirror axes, under each object
+/// (`scene::Symmetry`) and in what older files had for the whole scene
+/// (`io::Mirror`), so a field added here needs a value to start from.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Radial {
@@ -104,7 +107,7 @@ impl Radial {
         if self.on { self.count } else { 1 }
     }
 
-    /// The axis as a unit direction in the object's own space.
+    /// The axis as a unit direction in the space the symmetry sits in.
     pub fn axis_vector(&self) -> Vec3 {
         match self.axis {
             RadialAxis::X => Vec3::X,

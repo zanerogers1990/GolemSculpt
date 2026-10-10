@@ -82,9 +82,10 @@ change things. Nothing is kept between calls; hold ids, not references.
 | `cx.view` | The camera: `ray(px)`, `project(world)`, `depth_of`, `world_per_pixel(depth)`, `on_facing_plane(px, through)`, `right / up / forward`, `size`, `pixels_per_point` |
 | `cx.pointer`, `cx.hovering`, `cx.pressure`, `cx.mods` | Pointer in pixels; whether it is free over the viewport (show ghosts and hover only then); pen pressure; shift / ctrl / alt |
 | `cx.time`, `cx.dt`, `cx.active` | Seconds; whether this tool is the one up |
-| `cx.mirror`, `cx.unit`, `cx.tips`, `cx.clean_view` | Brush mirror axes; mm or inches (`sculpt_geom::units` formats and parses); tooltips on; panels hidden (draw no handles) |
-| `cx.radial_count`, `cx.radial_axis`, `cx.symmetry()` | Radial symmetry (repeats round an axis; 1 is off); every copy a stroke is made as, mirrors and turns together, as a `SymmetryGroup` |
-| `cx.scene()` | `objects()`, `active()`, `selected()` (every selected object, the active one first), `info(id)` (name, visible, placement, live mirror, copies tools keep, mesh id, counts), `mesh(id)` (positions, normals, indices, mask, hidden-face flags **as slices**, object space), `raycast(&ray)`, `raycast_object(id, &ray)`, `raycast_placed(id, &model, &ray)`, `bounds(id)` |
+| `cx.mirror`, `cx.unit`, `cx.tips`, `cx.clean_view` | The selected object's mirror axes (see Symmetry below); mm or inches (`sculpt_geom::units` formats and parses); tooltips on; panels hidden (draw no handles) |
+| `cx.radial_count`, `cx.radial_axis`, `cx.symmetry_world`, `cx.symmetry()` | The selected object's radial symmetry (repeats round an axis; 1 is off) and, when its symmetry is fixed in the world, where it stands; every copy a stroke on it is made as, mirrors and turns together, as a `SymmetryGroup` in its own space |
+| `cx.symmetry_of(id)` | Any object's own symmetry (a `Symmetry`), with what this call has asked to change already in it |
+| `cx.scene()` | `objects()`, `active()`, `selected()` (every selected object, the active one first), `info(id)` (name, visible, placement, live mirror, copies tools keep, mesh id, counts), `mesh(id)` (positions, normals, indices, mask, hidden-face flags **as slices**, object space), `symmetry(id)`, `raycast(&ray)`, `raycast_object(id, &ray)`, `raycast_placed(id, &model, &ray)`, `bounds(id)` |
 | `cx.pick(px)` | The visible surface under a pixel: object, position, normal, distance |
 
 Screen positions are physical pixels, y down. Sizes meant in interface points
@@ -100,8 +101,8 @@ app sorts vertices its own way, so do not expect the order you sent. Copy
 | `cx.spawn(label, work)` | Run work on a background thread; returns a `Job<T>` |
 | `cx.status(text, ok)`, `cx.toast(text)` | The status line of the Scene panel; the fading word over the viewport |
 | `cx.finish()`, `cx.start()` | Put this tool away; bring it up (for a button on its card) |
-| `cx.frame_view(aabb)`, `cx.set_unit(u)`, `cx.set_mirror(axes)`, `cx.repaint()` | Camera glide; app-wide unit; brush mirror; ask for another frame |
-| `cx.set_radial(RadialChange { on, count, axis })` | The brushes' radial symmetry: on or off, how many repeats, which axis (in the selected object's own space). What is left `None` stays as the Symmetry card has it. The Lathe turns it on round the object it made |
+| `cx.frame_view(aabb)`, `cx.set_unit(u)`, `cx.set_mirror(axes)`, `cx.repaint()` | Camera glide; app-wide unit; the selected object's mirror axes; ask for another frame |
+| `cx.set_radial(RadialChange { on, count, axis })` | The selected object's radial symmetry: on or off, how many repeats, which axis. What is left `None` stays as the Symmetry card has it. It changes the object that is selected at the moment of asking, so the Lathe asks right after the commit that made and selected its object, and it is that object's symmetry that is set |
 | `cx.icon(name)` | An icon for `ButtonStyle::icon` / `theme::tile` |
 
 ## Commands and undo
@@ -148,6 +149,33 @@ for each place in `placements()` and keep the nearest hit; it takes any matrix,
 so it picks a copy of the tool's own (one copy of an array) the same way.
 A clone, an instance or a piece cut from a mirrored object is not mirrored
 unless the tool says so with `.mirrored(..)`.
+
+**Symmetry belongs to objects.** Every object has its own brush symmetry:
+mirror axes, radial symmetry, and whether they sit in the object's own space
+or are fixed in the world. The Symmetry card shows the selected object's, and
+that is the one in the `Env` (`cx.mirror`, `cx.radial_count`, `cx.radial_axis`,
+`cx.symmetry_world`, and `cx.symmetry()` for the list of copies). A tool that
+works on the selected object needs nothing more. One that works on another
+object asks for that object's:
+
+```rust
+let own = cx.symmetry_of(anchor);        // Symmetry { mirror, radial_count, radial_axis, world }
+for op in own.group().iter() { .. }      // the copies, in the object's own space
+NewObject::new("Part", mesh).with_symmetry_of(target)   // a piece starts with what it was cut from has
+```
+
+The copies are in the object's own space for both kinds, so a tool repeats
+its work under them the same way: map a point with `op.apply_point(p)` and a
+direction or a normal with `op.apply(v)`. For a symmetry of the object's own
+the two agree. For one fixed in the world (`world` is `Some`, where the object
+stands) a copy also shifts points, because the world's plane does not pass
+through the object's origin, and it changes whenever the object is moved.
+A new object starts with no symmetry unless the tool says `.with_symmetry_of`
+(the Unity app's rule: a split part and a tube kept separate take the
+settings of the object they came from). `cx.set_mirror` and `cx.set_radial`
+change the selected object's, are not undo steps (ticking an axis never was),
+and no undo step holds a symmetry: an object that Z takes away and Shift + Z
+brings back has the symmetry it was left with.
 
 **Copies a tool keeps (an array's).** A tool can keep copies of an object on
 screen, and say that they are part of it. They are places the object's mesh is
@@ -371,6 +399,8 @@ let mut tool = MyTool::default();
 bench.enter(&mut tool);
 bench.drag(&mut tool, bench.px(Vec3::new(-0.4, 0.0, 0.5)), bench.px(Vec3::new(0.4, 0.0, 0.5)));
 bench.env.mods.shift = true;                        // set the moment directly
+bench.env.mirror = [true, false, false];            // the selected object's symmetry is the env's: this sets it
+bench.set_symmetry(other, Symmetry { radial_count: 6, ..Symmetry::NONE });   // and this, another object's
 let draw = bench.frame(&mut tool);                  // inspect draw.overlay.shapes, draw.previews()
 assert!(bench.undo(&mut tool));                     // Z as the app routes it
 bench.select(&[cube, other]);                       // several selected, the first active

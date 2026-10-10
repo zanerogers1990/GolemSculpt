@@ -653,11 +653,13 @@ const OBJECT_FIELDS: [&str; 6] = ["name", "visible", "mesh", "position", "rotati
 /// gives `None` for it, and the app keeps what it has.
 ///
 /// To keep something new, give it a name and two lines in
-/// `src/app/files.rs`. Say each object gains symmetry settings of its own:
+/// `src/app/files.rs`. Each object's own symmetry settings are kept this way
+/// (`scene/symmetry.rs`, which also reads what files held before objects had
+/// one):
 ///
 /// ```ignore
-/// details.set_object(i, io::slot::SYMMETRY, &object.symmetry);                 // in `Running::details`
-/// if let Some(s) = details.get_object(i, io::slot::SYMMETRY) { object.symmetry = s; }   // in `Running::apply_details`
+/// details.set_object(row, io::slot::SYMMETRY, &scene.symmetry(object.id));      // from `Running::details`
+/// if let Some(s) = details.get_object_over(row, io::slot::SYMMETRY, &Symmetry::default()) { .. }   // from `Running::apply_details`
 /// ```
 ///
 /// The value only has to derive `Serialize` and `Deserialize`. Give its
@@ -799,10 +801,18 @@ impl Shading {
     }
 }
 
-/// The brush symmetry: which axes strokes are mirrored across, how they are
-/// repeated round an axis, and whether the guides are drawn.
+/// Whether the symmetry guides are drawn, which is the scene's, and beside
+/// it the one brush symmetry a scene had before symmetry belonged to objects:
+/// which axes strokes are mirrored across and how they are repeated round an
+/// axis.
 ///
-/// `radial` came after the rest. A file from before it reads as radial
+/// Every object's own symmetry is now kept under the object
+/// (`slot::SYMMETRY`). A file from before that has only this, and its
+/// objects each take it (`scene::saved_symmetry`); a file from now on still
+/// writes the selected object's axes here, which is what a version of the
+/// app from before makes of it.
+///
+/// `radial` came after the axes. A file from before it reads as radial
 /// symmetry switched off, with the count and axis the app starts with.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

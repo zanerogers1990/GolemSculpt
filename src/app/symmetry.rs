@@ -51,23 +51,45 @@ impl Running {
     /// `--demo-symmetry`: two objects with a symmetry each, for a look at
     /// symmetry belonging to objects. A ball on the left mirrored across its
     /// own X, and a cube on the right, moved and turned, with five repeats
-    /// about its own Y; a stroke is laid on each while it is selected.
-    /// `SCULPT_DEMO_SYMMETRY` picks what is left selected and how the second
-    /// object's symmetry sits: `ball` (the default) or `cube` selects that
-    /// one, and `world` gives the cube Mirror X across the world's plane in
-    /// place of its radial symmetry, and leaves it selected.
+    /// about its own Y; a stroke is laid on each while it is selected, and
+    /// the cards above the Symmetry card are shut so that it shows.
+    /// `SCULPT_DEMO_SYMMETRY` picks which is left selected: `ball` (the
+    /// default) or `cube`. `world` stands a second ball in the cube's place,
+    /// turned and astride the world's X plane, with Mirror X fixed in the
+    /// world, and leaves that selected. `select:<name>` builds nothing: it
+    /// selects the object of that name in the scene as it is (a file opened
+    /// on the command line), for a look at that object's own symmetry.
     pub(super) fn symmetry_demo(&mut self) {
         let what = std::env::var("SCULPT_DEMO_SYMMETRY").unwrap_or_default();
+        let shut = ["Brushes", "Clay Settings", "Move Settings"].map(|card| (card.to_owned(), false));
+        crate::prefs::cards::restore(&self.egui_ctx, &shut.into_iter().collect());
+        if let Some(name) = what.strip_prefix("select:") {
+            match self.doc.scene.objects.iter().find(|o| o.name == name).map(|o| o.id) {
+                Some(id) => self.act(Action::SelectObject(id)),
+                None => eprintln!("demo-symmetry: no object is called {name:?}"),
+            }
+            let scene = &self.doc.scene;
+            for o in &scene.objects {
+                println!("symmetry of {:?}: {}", o.name, scene.symmetry(o.id).summary());
+            }
+            return;
+        }
+        let world = what == "world";
         let ball = self.doc.scene.active_id();
-        self.doc.scene.active_mut().position = Vec3::new(-0.75, 0.0, 0.0);
+        self.doc.scene.active_mut().position = Vec3::new(if world { -1.3 } else { -0.75 }, 0.0, 0.0);
         self.doc.edit_symmetry(|symmetry| symmetry.mirror = [true, false, false]);
 
-        self.act(Action::New(Primitive::Cube));
-        let cube = self.doc.scene.active_id();
+        self.act(Action::New(if world { Primitive::Sphere } else { Primitive::Cube }));
+        let second = self.doc.scene.active_id();
         let object = self.doc.scene.active_mut();
-        object.position = Vec3::new(0.7, 0.05, 0.0);
-        object.rotation = Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-0.35);
-        let world = what == "world";
+        if world {
+            // Its middle on the world's plane, and nothing else about it square to the world.
+            object.position = Vec3::new(0.0, 0.2, 0.15);
+            object.rotation = Quat::from_rotation_z(0.7) * Quat::from_rotation_y(0.5);
+        } else {
+            object.position = Vec3::new(0.7, 0.05, 0.0);
+            object.rotation = Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-0.35);
+        }
         self.doc.edit_symmetry(|symmetry| {
             *symmetry = if world {
                 Symmetry { mirror: [true, false, false], space: Space::World, ..Symmetry::default() }
@@ -80,33 +102,39 @@ impl Running {
         let aspect = self.view.size.x / self.view.size.y.max(1.0);
         let bounds = self.doc.scene.bounds(&self.doc.mesh);
         self.doc.camera.frame(bounds, aspect, false);
-        (self.doc.camera.yaw, self.doc.camera.pitch) = (20.0, 24.0);
+        (self.doc.camera.yaw, self.doc.camera.pitch) = (if world { 0.0 } else { 20.0 }, 32.0);
         // Room round them: the panels cover the sides of the picture.
         self.doc.camera.distance *= 1.2;
 
         // A stroke on each, selected in turn: each under its own symmetry.
-        for (id, from, to) in [
-            (ball, Vec3::new(0.2, 0.3, 0.4), Vec3::new(0.34, 0.02, 0.36)),
-            (cube, Vec3::new(0.26, 0.5, 0.3), Vec3::new(0.38, 0.5, 0.08)),
-        ] {
+        // On the ball, up and to the right of its middle on the side facing
+        // the camera; on the cube, across its top, which its own Y goes through.
+        let on_the_ball = (Vec3::new(0.2, 0.3, 0.5), Vec3::new(0.34, 0.02, 0.5));
+        let on_the_cube = (Vec3::new(0.1, 0.45, 0.22), Vec3::new(0.27, 0.45, 0.05));
+        for (id, (from, to)) in [(ball, on_the_ball), (second, if world { on_the_ball } else { on_the_cube })] {
             self.act(Action::SelectObject(id));
+            // The ball's are measured from its middle along the world's axes.
+            let object = self.doc.scene.active();
+            let place = |at: Vec3| if id == second && !world { object.matrix().transform_point3(at) } else { object.position + at };
+            let (from, to) = (place(from), place(to));
             self.symmetry_demo_stroke(from, to);
         }
-        let keep = if what == "cube" || world { cube } else { ball };
+        let keep = if what == "cube" || world { second } else { ball };
         self.act(Action::SelectObject(keep));
+        // The brush ring is where the last stroke ended; leave it out of the picture.
+        self.input.inside = false;
         self.sync_view();
     }
 
-    /// One scripted Clay stroke on the active object between two places given
-    /// in its own space (each is pulled onto its surface along the view).
+    /// One scripted Clay stroke on the active object between two places in
+    /// the world (each is pulled onto the object's surface along the view).
     fn symmetry_demo_stroke(&mut self, from: Vec3, to: Vec3) {
         self.sync_view();
         let settings = &mut self.doc.sculptor.settings;
         (settings.brush, settings.mask_mode) = (Brush::Clay, false);
         settings.radius_px = 0.03 * self.view.size.y;
         settings.per_brush[Brush::Clay.index()].strength = 0.6;
-        let model = self.doc.scene.active().matrix();
-        let on_screen = |at: Vec3| self.view.project(model.transform_point3(at));
+        let on_screen = |at: Vec3| self.view.project(at);
         let (Some(a), Some(b)) = (on_screen(from), on_screen(to)) else { return };
         let steps = 40;
         let sample = |i: usize| PointerSample {
@@ -116,6 +144,7 @@ impl Running {
         };
         let doc = &mut self.doc;
         if !doc.begin_stroke(&self.local, sample(0), false, false) {
+            eprintln!("demo-symmetry: the stroke from {from} missed \"{}\"", doc.scene.active().name);
             return;
         }
         for i in 1..=steps {

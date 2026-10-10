@@ -132,15 +132,28 @@ mask or set up first. It works as the Pose brush in Blender does.
 The **Symmetry** card of the Sculpt panel makes every stroke in several
 places at once: on both sides of a plane, all the way round an axis, or both.
 
+**Every object has its own symmetry**, as in the Unity app. The card shows the
+selected object's (it names it under its header) and changes that one alone.
+Select another object and the card, the guides and every stroke go by that
+object's settings: a figure whose face is mirrored across X and whose body
+across Z keeps both, with nothing to re-tick on the way from one to the other.
+
+- **Symmetry space** is where the planes and the axis sit. **Local** (to start
+  with) is through the object's own centre along its own axes: the symmetry
+  moves and turns with the object. **World** is through the world's centre
+  along the world's axes: it stays put while the object is moved or turned
+  through it. World pairs with **Mirror** in the Objects card: parts placed
+  either side of the world's centre sculpt symmetrically.
 - **Mirror strokes across** X, Y and Z, in any combination. **X** on the
-  keyboard is Mirror X.
+  keyboard is Mirror X of the selected object.
 - **Radial** repeats every stroke evenly round an axis through the object's
-  centre. **Radial Repeats** is how many times the stroke is made, itself
-  included, from 2 to 32. **Radial Axis** is the object's own X, Y or Z (Y to
-  start with: the way up of a vase or a bust, and the axis a lathed object is
-  turned round), or **Custom**: a direction typed in as `x, y, z`, or taken
-  with **From View**, which points the axis straight down the view, so that
-  seen from where you are the repeats land evenly round the object's centre.
+  centre (the world's, in World). **Radial Repeats** is how many times the
+  stroke is made, itself included, from 2 to 32. **Radial Axis** is the
+  object's own X, Y or Z (the world's, in World; Y to start with: the way up
+  of a vase or a bust, and the axis a lathed object is turned round), or
+  **Custom**: a direction typed in as `x, y, z`, or taken with **From View**,
+  which points the axis straight down the view, so that seen from where you
+  are the repeats land evenly round the centre.
 - Mirrors and Radial combine. Mirror X with six repeats about Y makes each
   repeat and its mirror image, twelve strokes in all; a mirror that the
   repeats already make (Z on top of X with an even count about Y) is not
@@ -150,15 +163,55 @@ places at once: on both sides of a plane, all the way round an axis, or both.
   straight through the axis builds up about as much as the same stroke with
   no symmetry, however many repeats there are, and a Move there slides along
   the axis instead of being pulled every way at once.
-- Every brush follows it, mask painting included, and so do the Mask, Hide,
-  Trim and Split tools, and the Tube tool (it draws a tube for each copy).
-- **Show Symmetry Guides** draws a thin line on the model where each mirror
-  plane cuts it and along the edge of each radial sector, the spokes meeting
-  where the axis comes through the surface. They are in the axis's colour
-  (red, green, blue; amber for a custom axis), and Tab hides them.
+- Every brush follows the selected object's symmetry, mask painting included,
+  and so do the Mask, Hide, Trim and Split tools. The Tube tool follows the
+  symmetry of the object a tube is drawn on (it draws a tube for each copy).
+  A stroke that lands on an instance of the selected object, on one of its
+  live mirror copies or on a copy of its array is made under the same
+  symmetry: a copy is the object's own mesh drawn again.
+- **Show Symmetry Guides** draws a thin line on the selected object where
+  each mirror plane cuts it and along the edge of each radial sector, the
+  spokes meeting where the axis comes through the surface. They are in the
+  axis's colour (red, green, blue; amber for a custom axis), and Tab hides
+  them. This one tick is the whole viewport's, not an object's: in the Unity
+  app a tick that hid one object's planes and left another's standing read
+  as a tick that did not work. (The Unity app drew every object's planes at
+  once; here only the selected object's guides are drawn.)
 
-The settings are the scene's, in the selected object's own space: they move
-and turn with the object. They are saved in the `.sclp` file.
+What an object starts with, as in the Unity app:
+
+- A new shape, an imported model, an SSphere skin, a mask extract and a
+  lathed object start with no symmetry (a lathed object with **Radial
+  Symmetry on Create** ticked starts with that).
+- A copy starts with what it was copied from: **Clone**, a live mirror made
+  into objects with **Validate** (a custom radial axis is mirrored with it),
+  the part **Split** cuts off, a tube kept separate (it takes the symmetry of
+  the object it was drawn on), and the objects an array is turned into.
+- **Instances share one symmetry.** An instance is the same mesh in another
+  place, so the objects that share a mesh are sculpted the same way: change
+  the symmetry with any one of them selected and it changes for all of them.
+  **Make Unique** gives one its own copy of the settings along with its own
+  mesh.
+- The object a **Join** or a boolean keeps, and an object that is remeshed,
+  trimmed or merged into, keeps the symmetry it had.
+
+Changing a symmetry is not an undo step, and no undo puts an older setting
+back, as in the Unity app: Z after ticking an axis steps back the last change
+to the model, and an object that Z brings back has the symmetry it was left
+with. Each object's symmetry is saved with it in the `.sclp` file.
+
+**World, exactly.** A World symmetry is worked out afresh from where the
+selected object stands each time a stroke begins, so moving or turning the
+object between strokes moves the planes through the model and never in the
+world. A mirror image across a plane the object is square to is exact to the
+last bit, as a Local one is; across a plane it is turned against, the two
+sides agree to rounding (a few ten-millionths of the model's size in the
+tests). On an object scaled unevenly and turned as well, the plane still
+passes through the right place but is as tilted as a rigid mirror image of a
+stretched object must be (the Unity app's limit too). A **Remesh**, a
+**Join** with remesh and the booleans are made exactly symmetric across the
+mirror planes of a Local symmetry only: the world's planes cut an object
+anywhere.
 
 ## Dynamic topology
 
@@ -438,14 +491,14 @@ the Density, Radius, Height and Scale sliders; the preview is drawn at up to
 background orbits. The profile is a scaffold: not saved, with its own Z while
 the tool is up.
 
-**Radial Symmetry on Create** (off to start with) turns radial symmetry on
-when the object is made, round the axis it was turned about (its own Y, which
-runs through its middle), so every stroke you make on it is repeated all the
-way round. The number of repeats is the Symmetry card's; its mirror axes are
-left as they are. Unticked, Create leaves the Symmetry card alone. In the Unity
-app the symmetry belonged to the object; here it is the scene's, as the
-Symmetry card describes, so Z right after Create puts it back as it was
-(unless you have changed it since) and Shift + Z turns it on again.
+**Radial Symmetry on Create** (off to start with) gives the new object radial
+symmetry of its own, round the axis it was turned about (its own Y, which runs
+through its middle), so every stroke you make on it is repeated all the way
+round: eight times, which is what every object starts with, and the Symmetry
+card changes it. It is the new object's symmetry, as in the Unity app. The
+object that was selected before keeps its own, Z right after Create takes the
+symmetry away with the object, and Shift + Z brings both back. Unticked, the
+new object starts with no symmetry, like any other.
 
 ## Tube
 
@@ -459,14 +512,17 @@ its own.
    on a plane facing you through the spot where it began, so the tube grows
    out of that spot. **On Surface** lays it along the model instead, half sunk
    into it (a vein, a ridge, a tail draped along a body). The ring at the
-   pointer shows how thick the next tube will be. A tube follows the
-   **Symmetry** card of the Sculpt panel, as the brushes do, in the space of the
-   object it grows from: with a mirror axis on, one stroke makes both arms; with
-   **Radial** on, it makes one tube for each repeat evenly round the radial
-   axis (a ring of horns), and twice as many with a mirror as well. The copies'
-   curves and points are drawn fainter, and grabbing one of their points edits
-   the tube through the mirror or the turn. Change the symmetry and the copies
-   change with it; the Tube panel says what it is.
+   pointer shows how thick the next tube will be. A tube follows the symmetry
+   of the object it grows from, as brushes on that object do (each object has
+   its own: see Symmetry): with a mirror axis on, one stroke makes both arms;
+   with **Radial** on, it makes one tube for each repeat evenly round the
+   radial axis (a ring of horns), and twice as many with a mirror as well. The
+   copies' curves and points are drawn fainter, and grabbing one of their
+   points edits the tube through the mirror or the turn. Change that object's
+   symmetry and the copies change with it; the Tube panel says what the
+   selected object's is. (A tube drawn on an object other than the selected
+   one is under that object's symmetry, not the selected one's, as in the
+   Unity app.)
 2. Shape it by its points, the dots along its orange curve; press one to
    select it (it turns orange). Drag a point, click the curve to add one,
    double-click a point to make it a sharp corner (it turns square) or smooth
@@ -488,8 +544,9 @@ its own.
    model. The work runs in the background, with its progress and a Cancel
    button (or Esc) while it does. **Keep Separate** makes each tube (all its
    copies together) an object of its own to sculpt, placed with the object it
-   was drawn on, and leaves that object, its mask and its hidden parts as they
-   were. Either is one undo step.
+   was drawn on and starting with that object's symmetry settings, and leaves
+   that object, its mask and its hidden parts as they were. Either is one undo
+   step.
 
 | Input (Tube up) | Action |
 | --- | --- |
@@ -554,10 +611,12 @@ piece of its own:
 While Mask, Hide, Trim or Split is up, a drag on the background draws a shape
 instead of orbiting, because a box or a cut line has to be able to start
 beside the model: orbit with Alt + drag, pan with the middle button. (With
-Extract up a drag orbits as usual.) They work on the selected object. With a
-mirror axis on, a mask or a hide covers the other side too, and a cut repeats
-there; with radial symmetry on (see Symmetry) they repeat all the way round
-the axis. Each mask, hide, trim, split and extract is one undo step, and a mask
+Extract up a drag orbits as usual.) They work on the selected object, under
+its own symmetry. With a mirror axis on, a mask or a hide covers the other
+side too, and a cut repeats there; with radial symmetry on (see Symmetry) they
+repeat all the way round the axis; with the symmetry in World space the other
+side is across the world's plane. Each mask, hide, trim, split and extract is
+one undo step, and a mask
 is carried across a cut. On a large model a cut runs in the background: its
 progress shows at the bottom of the viewport, with a Cancel button.
 
@@ -575,7 +634,9 @@ vertices each copy shows. A split leaves the object where it was, with its
 mirror and its array, cut; the new "Part" is a plain object in the object's own
 place with no mirror or array of its own, since a piece cut off is not a
 mirrored object (as in the Unity app; the mirror of the part is a Mirror tick
-away). These tools know nothing of arrays: they learn of an array's copies
+away). It does start with the object's symmetry settings (the Symmetry card's,
+see Symmetry), as in the Unity app: a piece of an object is sculpted the way
+the object is. These tools know nothing of arrays: they learn of an array's copies
 from the scene, which holds what the Array tool last said of them, so it works
 for any copies a tool keeps (see `Draw::live_copies` in
 `crates/toolkit/README.md`). The array has to be on screen for it, which it is
@@ -618,10 +679,14 @@ pair; after that they can be moved apart and the joints stay on them.
 
 - **Save / Open** use `.sclp`, which keeps the whole sculpt: every object
   (its exact mesh and mask, hidden faces, quads, name, position and
-  visibility; instances stay linked; live mirrors stay on) and how it was left: the material and
-  finish, lighting, HDRI, background and effects, the camera view, the
-  mirror axes and radial symmetry. Reopening a file puts all of it back. (An
-  HDRI is kept as the path of its picture, not the picture.)
+  visibility, and its own symmetry: mirror axes, radial symmetry, Local or
+  World; instances stay linked; live mirrors stay on) and how it was left:
+  the material and finish, lighting, HDRI, background and effects, the camera
+  view, and whether the symmetry guides show. Reopening a file puts all of it
+  back. (An HDRI is kept as the path of its picture, not the picture.) A
+  `.sclp` saved before symmetry belonged to objects holds one setting for the
+  whole scene: it opens with that setting given to every object in it, in
+  each object's own space, which is how it was applied then.
 - **Saving never harms the file already there.** The new file is written in
   full beside the old one and only then takes its place, so a full disk or a
   crash part-way leaves the old file as it was.
@@ -644,13 +709,14 @@ pair; after that they can be moved apart and the joints stay on them.
 - **Sculpts from the Unity app** (`.sculpt`) open with **Open** and
   **Import** just as a `.sclp` does, and show in Recent. They arrive the same
   way round and the same size: every object with its mesh, mask, hidden
-  faces, name, place and visibility; instances and live mirrors; the
-  material and finish, lighting, HDRI, background and effects; the camera
-  view; and the object that was selected, whose mirror axes and radial
-  symmetry become the scene's. Dynamic topology is set as the file left it.
-  A live array comes in as linked copies of its object, where the array had
-  them. The status line says what a file could not bring: an array's handles,
-  each object's separate symmetry, the Unity app's brush settings.
+  faces, name, place and visibility, and with its own symmetry (mirror axes,
+  radial symmetry, Local or World), as the Unity app kept it; instances and
+  live mirrors; the material and finish, lighting, HDRI, background and
+  effects; the camera view; and the object that was selected. Whether the
+  symmetry guides show is taken from that object. Dynamic topology is set as
+  the file left it. A live array comes in as linked copies of its object,
+  where the array had them. The status line says what a file could not bring:
+  an array's handles, the Unity app's brush settings.
   **The Unity file is never written to.** Save on such a scene asks where to
   put a `.sclp`, offering the same name, and that `.sclp` is the document
   from then on. A file that is damaged, or from a newer Unity format than
@@ -746,9 +812,10 @@ The **Objects** card at the top of the Scene panel is the scene graph.
 - Double-click a name to rename it (or use the field under the list).
 - Press and hold a row and it lifts out of the list; drag it up or down and
   let go to move it. Near the top or bottom edge a long list scrolls.
-- **Clone** makes an independent copy. **Instance** makes a linked copy that
-  shares the mesh (shown in blue): sculpt one and all change. **Make Unique**
-  unlinks one.
+- **Clone** makes an independent copy, with the same symmetry settings.
+  **Instance** makes a linked copy that shares the mesh (shown in blue):
+  sculpt one and all change, and they share one symmetry (see Symmetry).
+  **Make Unique** unlinks one.
 - **Mirror** (its own section, under Selected Object) gives the selected
   object live copies of itself across the world's planes, through the world's
   centre: tick X, Y and / or Z and press **Mirror**. There is one copy for each
@@ -888,12 +955,6 @@ Ported from the Unity app, each described in its own section above:
 A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
 each start with a clear mask and everything showing.
 
-Not ported yet:
-
-- Symmetry settings are one set for the whole scene, worked out in each
-  object's own space. The Unity app kept them per object and could also
-  mirror across the world's planes.
-
 SSpheres, arrays, unmerged tubes, rulers and planned keys are scaffolds: they
 are not kept in `.sclp` files, so make the skin, finish the array or merge the
 tube before closing the app.
@@ -907,7 +968,8 @@ cargo test --release          # engine tests
 cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
-SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; radial= also works with --demo-mirror and --demo-dyntopo)
+SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
+sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
