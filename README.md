@@ -51,6 +51,7 @@ pen last had (a mouse has no pressure and always sculpts at full strength).
 | Ctrl + S, Ctrl + Shift + S, Ctrl + O | Save, save as, open |
 | Ctrl + N | New scene (asks first if anything would be lost) |
 | Tab | Clean view: nothing on screen but the model (Tab or Esc brings the panels back) |
+| (Arrow tab on a panel's inner edge) | Fold that panel away to the edge of the screen, or bring it back; sculpting carries on |
 | O | Spin the view round the model (turntable) |
 | F11 | Fullscreen |
 | Ctrl + = / Ctrl + - | Interface size |
@@ -952,8 +953,9 @@ pair; after that they can be moved apart and the joints stay on them.
   looks the object over first, and asks before writing one with holes in it
   (see Checking a model for printing).
 - **The app remembers how you left it**: interface size, tooltips on or off,
-  which cards are open, fullscreen, millimetres or inches, the remesh
-  settings, dynamic topology and every brush's tuning. They are kept in
+  which cards are open, which panels are folded away, fullscreen, millimetres
+  or inches, the remesh settings, dynamic topology and every brush's tuning.
+  They are kept in
   `%APPDATA%\Sculpt\settings.json`, with the recent files; deleting that file
   puts everything back to how the app first starts.
 - **A crash does not take the session with it.** While the scene has changes
@@ -1339,6 +1341,19 @@ it, so that is the value it sets. The Pose brush makes no use of Strength, so
 its wheel has no bar. (The Unity app's wheel had a Size slider there as well;
 this one has Strength only.)
 
+**Either panel folds away.** Each panel has a small arrow tab on its inner
+edge, level with the bottom of the view gizmo. Tap it and the whole panel
+goes, leaving only a slim tab at the edge of the screen; tap that and the
+panel is back as it was, cards and scrolling included. The two sides fold
+separately. Everything else stays: the view gizmo and the Tooltips / Flat
+Shading / Wireframe row move out to the screen edge, the brush, the tools,
+the wheel and every key work as before, and the model has the room. This is
+not the clean view (Tab), which is for looking and switches strokes off; Tab
+still hides everything, tabs included, and brings the panels back folded or
+not as they were. Which panels are folded is remembered between runs. There is
+no key for it. A tool whose panel is folded away still works from the
+viewport, its wheel and its keys; its settings are a tap on the tab away.
+
 ## What is here, and what is not yet
 
 Ported from the Unity app, each described in its own section above:
@@ -1358,8 +1373,8 @@ Ported from the Unity app, each described in its own section above:
   recent files, the turntable with its 360 loop as a video or as pictures,
   and the timelapse. Recovery copies against a crash are this app's own: the
   Unity app has none.
-- **Interface**: the two panels, the brush wheel with its strength bar, the
-  clean view, tooltips and interface size.
+- **Interface**: the two panels and the tabs that fold them away, the brush
+  wheel with its strength bar, the clean view, tooltips and interface size.
 
 A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
 each start with a clear mask and everything showing.
@@ -1420,8 +1435,8 @@ sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-new   #
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)
-sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5>
-sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window
+sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5> | fold=left / right / both (panels folded away)
+sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel, the panels' fold tabs), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
 SCULPT_UNDO_BYTES=1 sculpt.exe --screenshot out.png --demo   # undo's memory limit set in bytes (here to nothing): the second stroke lets the first go, and the line that says so is showing

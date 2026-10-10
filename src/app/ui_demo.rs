@@ -1,11 +1,12 @@
 //! Looks and self-checks of the interface's own furniture, for runs made
 //! without a person at the tablet (`--demo-ui`): the strength bar under the
-//! brush wheel.
+//! brush wheel, and the tabs that fold the panels away.
 //!
 //! `--demo-ui` takes a list, `key` or `key=value` with commas between:
 //! `size=1.5` (interface size), `brush=Clay`, `mask`, `strength=0.3`,
 //! `wheel` (the brush wheel in the middle of the window; `wheel=low` near
-//! the bottom, where its bar goes above it) and `play`.
+//! the bottom, where its bar goes above it), `fold=left`, `fold=right` or
+//! `fold=both` (panels folded away) and `play`.
 //!
 //! `play` works the interface the way a pen would, through the same routines
 //! real input goes through, prints a line per check and closes the app. The
@@ -61,6 +62,7 @@ impl Running {
                 ("mask", _) => s.mask_mode = true,
                 ("strength", strength) => s.current_mut().strength = strength.parse().unwrap_or(0.5),
                 ("wheel", place) => wheel = Some(place.to_owned()),
+                ("fold", which) => self.doc.opts.folded = [which != "right", which != "left"],
                 ("play", _) => self.ui_demo.play = Some(Play { step: 0, wait: LEAD_IN, failed: 0 }),
                 (other, _) => eprintln!("--demo-ui: unknown item {other}"),
             }
@@ -102,7 +104,7 @@ impl Running {
     }
 
     /// Where an area of the interface was last drawn, if it is showing.
-    fn ui_demo_area(&self, id: &str, order: Order) -> Option<egui::Rect> {
+    fn ui_demo_area(&self, id: impl std::hash::Hash + std::fmt::Debug, order: Order) -> Option<egui::Rect> {
         let id = Id::new(id);
         self.egui_ctx.memory(|m| m.areas().is_visible(&LayerId::new(order, id)).then(|| m.area_rect(id)).flatten())
     }
@@ -221,6 +223,95 @@ impl Running {
             12 => {
                 let picked = brush(self) == Brush::Move && self.ui.radial.is_none();
                 expect("a tap on a tile still picks its brush and closes the wheel", picked);
+            }
+            _ => return self.ui_demo_fold_step(step - 13, expect),
+        }
+        false
+    }
+
+    /// The steps of `play` that fold the panels away and bring them back.
+    fn ui_demo_fold_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        let tab = |running: &Running, side: &str| running.ui_demo_area(("panel_tab", side), Order::Middle);
+        let panel = |running: &Running, id: &str| running.ui_demo_area(id, Order::Middle);
+        let folded = self.doc.opts.folded;
+        // A place the Sculpt panel covers while it shows, clear of its tab.
+        let under_panel = pos2(120.0, 120.0);
+        match step {
+            0 => {
+                expect("both panels show, each with a tab", panel(self, "sculpt_panel").zip(panel(self, "scene_panel")).is_some());
+                self.ui_demo_move(under_panel);
+            }
+            1 => {
+                expect("the pointer over the Sculpt panel is over the interface", self.over_ui());
+                if let Some(tab) = tab(self, "left") {
+                    self.ui_demo_button(tab.center(), true);
+                }
+            }
+            2 => {
+                expect("a press on the tab is not a stroke or an orbit", self.input.drag == Drag::Ui);
+                if let Some(tab) = tab(self, "left") {
+                    self.ui_demo_button(tab.center(), false);
+                }
+            }
+            3 => {
+                expect("a tap on its tab folds the Sculpt panel away", folded == [true, false] && panel(self, "sculpt_panel").is_none());
+                expect("and leaves a tab at the left edge of the window", tab(self, "left").is_some_and(|tab| tab.left() <= 0.5));
+                expect("the Scene panel stays", panel(self, "scene_panel").is_some());
+                self.ui_demo_move(under_panel);
+            }
+            4 => {
+                expect("where the panel was is viewport again", !self.over_ui());
+                self.ui_demo_button(under_panel, true);
+            }
+            5 => {
+                expect("and a drag there orbits, as on any background", self.input.drag == Drag::Orbit && !self.doc.opts.clean_view);
+                self.ui_demo_button(under_panel, false);
+                crate::turntable::set_clean_view(&mut self.doc, true);
+            }
+            6 => {
+                expect("the clean view (Tab) takes the tabs away too", tab(self, "left").or(tab(self, "right")).is_none());
+                crate::turntable::set_clean_view(&mut self.doc, false);
+            }
+            7 => {
+                let back = tab(self, "left").zip(tab(self, "right")).is_some();
+                expect("and brings them back with the panel still folded", back && self.doc.opts.folded == [true, false]);
+                self.doc.opts.ui_scale = 2.0;
+            }
+            8 => {
+                let screen = self.egui_ctx.content_rect();
+                let on_screen = |rect: Option<egui::Rect>| rect.is_some_and(|rect| screen.contains_rect(rect));
+                expect("at twice the interface size both tabs are still on screen", on_screen(tab(self, "left")) && on_screen(tab(self, "right")));
+                self.doc.opts.ui_scale = 1.0;
+            }
+            9 => {
+                if let Some(tab) = tab(self, "right") {
+                    self.ui_demo_button(tab.center(), true);
+                }
+            }
+            10 => {
+                if let Some(tab) = tab(self, "right") {
+                    self.ui_demo_button(tab.center(), false);
+                }
+            }
+            11 => {
+                expect("the Scene panel folds away on its own tab", folded == [true, true] && panel(self, "scene_panel").is_none());
+                let gizmo = panel(self, "view_gizmo");
+                let clear = gizmo.zip(tab(self, "right")).is_some_and(|(gizmo, tab)| !gizmo.intersects(tab));
+                expect("the view gizmo moves out beside the tab, not under it", clear);
+                let kept = self.prefs_now();
+                expect("the settings remember both", kept.left_panel_folded && kept.right_panel_folded);
+                if let Some(tab) = tab(self, "left") {
+                    self.ui_demo_button(tab.center(), true);
+                }
+            }
+            12 => {
+                if let Some(tab) = tab(self, "left") {
+                    self.ui_demo_button(tab.center(), false);
+                }
+            }
+            13 => {
+                expect("a tap on the tab at the edge brings the Sculpt panel back", folded == [false, true] && panel(self, "sculpt_panel").is_some());
+                self.doc.opts.folded = [false; 2];
             }
             _ => return true,
         }

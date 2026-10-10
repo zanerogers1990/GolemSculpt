@@ -193,6 +193,7 @@ impl Running {
         let opts = &mut self.doc.opts;
         opts.ui_scale = kept.interface_size();
         opts.tooltips = kept.tooltips;
+        opts.folded = [kept.left_panel_folded, kept.right_panel_folded];
         opts.remesh_resolution = kept.remesh_resolution();
         opts.quad_target = kept.quad_target();
         opts.new_shape_tris = kept.starting_detail();
@@ -209,7 +210,7 @@ impl Running {
     }
 
     /// The settings as they are right now.
-    fn prefs_now(&self) -> Prefs {
+    pub(super) fn prefs_now(&self) -> Prefs {
         let opts = &self.doc.opts;
         Prefs {
             interface_size: opts.ui_scale,
@@ -217,6 +218,8 @@ impl Running {
             fullscreen: self.window.fullscreen().is_some(),
             unit: self.doc.tools.unit.suffix().to_owned(),
             cards: prefs::cards::snapshot(&self.egui_ctx),
+            left_panel_folded: opts.folded[0],
+            right_panel_folded: opts.folded[1],
             brush: BrushPrefs::of(&self.doc.sculptor.settings),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,

@@ -39,6 +39,10 @@ pub struct Options {
     pub new_shape_tris: f32,
     /// Tab: hide every panel.
     pub clean_view: bool,
+    /// The Sculpt panel (left) and the Scene panel (right) folded away to a
+    /// tab at the edge of the screen. Unlike the clean view this hides
+    /// nothing else and switches nothing off.
+    pub folded: [bool; 2],
     /// Which way the transform gizmo's arrows and rings point.
     pub gizmo_axes: crate::gizmo::Orientation,
     /// Finishes, lighting, environment and post effects.
@@ -68,6 +72,7 @@ impl Default for Options {
             quad_target: 5000.0,
             new_shape_tris: 200_000.0,
             clean_view: false,
+            folded: [false; 2],
             gizmo_axes: Default::default(),
             look: Look::default(),
         }

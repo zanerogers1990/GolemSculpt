@@ -181,7 +181,7 @@ fn window_options(args: &[String]) -> app::Args {
             // The printing check on a damaged object: check | closed | export | remesh | quads | damaged | play
             "--demo-print" => opts.demo_print = it.next().cloned(),
             // The interface's own furniture, set up for a look or worked and checked:
-            // wheel | wheel=low | brush=<name> | mask | strength=<0..1> | size=<1.5> | play, with commas between.
+            // wheel | wheel=low | brush=<name> | mask | strength=<0..1> | size=<1.5> | fold=left|right|both | play, with commas between.
             "--demo-ui" => opts.demo_ui = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.

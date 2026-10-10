@@ -1,5 +1,5 @@
 //! What the app remembers between runs: interface size, tooltips, which
-//! cards are open, fullscreen, the measurement unit, every brush's tuning and
+//! cards are open, which panels are folded away, fullscreen, the measurement unit, every brush's tuning and
 //! the recent files. One small JSON file, `settings.json`, in the user's
 //! config folder (`%APPDATA%\Sculpt` on Windows). The Unity app kept the same
 //! things in PlayerPrefs.
@@ -363,6 +363,10 @@ pub struct Prefs {
     pub unit: String,
     /// Cards that are not as they start out (open or closed), by title.
     pub cards: BTreeMap<String, bool>,
+    /// The Sculpt panel (left) and the Scene panel (right) folded away to a
+    /// tab at the edge of the screen.
+    pub left_panel_folded: bool,
+    pub right_panel_folded: bool,
     pub brush: BrushPrefs,
     /// Voxels along the longest side for a voxel remesh.
     pub remesh_resolution: f32,
@@ -388,6 +392,8 @@ impl Default for Prefs {
             fullscreen: false,
             unit: LengthUnit::default().suffix().to_owned(),
             cards: BTreeMap::new(),
+            left_panel_folded: opts.folded[0],
+            right_panel_folded: opts.folded[1],
             brush: BrushPrefs::default(),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
@@ -526,6 +532,7 @@ mod tests {
         prefs.fullscreen = true;
         prefs.unit = "in".into();
         prefs.cards.insert("Stroke".into(), true);
+        prefs.right_panel_folded = true;
         prefs.brush.brush = "Clay".into();
         prefs.brush.radius_px = 84.0;
         prefs.brush.brushes.get_mut("Crease").unwrap().strength = 0.75;
@@ -625,6 +632,33 @@ mod tests {
         assert_eq!(prefs.brush.brushes["Layer"].strength, 0.33);
         assert!(!prefs.brush.brushes.contains_key("Retired Brush"));
         assert_eq!(prefs.length_unit(), LengthUnit::Millimetres, "an unknown unit is millimetres");
+    }
+
+    /// Which panels are folded away: a file from before there was such a
+    /// thing starts with both showing, one side is kept without the other,
+    /// and a value that is not yes or no costs only itself.
+    #[test]
+    fn folded_panels_are_remembered_and_old_files_start_with_both_showing() {
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        let fields = older.as_object_mut().unwrap();
+        assert!(fields.remove("left_panel_folded").is_some() && fields.remove("right_panel_folded").is_some());
+        fields.insert("tooltips".into(), false.into());
+        let prefs = Prefs::parse(&older.to_string());
+        assert!(!prefs.left_panel_folded && !prefs.right_panel_folded && !prefs.tooltips);
+
+        let (home, _) = settings_in("folded");
+        let folded = Prefs { left_panel_folded: true, ..Prefs::default() };
+        home.save(&folded).unwrap();
+        assert_eq!(home.load(), folded);
+        assert!(home.load().left_panel_folded && !home.load().right_panel_folded);
+
+        let odd = r#"{ "left_panel_folded": "yes", "right_panel_folded": true, "interface_size": 1.5 }"#;
+        let prefs = Prefs::parse(odd);
+        assert!(!prefs.left_panel_folded, "a word is not yes or no");
+        assert!(prefs.right_panel_folded && prefs.interface_size == 1.5, "the settings beside it are still read");
+        let odd = r#"{ "left_panel_folded": 1, "right_panel_folded": null, "tooltips": false }"#;
+        let prefs = Prefs::parse(odd);
+        assert!(!prefs.left_panel_folded && !prefs.right_panel_folded && !prefs.tooltips);
     }
 
     #[test]

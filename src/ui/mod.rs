@@ -1,6 +1,6 @@
 //! The interface: two floating panels over a full-window viewport, a view
 //! gizmo, the brush cursor and the radial brush menu. Layout and wording
-//! follow the Unity app.
+//! follow the Unity app. Either panel folds away to a tab (see `panels`).
 
 pub mod assets;
 mod brush_size;
@@ -9,6 +9,7 @@ mod falloff;
 mod look;
 mod mirror_copies;
 mod overlay;
+mod panels;
 mod pose;
 pub mod question;
 mod scene_graph;
@@ -28,11 +29,8 @@ pub use overlay::Cursor;
 pub mod overlay_colors {
     pub use super::overlay::{ADD, SMOOTH, SUBTRACT};
 }
+use panels::Side;
 use theme::{ButtonStyle, ACCENT};
-
-const LEFT_WIDTH: f32 = 270.0;
-const RIGHT_WIDTH: f32 = 260.0;
-const MARGIN: f32 = 8.0;
 
 pub struct UiState {
     pub assets: Assets,
@@ -100,55 +98,22 @@ pub fn build(
     tools::overlay(&ctx, doc);
 
     if !doc.opts.clean_view {
-        let max_height = (screen.height() - 2.0 * MARGIN).max(300.0);
-        let panel = |ui: &mut egui::Ui, width: f32, body: &mut dyn FnMut(&mut egui::Ui)| {
-            // A floating area only offers its previous size; ask for the full
-            // window height so the panel can grow with its content.
-            ui.set_max_height(max_height);
-            egui::Frame::new()
-                .fill(theme::PANEL)
-                .corner_radius(10.0)
-                .stroke(theme::hairline())
-                .inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 10 })
-                .show(ui, |ui| {
-                    ui.set_width(width - 20.0);
-                    egui::ScrollArea::vertical()
-                        .max_height(max_height - 20.0)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            ui.set_width(width - 20.0);
-                            body(ui)
-                        });
-                });
-        };
+        // Each panel, unless it is folded away, and the tab that folds it.
+        let (tips, mut folded) = (doc.opts.tooltips, doc.opts.folded);
+        panels::panel(&ctx, Side::Left, folded[0], &mut |ui| sculpt_panel(ui, doc, state, &mut actions));
+        panels::panel(&ctx, Side::Right, folded[1], &mut |ui| scene_panel(ui, doc, state, &mut actions));
+        for side in [Side::Left, Side::Right] {
+            let away = &mut folded[side.index()];
+            *away ^= panels::tab(&ctx, side, *away, tips);
+        }
 
-        egui::Area::new(Id::new("sculpt_panel"))
-            .order(Order::Middle)
-            .fade_in(false)
-            .fixed_pos(pos2(MARGIN, MARGIN))
-            .show(&ctx, |ui| {
-                panel(ui, LEFT_WIDTH, &mut |ui| sculpt_panel(ui, doc, state, &mut actions));
-            });
-        egui::Area::new(Id::new("scene_panel"))
-            .order(Order::Middle)
-            .fade_in(false)
-            .fixed_pos(pos2(screen.right() - MARGIN - RIGHT_WIDTH, MARGIN))
-            .show(&ctx, |ui| {
-                panel(ui, RIGHT_WIDTH, &mut |ui| scene_panel(ui, doc, state, &mut actions));
-            });
-
-        overlay::view_gizmo(
-            &ctx,
-            doc,
-            pos2(screen.right() - MARGIN - RIGHT_WIDTH - 14.0 - 108.0, 14.0),
-            &mut actions,
-        );
+        overlay::view_gizmo(&ctx, doc, panels::gizmo_origin(screen, folded[1]), &mut actions);
 
         // Bottom bar: the two things toggled constantly.
         egui::Area::new(Id::new("bottom_bar"))
             .order(Order::Middle)
             .fade_in(false)
-            .fixed_pos(pos2(MARGIN + LEFT_WIDTH + 12.0, screen.bottom() - 12.0 - 22.0))
+            .fixed_pos(panels::bottom_bar_origin(screen, folded[0]))
             .show(&ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 14.0;
@@ -158,6 +123,7 @@ pub fn build(
                     theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT);
                 });
             });
+        doc.opts.folded = folded;
     }
 
     overlay::radial_menu(&ctx, doc, state);
