@@ -557,7 +557,8 @@ impl Bench {
         let was_on = self.env.radial_count > 1;
         let on = change.on.unwrap_or(was_on);
         let kept = if was_on { self.env.radial_count } else { 8 };
-        let count = change.count.map_or(kept, |c| c.clamp(SymmetryGroup::MIN_RADIAL_COUNT, SymmetryGroup::MAX_RADIAL_COUNT));
+        let (fewest, most) = (SymmetryGroup::MIN_RADIAL_COUNT, SymmetryGroup::MAX_RADIAL_COUNT);
+        let count = change.count.map_or(kept, |c| c.clamp(fewest, most));
         self.env.radial_count = if on { count } else { 1 };
         if let Some(axis) = change.axis.filter(|axis| axis.length_squared() > 1e-12) {
             self.env.radial_axis = axis.normalize();

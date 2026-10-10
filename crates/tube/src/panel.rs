@@ -151,7 +151,8 @@ impl TubeTool {
         };
         theme::line(ui, &line, theme::HINT);
         if let Some(symmetry) = symmetry_summary(cx) {
-            theme::hint(ui, &format!("Symmetry: {symmetry}. Each tube is made under it (the Symmetry card of the Sculpt panel)."));
+            let text = format!("Symmetry: {symmetry}. Each tube is made under it (the Symmetry card of the Sculpt panel).");
+            theme::hint(ui, &text);
         }
     }
 

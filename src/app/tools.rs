@@ -1185,14 +1185,18 @@ mod tests {
         let marked = kit::scene::apply(
             &mut access,
             "Mark",
-            vec![Command::Mask { object: id, mask: vec![1.0; vertices] }, Command::HideFaces { object: id, triangles: half, hide: true }],
+            vec![
+                Command::Mask { object: id, mask: vec![1.0; vertices] },
+                Command::HideFaces { object: id, triangles: half, hide: true },
+            ],
         );
         assert!(marked.changed);
         let view = access.mesh(id).unwrap();
         assert!(view.mask.iter().all(|&m| m == 1.0) && view.hidden_triangles.is_some());
 
         let replacement = primitives::build(Primitive::Cube, 600, 0.5);
-        let data = kit::MeshData::Plain { mesh: TriMesh::new(replacement.positions.clone(), replacement.indices.clone()), mask: None };
+        let rebuilt = TriMesh::new(replacement.positions.clone(), replacement.indices.clone());
+        let data = kit::MeshData::Plain { mesh: rebuilt, mask: None };
         let receipt = kit::scene::apply(&mut access, "Merge", vec![Command::Replace { object: id, mesh: data }]);
         assert!(receipt.changed);
         let view = access.mesh(id).unwrap();
