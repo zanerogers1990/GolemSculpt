@@ -425,10 +425,13 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
             let radial_then = if repeats > 0 { (flag("radial"), repeats.clamp(2, 32) as u32) } else { (false, 8) };
             assert_eq!((own.radial.on, own.radial.count), radial_then, "{name} / {}: radial symmetry", object.name);
             println!("        symmetry: {}", own.summary());
-            // What this app was given per-object symmetry for: in these files
-            // the face is mirrored across X and the body across Z.
+            // What this app was given per-object symmetry for: in the two
+            // session backups the face is mirrored across X and the body
+            // across Z. Other files of the same model have other axes ticked,
+            // and the check against the entry's own flags above covers those.
+            let backup = name.starts_with("claude-session-backup") || name.starts_with("claude-symmetry-test");
             for (known, axes) in [("face", [true, false, false]), ("EsauCardona_BaseMesh", [false, false, true])] {
-                if object.name == known {
+                if backup && object.name == known {
                     assert_eq!((own.mirror, own.space), (axes, crate::scene::Space::Local), "{name} / {known}");
                 }
             }
