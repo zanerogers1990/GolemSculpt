@@ -6,11 +6,12 @@ use std::time::Instant;
 
 use glam::{Quat, Vec2, Vec3};
 use winit::event::MouseButton;
-use winit::keyboard::KeyCode;
+use winit::keyboard::{KeyCode, ModifiersState};
 
 use super::{DOUBLE_CLICK, Drag, Running};
 use crate::camera;
 use crate::doc::{Action, Tool};
+use crate::gizmo::{Handle, Handles, Target};
 use crate::mesh::Mesh;
 use crate::render::spheres::SkinLook;
 use crate::ssphere::{Body, Ctx, EditMode, Hit, Press, SSpheres};
@@ -90,9 +91,27 @@ impl Running {
         });
     }
 
+    /// What the transform gizmo sits on while the tool is up: arrows on the
+    /// selected sphere in Move mode (see ssphere/gizmo.rs for why only
+    /// arrows). The gizmo's own routines take it from here.
+    pub(super) fn spheres_gizmo(&self) -> Option<(Target, Handles)> {
+        Some(self.doc.spheres.gizmo()?.target())
+    }
+
+    /// Whether the pointer is on a sphere, which keeps a press even where an
+    /// arrow of the gizmo is drawn over it.
+    pub(super) fn spheres_claims_pointer(&mut self, pos: Vec2) -> bool {
+        self.with_spheres(|s, cx| s.claims_pointer(cx, pos))
+    }
+
     /// A button went down on the viewport while the tool is up.
     pub(super) fn spheres_pressed(&mut self, button: MouseButton) -> Drag {
         self.sync_view();
+        // An arrow of the gizmo on the selected sphere wins the press, as the
+        // gizmo's handles do everywhere (unless a sphere is in the way).
+        if button == MouseButton::Left && self.gizmo_pressed() {
+            return Drag::Gizmo;
+        }
         let mods = self.input.mods;
         let pos = self.input.pointer;
         let delete = button == MouseButton::Right || mods.control_key();
@@ -179,7 +198,12 @@ impl Running {
             }
             // Mid-drag: put the rig back. Otherwise: let go of the selection,
             // and failing that leave Esc to the app.
-            KeyCode::Escape => return self.doc.spheres.escape(),
+            KeyCode::Escape => {
+                let taken = self.doc.spheres.escape();
+                // A drag of the gizmo's arrow is cancelled with the rest.
+                self.transform_cancelled();
+                return taken;
+            }
             // The brush keys have nothing to act on while the tool is up.
             KeyCode::KeyS
             | KeyCode::KeyF
@@ -256,6 +280,8 @@ impl Running {
             || self.over_ui()
             || self.ui.radial.is_some()
             || self.input.mods.alt_key()
+            // On an arrow of the gizmo the pointer is the gizmo's.
+            || self.transform.on_tool_handle
             || !matches!(self.input.drag, Drag::None | Drag::Spheres);
         // A screenshot run has no time to wait for the skin to settle.
         let settle_now = self.args.screenshot.is_some();
@@ -416,6 +442,133 @@ impl Running {
         );
     }
 
+    /// The figure's elbow selected in Move mode, and the arrows pulled by the
+    /// real pointer routines: out along the red one, then up along the green
+    /// one, which lifts the hand and its fingers while the other arm follows
+    /// as a mirror image. With `how` `-held` the second pull is still going;
+    /// with `-play` it checks what the arrows do and prints what came of it.
+    fn spheres_demo_gizmo(&mut self, elbow: usize, how: &str) {
+        self.input.inside = true;
+        self.input.mods = ModifiersState::empty();
+        self.doc.spheres.set_mode(EditMode::Move);
+        self.doc.spheres.selected = Some(elbow);
+        self.sync_view();
+        if how == "-play" {
+            return self.spheres_gizmo_play(elbow);
+        }
+        // Pulled back a little, so the arrows clear the buttons in the corner.
+        self.doc.camera.distance *= 1.3;
+        self.sync_view();
+        for (axis, by) in [(0, 0.25), (1, 0.3)] {
+            let Some(frame) = self.demo_frame() else { return };
+            let grab = frame.pivot + frame.axis(axis) * frame.arm * 1.1;
+            let release = how != "-held" || axis == 0;
+            self.demo_drag(&[grab, grab + frame.axis(axis) * by], release);
+        }
+    }
+
+    /// Works the arrows the way a person would, through the real pointer, key
+    /// and undo routines, and prints what came of each step: a check of the
+    /// wiring that needs no one at the tablet.
+    fn spheres_gizmo_play(&mut self, elbow: usize) {
+        fn say(what: &str, ok: bool) {
+            println!("{} {what}", if ok { "ok  " } else { "FAIL" });
+        }
+        let world = |app: &Running| -> Vec<Vec3> {
+            let s = &app.doc.spheres;
+            s.rig.nodes().iter().map(|n| s.frame().to_world(n.position)).collect()
+        };
+        let mut branch = Vec::new();
+        self.doc.spheres.rig.collect_subtree(elbow, &mut branch);
+        let steps = |app: &Running| app.doc.spheres.undo_summary();
+        let skin_version = |app: &Running| app.doc.spheres.skin().map(|(_, generation)| generation);
+        let before = world(self);
+        self.spheres_frame();
+        let skin_before = skin_version(self);
+
+        let Some(frame) = self.demo_frame() else { return say("the arrows are up on the selected sphere", false) };
+        say("the arrows sit on the selected sphere, on the world's axes", {
+            frame.pivot.distance(before[elbow]) < 1e-4 && (0..3).all(|i| frame.axis(i).distance(Vec3::AXES[i]) < 1e-4)
+        });
+        say("and there is no ring or cube, only arrows", {
+            (0..3).all(|i| !frame.shown.has(Handle::Rotate(i)) && !frame.shown.has(Handle::Scale(i)))
+                && !frame.shown.has(Handle::Uniform)
+        });
+
+        // A press on the sphere itself is the sphere's, not an arrow's.
+        let px = |app: &Running, p: Vec3| app.view.project(p).unwrap_or(app.view.size * 0.5);
+        let centre = px(self, frame.pivot);
+        self.pointer_moved(centre, None);
+        self.pointer_pressed(MouseButton::Left, None);
+        say("a press on the sphere itself is a drag of the sphere", self.input.drag == Drag::Spheres);
+        self.pointer_released(MouseButton::Left);
+        say("which left no step when it did not move", steps(self).is_none());
+
+        // The red arrow, pulled out 0.25.
+        let grab = frame.pivot + frame.axis(0) * frame.arm * 1.1;
+        say("a press on the red arrow takes the drag", self.demo_drag(&[grab, grab + Vec3::X * 0.25], false));
+        say("and it is a drag of the arrow", self.input.drag == Drag::Gizmo);
+        // Z in the middle of a drag must not pull the spheres out from under it.
+        self.act(Action::Undo);
+        say("Z during the drag does nothing", self.transform_dragging() && self.doc.spheres.is_dragging());
+        self.spheres_frame();
+        say("the skin follows the spheres while the arrow is held", skin_version(self) != skin_before);
+        self.pointer_released(MouseButton::Left);
+        let after = world(self);
+        let moved = (0..after.len()).all(|i| {
+            let want = if branch.contains(&i) { before[i] + Vec3::X * 0.25 } else { before[i] };
+            after[i].distance(want) < 0.02
+        });
+        say("the sphere and its branch moved 0.25 out, and nothing else", moved);
+        println!("     the elbow went from {:.3} to {:.3}", before[elbow], after[elbow]);
+        let s = &self.doc.spheres;
+        let twin = s.rig.geometry(s.symmetry()).0.into_iter().find(|t| t.node == elbow && t.mirrored);
+        let real = s.rig.nodes()[elbow].position;
+        say("its twin on the other side is still its mirror image", {
+            twin.is_some_and(|t| t.centre.distance(Vec3::new(-real.x, real.y, real.z)) < 1e-5)
+        });
+        say("one drag is one step in the spheres' own history", steps(self) == Some(("Move Sphere", 1)));
+        self.act(Action::Undo);
+        say("which Z takes back, every sphere exactly where it was", world(self) == before && steps(self).is_none());
+        self.act(Action::Redo);
+        say("and Shift+Z brings back", world(self) == after);
+        self.act(Action::Undo);
+
+        // Esc mid-drag puts them back and the rest of the drag does nothing.
+        let Some(frame) = self.demo_frame() else { return say("the arrows are still up", false) };
+        let grab = frame.pivot + frame.axis(1) * frame.arm * 1.1;
+        self.demo_drag(&[grab, grab + Vec3::Y * 0.3], false);
+        say("the green arrow moved them", world(self)[elbow].distance(before[elbow]) > 0.2);
+        self.spheres_key_pressed(KeyCode::Escape);
+        say("Esc puts them back and ends the drag", world(self) == before && !self.transform_dragging());
+        self.pointer_moved(px(self, grab + Vec3::Y * 0.5), None);
+        self.pointer_released(MouseButton::Left);
+        say("the rest of that drag moves nothing and leaves no step", world(self) == before && steps(self).is_none());
+        say("and the sphere is still selected", self.doc.spheres.selected == Some(elbow));
+
+        // What puts the arrows away.
+        self.spheres_key_pressed(KeyCode::Digit3);
+        say("the Scale mode has no arrows", self.demo_frame().is_none());
+        self.spheres_key_pressed(KeyCode::Digit2);
+        say("the Move mode has them", self.demo_frame().is_some());
+        self.set_tool(Tool::Sculpt);
+        self.transform_frame();
+        say("putting the tool away takes them off", self.ui.gizmo.is_empty() && self.demo_frame().is_none());
+        self.set_tool(Tool::SSpheres);
+        self.transform_frame();
+        say("and bringing it back puts them on the same sphere", !self.ui.gizmo.is_empty());
+        let corner = self.view.origin + Vec2::new(30.0, 30.0);
+        self.pointer_moved(corner, None);
+        self.pointer_pressed(MouseButton::Left, None);
+        self.pointer_released(MouseButton::Left);
+        say("a click on empty space deselects, and the arrows go", self.demo_frame().is_none());
+        self.doc.spheres.selected = Some(elbow);
+        self.spheres_key_pressed(KeyCode::Delete);
+        say("deleting the sphere takes them off", self.demo_frame().is_none());
+        self.act(Action::Undo);
+        say("and undoing the delete brings them back", self.demo_frame().is_some());
+    }
+
     /// A small figure for visual checks without a person at the tablet:
     /// `rig` shows the armature under its shell, `preview` the solid skin,
     /// `skin` the finished object, `back` the spheres again after that, and
@@ -425,6 +578,9 @@ impl Running {
     /// `followed-skin` makes the skin of that. `wheel` holds the Space wheel
     /// open over the figure. `new` presses New SSphere Rig on the starting
     /// scene, and `play` builds a rig through scripted pointer input.
+    /// `gizmo` pulls the arrows on the figure's elbow out and up, `gizmo-held`
+    /// leaves the second pull going, and `gizmo-play` checks the arrows
+    /// through the real pointer and keys.
     pub(super) fn spheres_demo(&mut self, what: &str) {
         if what == "play" {
             return self.spheres_play();
@@ -458,6 +614,7 @@ impl Running {
         }
         chain(pelvis, &[(v(0.1, 0.93, 0.0), 0.11), (v(0.13, 0.52, 0.04), 0.07), (v(0.14, 0.1, 0.0), 0.05)]);
         self.doc.spheres.selected = Some(chest);
+        let elbow = self.doc.spheres.rig.parent_of(hand);
         self.doc.spheres.preview = what == "preview";
         if attach {
             self.spheres_demo_attach(what != "attached");
@@ -465,6 +622,9 @@ impl Running {
         self.sync_view();
         self.frame_view();
         self.doc.camera.update(1.0);
+        if let (Some(how), Some(elbow)) = (what.strip_prefix("gizmo"), elbow) {
+            self.spheres_demo_gizmo(elbow, how);
+        }
         if what == "wheel" {
             // In the interface's units, which no frame has set up yet.
             let per_point = self.window.scale_factor() as f32 * self.doc.opts.ui_scale;
