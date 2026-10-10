@@ -3,6 +3,7 @@
 
 mod app;
 mod bench;
+mod bench_matched;
 mod camera;
 mod capture;
 mod doc;
@@ -70,6 +71,20 @@ fn main() {
             sizes = vec![200_000, 1_000_000, 4_000_000];
         }
         bench::run(&sizes);
+        return;
+    }
+    if let Some(i) = args.iter().position(|a| a == "--bench-matched") {
+        // Optional icosphere subdivisions after the flag: 7 (327k tris) and 8 (1.3M) by default.
+        let mut subdivisions: Vec<usize> = args[i + 1..].iter().filter_map(|a| a.parse().ok()).collect();
+        if subdivisions.is_empty() {
+            subdivisions = vec![7, 8];
+        }
+        bench_matched::run(&subdivisions);
+        return;
+    }
+    if args.iter().any(|a| a == "--bench-volume") {
+        // Remesh and boolean costs, on the source the Unity engine benchmarks use.
+        bench_matched::run_volume();
         return;
     }
 
