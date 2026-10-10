@@ -20,6 +20,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "brush_crease",
     "brush_inflate",
     "brush_flatten",
+    "brush_pose",
     "brush_standard",
     "brush_layer",
     "brush_snakehook",

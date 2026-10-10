@@ -16,7 +16,7 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | Input | Action |
 | --- | --- |
 | Left drag on the model | Sculpt |
-| Ctrl + drag, or right drag | Sculpt inverted |
+| Ctrl + drag, or right drag | Sculpt inverted (Pose: twist the limb, or slide it) |
 | Shift + drag | Smooth |
 | Left drag on the background | Orbit |
 | Alt + drag | Orbit |
@@ -30,7 +30,7 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 | H / Shift + H / Alt + H | Hide the selection / hide everything else / show everything |
 | / | Local View: only the selection, framed; again to bring the rest and the view back |
 | Delete | Delete the selected object (asks first) |
-| 1 2 3 4 5 6 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Standard, Layer, Snake Hook |
+| 1 2 3 4 5 6 7 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook |
 | S / F / D + drag | Brush size / strength / focal shift |
 | Space (hold) | Brush wheel |
 | M | Mask painting |
@@ -75,6 +75,48 @@ them all.
   so moving one finger leaves the finger next to it alone.
 - Mask painting has **Mask Hardness** for its edge; the selected brush's
   falloff and Front Facing Only do not apply to it.
+
+### Pose
+
+**Pose** (**7**) bends a limb the way you would pose a figure, with nothing to
+mask or set up first. It works as the Pose brush in Blender does.
+
+- Rest the pointer on a limb and a white line shows what a press would do. It
+  runs from the pointer to a dot with a ring round it: the **joint**. What is
+  on the pointer's side of the joint is the limb that will move, hand and all;
+  what is past it stays where it is.
+- **The brush size places the joint.** It sits in the middle of the limb where
+  the brush ring crosses it, on the side toward the body, so a bigger brush
+  bends the limb further up. Scroll, or hold S and drag, and the line follows
+  as the ring grows. The ring has to reach right round the limb: with the
+  pointer on one side of an arm it must take in the far side too. A smaller
+  one only gets hold of a patch of skin, and turns that patch and nothing
+  else (the line shows it: the joint sits right under the pointer).
+- Drag, and the limb turns about the joint to point at the pen. **Ctrl + drag**
+  (or the right button) twists it about its own length, the skin under the pen
+  going round with the pen.
+- **Segments (Joints)**: with more than one, a chain of joints runs back along
+  the limb, each a brush size from the last, and the limb reaches for the pen
+  like an arm: the point you took hold of follows the pen, every part keeps
+  its length, and the last joint (the ringed one) stays put.
+- **Joint Offset** pushes the joint further up the limb, past the brush ring,
+  by that many brush sizes: for a hand or a face, where a brush small enough
+  to pick out one part would put the joint too close to it.
+- **Rigidity** sets how sharply a joint bends, from a long soft curve to a
+  hinge. Focal Shift and Custom Falloff shape the bend itself: the curve's
+  left end is the limb's side of the joint, its right end the side that stays.
+- **Resize** makes the limb bigger or smaller about the joint as you drag away
+  from the joint or toward it (Ctrl + drag slides it without turning).
+  **Stretch** makes it longer and thinner, or shorter and fatter, keeping its
+  volume. Both work about one joint.
+- Masked surface stays where it is, hidden parts are left alone, and one drag
+  is one undo step. Strength and pen pressure do not apply: the limb follows
+  the pen exactly.
+- With a mirror on, each side gets a joint of its own, so both arms bend
+  together. A limb that lies on the mirror plane itself (a neck, a tail, the
+  trunk) can only bend within the plane, and will not twist: dragged to one
+  side it stays put, which is the mirror keeping the model symmetric. Turn the
+  mirror off to tilt a head.
 
 ## Transform gizmo
 
@@ -544,6 +586,7 @@ sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
 sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
 sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play
+sculpt.exe --screenshot out.png --demo-pose bend     # a figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play (bend:close moves the camera in; :soft and :offset change those settings)
 sculpt.exe --screenshot out.png --demo-gizmo   # the gizmo on a turned object (SCULPT_DEMO_GIZMO=global | local | three | three-turn | masked | play for more)
 sculpt.exe --screenshot out.png --demo-tool measure  # a hosted tool: id or id:what (measure:inches, array:curve, keys:applied, studs:job, any:play)
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)

@@ -25,7 +25,7 @@ use crate::doc::{Action, MaskOp, Options};
 use crate::io;
 use crate::mesh::bvh::Aabb;
 use crate::mesh::primitives::{self, Primitive};
-use crate::sculpt::{Brush, PointerSample};
+use crate::sculpt::{Brush, PointerSample, PoseMode, PoseSettings};
 use crate::ui::theme;
 
 /// How long a connection waits for the main thread. A remesh of a heavy mesh
@@ -250,7 +250,9 @@ impl Running {
         self.capture = Some(Capture { reply: request.reply, max_size, clean_view });
     }
 
-    fn call(&mut self, tool: &str, args: &Value) -> Result<String, String> {
+    /// Runs one of the bridge's tools. (Also called by the scripted checks,
+    /// which try a tool without a socket.)
+    pub(super) fn call(&mut self, tool: &str, args: &Value) -> Result<String, String> {
         if tool == "get_state" {
             return Ok(self.state().to_string());
         }
@@ -338,6 +340,12 @@ impl Running {
             "accumulate": b.accumulate,
             "mask_mode": s.mask_mode,
             "mirror": { "x": s.symmetry[0], "y": s.symmetry[1], "z": s.symmetry[2] },
+            "pose": {
+                "mode": s.pose.mode.name(),
+                "joints": s.pose.joints,
+                "offset": round(s.pose.offset),
+                "rigidity": round(s.pose.rigidity),
+            },
         })
     }
 
@@ -436,6 +444,21 @@ impl Running {
         if let Some(on) = flag(args, "accumulate") {
             s.current_mut().accumulate = on;
         }
+        if let Some(name) = text(args, "pose_mode") {
+            s.pose.mode = PoseMode::ALL
+                .into_iter()
+                .find(|mode| key(mode.name()) == key(name))
+                .ok_or("pose_mode is \"bend\", \"resize\" or \"stretch\".")?;
+        }
+        if let Some(joints) = num(args, "pose_joints") {
+            s.pose.joints = joints.round().clamp(1.0, PoseSettings::MAX_JOINTS as f32) as u32;
+        }
+        if let Some(offset) = num(args, "pose_offset") {
+            s.pose.offset = offset.clamp(0.0, PoseSettings::MAX_OFFSET);
+        }
+        if let Some(rigidity) = num(args, "pose_rigidity") {
+            s.pose.rigidity = rigidity.clamp(0.0, 1.0);
+        }
         for (axis, name) in ["mirror_x", "mirror_y", "mirror_z"].into_iter().enumerate() {
             if let Some(on) = flag(args, name) {
                 s.symmetry[axis] = on;
@@ -508,7 +531,10 @@ impl Running {
         };
         let dabs = doc.sculptor.dabs_applied - dabs_before;
         let what = if doc.sculptor.settings.mask_mode { "Mask" } else { brush.name() };
-        Ok(if changed {
+        Ok(if changed && dabs == 0 {
+            // Move and Pose take hold once and are dragged: they lay no dabs.
+            format!("{what} drag made. One undo step.")
+        } else if changed {
             format!("{what} stroke drawn ({dabs} dabs). One undo step.")
         } else {
             format!("{what} stroke drawn, but it changed nothing. Check the strength, the mask and the radius.")

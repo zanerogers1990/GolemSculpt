@@ -7,6 +7,7 @@ mod brush_size;
 mod falloff;
 mod look;
 mod overlay;
+mod pose;
 pub mod question;
 mod scene_graph;
 mod spheres;
@@ -44,6 +45,10 @@ pub struct UiState {
     pub gizmo: Vec<crate::gizmo::Shape>,
     /// The recent files and their tiles in the File card.
     pub recent: crate::recent::Recent,
+    /// The Pose brush's chains as the app laid them out for this frame, in
+    /// the interface's points: the grabbed point, then each joint. Empty
+    /// when there is nothing to show.
+    pub pose: Vec<Vec<Pos2>>,
 }
 
 impl UiState {
@@ -56,6 +61,7 @@ impl UiState {
             graph: Default::default(),
             gizmo: Vec::new(),
             recent: Default::default(),
+            pose: Vec::new(),
         }
     }
 }
@@ -87,6 +93,7 @@ pub fn build(
 
     overlay::transform_gizmo(&ctx, &state.gizmo);
     overlay::cursor(&ctx, cursor);
+    pose::overlay(&ctx, &state.pose);
     tools::overlay(&ctx, doc);
 
     if !doc.opts.clean_view {
@@ -316,7 +323,8 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             return;
         }
         let bs = s.current_mut();
-        let accumulates = !matches!(brush, Brush::Move | Brush::SnakeHook | Brush::Smooth | Brush::Flatten | Brush::Layer);
+        let accumulates =
+            !matches!(brush, Brush::Move | Brush::Pose | Brush::SnakeHook | Brush::Smooth | Brush::Flatten | Brush::Layer);
         if accumulates {
             let label = if bs.accumulate { "Accumulate" } else { "Accumulate (Off)" };
             tip(
@@ -329,12 +337,15 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         if accumulates || brush == Brush::Layer {
             theme::slider(ui, "Build-Up Strength", &mut bs.build_up, 0.1..=3.0, |v| format!("{v:.2}"));
         }
-        let label = if bs.front_facing { "Front Facing Only" } else { "Front Facing Only (Off)" };
-        tip(
-            theme::checkbox(ui, &mut bs.front_facing, label, ACCENT),
-            tips,
-            "Ignore surface that faces away from the camera, so thin shapes are not hit on the far side.",
-        );
+        // Not for Pose: a limb is posed whole, far side and all.
+        if brush != Brush::Pose {
+            let label = if bs.front_facing { "Front Facing Only" } else { "Front Facing Only (Off)" };
+            tip(
+                theme::checkbox(ui, &mut bs.front_facing, label, ACCENT),
+                tips,
+                "Ignore surface that faces away from the camera, so thin shapes are not hit on the far side.",
+            );
+        }
         match brush {
             Brush::Clay => {
                 theme::slider(ui, "Clay Depth", &mut s.clay_depth, 0.1..=1.5, |v| format!("{v:.2}"));
@@ -358,6 +369,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
                     "Grab only the surface joined to the point under the pointer: moving one finger leaves the one next to it alone.",
                 );
             }
+            Brush::Pose => pose::settings(ui, s, tips),
             _ => theme::hint(ui, "No extra settings for this brush."),
         }
         falloff::section(ui, s, tips);
