@@ -685,6 +685,33 @@ fn a_partial_circle_ends_on_its_sweep() {
     near_angle(360.0 / 7.0 * 6.0, turn_about(Vec3::Z, spoke(&full[0]), spoke(&full[6])), 1e-2, "full sweep");
 }
 
+/// A negative sweep is the same circle run the other way: every copy is the forward one reflected
+/// in the plane through the axis and the centre, so it turns by the opposite angle and is as big.
+#[test]
+fn a_negative_sweep_goes_round_the_other_way_by_the_same_amount() {
+    let centre = Vec3::new(-3.0, 0.0, 0.0);
+    for sweep in [360.0, 200.0, 45.0] {
+        for follow in [true, false] {
+            let mut s = ArraySettings::new(ArrayKind::Radial);
+            (s.count, s.axis, s.sweep, s.follow, s.end_scale) = (6, 2, sweep, follow, 0.4);
+            let forward = compute(&s, &[Vec3::ZERO, centre]);
+            s.sweep = -sweep;
+            let back = compute(&s, &[Vec3::ZERO, centre]);
+            assert_eq!(back.len(), forward.len());
+            for (i, (a, b)) in forward.iter().zip(&back).enumerate() {
+                near_vec(a.offset * Vec3::new(1.0, -1.0, 1.0), b.offset, 1e-5, &format!("sweep {sweep}: copy {i}"));
+                near_vec(a.rotation.conjugate().to_scaled_axis(), b.rotation.to_scaled_axis(), 1e-5, "turn");
+                near(a.scale as f64, b.scale as f64, 1e-6, "size");
+            }
+            // The ring the tool draws runs the same way as the copies: an arc ends on its last copy.
+            if sweep < 359.99 {
+                let ring = radial_arc(&s, &[Vec3::ZERO, centre], 12);
+                near_vec(back[5].offset, ring[12], 1e-4, "the arc ends on the last copy");
+            }
+        }
+    }
+}
+
 /// The picture `Design/Array/array_circle.png`: the object at the right, the centre to its left,
 /// seen from the front. The copies go round counter-clockwise on screen from the object (the
 /// next one is above it), and tapering shrinks them that way round. Seen from +Z, as the front

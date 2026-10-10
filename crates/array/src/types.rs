@@ -68,6 +68,9 @@ pub struct ArraySettings {
     pub axis: i32,
     /// Radial: how much of the circle is covered, in degrees. 360 spreads the
     /// copies evenly all the way round; less puts the last copy at the arc's end.
+    /// Negative goes the other way round, by the same amount: a circle the Unity
+    /// app turned about its Y or Z axis runs the other way once its X is negated,
+    /// and this is how it keeps the copies where they were drawn.
     pub sweep: f32,
 }
 
@@ -107,7 +110,7 @@ impl ArraySettings {
             end_scale: scale(self.end_scale),
             mid_scale: scale(self.mid_scale),
             axis: self.axis.clamp(0, 2),
-            sweep: finite_or(self.sweep, 360.0).clamp(1.0, 360.0),
+            sweep: clamp_sweep(self.sweep),
             closed: self.closed && self.kind == ArrayKind::Curve,
             ..*self
         }
@@ -122,6 +125,13 @@ impl Default for ArraySettings {
 
 fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
+}
+
+/// A sweep with its size in range (1 to 360 degrees) and its direction kept.
+fn clamp_sweep(sweep: f32) -> f32 {
+    let sweep = finite_or(sweep, 360.0);
+    let size = sweep.abs().clamp(1.0, 360.0);
+    if sweep < 0.0 { -size } else { size }
 }
 
 /// Where something sits in the world: position, rotation, and a scale that may
@@ -260,6 +270,15 @@ mod tests {
 
         s.kind = ArrayKind::Curve;
         assert!(s.clamped().closed);
+    }
+
+    #[test]
+    fn a_sweep_keeps_its_direction_and_is_limited_in_size() {
+        let mut s = ArraySettings::new(ArrayKind::Radial);
+        for (given, kept) in [(-90.0, -90.0), (-1000.0, -360.0), (-0.2, -1.0), (0.2, 1.0), (-0.0, 1.0), (f32::NEG_INFINITY, 360.0)] {
+            s.sweep = given;
+            assert_eq!(s.clamped().sweep, kept, "{given}");
+        }
     }
 
     #[test]

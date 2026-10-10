@@ -68,6 +68,53 @@ impl Scene {
         }
     }
 
+    /// Everything an export writes for `object`, each with the name it goes under
+    /// (no spaces): the object itself, its live mirror copies (`Ball_MirrorX`), then the
+    /// copies a tool keeps of it, which are an array's. Those are named as the Unity
+    /// exporters named an array's views: `Ball_Array3` for the third copy of the run
+    /// (the object is the first), and `Ball_Array3MirrorX` for that copy seen through
+    /// the object's mirror. The matrices are the places' own, so a copy seen through a
+    /// reflection is written with its faces turned back (the exporters see the
+    /// determinant). Hidden objects keep no copies, as on screen.
+    pub fn export_places(&self, object: &Object) -> Vec<(String, Mat4)> {
+        let name = object.name.replace(' ', "_");
+        let mut places = vec![(name.clone(), object.matrix())];
+        let mirrors = object.mirror.map_or_else(Vec::new, |mirror| mirror.copies());
+        places.extend(
+            mirrors.iter().map(|c| (format!("{name}_Mirror{}", c.axis_name()), object.placed_matrix(c.flip_mask))),
+        );
+
+        // The tool says the straight copies (the second of the run on), then the same again through
+        // each side of the mirror, in the mirror's own order.
+        let kept = self.tool_places(object.id);
+        let sides = 1 + mirrors.len();
+        if kept.len() % sides != 0 {
+            places.extend(kept.iter().enumerate().map(|(i, m)| (format!("{name}_Array{}", i + 2), *m)));
+            return places;
+        }
+        let per_side = kept.len() / sides;
+        for (i, matrix) in kept.iter().enumerate() {
+            let (side, copy) = (i / per_side, i % per_side + 2);
+            let reflection = if side == 0 { String::new() } else { format!("Mirror{}", mirrors[side - 1].axis_name()) };
+            places.push((format!("{name}_Array{copy}{reflection}"), *matrix));
+        }
+        places
+    }
+
+    /// What an export's status line adds when the object has copies besides itself:
+    /// " with its mirror copy and its 4 array copies".
+    pub fn export_note(&self, object: &Object) -> String {
+        let mirrors = object.mirror.map_or(0, |m| m.copy_count());
+        let arrays = self.tool_places(object.id).len();
+        let part = |count: usize, kind: &str| match count {
+            0 => None,
+            1 => Some(format!("its {kind} copy")),
+            n => Some(format!("its {n} {kind} copies")),
+        };
+        let parts: Vec<String> = [part(mirrors, "mirror"), part(arrays, "array")].into_iter().flatten().collect();
+        if parts.is_empty() { String::new() } else { format!(" with {}", parts.join(" and ")) }
+    }
+
     /// Every place an object's mesh is drawn, with its code: the object, its
     /// live mirror copies, then the copies tools keep.
     pub fn places_of<'a>(&'a self, object: &'a Object) -> impl Iterator<Item = (u16, Mat4)> + 'a {

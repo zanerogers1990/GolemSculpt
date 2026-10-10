@@ -12,9 +12,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
+use sculpt_toolkit::Arrival;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Fullscreen;
 
+use super::tools::Tools;
 use super::{Running, import_mesh, install, is_native, stem};
 use crate::camera::{Camera, SavedView};
 use crate::doc::{Action, OpenHow};
@@ -62,8 +64,10 @@ fn how_many(count: usize) -> String {
 
 /// Adds a loaded file's objects to the scene, where they were saved, under
 /// names nothing in the scene has yet, and selects the first of them.
-/// Objects that shared a mesh in the file still share it.
-fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) {
+/// Objects that shared a mesh in the file still share it. Gives back the row
+/// of the file and the id in the scene of each object that was added.
+fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) -> Vec<(usize, u64)> {
+    let mut added = Vec::new();
     let mut meshes: Vec<Option<Mesh>> = saved.meshes.into_iter().map(Some).collect();
     // For each mesh of the file, the first object added that shows it.
     let mut shown_by: Vec<Option<u64>> = vec![None; meshes.len()];
@@ -93,10 +97,12 @@ fn append(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) {
         (object.visible, object.position, object.rotation, object.scale) = (o.visible, o.position, o.rotation, o.scale);
         object.mirror = crate::scene::saved_mirror(&saved.details, row);
         first.get_or_insert(id);
+        added.push((row, id));
     }
     if let Some(first) = first {
         scene.select(first, slot);
     }
+    added
 }
 
 impl Running {
@@ -327,6 +333,7 @@ impl Running {
         details.set(io::slot::CAMERA, &self.doc.camera.saved_view());
         details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides, radial });
         self.doc.scene.keep_mirrors(&mut details);
+        self.doc.tools.keep_in_file(&self.doc.scene, &mut details);
         details
     }
 
@@ -335,6 +342,9 @@ impl Running {
     /// the app as it is; with no saved view, the model is framed instead.
     fn apply_details(&mut self, details: &io::Details) {
         self.doc.scene.restore_mirrors(details);
+        // The file's objects are the scene's now, row for row: the tools get what they kept for them.
+        let rows = Tools::rows_of(&self.doc.scene);
+        self.doc.tools.restore_from_file(&rows, details, Arrival::Replaced);
         if let Some(shading) = details.get_over(io::slot::SHADING, &io::Shading::default()) {
             shading.apply(&mut self.doc.opts);
             // The picture is looked up by name: the list differs between
@@ -635,10 +645,13 @@ impl Running {
         };
         let count = saved.objects.len();
         let note = unity_import::status_note(&saved.details, false).map_or(String::new(), |note| format!(". {note}"));
+        let (details, mut rows) = (saved.details.clone(), Vec::new());
         self.edit_scene(|scene, slot| {
-            append(scene, slot, saved);
+            rows = append(scene, slot, saved);
             true
         });
+        // Only the objects are added: their arrays come with them, and the scene's own are not touched.
+        self.doc.tools.restore_from_file(&rows, &details, Arrival::Added);
         self.doc.mesh_replaced = true;
         self.frame_view();
         self.status(format!("Added {} from {}{note}", how_many(count), file_name(&path)), true);

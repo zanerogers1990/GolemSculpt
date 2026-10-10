@@ -21,7 +21,10 @@ use crate::draw::{Draw, smooth_normals};
 use crate::jobs::Jobs;
 use sculpt_symmetry::MirrorRepeater;
 
-use crate::scene::{Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Scene};
+use crate::saved::{Arrival, Saved};
+use crate::scene::{
+    Command, Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Scene,
+};
 use crate::tool::{Button, Event, GizmoPhase, Key, Tool};
 use crate::view::{Ray, View};
 
@@ -748,6 +751,30 @@ impl Bench {
         self.send(tool, Event::Redo) || self.doc.step(false)
     }
 
+    /// What the tool would write into a scene file: its `save_object` for each
+    /// object, in the order of the object list (the rows of the file).
+    pub fn save_tool(&self, tool: &dyn Tool) -> Vec<Option<Saved>> {
+        self.doc.objects().into_iter().map(|id| tool.save_object(id)).collect()
+    }
+
+    /// Opens a file: `objects` take the place of every object in the scene,
+    /// under new ids and as one undo step, as Open does. Returns the new ids in
+    /// order, for `load_tool`.
+    pub fn open(&mut self, objects: Vec<(&str, TriMesh)>) -> Vec<ObjectId> {
+        let old = self.doc.objects();
+        let mut commands: Vec<Command> = objects.into_iter().map(|(name, mesh)| Command::Add(NewObject::new(name, mesh))).collect();
+        commands.extend(old.into_iter().map(|object| Command::Delete { object }));
+        self.call(|cx| cx.commit("Open", commands)).added
+    }
+
+    /// Hands the tool what a file kept for it: `saved[row]` belongs to the
+    /// object `ids[row]` (a row with no id is not in the scene and is left out,
+    /// as the app does), as `Tool::load_objects` is called when a file comes in.
+    pub fn load_tool(&mut self, tool: &mut dyn Tool, ids: &[ObjectId], saved: Vec<Option<Saved>>, arrival: Arrival) {
+        let objects = ids.iter().zip(saved).filter_map(|(&id, saved)| Some((id, saved?))).collect();
+        tool.load_objects(objects, arrival);
+    }
+
     /// Z with no tool up: steps the scene's history.
     pub fn undo_scene(&mut self) -> bool {
         self.doc.step(true)
@@ -1218,6 +1245,69 @@ mod tests {
         assert_eq!(bench.doc.info(a).unwrap().live_copies, [right]);
         bench.live_copies(a, &[]);
         assert!(bench.doc.info(a).unwrap().live_copies.is_empty());
+    }
+
+    /// A tool that keeps a label for some objects, to follow it through a save and an open.
+    #[derive(Default)]
+    struct Labeller {
+        labels: std::collections::BTreeMap<ObjectId, String>,
+        arrivals: Vec<Arrival>,
+    }
+
+    impl Tool for Labeller {
+        fn info(&self) -> crate::tool::Info {
+            crate::tool::Info { id: "labeller", name: "Labeller", icon: "", tip: "", hotkey: None }
+        }
+
+        fn save_object(&self, object: ObjectId) -> Option<Saved> {
+            self.labels.get(&object).map(|label| Saved::fields([("label", label.as_str().into())]))
+        }
+
+        fn load_objects(&mut self, objects: Vec<(ObjectId, Saved)>, arrival: Arrival) {
+            self.arrivals.push(arrival);
+            for (id, saved) in objects {
+                if let Some(label) = saved.get("label").and_then(Saved::text) {
+                    self.labels.insert(id, label.to_owned());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn what_a_tool_saves_for_an_object_follows_the_object_through_a_file_by_its_row() {
+        let mut bench = Bench::new();
+        let (a, b, c) = (bench.add("A", cube(0.5)), bench.add("B", cube(0.5)), bench.add("C", cube(0.5)));
+        let mut tool = Labeller::default();
+        tool.labels.insert(c, "third".into());
+        tool.labels.insert(a, "first".into());
+
+        // Rows, not ids: the middle object has nothing.
+        let saved = bench.save_tool(&tool);
+        assert_eq!(saved.iter().map(Option::is_some).collect::<Vec<_>>(), [true, false, true]);
+
+        // Opening the file replaces the scene, under new ids; the labels go to the new objects of the same rows.
+        let opened = bench.open(vec![("A", cube(0.5)), ("B", cube(0.5)), ("C", cube(0.5))]);
+        assert!(opened.iter().all(|id| ![a, b, c].contains(id)), "the file's objects are new objects");
+        assert_eq!(bench.doc.objects(), opened);
+        bench.load_tool(&mut tool, &opened, saved.clone(), Arrival::Replaced);
+        assert_eq!(tool.labels.get(&opened[0]).map(String::as_str), Some("first"));
+        assert_eq!(tool.labels.get(&opened[2]).map(String::as_str), Some("third"));
+        assert!(!tool.labels.contains_key(&opened[1]));
+        assert_eq!(bench.save_tool(&tool), saved, "saving the opened scene writes what was read");
+
+        // Undoing the open brings the old objects back, and the tool still has what it held for them.
+        assert!(bench.undo_scene());
+        assert_eq!(bench.doc.objects(), [a, b, c]);
+        assert_eq!(bench.save_tool(&tool), saved);
+        assert!(bench.redo_scene());
+        assert_eq!(bench.doc.objects(), opened);
+
+        // A row with no object (a file entry the scene did not take) is left out, and a file that has nothing is still announced.
+        let mut other = Labeller::default();
+        bench.load_tool(&mut other, &opened[..1], saved, Arrival::Added);
+        assert_eq!(other.labels.len(), 1);
+        bench.load_tool(&mut other, &opened, vec![None, None, None], Arrival::Replaced);
+        assert_eq!(other.arrivals, [Arrival::Added, Arrival::Replaced]);
     }
 
     #[test]

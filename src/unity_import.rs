@@ -68,14 +68,21 @@
 //! one setting. Dynamic topology is set as the file has it, because the
 //! Unity app restored it with the file.
 //!
-//! A live array has no place in this app's files yet, so the copies it drew
-//! come in as linked copies of its object, where they were.
+//! A live array stays a live array: it goes in the object's entry of the
+//! details under [`io::slot::ARRAY`], exactly as the Array tool saves its own,
+//! so the object opens with its array and the tool lays the copies out. Its
+//! handle points go through the flip like any point. The layout arithmetic is
+//! the same numbers in both apps, which is why the copies land where Unity drew
+//! them, with one exception: a circle about Y or Z runs the other way round once
+//! X is negated (a turn seen in a mirror), so it is kept as a sweep in the other
+//! direction ([`through_the_flip`]). [`LiveArray::placements`] is where Unity
+//! drew each copy, in this app's axes, for anything that wants to check.
 //!
-//! The rest has nowhere to go: the array itself, the other objects' own
-//! symmetry, symmetry fixed in the world, and the brush settings (which are
-//! the user's own here, not a file's). It is still parsed, brought into this
-//! app's axes and handed back in [`Extras`], and [`LeftBehind`] says in plain
-//! words what the user is missing.
+//! The rest has nowhere to go: the other objects' own symmetry, symmetry fixed
+//! in the world, and the brush settings (which are the user's own here, not a
+//! file's). It is still parsed, brought into this app's axes and handed back
+//! in [`Extras`], and [`LeftBehind`] says in plain words what the user is
+//! missing.
 //!
 //! The JSON's own shape, class for class, is in `header.rs`.
 
@@ -87,7 +94,7 @@ use std::path::Path;
 
 use glam::{Quat, Vec3};
 use rayon::prelude::*;
-use sculpt_array::{ArrayKind, ArrayPlacement, ArraySettings};
+use sculpt_array::{ArrayKind, ArrayPlacement, ArraySettings, ArrayState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -303,23 +310,21 @@ impl ObjectSymmetry {
     }
 }
 
-/// A live array the Unity app had on an object. Its copies come in as linked
-/// copies of the object (see [`Extras`]); this is the array itself, for when
-/// a file here can hold one.
-#[allow(dead_code)] // for live arrays in files, which this app does not keep yet
+/// A live array the Unity app had on an object, as this app has it now: the
+/// object's own array, in the object's entry of the details.
+#[allow(dead_code)] // the app reads the array out of the details; these are for the tests and whatever checks them
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveArray {
-    /// As the file has them. They are the same numbers in both apps, except
-    /// that a circle about Y or Z runs the other way round once X is negated:
-    /// `placements` is where Unity drew the copies, whatever the kind.
+    /// The settings the live array has: the file's, except that a circle about
+    /// Y or Z has its sweep negated, which is how the copies stay where Unity
+    /// drew them (see [`through_the_flip`]).
     pub settings: ArraySettings,
     /// Handle points as offsets from the object's position, in this app's axes.
     pub points: Vec<Vec3>,
-    /// Where each copy sat relative to the object, in this app's axes; the
-    /// first is the object itself.
+    /// Where the Unity app drew each copy relative to the object, in this app's
+    /// axes; the first is the object itself. The Array tool's layout of
+    /// `settings` and `points` is these.
     pub placements: Vec<ArrayPlacement>,
-    /// The rows of the scene's object list its copies came in as.
-    pub rows: Vec<usize>,
 }
 
 /// What the file kept for one of its objects beyond what the scene took.
@@ -340,9 +345,8 @@ pub struct ObjectExtras {
 ///   object's; the other objects' are only here, as is whether an object's
 ///   symmetry was fixed in the world rather than in its own space, which
 ///   this app does not have.
-/// - **Live arrays**: `objects[i].array`. The copies Unity drew are in the
-///   scene as linked copies, each with the object's live mirror; the array's
-///   own settings and handle points are only here.
+/// - **Live arrays**: `objects[i].array`. The array is the object's own in the
+///   scene's details (see [`LiveArray`]); what is here is for comparing.
 /// - **Brush settings**: `brush`, the whole block. Only dynamic topology is
 ///   applied (see [`SavedDynamicTopology`]).
 ///
@@ -527,10 +531,9 @@ fn unique(wanted: &str, taken: &[SavedObject]) -> String {
     (2..).map(|n| format!("{wanted} ({n})")).find(|name| free(name)).unwrap_or_else(|| wanted.to_owned())
 }
 
-/// The live array of an entry, if it has one this app knows how to lay out:
-/// its settings, its handle points and where its copies go, all still in
-/// Unity's axes. The rule for "has one" is the Unity loader's.
-fn array_of(entry: &ArrayEntry) -> Option<(ArraySettings, Vec<Vec3>, Vec<ArrayPlacement>)> {
+/// The live array of an entry, if it has one this app knows how to lay out,
+/// in this app's axes. The rule for "has one" is the Unity loader's.
+fn array_of(entry: &ArrayEntry) -> Option<LiveArray> {
     let kind = ArrayKind::from_id(entry.kind);
     if kind == ArrayKind::None || entry.points.len() < 2 {
         return None;
@@ -554,7 +557,28 @@ fn array_of(entry: &ArrayEntry) -> Option<(ArraySettings, Vec<Vec3>, Vec<ArrayPl
     // The layout is the same arithmetic in both apps, so on Unity's numbers
     // it gives Unity's placements.
     let placements = sculpt_array::compute_layout(&settings, &points);
-    Some((settings, points, placements))
+    Some(LiveArray {
+        settings: through_the_flip(settings),
+        points: points.into_iter().map(axes::point).collect(),
+        placements: placements
+            .iter()
+            .map(|p| ArrayPlacement { offset: axes::point(p.offset), rotation: axes::rotation(p.rotation), scale: p.scale })
+            .collect(),
+    })
+}
+
+/// An array's settings as the same array reads once X is negated. A path's
+/// copies need no change: its offsets are the path's points, and the frame it
+/// carries along the path is made of cross products, which turn over with the
+/// mirror exactly as a rotation seen in it does. A circle's turn is a fixed
+/// angle about a fixed axis, and a turn about Y or Z seen in the mirror is the
+/// opposite turn, so its sweep goes the other way (a negative sweep: see
+/// `ArraySettings::sweep`). About X the axis lies in the mirror and nothing changes.
+fn through_the_flip(settings: ArraySettings) -> ArraySettings {
+    if settings.kind == ArrayKind::Radial && settings.axis != 0 {
+        return ArraySettings { sweep: -settings.sweep, ..settings };
+    }
+    settings
 }
 
 /// An object's own symmetry, in this app's terms.
@@ -611,49 +635,12 @@ fn convert(header: Header, raw: Vec<RawObject>) -> Imported {
             rows.push(SavedObject { name, visible: instance.visible, mesh, position, rotation, scale });
         }
 
-        // A live array: its copies come in as linked copies of the object,
-        // where Unity drew them, each mirrored as the object is.
-        let mut array = None;
-        if let Some((settings, points, placements)) = array_of(&entry.array) {
-            let mut copies = Vec::new();
-            for (k, copy) in placements.iter().enumerate().skip(1) {
-                let at = rows.len();
-                // In Unity's axes the copy is the object moved by `offset`
-                // and then turned by `rotation`; both go through the mirror.
-                let position = position + axes::point(copy.offset);
-                let rotation = (axes::rotation(copy.rotation) * rotation).normalize();
-                let name = unique(&format!("{name} (Array {})", k + 1), &rows);
-                rows.push(SavedObject {
-                    name,
-                    visible: entry.visible,
-                    mesh,
-                    position,
-                    rotation,
-                    scale: scale * copy.scale,
-                });
-                if let Some(mirror) = &mirror {
-                    details.set_object(at, io::slot::MIRROR_COPIES, mirror);
-                }
-                copies.push(at);
-            }
-            let came = match copies.len() {
-                1 => "its copy came in as a linked copy".to_owned(),
-                n => format!("its {n} copies came in as linked copies"),
-            };
-            left.objects.push(format!("the live array on \"{name}\" ({came}, without the array's handles)"));
-            array = Some(LiveArray {
-                settings,
-                points: points.into_iter().map(axes::point).collect(),
-                placements: placements
-                    .iter()
-                    .map(|p| ArrayPlacement {
-                        offset: axes::point(p.offset),
-                        rotation: axes::rotation(p.rotation),
-                        scale: p.scale,
-                    })
-                    .collect(),
-                rows: copies,
-            });
+        // A live array stays one: the object's entry keeps it the way the Array
+        // tool saves its own, and the tool takes it up when the file is opened.
+        let array = array_of(&entry.array);
+        if let Some(live) = &array {
+            let state = ArrayState { settings: live.settings, points: live.points.clone() };
+            details.set_tool_object(row, io::slot::ARRAY, &sculpt_array::state_to_saved(&state));
         } else if entry.array.kind != 0 {
             left.objects.push(format!("an array on \"{name}\" that this app cannot read"));
         }

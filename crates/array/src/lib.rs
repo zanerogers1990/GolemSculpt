@@ -58,6 +58,7 @@ mod gestures;
 mod panel;
 mod picture;
 mod pose;
+mod saved;
 mod simplify;
 mod tool;
 
@@ -71,12 +72,15 @@ mod tool_tests;
 mod copy_tests;
 #[cfg(test)]
 mod arrow_tests;
+#[cfg(test)]
+mod file_tests;
 
 pub use bake::{MAX_COMBINED_VERTICES, bake, bake_array, bake_normals, local_matrices};
 pub use copies::{Place, drawn as drawn_copies, places as copy_places};
 pub use finish::Apply;
 pub use layout::{axis_vector, compute as compute_layout, radial_arc, scale_at};
 pub use pose::CopyPick;
+pub use saved::{from_saved as state_from_saved, to_saved as state_to_saved};
 pub use state::ArrayState;
 pub use tool::{ArrayTool, tool};
 pub use types::{ArrayKind, ArrayPlacement, ArraySettings, Pose};

@@ -16,8 +16,9 @@ use crate::types::{ArrayKind, ArraySettings};
 /// Settings and handle points. Kind `None` means "no array".
 ///
 /// Saved as: kind id, count, end scale, mid scale, closed, follow, space by
-/// size, axis, sweep, and the points. A file with no array reads back as kind 0
-/// and no points, which `ArrayState::none` is.
+/// size, axis, sweep, and the points (`saved.rs` writes and reads them as the
+/// scene file keeps them). A file with no array reads back as kind 0 and no
+/// points, which `ArrayState::none` is.
 ///
 /// Equality is the undo system's question "did anything change": every field
 /// exactly, except that any two states with no array are alike.
@@ -39,6 +40,15 @@ impl PartialEq for ArrayState {
 }
 
 impl ArrayState {
+    /// The most handle points an array keeps. A path drawn by hand is simplified to a couple
+    /// of dozen, and clicking adds one at a time; this is for a file or script that asks for
+    /// a million, whose path would be sampled that many times over.
+    pub const MAX_POINTS: usize = 256;
+    /// How far from the object a handle point may be, along each axis: ten kilometres at
+    /// the app's ten millimetres a unit. Far enough for anything drawn, near enough that
+    /// the layout's arithmetic stays well inside what a float can hold.
+    pub const MAX_REACH: f32 = 1.0e6;
+
     pub fn none() -> ArrayState {
         ArrayState { settings: ArraySettings::new(ArrayKind::None), points: Vec::new() }
     }
@@ -47,14 +57,22 @@ impl ArrayState {
         self.settings.kind == ArrayKind::None
     }
 
-    /// The state as it should be stored and laid out: settings in range and,
+    /// The state as it should be stored and laid out: settings in range, a
+    /// reasonable number of points that are all places (a coordinate that is
+    /// not a number is the object's own, one that is far off is brought in), and,
     /// for any kind, the object's own point and at least one more to aim at.
     /// What a loaded file or a script may not have respected.
     pub fn sanitized(&self) -> ArrayState {
         if self.is_none() {
             return ArrayState::none();
         }
-        let mut points = self.points.clone();
+        let reach = |c: f32| if c.is_finite() { c.clamp(-Self::MAX_REACH, Self::MAX_REACH) } else { 0.0 };
+        let mut points: Vec<Vec3> = self
+            .points
+            .iter()
+            .take(Self::MAX_POINTS)
+            .map(|p| Vec3::new(reach(p.x), reach(p.y), reach(p.z)))
+            .collect();
         if points.is_empty() {
             points.push(Vec3::ZERO);
         }
@@ -168,6 +186,19 @@ mod tests {
     fn a_valid_state_survives_sanitizing_unchanged() {
         let state = curve_state();
         assert_eq!(state.sanitized(), state);
+    }
+
+    #[test]
+    fn sanitizing_keeps_a_reasonable_number_of_points_that_are_all_places() {
+        let mut state = curve_state();
+        state.points = vec![Vec3::new(f32::NAN, 1.0, f32::INFINITY), Vec3::new(1e30, -1e30, 2.0)];
+        state.points.extend((0..1000).map(|i| Vec3::splat(i as f32)));
+        let s = state.sanitized();
+        assert_eq!(s.points.len(), ArrayState::MAX_POINTS);
+        assert!(s.points.iter().all(|p| p.is_finite() && p.abs().max_element() <= ArrayState::MAX_REACH));
+        assert_eq!(s.points[0], Vec3::new(0.0, 1.0, 0.0));
+        assert_eq!(s.points[1], Vec3::new(ArrayState::MAX_REACH, -ArrayState::MAX_REACH, 2.0));
+        assert_eq!(s.sanitized(), s, "sanitizing twice changes nothing");
     }
 
     #[test]

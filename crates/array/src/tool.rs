@@ -25,9 +25,13 @@
 //! | Z, Shift + Z | Step the array's own history |
 //!
 //! Y brings the tool up and puts it away. A drag on empty background orbits.
-//! Arrays are the tool's, not the scene's: they are not saved in `.sclp` files
-//! yet, and they have their own Z while the tool is up (the scene's takes over
-//! when the tool's history is empty, or the tool is away).
+//! Arrays are the tool's, not the scene's: they have their own Z while the tool
+//! is up (the scene's takes over when the tool's history is empty, or the tool
+//! is away). They are kept in `.sclp` files all the same, by the tool through the
+//! toolkit's save and load hooks (`saved.rs` is the shape in the file), one array
+//! to an object, under that object's row of the file. An Open that replaces the
+//! scene ends the tool's history and leaves every array the tool holds where it
+//! is, keyed by an object that is not in the scene until Undo brings it back.
 //!
 //! An object with a live mirror has its array mirrored with it (`copies.rs`),
 //! and a copy on either side can be picked. What posing a copy, putting the
@@ -36,7 +40,7 @@
 //! the tool's own history knows of, in order (`pose.rs`).
 
 use glam::Vec3;
-use sculpt_toolkit::{Button, Ctx, Draw, Event, GizmoTarget, Info, Key, ObjectId, Placement, Tool};
+use sculpt_toolkit::{Arrival, Button, Ctx, Draw, Event, GizmoTarget, Info, Key, ObjectId, Placement, Saved, Tool};
 
 use crate::arrays::{Arrays, History};
 use crate::arrows::Pointing;
@@ -224,6 +228,17 @@ impl ArrayTool {
         picture::draw_stroke(cx, draw, self.stroke_world());
     }
 
+    /// A file replaced the whole scene: nothing the tool was doing belongs to it, and
+    /// its own steps are for objects the scene no longer has, which Z must not answer
+    /// before the scene's own undo of the Open does. The arrays of those objects stay
+    /// (their ids are never used again), so undoing the Open finds them as they were.
+    fn forget_history(&mut self) {
+        self.cancel_gesture();
+        self.history = History::default();
+        self.picked = None;
+        self.copy = None;
+    }
+
     /// Where the handles and the path under the pointer are, for the hover
     /// highlight and the click that adds a point.
     fn refresh_hover(&mut self, cx: &Ctx) {
@@ -335,6 +350,21 @@ impl Tool for ArrayTool {
 
     fn can_undo(&self, redo: bool) -> bool {
         if redo { !self.history.redo.is_empty() } else { !self.history.undo.is_empty() || self.edit_changed() }
+    }
+
+    fn save_object(&self, object: ObjectId) -> Option<Saved> {
+        self.arrays.get(object).map(|live| crate::saved::to_saved(&live.state))
+    }
+
+    fn load_objects(&mut self, objects: Vec<(ObjectId, Saved)>, arrival: Arrival) {
+        if arrival == Arrival::Replaced {
+            self.forget_history();
+        }
+        for (object, saved) in objects {
+            if let Some(state) = crate::saved::from_saved(&saved) {
+                self.arrays.set(object, state);
+            }
+        }
     }
 
     fn demo(&mut self, cx: &mut Ctx, what: &str) {

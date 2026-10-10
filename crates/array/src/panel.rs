@@ -76,8 +76,8 @@ pub fn show(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
         });
         theme::hint(
             ui,
-            "Arrays are kept by this tool: they are not saved in .sclp files yet, and Z steps them while Array is up. \
-             Make them real to keep them.",
+            "An array stays with its object and is saved in the .sclp file, so it comes back live. Z steps it while \
+             Array is up. Make it real to turn the copies into geometry.",
         );
     });
 
@@ -285,17 +285,26 @@ fn circle_controls(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, s: &Ar
         }
     });
 
-    let mut sweep = s.sweep;
+    // The slider is the size of the sweep; which way round it goes is the box under it.
+    let reversed = s.sweep < 0.0;
+    let mut sweep = s.sweep.abs();
     let r = theme::slider(ui, "Sweep", &mut sweep, 10.0..=360.0, |v| {
         if v >= 357.0 { "full circle".to_owned() } else { format!("{} degrees", v.round() as i32) }
     });
     let help = "How much of the circle the copies cover. All the way right is the full circle; less makes an arc - a \
                 fan, a crest.";
     if theme::tip(r, cx.tips, help).changed() {
-        let new = if sweep >= 357.0 { 360.0 } else { sweep.round() };
+        let size = if sweep >= 357.0 { 360.0 } else { sweep.round() };
+        let new = if reversed { -size } else { size };
         if (new - s.sweep).abs() > 1e-3 {
             tool.edit(cx, "Array Sweep", true, |a| a.settings.sweep = new);
         }
+    }
+    let help = "Go round the other way: the copy after the object is on its other side. A circle opened from the Unity \
+                app that goes round Y or Z is set this way, so that every copy stays where it was.";
+    if let Some(on) = toggle(ui, cx.tips, "Other way round", reversed, help) {
+        let (size, sign) = (s.sweep.abs(), if on { -1.0 } else { 1.0 });
+        tool.edit(cx, "Array Direction", false, |a| a.settings.sweep = sign * size);
     }
 }
 

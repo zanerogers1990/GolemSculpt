@@ -2,7 +2,8 @@
 
 use crate::ctx::Ctx;
 use crate::draw::Draw;
-use crate::scene::Placement;
+use crate::saved::{Arrival, Saved};
+use crate::scene::{ObjectId, Placement};
 
 /// Keyboard keys, as egui names them (`Key::A`, `Key::Num1`, `Key::Escape`,
 /// `Key::Delete`, `Key::OpenBracket`...).
@@ -203,6 +204,34 @@ pub trait Tool {
     fn gizmo(&self) -> Option<GizmoTarget> {
         None
     }
+
+    /// What the tool holds for `object` that belongs in the scene's file, if
+    /// anything (an array's settings and handle points). Asked of every tool
+    /// for every object whenever the scene is saved. The app writes it into
+    /// the object's entry under [`Info::id`], so the same name is how a file
+    /// from a later version, which has more than this one knows, is read:
+    /// leave out what the file does not need, and read what is there leniently.
+    ///
+    /// The object is named by its id here, and by its place in the object list
+    /// in the file; the app keeps the two together, so ids need not be stable
+    /// across a save. Keep to what is the object's own: where it stands in the
+    /// scene is saved with the object, not with the tool.
+    fn save_object(&self, _object: ObjectId) -> Option<Saved> {
+        None
+    }
+
+    /// Objects came into the scene from a file, with what this tool saved for
+    /// them. Called on every tool each time a file comes in (`objects` is
+    /// empty when the file has nothing of the tool's), after the objects are
+    /// in the scene and have their ids. Treat `objects` as you would a stranger's
+    /// input: a damaged value is skipped, never a reason to fail.
+    ///
+    /// `Arrival::Replaced` means the objects took the place of the whole scene,
+    /// which Undo brings back as it was, so keep what you hold for the objects
+    /// that were there (ids are never reused) but end any history of your own
+    /// that Z would otherwise answer before the scene's. `Arrival::Added` leaves
+    /// everything as it is.
+    fn load_objects(&mut self, _objects: Vec<(ObjectId, Saved)>, _arrival: Arrival) {}
 
     /// Puts the tool in a state worth a screenshot: `--demo-tool <id>` brings
     /// the tool up and calls this with whatever followed `<id>:` (empty if
