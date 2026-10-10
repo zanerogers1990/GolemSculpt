@@ -36,6 +36,7 @@ mod faces;
 mod file_arrays;
 mod file_undo;
 mod files;
+mod focus;
 mod live_copies;
 mod masked;
 mod mirror_copies;
@@ -135,8 +136,9 @@ impl Args {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Drag {
+    #[default]
     None,
     Sculpt,
     Orbit,
@@ -166,6 +168,7 @@ struct Gauge {
     start: f32,
 }
 
+#[derive(Default)]
 struct Input {
     pointer: Vec2,
     inside: bool,
@@ -179,6 +182,8 @@ struct Input {
     last_f: Option<Instant>,
     gauge: Option<Gauge>,
     hover: Option<Vec3>,
+    /// Keys that went down and have not come up, so a lost focus can let go of them (app/focus.rs).
+    held: Vec<KeyCode>,
 }
 
 struct Running {
@@ -451,6 +456,7 @@ impl Running {
                 last_f: None,
                 gauge: None,
                 hover: None,
+                held: Vec::new(),
             },
             view,
             local: view,
@@ -612,6 +618,8 @@ impl Running {
                     self.pointer_moved(Vec2::new(position.x as f32, position.y as f32), None);
                 }
             }
+            // Alt-tab or a click elsewhere: no release will come for what is held.
+            WindowEvent::Focused(false) => self.focus_lost(),
             WindowEvent::CursorEntered { .. } => self.input.inside = true,
             WindowEvent::CursorLeft { .. } => {
                 self.input.inside = self.args.keep_pointer;
@@ -661,6 +669,7 @@ impl Running {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let typing = self.egui_ctx.egui_wants_keyboard_input();
+                    self.input.note_key(code, event.state == ElementState::Pressed);
                     match event.state {
                         // Releases always go through, so a held key can never stick.
                         ElementState::Released => self.key_released(code),
@@ -802,13 +811,7 @@ impl Running {
     }
 
     fn finish_stroke(&mut self) {
-        let doc = &mut self.doc;
-        for s in self.input.samples.drain(..) {
-            doc.sculptor.sample(&mut doc.mesh, &self.local, s);
-        }
-        if let Some(delta) = doc.sculptor.end(&mut doc.mesh, &self.local) {
-            doc.history.push_stroke(delta);
-        }
+        focus::end_stroke(&mut self.input, &mut self.doc, &self.local);
         self.stroke_ended = Some(Instant::now());
     }
 

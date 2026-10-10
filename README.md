@@ -55,6 +55,11 @@ For pen pressure, tick **Enable Windows Ink** in the Huion driver.
 Dragging on the background to orbit is the one addition to the Unity app's
 controls; everything else matches it.
 
+If the window loses focus (Alt-Tab, a click on another program) while a button
+or key is held, the drag ends there as if you had let go (a stroke is kept as
+its one undo step) and every held key is let go, so Z works at once on coming
+back.
+
 ## Brushes
 
 Each brush keeps its own Strength, Focal Shift and falloff; Size is shared by
@@ -1125,6 +1130,7 @@ sculpt.exe --screenshot out.png --demo-tool array:mirror  # a mirrored column of
 sculpt.exe --screenshot out.png --demo-tool hide:array    # a shape drawn over one copy of an array (the Array tool lays a column out first): the same hole in every copy; also mask:array, trim:array, split:array
 sculpt.exe --screenshot out.png --demo-tool array:point   # the gizmo's arrows on the end point of the path; array:arrows drags them sideways, array:start puts them on the square start point and drags that; array:arrow drags an arrow with the pointer and Z, printing a line per check
 sculpt.exe --demo-tool array:stroke                       # brush strokes begun on an array's copies by way of the pointer routines; prints a line per check (ok / FAIL), add --screenshot out.png to see the result
+sculpt.exe --demo-tool measure:focus                    # a stroke, a camera drag and a tool's drag cut off by the window losing focus; prints a line per check (ok / FAIL), add --screenshot out.png to see the result
 sculpt.exe --screenshot out.png --demo-tool array:several --demo-files array   # three arrays (a ring, a curve, a mirrored column) saved, opened, undone, redone, added and exported; prints a line per check; the picture is the reopened scene
 sculpt.exe --screenshot out.png --demo-tool array:as-is some.sculpt            # the Array tool up on the arrays a file brought with it (a Unity sculpt that has one): the first object with an array is selected, its path and handles show
 sculpt.exe --screenshot out.png --demo-tool tube:radial   # a horn repeated six times round Y; also tube:mirror, tube:radial-mirror (three repeats and a mirror), tube:surface, tube:object (kept separate), tube:merged, tube:radial-merged

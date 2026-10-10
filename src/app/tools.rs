@@ -887,6 +887,19 @@ impl Running {
         }
     }
 
+    /// The window lost focus. A drag the tool holds ends as the release it
+    /// would have had; a press it passed on, still waiting to turn out a
+    /// click, is dropped rather than made into one.
+    pub(super) fn tools_focus_lost(&mut self) {
+        self.doc.tools.watch = None;
+        self.tools_released();
+    }
+
+    /// Whether the tool that is up holds the drag that is going on.
+    pub(super) fn tools_holds_drag(&self) -> bool {
+        self.doc.tools.captured
+    }
+
     /// True when a hosted tool is up: it gets the wheel first, and what it
     /// does not use zooms (never the brush, which is put away).
     pub(super) fn tools_wheel(&mut self, lines: f32) -> bool {
@@ -1078,6 +1091,9 @@ impl Running {
         }
         if what == "check" {
             return self.tools_check(index);
+        }
+        if what == "focus" {
+            return self.focus_demo(index);
         }
         if self.demo_with_array(index, id, what) {
             return;
