@@ -10,7 +10,7 @@ use sculpt_toolkit::{Ctx, Draw, Shape, Style, View};
 
 use crate::finish::Finishing;
 use crate::input::{Drag, Pointer};
-use crate::live::{Frame, LiveTube, TubeState};
+use crate::live::{Frame, LiveTube, Symmetry, TubeState};
 use crate::types::{CapStyle, TubeSettings};
 
 const MAX_UNDO_STEPS: usize = 128;
@@ -331,7 +331,7 @@ impl TubeTool {
 
     /// Brings every tube's copies (and, with `previews`, its preview mesh)
     /// up to date with its points, its settings, where its anchor stands
-    /// and the mirror axes. A tube whose anchor has been deleted has nowhere
+    /// and the symmetry the brushes are under. A tube whose anchor has been deleted has nowhere
     /// to live and goes with it.
     pub(crate) fn refresh(&mut self, cx: &Ctx, previews: bool) {
         let scene = cx.scene();
@@ -352,8 +352,9 @@ impl TubeTool {
             let info = tube.state.anchor.and_then(|a| scene.info(a));
             info.map_or(Frame::WORLD, |info| Frame { placement: info.placement })
         };
+        let symmetry = Symmetry::of(cx);
         for tube in self.tubes.iter_mut().chain(self.pointer.draft.as_mut()) {
-            tube.build(frame_of(tube), cx.mirror);
+            tube.build(frame_of(tube), symmetry);
             if previews {
                 tube.build_preview();
             }

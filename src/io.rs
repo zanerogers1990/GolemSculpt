@@ -955,6 +955,8 @@ pub fn save_scene_with(
     details: &Details,
     path: &Path,
 ) -> Result<()> {
+    // Never over a sculpt from the Unity app, which this app cannot write.
+    crate::unity_import::refuse_to_overwrite(path)?;
     let info = details.document(objects, active);
     replace_file(path, |w| write_scene(w, meshes, &info))
 }
@@ -1237,6 +1239,10 @@ pub fn load_scene(path: &Path) -> Result<SavedScene> {
     }
     if &magic == SCENE_MAGIC {
         return Ok(read_blocks(file, path)?.into_scene());
+    }
+    if &magic == crate::unity_import::MAGIC {
+        // A sculpt from the Unity app: read by `unity_import.rs`.
+        return crate::unity_import::load_scene(file, path);
     }
     drop(file);
     let newer = magic.starts_with(b"SCLP") && magic[4..].iter().all(u8::is_ascii_digit) && magic[4..] > SCENE_MAGIC[4..];

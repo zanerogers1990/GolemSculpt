@@ -40,6 +40,7 @@ mod selection;
 mod spheres;
 pub(crate) mod tools;
 mod transform;
+mod unity;
 mod visibility;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(350);
@@ -109,6 +110,9 @@ pub struct Args {
     /// Save and open scripted scenes, or put up a question about unsaved
     /// work (for visual checks; see app/files.rs).
     pub demo_files: Option<String>,
+    /// Look at the whole scene from this yaw and pitch, in degrees, whatever
+    /// view a file that was opened had (for visual checks): 0,0 is the front.
+    pub view: Option<(f32, f32)>,
     pub open: Option<PathBuf>,
 }
 
@@ -462,6 +466,14 @@ impl Running {
         }
         if let Some(what) = running.args.demo_files.clone() {
             running.files_demo(&what);
+        }
+        if let Some((yaw, pitch)) = running.args.view {
+            // Every object in the picture, from the side asked for.
+            let aspect = running.view.size.x / running.view.size.y.max(1.0);
+            let camera = &mut running.doc.camera;
+            (camera.yaw, camera.pitch) = (yaw, pitch.clamp(-89.0, 89.0));
+            camera.frame(running.doc.scene.bounds(&running.doc.mesh), aspect, false);
+            running.sync_view();
         }
         // Whatever the setup above selected or undid must not pulse in the
         // first frames (a screenshot is taken in them).
@@ -1774,8 +1786,11 @@ fn brush_key(brush: Brush) -> KeyCode {
     }
 }
 
+/// Whether `path` is a whole scene: this app's `.sclp`, or a `.sculpt` from
+/// the Unity app, which opens the same way (see `unity_import.rs`).
 fn is_native(path: &std::path::Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("sclp"))
+        || crate::unity_import::is_unity(path)
 }
 
 /// A file's name without its extension, for naming the object it becomes.

@@ -25,6 +25,7 @@ mod tests;
 mod timelapse;
 mod turntable;
 mod ui;
+mod unity_import;
 mod util;
 
 use std::path::PathBuf;
@@ -118,6 +119,8 @@ fn main() {
             "--demo-timelapse" => opts.demo_timelapse = it.next().map(PathBuf::from),
             // Shading settings for visual checks, e.g. "matcap=off,finish=metal:rust".
             "--look" => opts.look = it.next().cloned(),
+            // Look at the whole scene from a yaw and pitch in degrees, e.g. "0,0" for the front.
+            "--view" => opts.view = it.next().and_then(|s| s.split_once(',')).and_then(|(y, p)| Some((y.parse().ok()?, p.parse().ok()?))),
             "--test-keep-pointer" => opts.keep_pointer = true,
             "--remesh" => opts.remesh = it.next().and_then(|s| s.parse().ok()),
             "--quad-remesh" => opts.quad_remesh = it.next().and_then(|s| s.parse().ok()),

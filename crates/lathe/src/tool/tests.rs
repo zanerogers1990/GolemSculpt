@@ -817,6 +817,123 @@ fn undoing_the_create_hands_the_profile_back_and_redo_puts_the_tool_away_again()
     assert_eq!(tool.created(), Some(made), "the same object, under the same id");
 }
 
+/// Create, and frames until the new object is there. The tool is left up.
+fn create(bench: &mut Bench, tool: &mut Lathe) -> ObjectId {
+    let before = bench.doc.objects().len();
+    assert!(bench.key(tool, Key::Enter));
+    wait_for_objects(bench, tool, before + 1);
+    created_object(bench)
+}
+
+/// What Unity's Create did: gave the new object radial symmetry round its own Y, the axis it was turned
+/// about, with the repeat count of the Symmetry card (`LatheController.CreateMesh`).
+#[test]
+fn radial_symmetry_on_create_turns_it_on_round_the_axis_the_object_was_turned_about() {
+    let (mut bench, mut tool) = bench();
+    assert!(!tool.radial_on_create(), "off to start with, as in Unity");
+    tool.set_radial_on_create(true);
+    tool.set_segments(64);
+    assert_eq!((bench.env.radial_count, bench.env.radial_axis), (1, Vec3::Y));
+    let id = create(&mut bench, &mut tool);
+    assert!(bench.env.radial_count > 1, "radial symmetry is on");
+    assert_eq!(bench.env.radial_axis, Vec3::Y);
+    assert!(bench.status.as_ref().is_some_and(|s| s.1 && s.0.contains("Radial symmetry is on")));
+
+    // Y is the axis the object was turned about: it stands upright, with its origin on the axis, and the
+    // solid is as wide one way as the other about it.
+    let info = bench.doc.info(id).unwrap();
+    assert_eq!(info.placement.rotation, glam::Quat::IDENTITY);
+    let bounds = bench.doc.bounds(id);
+    let at = info.placement.position;
+    assert!((bounds.center().x - at.x).abs() < 1e-3 && (bounds.center().z - at.z).abs() < 1e-3, "{bounds:?} about {at}");
+    // A surface of revolution about it: turned by one repeat, the object lies on itself, so a stroke
+    // repeated that way falls on matching places.
+    let mesh = mesh_of(&bench, id);
+    let turn = glam::Quat::from_rotation_y(std::f32::consts::TAU / bench.env.radial_count as f32);
+    let off = mesh
+        .positions
+        .iter()
+        .step_by(37)
+        .map(|&p| {
+            let p = turn * p;
+            (0..mesh.triangle_count())
+                .map(|t| {
+                    let [a, b, c] = mesh.triangle(t);
+                    sculpt_geom::tri::closest_point(p, a, b, c).distance(p)
+                })
+                .fold(f32::MAX, f32::min)
+        })
+        .fold(0.0, f32::max);
+    assert!(off < 2e-3, "turned by one repeat the object is {off} from itself");
+    // The tool is put away as it always is.
+    assert!(bench.finished);
+}
+
+#[test]
+fn without_the_option_create_leaves_the_symmetry_as_it_is() {
+    for (count, axis) in [(1, Vec3::Y), (6, Vec3::Z), (3, Vec3::Y)] {
+        let (mut bench, mut tool) = bench();
+        (bench.env.radial_count, bench.env.radial_axis) = (count, axis);
+        bench.env.mirror = [true, false, false];
+        create(&mut bench, &mut tool);
+        assert_eq!((bench.env.radial_count, bench.env.radial_axis), (count, axis));
+        assert_eq!(bench.env.mirror, [true, false, false]);
+        assert!(bench.status.as_ref().is_some_and(|s| !s.0.contains("Radial symmetry")));
+    }
+}
+
+#[test]
+fn the_option_turns_the_axis_to_y_and_keeps_the_repeat_count_and_the_mirror() {
+    let (mut bench, mut tool) = bench();
+    tool.set_radial_on_create(true);
+    (bench.env.radial_count, bench.env.radial_axis) = (6, Vec3::Z);
+    bench.env.mirror = [false, false, true];
+    create(&mut bench, &mut tool);
+    assert_eq!((bench.env.radial_count, bench.env.radial_axis), (6, Vec3::Y));
+    assert_eq!(bench.env.mirror, [false, false, true]);
+}
+
+#[test]
+fn undoing_the_create_takes_the_symmetry_it_turned_on_with_it_and_redoing_brings_it_back() {
+    for (before_count, before_axis) in [(1, Vec3::Y), (1, Vec3::X), (6, Vec3::Z), (4, Vec3::Y)] {
+        let (mut bench, mut tool) = bench();
+        tool.set_radial_on_create(true);
+        (bench.env.radial_count, bench.env.radial_axis) = (before_count, before_axis);
+        create(&mut bench, &mut tool);
+        let on = (bench.env.radial_count, bench.env.radial_axis);
+        assert!(on.0 > 1 && on.1 == Vec3::Y);
+        bench.env.active = false;
+
+        assert!(bench.undo_scene());
+        bench.frame(&mut tool);
+        assert_eq!((bench.env.radial_count, bench.env.radial_axis), (before_count, before_axis), "undone");
+
+        assert!(bench.redo_scene());
+        bench.frame(&mut tool);
+        assert_eq!((bench.env.radial_count > 1, bench.env.radial_axis), (true, Vec3::Y), "redone");
+    }
+}
+
+#[test]
+fn symmetry_changed_since_the_create_is_left_alone_when_it_is_undone() {
+    let (mut bench, mut tool) = bench();
+    tool.set_radial_on_create(true);
+    create(&mut bench, &mut tool);
+    bench.env.active = false;
+    // The artist turned it to X (and switched it off, in the second round) before changing their mind.
+    bench.env.radial_axis = Vec3::X;
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    assert_eq!((bench.env.radial_count > 1, bench.env.radial_axis), (true, Vec3::X), "their axis stays");
+    assert!(bench.redo_scene());
+    bench.frame(&mut tool);
+
+    bench.env.radial_count = 1;
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    assert_eq!(bench.env.radial_count, 1, "their off stays off");
+}
+
 #[test]
 fn the_next_visit_after_a_create_stands_the_shape_beside_the_new_object() {
     let (mut bench, mut tool) = bench();
@@ -908,6 +1025,12 @@ fn the_demos_reach_the_states_they_describe() {
     assert_eq!(bench.doc.objects().len(), 2);
     assert!(bench.finished);
     assert!(tool.created().is_some());
+    assert_eq!(bench.env.radial_count, 1, "no symmetry unless it was asked for");
+
+    let (bench, tool) = run("radial");
+    assert_eq!(bench.doc.objects().len(), 2);
+    assert!(tool.radial_on_create() && tool.created().is_some());
+    assert_eq!((bench.env.radial_count > 1, bench.env.radial_axis), (true, Vec3::Y));
 }
 
 #[test]

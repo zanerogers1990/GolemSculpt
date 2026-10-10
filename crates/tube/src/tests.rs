@@ -2,5 +2,6 @@
 //! the tool driven the way the app drives it.
 
 mod geometry;
+mod radial;
 mod timing;
 mod tool;

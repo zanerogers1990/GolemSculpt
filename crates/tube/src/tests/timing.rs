@@ -10,9 +10,10 @@ use glam::{Mat4, Vec3};
 use sculpt_geom::TriMesh;
 
 use crate::field::{MAX_VOXEL_SAMPLES, TubeField};
-use crate::live::PREVIEW_MAX_SAMPLES;
+use super::tool::{bench, draw_horn, on_sphere};
+use crate::live::{PREVIEW_MAX_SAMPLES, Symmetry};
 use crate::merge::{self, Stage};
-use crate::testing::{assert_closed, field_of, icosphere, shells};
+use crate::testing::{assert_closed, field_of, field_under, icosphere, shells};
 use crate::types::{TubePoint, TubeSettings};
 
 /// Best of three, in milliseconds, with the last result.
@@ -82,6 +83,76 @@ fn building_a_typical_tube_at_preview_and_at_final_quality() {
         let (ms, built) = best_of_three(|| field.voxelize(0.004, [false; 3], budget).unwrap());
         let samples = built.grid.sample_count();
         println!("  {name}: {ms:.1} ms for a cell of {:.4}, {samples} samples -> {} triangles", built.grid.cell, built.surface.indices.len() / 3);
+    }
+}
+
+/// What repeating an arm round an axis costs: the stations of every copy, and the live preview's lattice,
+/// which has to cover all of them.
+#[test]
+#[ignore]
+fn an_arm_repeated_round_an_axis_at_preview_quality() {
+    let radius = 0.08;
+    let (points, settings) = arm(radius);
+    let (none, x) = ([false; 3], [true, false, false]);
+    for (count, mirror) in [(1, none), (2, none), (6, none), (12, none), (32, none), (12, x)] {
+        let symmetry = Symmetry::new(mirror, count, Vec3::Y);
+        let (ms, field) = best_of_three(|| field_under(&points, &settings, &symmetry));
+        let floor = field.min_radius().max(radius * merge::RESOLVED_TIP_FRACTION);
+        let cell = (radius / 5.0).min(floor / merge::CELLS_ACROSS_RADIUS);
+        let planes = symmetry.exact_planes();
+        let (preview_ms, built) = best_of_three(|| field.voxelize(cell, planes, PREVIEW_MAX_SAMPLES).unwrap());
+        let (samples, coarsened) = (built.grid.sample_count(), built.grid.cell / cell);
+        let mesh = built.surface.into_mesh();
+        println!(
+            "{count:>2} repeats, mirror X {}: stations {ms:.2} ms ({} cones); preview {preview_ms:.1} ms, \
+             {samples} samples (cell {coarsened:.2}x the asked one) -> {}",
+            mirror[0],
+            field.cone_count(),
+            describe(&mesh)
+        );
+        assert_closed(&mesh, "the repeated arm");
+    }
+}
+
+/// What a frame costs with the tool up and a tube drawn, hovering over the model: every copy's curve is
+/// projected to find what is under the pointer, and every copy's handles are drawn.
+#[test]
+#[ignore]
+fn a_frame_with_a_tube_drawn_under_radial_symmetry() {
+    for count in [1, 6, 32] {
+        let (mut bench, mut tool, _) = bench();
+        (bench.env.radial_count, bench.env.radial_axis) = (count, Vec3::Y);
+        draw_horn(&mut bench, &mut tool);
+        bench.hover(bench.px(on_sphere(-0.2, -0.2)));
+        bench.frame(&mut tool);
+        let (ms, draw) = best_of_three(|| bench.frame(&mut tool));
+        let (shapes, copies) = (draw.overlay.shapes.len(), tool.copy_count(0));
+        println!("{count:>2} repeats: a frame is {ms:.2} ms, {shapes} overlay shapes, {copies} copies");
+    }
+}
+
+/// Fusing arms repeated round an axis into a model of a few hundred thousand triangles, as Merge does.
+#[test]
+#[ignore]
+fn fusing_an_arm_repeated_round_an_axis_into_a_model() {
+    let sphere = icosphere(7, 1.0, Vec3::ZERO);
+    println!("model: icosphere, {}", describe(&sphere));
+    let (points, settings) = arm(0.08);
+    for count in [1, 6, 32] {
+        let symmetry = Symmetry::new([false; 3], count, Vec3::Y);
+        let field = field_under(&points, &settings, &symmetry);
+        let plan = merge::plan(&sphere.positions, &sphere.indices, &Mat4::IDENTITY, &field, 0.08, 0.08);
+        let planes = symmetry.exact_planes();
+        let start = Instant::now();
+        let merged = merge::merge(&sphere, &Mat4::IDENTITY, &field, &plan, 0.08, planes, &|_| true).unwrap();
+        println!(
+            "{count:>2} repeats: {} cells along the longest side, merged in {:.0} ms -> {}",
+            plan.resolution,
+            start.elapsed().as_secs_f64() * 1000.0,
+            describe(&merged)
+        );
+        assert_closed(&merged, "the model with arms round it");
+        assert_eq!(shells(&merged), 1);
     }
 }
 

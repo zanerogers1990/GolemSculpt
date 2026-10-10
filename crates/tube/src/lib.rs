@@ -10,8 +10,10 @@
 //! step on the scene's history, and undoing it hands the tubes back live.
 //!
 //! A tube drawn on an object belongs to it: its points are kept in that
-//! object's own space (it moves with it) and it follows the mirror axes, so
-//! one stroke with X mirroring on makes both arms.
+//! object's own space (it moves with it) and it follows the brushes'
+//! symmetry, so one stroke with X mirroring on makes both arms, and one with
+//! radial symmetry on makes a tube for each repeat round the axis (twice as
+//! many with a mirror as well).
 //!
 //! While the tool is up it has the pointer:
 //!
@@ -30,8 +32,8 @@
 //! | Enter | Merge |
 //! | Esc | Cancel the gesture, then deselect, then leave |
 //!
-//! T brings the tool up and puts it away. Grabbing a mirrored copy's point
-//! edits the tube through the mirror. A drag on empty background orbits, as
+//! T brings the tool up and puts it away. Grabbing a copy's point (mirrored
+//! or turned) edits the tube through the mirror or the turn. A drag on empty background orbits, as
 //! everywhere in the app; in the Unity tool it drew a tube in mid-air, which
 //! is now Ctrl + drag.
 //!
@@ -50,11 +52,11 @@ pub mod spine;
 mod tool;
 pub mod types;
 
-use glam::Vec2;
-use sculpt_toolkit::{Button, Ctx, Draw, Event, Info, Key, Tool};
+use glam::{Vec2, Vec3};
+use sculpt_toolkit::{Button, Ctx, Draw, Event, Info, Key, RadialChange, Tool};
 
 pub use field::TubeField;
-pub use live::TubeState;
+pub use live::{Symmetry, TubeState};
 pub use tool::TubeTool;
 pub use types::{CapStyle, ControlPoint, Sample, TubePoint, TubeSettings};
 
@@ -131,9 +133,11 @@ impl Tool for TubeTool {
 
     /// A tube drawn out of the selected object and left mid-edit, one point
     /// selected and thickened so its radius handle shows. `mirror` draws it
-    /// to one side with X mirroring on, for a pair; `surface` lays it on the
-    /// model instead; `object` goes on to Keep Separate and `merged` to
-    /// Merge.
+    /// to one side with X mirroring on, for a pair; `radial` with six repeats
+    /// about Y, for a ring of them, and `radial-mirror` with three and a
+    /// mirror as well, for six; `surface` lays it on the model instead;
+    /// `object` goes on to Keep Separate and `merged` to Merge (`radial-merged`
+    /// the six repeats of `radial`).
     fn demo(&mut self, cx: &mut Ctx, what: &str) {
         let scene = cx.scene();
         let bounds = scene.bounds(scene.active());
@@ -143,13 +147,19 @@ impl Tool for TubeTool {
         let (centre, reach) = (bounds.center(), bounds.size().max_element() * 0.5);
         let view = cx.view;
         let at = |right: f32, up: f32| view.project(centre + (view.right * right + view.up * up) * reach);
-        cx.set_mirror([what == "mirror", false, false]);
+        let turned = what.starts_with("radial");
+        cx.set_mirror([what == "mirror" || what == "radial-mirror", false, false]);
+        let repeats = if what == "radial-mirror" { 3 } else { 6 };
+        cx.set_radial(RadialChange { on: Some(turned), count: Some(repeats), axis: Some(Vec3::Y) });
         self.set_on_surface(what == "surface");
 
         // A stroke from on the model out past its outline, curling over.
         let waypoints: &[(f32, f32)] = match what {
             "surface" => &[(-0.55, -0.35), (-0.2, 0.1), (0.15, 0.0), (0.5, 0.4)],
-            "mirror" => &[(0.45, 0.3), (0.85, 0.75), (1.25, 0.85), (1.5, 0.55)],
+            "mirror" | "radial" | "radial-merged" => &[(0.45, 0.3), (0.85, 0.75), (1.25, 0.85), (1.5, 0.55)],
+            // Up from the model between the mirror plane and the next repeat's, so that no tube lands on
+            // another of the six.
+            "radial-mirror" => &[(0.4, 0.25), (0.5, 0.8), (0.6, 1.15), (0.72, 1.3)],
             _ => &[(-0.3, 0.4), (-0.55, 0.95), (-1.0, 1.2), (-1.45, 0.95)],
         };
         let mut path: Vec<Vec2> = Vec::new();
@@ -167,7 +177,7 @@ impl Tool for TubeTool {
 
         match what {
             "object" => self.keep_separate(cx),
-            "merged" => {
+            "merged" | "radial-merged" => {
                 self.merge_all(cx);
                 self.wait_for_merge(cx);
             }

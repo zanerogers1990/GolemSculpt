@@ -20,6 +20,11 @@ impl Lathe {
             "ring" => self.apply_preset(cx, LathePreset::Ring),
             "sketch" => self.demo_sketch(cx),
             "created" => self.demo_created(cx),
+            // The same, with Radial Symmetry on Create ticked.
+            "radial" => {
+                self.set_radial_on_create(true);
+                self.demo_created(cx);
+            }
             _ => {}
         }
         // So the first frame already has the shape.

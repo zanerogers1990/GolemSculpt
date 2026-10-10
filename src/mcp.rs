@@ -204,7 +204,7 @@ fn tools() -> Value {
         tool(
             "launch",
             "Start the Sculpt app if it is not already running, and wait until it is ready.",
-            json!({ "file": string("Full path of a .sclp, .obj or .stl file to open at start.") }),
+            json!({ "file": string("Full path of a .sclp, .sculpt (Unity app), .obj or .stl file to open at start.") }),
             &[],
         ),
         tool(
@@ -358,7 +358,7 @@ fn tools() -> Value {
         tool("delete_object", "Delete an object. The last one cannot be deleted.", json!({ "object": object() }), &[]),
         tool(
             "open_file",
-            "Open a .sclp file in place of the scene, or add an .obj or .stl model to it as a new object.",
+            "Open a .sclp file (or a .sculpt from the Unity app) in place of the scene, or add an .obj or .stl model to it as a new object.",
             json!({ "path": string("Full path of the file.") }),
             &["path"],
         ),
