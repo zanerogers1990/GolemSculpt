@@ -94,6 +94,8 @@ fn main() {
             "--demo-flash" => opts.demo_flash = true,
             // Half of the active object's faces hidden, cut on a slant.
             "--demo-hide" => opts.demo_hide = true,
+            // A long shape pulled out of a coarse ball, then refined by dynamic topology; wireframe on.
+            "--demo-dyntopo" => opts.demo_dyntopo = true,
             // rig | preview | skin | back | again | play
             "--demo-spheres" => opts.demo_spheres = it.next().cloned(),
             // Saving, opening and the questions about unsaved work: recent | ask-exit | ask-open | ask-open-clean | play

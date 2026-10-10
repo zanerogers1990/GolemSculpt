@@ -3,6 +3,8 @@
 //! dirty tracking so only the changed parts are re-lit and re-uploaded.
 
 pub mod bvh;
+pub mod dyntopo;
+mod lists;
 pub mod primitives;
 pub mod visibility;
 
@@ -15,6 +17,7 @@ use rayon::prelude::*;
 
 use crate::util::{BitSet, SharedMut};
 use bvh::{Aabb, Bvh, Hit, Leaf};
+use lists::Lists;
 
 /// Vertex ranges closer than this are uploaded as one range; a few wasted
 /// kilobytes cost far less than an extra buffer write.
@@ -48,10 +51,9 @@ pub struct Mesh {
     curv_scale: f32,
     curv_on: bool,
 
-    vt_off: Vec<u32>,
-    vt: Vec<u32>,
-    vv_off: Vec<u32>,
-    vv: Vec<u32>,
+    /// The triangles on each vertex, and its edge-connected neighbours.
+    vt: Lists,
+    vv: Lists,
 
     pub bvh: Bvh,
 
@@ -73,12 +75,17 @@ pub struct Mesh {
     dirty_nrm: BitSet,
     dirty_mask: BitSet,
     dirty_curv: BitSet,
+
+    /// What dynamic topology keeps for this mesh (see dyntopo.rs).
+    topo: dyntopo::State,
 }
 
 /// Polygon faces over a mesh's own vertices: face `f`'s corners are
 /// `indices[start[f]..start[f + 1]]`. Brushes only move vertices, so the faces
 /// follow every stroke for free; anything that rebuilds the triangles builds a
-/// new mesh, which starts without them.
+/// new mesh, which starts without them, and dynamic topology retires them the
+/// first time it splits one.
+#[derive(Clone)]
 pub struct Polys {
     pub start: Vec<u32>,
     pub indices: Vec<u32>,
@@ -156,14 +163,24 @@ impl StrokeArrays<'_> {
 
 /// What a finished stroke changed; enough to undo and redo it.
 pub enum StrokeDelta {
-    Positions { verts: Vec<u32>, before: Vec<Vec3>, after: Vec<Vec3> },
+    /// Vertices moved. `topology` is there when dynamic topology also added
+    /// triangles and vertices during the stroke: `verts` then lists only
+    /// vertices from before it, and the rest is in there (see dyntopo.rs).
+    Positions {
+        verts: Vec<u32>,
+        before: Vec<Vec3>,
+        after: Vec<Vec3>,
+        topology: Option<Box<dyntopo::TopologyDelta>>,
+    },
     Mask { verts: Vec<u32>, before: Vec<f32>, after: Vec<f32> },
 }
 
 impl StrokeDelta {
     pub fn bytes(&self) -> usize {
         match self {
-            StrokeDelta::Positions { verts, .. } => verts.len() * 28,
+            StrokeDelta::Positions { verts, topology, .. } => {
+                verts.len() * 28 + topology.as_ref().map_or(0, |t| t.bytes())
+            }
             StrokeDelta::Mask { verts, .. } => verts.len() * 12,
         }
     }
@@ -175,6 +192,9 @@ pub struct DirtyRanges {
     pub normals: Vec<Range<u32>>,
     pub mask: Vec<Range<u32>>,
     pub curv: Vec<Range<u32>>,
+    /// Triangles (not corners) whose corners changed or that are new, when
+    /// `Mesh::topology_version` has moved since the last call.
+    pub triangles: Vec<Range<u32>>,
 }
 
 /// Whether an input triangle is kept when a mesh is built: three different
@@ -229,10 +249,8 @@ impl Mesh {
             curv_mean: 0.0,
             curv_scale: 1.0,
             curv_on: false,
-            vt_off: Vec::new(),
-            vt: Vec::new(),
-            vv_off: Vec::new(),
-            vv: Vec::new(),
+            vt: Lists::default(),
+            vv: Lists::default(),
             bvh: built.bvh,
             hidden: Default::default(),
             orig_pos: vec![Vec3::ZERO; n],
@@ -248,6 +266,7 @@ impl Mesh {
             dirty_nrm: BitSet::with_len(leaf_count),
             dirty_mask: BitSet::with_len(leaf_count),
             dirty_curv: BitSet::with_len(leaf_count),
+            topo: dyntopo::State::default(),
         };
         mesh.build_adjacency();
         mesh.recompute_all_normals();
@@ -269,13 +288,13 @@ impl Mesh {
     /// Triangles incident to a vertex.
     #[cfg(test)]
     pub fn vert_tris(&self, v: u32) -> &[u32] {
-        &self.vt[self.vt_off[v as usize] as usize..self.vt_off[v as usize + 1] as usize]
+        self.vt.row(v as usize)
     }
 
     /// Edge-connected neighbours of a vertex.
     #[inline]
     pub fn neighbours(&self, v: u32) -> &[u32] {
-        &self.vv[self.vv_off[v as usize] as usize..self.vv_off[v as usize + 1] as usize]
+        self.vv.row(v as usize)
     }
 
     fn build_adjacency(&mut self) {
@@ -288,18 +307,15 @@ impl Mesh {
             off[i + 1] += off[i];
         }
         let mut cursor = off.clone();
-        let mut vt = vec![0u32; self.indices.len()];
+        let mut fans = vec![0u32; self.indices.len()];
         for (i, &v) in self.indices.iter().enumerate() {
             let c = &mut cursor[v as usize];
-            vt[*c as usize] = (i / 3) as u32;
+            fans[*c as usize] = (i / 3) as u32;
             *c += 1;
         }
-        self.vt_off = off;
-        self.vt = vt;
 
         let indices = &self.indices;
-        let vt_off = &self.vt_off;
-        let vt = &self.vt;
+        let (vt_off, vt) = (&off, &fans);
         let ring = |v: usize, buf: &mut Vec<u32>| {
             buf.clear();
             for &t in &vt[vt_off[v] as usize..vt_off[v + 1] as usize] {
@@ -337,8 +353,8 @@ impl Mesh {
                 }
             });
         }
-        self.vv_off = vv_off;
-        self.vv = vv;
+        self.vt = Lists::from_offsets(&off, fans);
+        self.vv = Lists::from_offsets(&vv_off, vv);
     }
 
     #[inline]
@@ -362,11 +378,9 @@ impl Mesh {
     pub fn recompute_all_normals(&mut self) {
         let positions = &self.positions;
         let indices = &self.indices;
-        let vt_off = &self.vt_off;
         let vt = &self.vt;
         self.normals.par_iter_mut().enumerate().with_min_len(4096).for_each(|(v, n)| {
-            let tris = &vt[vt_off[v] as usize..vt_off[v + 1] as usize];
-            *n = Self::vertex_normal(positions, indices, tris, *n);
+            *n = Self::vertex_normal(positions, indices, vt.row(v), *n);
         });
         self.pending_normals.clear();
         let leaves = self.bvh.leaves.len();
@@ -445,9 +459,8 @@ impl Mesh {
         if self.curv_scale < 1e-6 {
             self.curv_scale = 1.0;
         }
-        let (positions, normals, vv, vv_off, scale) =
-            (&self.positions, &self.normals, &self.vv, &self.vv_off, self.curv_scale);
-        let ring = |v: usize| &vv[vv_off[v] as usize..vv_off[v + 1] as usize];
+        let (positions, normals, vv, scale) = (&self.positions, &self.normals, &self.vv, self.curv_scale);
+        let ring = |v: usize| vv.row(v);
         self.curv_raw.resize(n, 0.0);
         self.curv_raw.par_iter_mut().enumerate().with_min_len(4096).for_each(|(v, raw)| {
             *raw = Self::raw_curvature(positions, normals, ring(v), v, scale);
@@ -467,9 +480,9 @@ impl Mesh {
     /// Brings the curvature of the vertices in `leaves` up to date after they
     /// (or their neighbours) moved.
     fn update_curvature(&mut self, leaves: &[u32]) {
-        let (positions, normals, vv, vv_off, bvh) = (&self.positions, &self.normals, &self.vv, &self.vv_off, &self.bvh);
+        let (positions, normals, vv, bvh) = (&self.positions, &self.normals, &self.vv, &self.bvh);
         let (scale, mean) = (self.curv_scale, self.curv_mean);
-        let ring = |v: usize| &vv[vv_off[v] as usize..vv_off[v + 1] as usize];
+        let ring = |v: usize| vv.row(v);
         // Two passes: the stored value blurs across neighbours, so every raw
         // value has to exist before any of them is read.
         {
@@ -717,11 +730,19 @@ impl Mesh {
         self.stroke_leaves.clear();
         self.bvh.refit_leaves(&leaves, &self.positions, &self.indices, false);
 
-        if self.touched.is_empty() {
+        // What dynamic topology added during the stroke, if it ran.
+        let topology = self.end_stroke_topology();
+        if self.touched.is_empty() && topology.is_none() {
             return None;
         }
-        let verts = std::mem::take(&mut self.touched);
+        let mut verts = std::mem::take(&mut self.touched);
+        if let Some(topology) = &topology {
+            // The vertices the stroke made go when it is undone; only those
+            // from before it have somewhere to go back to.
+            verts.retain(|&v| v < topology.vertices_before());
+        }
         Some(if mask_stroke {
+            debug_assert!(topology.is_none(), "mask painting never refines");
             StrokeDelta::Mask {
                 before: verts.iter().map(|&v| self.orig_mask[v as usize]).collect(),
                 after: verts.iter().map(|&v| self.mask[v as usize]).collect(),
@@ -732,6 +753,7 @@ impl Mesh {
                 before: verts.iter().map(|&v| self.orig_pos[v as usize]).collect(),
                 after: verts.iter().map(|&v| self.positions[v as usize]).collect(),
                 verts,
+                topology,
             }
         })
     }
@@ -768,9 +790,13 @@ impl Mesh {
     /// [`Self::positions_changed`] when the change is given as a vertex list.
     pub fn leaves_of(&self, verts: &[u32]) -> Vec<u32> {
         let mut set = BitSet::with_len(self.bvh.leaves.len());
+        // Kept apart from `set`: a leaf already in there as some other
+        // leaf's neighbour still has neighbours of its own to bring.
+        let mut owners = BitSet::with_len(self.bvh.leaves.len());
         for &v in verts {
             let l = self.bvh.vert_leaf[v as usize];
-            if !set.get(l as usize) {
+            if !owners.get(l as usize) {
+                owners.set(l as usize);
                 set.set(l as usize);
                 for &o in self.bvh.leaf_neighbours(l) {
                     set.set(o as usize);
@@ -793,14 +819,13 @@ impl Mesh {
         {
             let positions = &self.positions;
             let indices = &self.indices;
-            let vt_off = &self.vt_off;
             let vt = &self.vt;
             let bvh = &self.bvh;
             let out = SharedMut::new(&mut self.normals);
             leaves.par_iter().with_min_len(32).for_each(|&l| {
                 let leaf = &bvh.leaves[l as usize];
                 for v in leaf.vert_start as usize..leaf.vert_end as usize {
-                    let tris = &vt[vt_off[v] as usize..vt_off[v + 1] as usize];
+                    let tris = vt.row(v);
                     // SAFETY: every leaf owns a disjoint vertex range, so each
                     // normal is read and written by exactly one task.
                     unsafe {
@@ -843,6 +868,7 @@ impl Mesh {
             normals: self.ranges(&self.dirty_nrm),
             mask: self.ranges(&self.dirty_mask),
             curv: self.ranges(&self.dirty_curv),
+            triangles: self.topo.take_unsent((self.indices.len() / 3) as u32),
         };
         self.dirty_curv.clear();
         self.dirty_pos.clear();
@@ -894,8 +920,13 @@ impl Mesh {
     pub fn apply_delta(&mut self, delta: &StrokeDelta, undo: bool) {
         debug_assert!(!self.in_stroke);
         match delta {
-            StrokeDelta::Positions { verts, before, after } => {
+            StrokeDelta::Positions { verts, before, after, topology } => {
                 let src = if undo { before } else { after };
+                if let Some(topology) = topology {
+                    // The stroke also grew the mesh: counts and triangles go
+                    // back or forward with the positions (see dyntopo.rs).
+                    return self.apply_topology(topology, verts, src, undo);
+                }
                 for (&v, &p) in verts.iter().zip(src) {
                     self.positions[v as usize] = p;
                 }
@@ -953,7 +984,10 @@ impl Mesh {
 
     pub fn memory_bytes(&self) -> usize {
         self.positions.len() * (12 * 4 + 4 * 3)
-            + (self.indices.len() + self.vt.len() + self.vv.len()) * 4
+            + self.indices.len() * 4
+            + self.vt.bytes()
+            + self.vv.bytes()
             + self.hidden.bytes()
+            + self.topo.bytes()
     }
 }

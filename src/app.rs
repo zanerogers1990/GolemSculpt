@@ -29,6 +29,7 @@ use crate::ui::{self, Cursor, UiState, theme};
 use crate::{io, remesh};
 
 mod bridge;
+mod dyntopo;
 mod recording;
 mod faces;
 mod files;
@@ -77,6 +78,9 @@ pub struct Args {
     /// Hide half of the active object's faces after the demo strokes (for
     /// visual checks of hidden faces).
     pub demo_hide: bool,
+    /// Pull a long shape out of a coarse ball and work along it with dynamic
+    /// topology on, wireframe showing (for visual checks; see app/dyntopo.rs).
+    pub demo_dyntopo: bool,
     /// Testing aid: keep treating the pointer as inside the window after the
     /// OS says it left, so input posted to the window by a script (while the
     /// real cursor is elsewhere) still gets hover behaviour.
@@ -413,6 +417,9 @@ impl Running {
         }
         if running.args.demo {
             running.demo_strokes();
+        }
+        if running.args.demo_dyntopo {
+            running.dyntopo_demo();
         }
         if let Some(what) = running.args.demo_tool.clone() {
             running.tools_demo(&what);
@@ -1412,6 +1419,7 @@ impl Running {
         self.sync_view();
 
         // Sculpt: every pointer sample since the last frame, in order.
+        self.dyntopo_demo_frame();
         let sculpt_start = Instant::now();
         if self.doc.sculptor.is_active() {
             let doc = &mut self.doc;

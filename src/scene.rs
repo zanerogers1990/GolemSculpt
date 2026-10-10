@@ -742,7 +742,9 @@ impl Scene {
     }
 
     fn baseline(&self, slot: &Mesh) -> Option<&Baseline> {
-        let fits = |b: &&Baseline| b.uid == slot.uid && b.positions.len() == slot.positions.len();
+        // Dynamic topology adds vertices after the ones the mesh was built
+        // with, which are the ones kept here (see `Mesh::rest_shape`).
+        let fits = |b: &&Baseline| b.uid == slot.uid && b.positions.len() <= slot.positions.len();
         self.baselines.get(&self.active_mesh()).filter(fits)
     }
 
@@ -756,7 +758,7 @@ impl Scene {
     /// was made, loaded or last rebuilt. Returns the undo record, or `None`
     /// if it is at rest already.
     pub fn reset_shape(&self, slot: &mut Mesh) -> Option<StrokeDelta> {
-        let rest = &self.baseline(slot)?.positions;
+        let rest = slot.rest_shape(&self.baseline(slot)?.positions)?;
         let verts: Vec<u32> =
             (0..rest.len() as u32).filter(|&v| slot.positions[v as usize] != rest[v as usize]).collect();
         if verts.is_empty() {
@@ -766,6 +768,7 @@ impl Scene {
             before: verts.iter().map(|&v| slot.positions[v as usize]).collect(),
             after: verts.iter().map(|&v| rest[v as usize]).collect(),
             verts,
+            topology: None,
         };
         slot.apply_delta(&delta, false);
         Some(delta)

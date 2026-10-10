@@ -76,6 +76,35 @@ them all.
 - Mask painting has **Mask Hardness** for its edge; the selected brush's
   falloff and Front Facing Only do not apply to it.
 
+## Dynamic topology
+
+**Dynamic Topology**, in the Remesh card of the Sculpt panel, adds triangles
+under the brush as you sculpt, so detail appears where you work and nowhere
+else. It starts off, and the app remembers how you left it.
+
+- **Detail (Fine - Coarse)** is the longest edge left under the brush, as a
+  percentage of the brush's radius: 3% to 50%, starting at 15%. Detail goes
+  with the brush, so a small brush adds fine triangles and a big one leaves
+  the surface as it is. Zoom in and shrink the brush to ask for more.
+- Standard, Clay, Crease, Inflate, Flatten and Layer refine. Move, Snake
+  Hook, Smooth and mask painting do not. Pull a shape out with Snake Hook,
+  then run one of the refining brushes along it, and the triangles the pull
+  stretched are split into even ones.
+- It only ever adds. Triangles are never merged back, so a region stays as
+  fine as the finest brush that has worked on it; **Remesh** evens the whole
+  model out again. It stops adding at 4 million triangles, and a line under
+  the slider says when it has.
+- A stroke that added detail is one undo step like any other: undo takes the
+  added triangles away again and redo puts them back.
+- Masked surface is left alone, and a new vertex takes its mask from the two
+  it was made between. Hidden parts are not refined. Instances share the
+  refined mesh. A mirrored stroke refines both sides.
+- A quad-remeshed object stops being quads the first time a brush refines
+  it (undoing that stroke brings them back): from then on its wireframe
+  shows triangles, and OBJ export writes triangles.
+- **Reset Shape** still goes back to the shape before sculpting, with the
+  added triangles lying on it.
+
 ## Transform gizmo
 
 Press **G** (or the Transform button) to move, turn and resize the selected
@@ -360,7 +389,7 @@ pair; after that they can be moved apart and the joints stay on them.
   lives in one place, `crates/geom/src/units.rs`.
 - **The app remembers how you left it**: interface size, tooltips on or off,
   which cards are open, fullscreen, millimetres or inches, the remesh
-  settings and every brush's tuning. They are kept in
+  settings, dynamic topology and every brush's tuning. They are kept in
   `%APPDATA%\Sculpt\settings.json`, with the recent files; deleting that file
   puts everything back to how the app first starts.
 
@@ -537,9 +566,11 @@ Left out on purpose: the Unity app's mold maker and hard-surface tool.
 
 ```
 cargo test --release          # engine tests
+cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
+sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
 sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"

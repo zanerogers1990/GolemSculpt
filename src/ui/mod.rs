@@ -4,6 +4,7 @@
 
 pub mod assets;
 mod brush_size;
+mod dyntopo;
 mod falloff;
 mod look;
 mod overlay;
@@ -463,6 +464,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         {
             actions.push(Action::Remesh);
         }
+        dyntopo::section(ui, &mut doc.sculptor.dyntopo, tips);
 
         ui.add_space(6.0);
         theme::hint(ui, "Quad Remesh rebuilds it as even quads that follow the form. Export keeps the quads.");

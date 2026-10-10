@@ -50,6 +50,13 @@ impl BitSet {
         Self { words: vec![0; len.div_ceil(64)], any: false }
     }
 
+    /// Makes room for indices up to `len`; what is set stays set.
+    pub fn grow(&mut self, len: usize) {
+        if self.words.len() < len.div_ceil(64) {
+            self.words.resize(len.div_ceil(64), 0);
+        }
+    }
+
     #[inline]
     pub fn set(&mut self, i: usize) {
         self.words[i >> 6] |= 1 << (i & 63);

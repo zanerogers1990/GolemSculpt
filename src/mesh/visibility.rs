@@ -51,6 +51,27 @@ impl Hidden {
     pub(super) fn bytes(&self) -> usize {
         self.tris.len() + self.verts.len()
     }
+
+    /// Whether triangle `t` is hidden. One that dynamic topology has only
+    /// just appended has no flag yet, and shows.
+    #[inline]
+    pub(super) fn hides(&self, t: u32) -> bool {
+        self.count > 0 && self.tris.get(t as usize).copied().unwrap_or(false)
+    }
+
+    /// Keeps one flag per triangle and per vertex after dynamic topology
+    /// added some (they show, like the faces they were split from) or an
+    /// undo took them away again. No face that was hidden changes: a hidden
+    /// face is never split or flipped, so its triangle keeps its number and
+    /// a hidden vertex keeps every triangle it had.
+    pub(super) fn resize(&mut self, triangles: usize, vertices: usize) {
+        if self.count == 0 || (self.tris.len() == triangles && self.verts.len() == vertices) {
+            return;
+        }
+        self.tris.resize(triangles, false);
+        self.verts.resize(vertices, false);
+        self.version += 1;
+    }
 }
 
 /// What a hide, show or invert changed; enough to undo and redo it.
@@ -289,7 +310,7 @@ impl Mesh {
         // Whether a showing triangle on `a` also has `b`: next after `a` in
         // its winding, or with `either_way` on either side of it.
         let shows = |a: u32, b: u32, either_way: bool| {
-            let fan = &self.vt[self.vt_off[a as usize] as usize..self.vt_off[a as usize + 1] as usize];
+            let fan = self.vt.row(a as usize);
             fan.iter().any(|&t| {
                 let t = t as usize;
                 if hidden[t] {

@@ -5,6 +5,7 @@
 //! is joined with a centripetal Catmull-Rom spline, so a fast stroke is a
 //! curve rather than a polygon.
 
+pub mod dyntopo;
 mod falloff;
 mod input;
 mod kernels;
@@ -403,6 +404,8 @@ pub struct Sculptor {
     /// Last point sculpted, in world space; the camera can orbit around it.
     pub last_hit: Option<Vec3>,
     pub dabs_applied: u64,
+    /// Dynamic topology: its settings, and how far the stroke has refined.
+    pub dyntopo: dyntopo::DynTopo,
 }
 
 fn slerp_dir(a: Vec3, b: Vec3, t: f32) -> Vec3 {
@@ -571,6 +574,7 @@ impl Sculptor {
         };
         let pressure = self.shape_pressure(&sample);
         let bounds = mesh.bounds();
+        self.dyntopo.begin(brush, mask, bounds.size().max_element());
         let relax = self.settings.clay_relax;
         let curvature = if !mask && brush == Brush::Clay && relax > 0.0 {
             self.curvature_base(mesh)
@@ -739,6 +743,7 @@ impl Sculptor {
             stroke.carry = 0.0;
             stroke.last_dab = None;
             stroke.crease_n = None;
+            self.dyntopo.pause();
             return;
         };
         self.last_hit = Some(hit.pos);
@@ -773,6 +778,11 @@ impl Sculptor {
             knot.normal = n;
             knot.dir = stroke.crease_d;
         }
+        // Dynamic topology goes first, so the dabs land on the new vertices.
+        // Every symmetric copy of the brush refines where its dabs will go.
+        self.dyntopo.refine(mesh, hit.pos, p.radius, &|at, copies| {
+            copies.extend(stroke.ops.iter().map(|op| op.apply_point(at)));
+        });
         stroke.knots.push(knot);
         stroke.last_knot_time = sample.time;
         Self::advance(mesh, stroke, false, view.pos, &mut self.dabs_applied);
@@ -1010,6 +1020,10 @@ impl Sculptor {
 
         let dab_brush = p.mask || !matches!(p.brush, Brush::Move | Brush::SnakeHook);
         if dab_brush {
+            // Detail a busy frame left unfinished, while the pointer rests.
+            self.dyntopo.frame(mesh, p.radius, &|at, copies| {
+                copies.extend(stroke.ops.iter().map(|op| op.apply_point(at)));
+            });
             // A short pause releases the segment that was waiting for a knot.
             if stroke.time - stroke.last_knot_time > 0.05 || dt > 0.05 {
                 Self::advance(mesh, stroke, true, view.pos, &mut self.dabs_applied);

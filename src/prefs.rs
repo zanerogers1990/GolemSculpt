@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use sculpt_geom::LengthUnit;
 use serde::{Deserialize, Serialize};
 
+use crate::sculpt::dyntopo::{self, DynTopo};
 use crate::sculpt::{Brush, FalloffCurve, Settings};
 
 const FILE_NAME: &str = "settings.json";
@@ -300,6 +301,10 @@ pub struct Prefs {
     pub quad_target: f32,
     /// Triangle count of a new shape (Starting Detail).
     pub starting_detail: f32,
+    /// Dynamic topology: whether brushes add detail as they go, and the
+    /// longest edge they leave, as a fraction of the brush radius.
+    pub dynamic_topology: bool,
+    pub dynamic_topology_detail: f32,
     /// Sculpts recently saved or opened, newest first (see `recent.rs`).
     pub recent: Vec<PathBuf>,
 }
@@ -307,6 +312,7 @@ pub struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         let opts = crate::doc::Options::default();
+        let dyntopo = DynTopo::default();
         Self {
             interface_size: opts.ui_scale,
             tooltips: opts.tooltips,
@@ -317,6 +323,8 @@ impl Default for Prefs {
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
             starting_detail: opts.new_shape_tris,
+            dynamic_topology: dyntopo.enabled,
+            dynamic_topology_detail: dyntopo.detail,
             recent: Vec::new(),
         }
     }
@@ -354,6 +362,10 @@ impl Prefs {
     pub fn starting_detail(&self) -> f32 {
         // The Starting Detail slider's own ends: 10^4 to 10^6.6 triangles.
         fit(self.starting_detail, 1.0e4, 10f32.powf(6.6), crate::doc::Options::default().new_shape_tris)
+    }
+
+    pub fn dynamic_topology_detail(&self) -> f32 {
+        fit(self.dynamic_topology_detail, dyntopo::MIN_DETAIL, dyntopo::MAX_DETAIL, dyntopo::DEFAULT_DETAIL)
     }
 }
 
@@ -441,6 +453,8 @@ mod tests {
         prefs.brush.brush = "Clay".into();
         prefs.brush.radius_px = 84.0;
         prefs.brush.brushes.get_mut("Crease").unwrap().strength = 0.75;
+        prefs.dynamic_topology = true;
+        prefs.dynamic_topology_detail = 0.08;
         prefs.recent = vec![dir.join("a.sclp"), dir.join("b.sclp")];
         home.save(&prefs).unwrap();
         assert_eq!(home.load(), prefs);
@@ -546,6 +560,14 @@ mod tests {
         prefs.brush.clay_softness = 0.0;
         prefs.brush.radius_px = f32::NAN;
         prefs.brush.brushes.get_mut("Clay").unwrap().strength = 9.0;
+        // Dynamic topology starts off, at the Unity app's detail, and a
+        // detail no slider could have set is brought back onto the slider.
+        assert!(!prefs.dynamic_topology);
+        assert_eq!(prefs.dynamic_topology_detail(), dyntopo::DEFAULT_DETAIL);
+        prefs.dynamic_topology_detail = 0.0;
+        assert_eq!(prefs.dynamic_topology_detail(), dyntopo::MIN_DETAIL);
+        prefs.dynamic_topology_detail = f32::NAN;
+        assert_eq!(prefs.dynamic_topology_detail(), dyntopo::DEFAULT_DETAIL);
         assert_eq!(prefs.interface_size(), 3.0);
         assert_eq!(prefs.remesh_resolution(), 4.0);
         assert_eq!(prefs.starting_detail(), Prefs::default().starting_detail);
