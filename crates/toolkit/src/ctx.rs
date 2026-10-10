@@ -81,6 +81,21 @@ impl Env {
     }
 }
 
+/// A change to the brushes' radial symmetry that a tool asks for (see
+/// [`Ctx::set_radial`]). What is left `None` stays as the Symmetry card has
+/// it, so a tool that only wants it on, round an axis, does not have to know
+/// the repeat count that is kept while it is off.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RadialChange {
+    /// Switch radial symmetry on or off.
+    pub on: Option<bool>,
+    /// How many times a stroke is made, itself included (2 to 32).
+    pub count: Option<u32>,
+    /// The axis it goes round, a direction through the selected object's
+    /// origin in its own space.
+    pub axis: Option<Vec3>,
+}
+
 /// Requests a tool made that the app carries out when the call returns.
 /// Tool crates do not touch this; it is how the host reads them back.
 #[derive(Debug, Default)]
@@ -98,6 +113,7 @@ pub struct Outbox {
     pub frame: Option<Aabb>,
     pub unit: Option<LengthUnit>,
     pub mirror: Option<[bool; 3]>,
+    pub radial: Option<RadialChange>,
     /// Draw another frame straight after this one.
     pub repaint: bool,
     /// A commit changed the scene.
@@ -209,6 +225,22 @@ impl<'a> Ctx<'a> {
     pub fn set_mirror(&mut self, mirror: [bool; 3]) {
         self.env.mirror = mirror;
         self.out.mirror = Some(mirror);
+    }
+
+    /// Switches the brushes' radial symmetry, for a tool that sets it to suit
+    /// what it made (the Lathe, round the axis it turned its object about).
+    /// `cx.radial_count` and `cx.radial_axis` follow at once as far as the
+    /// change says what they are; the app has the rest from the next call.
+    pub fn set_radial(&mut self, change: RadialChange) {
+        if change.on == Some(false) {
+            self.env.radial_count = 1;
+        } else if let Some(count) = change.count.filter(|_| change.on == Some(true) || self.env.radial_count > 1) {
+            self.env.radial_count = count.clamp(SymmetryGroup::MIN_RADIAL_COUNT, SymmetryGroup::MAX_RADIAL_COUNT);
+        }
+        if let Some(axis) = change.axis.filter(|axis| axis.length_squared() > 1e-12) {
+            self.env.radial_axis = axis.normalize();
+        }
+        self.out.radial = Some(change);
     }
 
     /// Asks for another frame after this one. The app only draws when

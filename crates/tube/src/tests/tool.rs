@@ -12,7 +12,7 @@ use crate::testing::{assert_closed, icosphere, shells, unmatched_across};
 
 /// A sphere of radius 0.5 in front of the camera (which looks down -z from
 /// z = 5) and the tool brought up on it.
-fn bench() -> (Bench, TubeTool, ObjectId) {
+pub(super) fn bench() -> (Bench, TubeTool, ObjectId) {
     let mut bench = Bench::new();
     let sphere = bench.add("Body", icosphere(4, 0.5, Vec3::ZERO));
     let mut tool = TubeTool::default();
@@ -21,13 +21,13 @@ fn bench() -> (Bench, TubeTool, ObjectId) {
 }
 
 /// The point of the sphere's front that is drawn over (x, y).
-fn on_sphere(x: f32, y: f32) -> Vec3 {
+pub(super) fn on_sphere(x: f32, y: f32) -> Vec3 {
     Vec3::new(x, y, (0.25 - x * x - y * y).max(0.0).sqrt())
 }
 
 /// A stroke through world points: pressed at the first, dragged through the
 /// rest in small steps, let go at the last.
-fn stroke(bench: &mut Bench, tool: &mut TubeTool, through: &[Vec3]) {
+pub(super) fn stroke(bench: &mut Bench, tool: &mut TubeTool, through: &[Vec3]) {
     let px: Vec<Vec2> = through.iter().map(|&p| bench.px(p)).collect();
     bench.press(tool, px[0], Button::Left);
     for pair in px.windows(2) {
@@ -40,27 +40,27 @@ fn stroke(bench: &mut Bench, tool: &mut TubeTool, through: &[Vec3]) {
 
 /// A horn drawn from the sphere's right shoulder out past its outline, with
 /// a bend in it: three or four points.
-fn draw_horn(bench: &mut Bench, tool: &mut TubeTool) {
+pub(super) fn draw_horn(bench: &mut Bench, tool: &mut TubeTool) {
     let start = on_sphere(0.3, 0.1);
     let z = start.z;
     stroke(bench, tool, &[start, Vec3::new(0.6, 0.45, z), Vec3::new(1.0, 0.5, z)]);
 }
 
-fn handle_px(bench: &Bench, tool: &TubeTool, tube: usize, point: usize, copy: usize) -> Vec2 {
+pub(super) fn handle_px(bench: &Bench, tool: &TubeTool, tube: usize, point: usize, copy: usize) -> Vec2 {
     bench.px(tool.handle_world(tube, point, copy).expect("the handle exists"))
 }
 
-fn preview_mesh(draw: &Draw, index: usize) -> TriMesh {
+pub(super) fn preview_mesh(draw: &Draw, index: usize) -> TriMesh {
     let data = draw.previews()[index].mesh.data();
     TriMesh::new(data.positions.clone(), data.indices.clone())
 }
 
-fn status(bench: &Bench) -> &str {
+pub(super) fn status(bench: &Bench) -> &str {
     bench.status.as_ref().map_or("", |s| s.0.as_str())
 }
 
 /// Frames until the merge has landed.
-fn wait_for_merge(bench: &mut Bench, tool: &mut TubeTool) {
+pub(super) fn wait_for_merge(bench: &mut Bench, tool: &mut TubeTool) {
     let start = Instant::now();
     while tool.is_merging() {
         assert!(start.elapsed() < Duration::from_secs(60), "the merge never landed");
@@ -689,26 +689,40 @@ fn hovering_lights_what_a_press_would_take() {
 
 #[test]
 fn the_panel_builds_and_the_demos_run() {
-    for what in ["", "mirror", "surface", "object", "merged"] {
+    for what in ["", "mirror", "radial", "radial-mirror", "surface", "object", "merged", "radial-merged"] {
         let (mut bench, mut tool, body) = bench();
         let before = bench.doc.info(body).unwrap().mesh;
         bench.call(|cx| tool.demo(cx, what));
         match what {
             "object" => assert_eq!((tool.tube_count(), bench.doc.objects().len()), (0, 2)),
-            "merged" => {
+            "merged" | "radial-merged" => {
                 assert_eq!(tool.tube_count(), 0);
                 assert_ne!(bench.doc.info(body).unwrap().mesh, before);
+                assert_eq!(bench.env.radial_count, if what == "radial-merged" { 6 } else { 1 });
             }
             _ => {
                 assert_eq!(tool.tube_count(), 1, "demo {what:?}");
-                assert_eq!(bench.env.mirror[0], what == "mirror");
+                assert_eq!(bench.env.mirror[0], what == "mirror" || what == "radial-mirror");
+                let repeats = match what {
+                    "radial" => 6,
+                    "radial-mirror" => 3,
+                    _ => 1,
+                };
+                assert_eq!(bench.env.radial_count, repeats);
                 assert_eq!(tool.on_surface(), what == "surface");
                 assert!(tool.selected_point().is_some() && tool.selected_point_size() > 1.5);
                 let draw = bench.frame(&mut tool);
-                assert_eq!(shells(&preview_mesh(&draw, 0)), if what == "mirror" { 2 } else { 1 });
+                let pieces = match what {
+                    "mirror" => 2,
+                    "radial" => 6,
+                    "radial-mirror" => 6,
+                    _ => 1,
+                };
+                assert_eq!(tool.copy_count(0), pieces);
+                assert_eq!(shells(&preview_mesh(&draw, 0)), pieces, "demo {what:?}");
             }
         }
-        assert_eq!(bench.doc.undo_steps(), usize::from(matches!(what, "object" | "merged")));
+        assert_eq!(bench.doc.undo_steps(), usize::from(matches!(what, "object" | "merged" | "radial-merged")));
 
         let ctx = egui::Context::default();
         sculpt_toolkit::theme::install(&ctx);
@@ -718,4 +732,68 @@ fn the_panel_builds_and_the_demos_run() {
         assert!(!output.shapes.is_empty(), "the panel drew something");
         output.textures_delta.clear();
     }
+}
+
+/// The back of the body masked and hidden: out of the way of a stroke on the
+/// front, which a hidden face would not let the pointer hit. Returns how
+/// many vertices and triangles the body has.
+fn mask_and_hide_the_back(bench: &mut Bench, body: ObjectId) -> (usize, usize) {
+    let mesh = bench.doc.mesh(body).unwrap().to_tri_mesh();
+    let at_back = |t: usize| mesh.indices[3 * t..3 * t + 3].iter().all(|&i| mesh.positions[i as usize].z < -0.1);
+    let hidden: Vec<u32> = (0..mesh.triangle_count()).filter(|&t| at_back(t)).map(|t| t as u32).collect();
+    let mask: Vec<f32> = mesh.positions.iter().map(|p| if p.z < -0.1 { 1.0 } else { 0.0 }).collect();
+    assert!(!hidden.is_empty() && mask.contains(&1.0));
+    let receipt = bench.call(|cx| {
+        cx.commit("Mask", vec![Command::Mask { object: body, mask }]);
+        cx.commit("Hide", vec![Command::HideFaces { object: body, triangles: hidden, hide: true }])
+    });
+    assert!(receipt.changed);
+    (mesh.vertex_count(), mesh.triangle_count())
+}
+
+/// What the Unity app did (`SculptableMesh.ReplaceGeometry`, which its tube
+/// merge ended in, as Remesh does): a merged model starts with a clear mask
+/// and everything showing, because the new surface has no mapping onto the
+/// old one's mask or faces.
+#[test]
+fn a_merge_clears_the_mask_and_shows_every_face_as_a_remesh_does() {
+    let (mut bench, mut tool, body) = bench();
+    let (vertices, triangles) = mask_and_hide_the_back(&mut bench, body);
+    let view = bench.doc.mesh(body).unwrap();
+    assert!(view.mask.iter().sum::<f32>() > 0.0 && view.hidden_triangles.is_some());
+    assert!(view.visible_triangle_count() < triangles);
+    assert_eq!(view.mask.len(), vertices);
+
+    draw_horn(&mut bench, &mut tool);
+    assert!(bench.key(&mut tool, Key::Enter));
+    wait_for_merge(&mut bench, &mut tool);
+    let merged = bench.doc.mesh(body).unwrap();
+    assert_ne!(merged.vertex_count(), vertices, "the model was rebuilt");
+    assert_eq!(merged.mask.len(), merged.vertex_count());
+    assert_eq!(merged.mask.iter().sum::<f32>(), 0.0, "the mask is clear");
+    assert!(merged.hidden_triangles.is_none() && merged.hidden_vertices.is_none(), "nothing is hidden");
+    assert_eq!(merged.visible_triangle_count(), merged.triangle_count());
+}
+
+/// Keep Separate leaves the body it was drawn on alone, as it did in Unity
+/// (the new objects are built from the tubes alone): its mask and hidden
+/// faces stay as they were, and the tube objects start clear.
+#[test]
+fn keep_separate_leaves_the_bodys_mask_and_hidden_faces_and_the_tube_starts_clear() {
+    let (mut bench, mut tool, body) = bench();
+    mask_and_hide_the_back(&mut bench, body);
+    let (mask, hidden) = {
+        let view = bench.doc.mesh(body).unwrap();
+        (view.mask.to_vec(), view.hidden_triangles.unwrap().to_vec())
+    };
+    draw_horn(&mut bench, &mut tool);
+    bench.call(|cx| tool.keep_separate(cx));
+    assert_eq!(bench.doc.objects().len(), 2);
+
+    let body_view = bench.doc.mesh(body).unwrap();
+    assert_eq!(body_view.mask, mask.as_slice(), "the body keeps its mask");
+    assert_eq!(body_view.hidden_triangles, Some(hidden.as_slice()), "and its hidden faces");
+    let kept = bench.doc.active_mesh().unwrap();
+    assert_eq!(kept.mask.iter().sum::<f32>(), 0.0);
+    assert!(kept.hidden_triangles.is_none());
 }

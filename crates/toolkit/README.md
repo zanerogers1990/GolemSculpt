@@ -101,6 +101,7 @@ app sorts vertices its own way, so do not expect the order you sent. Copy
 | `cx.status(text, ok)`, `cx.toast(text)` | The status line of the Scene panel; the fading word over the viewport |
 | `cx.finish()`, `cx.start()` | Put this tool away; bring it up (for a button on its card) |
 | `cx.frame_view(aabb)`, `cx.set_unit(u)`, `cx.set_mirror(axes)`, `cx.repaint()` | Camera glide; app-wide unit; brush mirror; ask for another frame |
+| `cx.set_radial(RadialChange { on, count, axis })` | The brushes' radial symmetry: on or off, how many repeats, which axis (in the selected object's own space). What is left `None` stays as the Symmetry card has it. The Lathe turns it on round the object it made |
 | `cx.icon(name)` | An icon for `ButtonStyle::icon` / `theme::tile` |
 
 ## Commands and undo

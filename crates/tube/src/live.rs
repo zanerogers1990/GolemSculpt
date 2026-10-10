@@ -4,7 +4,7 @@
 
 use glam::{Mat3, Mat4, Vec3};
 use sculpt_geom::{SymmetryGroup, SymmetryOp};
-use sculpt_toolkit::{ObjectId, Placement, Preview, PreviewData};
+use sculpt_toolkit::{Env, ObjectId, Placement, Preview, PreviewData};
 
 use crate::field::TubeField;
 use crate::merge::{CELLS_ACROSS_RADIUS, RESOLVED_TIP_FRACTION};
@@ -74,6 +74,63 @@ impl Frame {
     }
 }
 
+/// The symmetry a tube is repeated under: the brushes' mirror axes and radial
+/// repeats, in the space of the object the tube was drawn on (the axes are
+/// that object's own, and the radial axis passes through its origin), exactly
+/// as the brushes have them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Symmetry {
+    pub mirror: [bool; 3],
+    /// How many times round the axis the tube is made, itself included: 1
+    /// when radial symmetry is off.
+    pub radial_count: u32,
+    /// With radial symmetry off this is always Y, so turning the axis of a
+    /// symmetry that is off does not look like a change.
+    pub radial_axis: Vec3,
+}
+
+impl Symmetry {
+    pub const NONE: Symmetry = Symmetry { mirror: [false; 3], radial_count: 1, radial_axis: Vec3::Y };
+
+    pub fn new(mirror: [bool; 3], radial_count: u32, radial_axis: Vec3) -> Symmetry {
+        // The count is limited with a chain rather than `if n < MIN { 1 } else { n.min(MAX) }`:
+        // rustc 1.99.0 miscompiles that form for unsigned integers, turning 0 into 0.
+        let radial_count = if radial_count < SymmetryGroup::MIN_RADIAL_COUNT {
+            1
+        } else if radial_count > SymmetryGroup::MAX_RADIAL_COUNT {
+            SymmetryGroup::MAX_RADIAL_COUNT
+        } else {
+            radial_count
+        };
+        let axis = radial_axis.normalize_or_zero();
+        let radial_axis = if radial_count > 1 && axis != Vec3::ZERO { axis } else { Vec3::Y };
+        Symmetry { mirror, radial_count, radial_axis }
+    }
+
+    /// The symmetry the brushes are working under at the moment.
+    pub fn of(env: &Env) -> Symmetry {
+        Symmetry::new(env.mirror, env.radial_count, env.radial_axis)
+    }
+
+    /// Every copy a tube is made as, the tube itself first.
+    pub fn group(&self) -> SymmetryGroup {
+        let [x, y, z] = self.mirror;
+        SymmetryGroup::build(x, y, z, self.radial_count, self.radial_axis)
+    }
+
+    /// The coordinate planes the copies are exactly symmetric across, which
+    /// is where the lattice they are meshed on can be laid out to make that
+    /// true to the bit (see `TubeField::voxelize`): the mirror planes that are
+    /// on. Not when turns come with them and the copies do not close up under
+    /// the mirrors, as with a custom radial axis tilted against a mirror
+    /// plane: no plane maps those copies onto each other, and forcing one
+    /// would add each side's tubes to the other.
+    pub fn exact_planes(&self) -> [bool; 3] {
+        let turned = self.radial_count > 1;
+        if turned && self.mirror.contains(&true) && !self.group().is_group() { [false; 3] } else { self.mirror }
+    }
+}
+
 /// One symmetric copy of a live tube, as last built.
 #[derive(Clone, Debug)]
 pub struct TubeCopy {
@@ -105,14 +162,14 @@ struct Built {
     caps: CapStyle,
     smoothness: f32,
     frame: Frame,
-    mirror: [bool; 3],
+    symmetry: Symmetry,
 }
 
 impl Built {
-    fn matches(&self, state: &TubeState, frame: Frame, mirror: [bool; 3]) -> bool {
+    fn matches(&self, state: &TubeState, frame: Frame, symmetry: Symmetry) -> bool {
         let s = &state.settings;
         self.frame == frame
-            && self.mirror == mirror
+            && self.symmetry == symmetry
             && self.radius == s.radius
             && self.taper == s.taper
             && self.flip_taper == s.flip_taper
@@ -128,7 +185,7 @@ pub struct LiveTube {
     /// itself.
     pub copies: Vec<TubeCopy>,
     pub frame: Frame,
-    pub mirror: [bool; 3],
+    pub symmetry: Symmetry,
     built: Option<Built>,
     /// The tube's surface in world space, as drawn while it is live.
     pub preview: Preview,
@@ -146,7 +203,7 @@ impl LiveTube {
             state,
             copies: Vec::new(),
             frame: Frame::WORLD,
-            mirror: [false; 3],
+            symmetry: Symmetry::NONE,
             built: None,
             preview: Preview::new(),
             preview_current: false,
@@ -155,13 +212,13 @@ impl LiveTube {
 
     /// Builds every symmetric copy of the tube (in its frame) with their
     /// world-space handles and curves, unless what they were last built from
-    /// is unchanged. `mirror` is the anchor's mirror axes: plain mirroring in
-    /// the anchor's own space.
-    pub fn build(&mut self, frame: Frame, mirror: [bool; 3]) {
-        if self.built.as_ref().is_some_and(|b| b.matches(&self.state, frame, mirror)) {
+    /// is unchanged. `symmetry` is the brushes' mirror axes and radial
+    /// repeats, taken in the anchor's own space.
+    pub fn build(&mut self, frame: Frame, symmetry: Symmetry) {
+        if self.built.as_ref().is_some_and(|b| b.matches(&self.state, frame, symmetry)) {
             return;
         }
-        let group = SymmetryGroup::build(mirror[0], mirror[1], mirror[2], 1, Vec3::Y);
+        let group = symmetry.group();
         let local_to_frame = frame.local_to_frame();
         let frame_to_world = frame.frame_to_world();
         self.copies = group
@@ -182,10 +239,10 @@ impl LiveTube {
             caps: s.caps,
             smoothness: s.smoothness,
             frame,
-            mirror,
+            symmetry,
         });
         self.frame = frame;
-        self.mirror = mirror;
+        self.symmetry = symmetry;
         self.preview_current = false;
     }
 
@@ -224,7 +281,7 @@ impl LiveTube {
         let r = self.state.settings.radius;
         let floor = field.min_radius().max(r * RESOLVED_TIP_FRACTION);
         let cell = (r / PREVIEW_CELLS_ACROSS_RADIUS).min(floor / CELLS_ACROSS_RADIUS);
-        let Ok(built) = field.voxelize(cell, self.mirror, PREVIEW_MAX_SAMPLES) else {
+        let Ok(built) = field.voxelize(cell, self.symmetry.exact_planes(), PREVIEW_MAX_SAMPLES) else {
             self.preview.clear();
             return;
         };

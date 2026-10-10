@@ -3,9 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use glam::{Mat4, Vec3};
-use sculpt_geom::{SymmetryGroup, SymmetryOp, TriMesh};
+use sculpt_geom::{SymmetryOp, TriMesh};
 
 use crate::field::TubeField;
+use crate::live::Symmetry;
 use crate::spine;
 use crate::types::{TubePoint, TubeSettings};
 
@@ -125,9 +126,14 @@ pub fn unmatched_across(mesh: &TriMesh, axis: usize) -> (usize, usize) {
 /// The field of one tube through free points, mirrored across `mirror`, in
 /// the space the points are given in.
 pub fn field_of(points: &[TubePoint], settings: &TubeSettings, mirror: [bool; 3]) -> TubeField {
-    let group = SymmetryGroup::build(mirror[0], mirror[1], mirror[2], 1, Vec3::Y);
+    field_under(points, settings, &Symmetry::new(mirror, 1, Vec3::Y))
+}
+
+/// The field of one tube through free points, repeated under `symmetry`, in
+/// the space the points are given in.
+pub fn field_under(points: &[TubePoint], settings: &TubeSettings, symmetry: &Symmetry) -> TubeField {
     let mut field = TubeField::new();
-    for op in &group {
+    for op in &symmetry.group() {
         let (_, samples) = spine::sample(points, settings, &Mat4::IDENTITY, op);
         field.add_tube(&samples, settings.caps);
     }

@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::{Mat3, Mat4, Vec2};
+use glam::{Mat3, Mat4, Vec2, Vec3};
 use sculpt_geom::{LengthUnit, TriMesh};
 use sculpt_toolkit as kit;
 use sculpt_toolkit::{Ctx, Draw, Env, Event, Jobs, MeshData, ObjectId, Outbox};
@@ -24,7 +24,7 @@ use crate::history::History;
 use crate::mesh::Mesh;
 use crate::render::DrawItem;
 use crate::scene::{Scene, SceneState};
-use crate::sculpt::Sculptor;
+use crate::sculpt::{Radial, RadialAxis, Sculptor};
 use crate::ui::assets::Assets;
 
 /// Every hosted tool, in the order of their buttons. Adding a tool is one
@@ -207,6 +207,9 @@ impl Tools {
         if let Some(mirror) = out.mirror {
             doc.sculptor.settings.symmetry = mirror;
         }
+        if let Some(change) = out.radial {
+            change_radial(&mut doc.sculptor.settings.radial, change);
+        }
         if let Some(bounds) = out.frame.filter(|b| !b.is_empty()) {
             let aspect = env.view.size.x / env.view.size.y.max(1.0);
             doc.camera.frame(crate::mesh::bvh::Aabb { min: bounds.min, max: bounds.max }, aspect, true);
@@ -220,6 +223,25 @@ impl Tools {
         }
         pending.finish |= out.finish && env.active;
         Some(result)
+    }
+}
+
+/// A tool's request for radial symmetry, taken into the Symmetry card's
+/// settings. A direction along the object's X, Y or Z is that axis; any other
+/// is the custom one.
+fn change_radial(radial: &mut Radial, change: kit::RadialChange) {
+    if let Some(on) = change.on {
+        radial.on = on;
+    }
+    if let Some(count) = change.count {
+        radial.count = count.clamp(Radial::MIN_COUNT, Radial::MAX_COUNT);
+    }
+    let Some(axis) = change.axis.filter(|axis| axis.is_finite() && axis.length_squared() > 1e-12) else { return };
+    let axis = axis.normalize();
+    let named = [(Vec3::X, RadialAxis::X), (Vec3::Y, RadialAxis::Y), (Vec3::Z, RadialAxis::Z)];
+    match named.iter().find(|(unit, _)| unit.abs_diff_eq(axis, 1e-6)) {
+        Some(&(_, choice)) => radial.axis = choice,
+        None => radial.set_custom_axis(axis),
     }
 }
 
@@ -1115,6 +1137,79 @@ mod tests {
 
     fn cube() -> Mesh {
         primitives::build(Primitive::Cube, 600, 0.5)
+    }
+
+    /// A tool that asks for radial symmetry changes the settings the Symmetry card shows, and leaves alone
+    /// what it does not name.
+    #[test]
+    fn a_tools_request_for_radial_symmetry_changes_the_symmetry_settings() {
+        let mut radial = Radial::default();
+        assert!(!radial.on);
+        fn ask(radial: &mut Radial, on: Option<bool>, count: Option<u32>, axis: Option<Vec3>) {
+            change_radial(radial, kit::RadialChange { on, count, axis });
+        }
+        ask(&mut radial, Some(true), None, Some(Vec3::Z));
+        assert_eq!((radial.on, radial.count, radial.axis), (true, Radial::default().count, RadialAxis::Z));
+        ask(&mut radial, None, Some(5), None);
+        assert_eq!((radial.on, radial.count, radial.axis), (true, 5, RadialAxis::Z));
+        // The count is kept in range, and a direction that is not one of the three is the custom axis.
+        ask(&mut radial, None, Some(0), Some(Vec3::new(0.0, 2.0, 2.0)));
+        assert_eq!((radial.count, radial.axis), (Radial::MIN_COUNT, RadialAxis::Custom));
+        assert!(radial.axis_vector().abs_diff_eq(Vec3::new(0.0, 1.0, 1.0).normalize(), 1e-6));
+        ask(&mut radial, None, Some(99), Some(Vec3::Y * 4.0));
+        assert_eq!((radial.count, radial.axis), (Radial::MAX_COUNT, RadialAxis::Y));
+        // Something with no direction is no axis; off keeps the rest for next time.
+        ask(&mut radial, Some(false), None, Some(Vec3::ZERO));
+        assert_eq!((radial.on, radial.count, radial.axis), (false, Radial::MAX_COUNT, RadialAxis::Y));
+        assert_eq!(radial.repeats(), 1);
+    }
+
+    /// What a merge or a remesh gives back a model through a context (`Command::Replace`): the new mesh is
+    /// not the old one's vertices, so it arrives with no mask and every face showing, as the Unity app's
+    /// `ReplaceGeometry` left it.
+    #[test]
+    fn a_replaced_mesh_arrives_with_no_mask_and_nothing_hidden() {
+        let mut mesh = cube();
+        let mut scene = Scene::new("Cube");
+        let id = ObjectId(scene.active_id());
+        let mut history = History::default();
+        history.target = scene.active_mesh();
+        let mut sculptor = Sculptor::default();
+        let mut access =
+            Access { scene: &mut scene, mesh: &mut mesh, history: &mut history, sculptor: &mut sculptor, before: None };
+
+        let count = access.mesh(id).unwrap().triangle_count();
+        let vertices = access.mesh(id).unwrap().vertex_count();
+        let half: Vec<u32> = (0..count as u32 / 2).collect();
+        let hidden = half.len();
+        let marked = kit::scene::apply(
+            &mut access,
+            "Mark",
+            vec![
+                Command::Mask { object: id, mask: vec![1.0; vertices] },
+                Command::HideFaces { object: id, triangles: half, hide: true },
+            ],
+        );
+        assert!(marked.changed);
+        let view = access.mesh(id).unwrap();
+        assert!(view.mask.iter().all(|&m| m == 1.0) && view.hidden_triangles.is_some());
+
+        let replacement = primitives::build(Primitive::Cube, 600, 0.5);
+        let rebuilt = TriMesh::new(replacement.positions.clone(), replacement.indices.clone());
+        let data = kit::MeshData::Plain { mesh: rebuilt, mask: None };
+        let receipt = kit::scene::apply(&mut access, "Merge", vec![Command::Replace { object: id, mesh: data }]);
+        assert!(receipt.changed);
+        let view = access.mesh(id).unwrap();
+        assert_eq!(view.mask.len(), view.vertex_count());
+        assert!(view.mask.iter().all(|&m| m == 0.0), "the mask is clear");
+        assert!(view.hidden_triangles.is_none() && view.hidden_vertices.is_none(), "nothing is hidden");
+        assert_eq!(view.visible_triangle_count(), view.triangle_count());
+
+        // Undo is a step on the object list, so it brings the old mesh back as it was, mask and hidden
+        // faces with it (the Unity app's undo of a topology change left the mask blank).
+        assert!(history.step_scene(true, &mut scene, &mut mesh));
+        assert!(mesh.mask.iter().all(|&m| m == 1.0), "the old mask is back");
+        assert_eq!(mesh.hidden_triangle_count(), hidden, "and the old hidden faces");
     }
 
     /// What a tool's context does with the document, without the window.
