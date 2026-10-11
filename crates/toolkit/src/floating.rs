@@ -101,6 +101,11 @@ pub fn any(ctx: &Context) -> bool {
     cards(ctx, |cards| !cards.is_empty())
 }
 
+/// How many cards float, showing or not.
+pub fn count(ctx: &Context) -> usize {
+    cards(ctx, |cards| cards.len())
+}
+
 /// Where the window of the card called `key` is on screen, if it is showing.
 pub fn window(ctx: &Context, key: &str) -> Option<Rect> {
     let id = area_id(key);
@@ -225,7 +230,7 @@ pub(crate) fn show(ui: &mut Ui, key: &str, header: &CardHeader, docked: Id, body
     let id = area_id(key);
     let (mut moved, mut put_back) = (Vec2::ZERO, false);
     let frame = egui::Frame::new()
-        .fill(theme::CARD)
+        .fill(theme::CARD())
         .corner_radius(7.0)
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(46)))
         .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: egui::Color32::from_black_alpha(110) });
@@ -304,7 +309,7 @@ mod tests {
     /// something of the panel's own that takes a tap.
     fn two_cards(ui: &mut Ui, seen: &mut Seen) {
         for (title, open) in [("Brushes", true), ("Masking", false)] {
-            theme::category(ui, title, theme::ACCENT, "summary", open, |ui| {
+            theme::category(ui, title, theme::ACCENT(), "summary", open, |ui| {
                 seen.drawn.push(title);
                 if theme::button(ui, ui.available_width(), "Press", Default::default()).clicked() {
                     seen.clicked.push(title);
@@ -567,7 +572,7 @@ mod tests {
             let input = egui::RawInput { screen_rect: Some(short), ..Default::default() };
             ctx.run_ui(input, |root| {
                 only(root, "left", 250.0, |ui| {
-                    theme::category(ui, "Tall", theme::ACCENT, "", true, |ui| {
+                    theme::category(ui, "Tall", theme::ACCENT(), "", true, |ui| {
                         for _ in 0..40 {
                             theme::heading(ui, "A line");
                         }

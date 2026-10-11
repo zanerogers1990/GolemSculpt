@@ -158,7 +158,9 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
                 p.circle_filled(at, 9.0 * scale, color);
                 p.text(at, Align2::CENTER_CENTER, letter, theme::bold(10.0), Color32::from_black_alpha(220));
             } else {
-                p.circle_filled(at, 8.0 * scale, Color32::from_rgb(24, 24, 30));
+                // The far end of an axis: a ring, filled in the backdrop's colour.
+                let [r, g, b] = doc.opts.background.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
+                p.circle_filled(at, 8.0 * scale, Color32::from_rgb(r, g, b));
                 p.circle_stroke(at, 8.0 * scale, Stroke::new(1.5, color));
                 if hovered {
                     p.text(at, Align2::CENTER_CENTER, letter, theme::bold(9.0), color);
@@ -203,7 +205,7 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
             ui.add_space(16.0);
             let style = theme::ButtonStyle {
                 height: 22.0,
-                active: doc.opts.stroke_pivot.then_some(theme::ACCENT),
+                active: doc.opts.stroke_pivot.then_some(theme::ACCENT()),
                 ..Default::default()
             };
             let r = theme::button(ui, 76.0, "Stroke Pivot", style);
@@ -294,7 +296,7 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
             let scale = 0.85 + 0.15 * open;
             let fade = |c: Color32| c.gamma_multiply(open);
             let c = rect.center();
-            p.circle_filled(c, disc * scale, fade(Color32::from_rgba_unmultiplied(14, 14, 18, 200)));
+            p.circle_filled(c, disc * scale, fade(theme::wheel_disc()));
             p.circle_stroke(c, disc * scale, Stroke::new(1.0, fade(Color32::from_white_alpha(18))));
             let pointer = response.hover_pos();
             let mut hovered_name = None;
@@ -305,11 +307,11 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
                 let size = tile_size * scale * if hovered { 1.1 } else { 1.0 };
                 let tile = Rect::from_center_size(at, Vec2::splat(size));
                 let fill = if hovered {
-                    Color32::from_rgb(92, 163, 255)
+                    theme::lit(theme::ACCENT())
                 } else if active {
-                    theme::ACCENT
+                    theme::ACCENT()
                 } else {
-                    Color32::from_rgb(43, 43, 54)
+                    theme::HEADER()
                 };
                 p.rect_filled(tile, 11.0, fade(fill));
                 if let Some(id) = state.assets.icon(icon) {
@@ -320,7 +322,7 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
                         fade(Color32::WHITE),
                     );
                 }
-                p.text(at + vec2(0.0, 18.0), Align2::CENTER_CENTER, name, theme::bold(10.0), fade(theme::TEXT));
+                p.text(at + vec2(0.0, 18.0), Align2::CENTER_CENTER, name, theme::bold(10.0), fade(theme::TEXT()));
                 if hovered {
                     hovered_name = Some(name);
                     if response.clicked() {
@@ -328,8 +330,8 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
                     }
                 }
             }
-            p.circle_filled(c, 40.0 * scale, fade(Color32::from_rgb(26, 26, 32)));
-            p.text(c, Align2::CENTER_CENTER, hovered_name.unwrap_or(current), theme::bold(14.0), fade(theme::TEXT));
+            p.circle_filled(c, 40.0 * scale, fade(theme::CARD()));
+            p.text(c, Align2::CENTER_CENTER, hovered_name.unwrap_or(current), theme::bold(14.0), fade(theme::TEXT()));
         });
     if spheres {
         // The size of the next sphere, set from under the wheel.
@@ -408,7 +410,7 @@ pub fn wheel_bar(
         let (rect, response) = ui.allocate_exact_size(plate.size(), Sense::click_and_drag());
         // The card colour of the panels, so the unfilled part of the track
         // shows against it as it does there.
-        ui.painter().rect_filled(rect, 10.0, theme::CARD);
+        ui.painter().rect_filled(rect, 10.0, theme::CARD());
         changed = theme::slider_in(ui, wheel_bar_slider(rect), response, label, value, range, readout).changed();
     });
     changed

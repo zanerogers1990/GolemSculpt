@@ -284,12 +284,12 @@ impl Extract {
 
     fn status_line(&self, ui: &mut egui::Ui) {
         match (&self.error, self.building.is_some()) {
-            (_, true) => theme::line(ui, "Working out the preview...", theme::HINT),
+            (_, true) => theme::line(ui, "Working out the preview...", theme::HINT()),
             (Some(why), _) => theme::line(ui, why, theme::ERROR),
             (None, _) if self.triangles > 0 => {
                 theme::line(ui, &format!("Preview: {} tris. Accept to keep.", theme::count(self.triangles)), theme::OK);
             }
-            _ => theme::line(ui, "Mask an area first. Accept makes it a new object.", theme::HINT),
+            _ => theme::line(ui, "Mask an area first. Accept makes it a new object.", theme::HINT()),
         }
     }
 
@@ -321,7 +321,7 @@ impl Extract {
         let r = theme::slider(ui, "Mask Threshold", &mut s.mask_threshold, 0.05..=0.95, amount);
         theme::tip(r, cx.tips, "How strongly a vertex must be masked to be included in the extraction.");
 
-        let r = theme::checkbox(ui, &mut s.invert_region, "Extract Unmasked Instead", ACCENT);
+        let r = theme::checkbox(ui, &mut s.invert_region, "Extract Unmasked Instead", ACCENT());
         theme::tip(r, cx.tips, "Extracts the unmasked area instead of the masked one.");
     }
 }
@@ -405,7 +405,7 @@ impl Tool for Extract {
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, 2, 6.0);
                 ui.add_enabled_ui(self.triangles > 0 && self.adding.is_none(), |ui| {
-                    let style = ButtonStyle { active: Some(ACCENT), badge: "Enter", ..Default::default() };
+                    let style = ButtonStyle { active: Some(ACCENT()), badge: "Enter", ..Default::default() };
                     let r = theme::button(ui, w, "Accept", style);
                     if theme::tip(r, cx.tips, "Turns the preview into a real, separate object. One undo step.").clicked() {
                         self.accept(cx);

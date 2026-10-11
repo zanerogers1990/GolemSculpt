@@ -38,7 +38,7 @@ pub fn tool_row(ui: &mut egui::Ui, doc: &Doc, state: &UiState, actions: &mut Vec
         for (tool, label, icon, help) in tools {
             let style = ButtonStyle {
                 icon: state.assets.icon(icon),
-                active: (doc.tool == tool).then_some(ACCENT),
+                active: (doc.tool == tool).then_some(ACCENT()),
                 ..Default::default()
             };
             if tip(theme::button(ui, w, label, style), doc.opts.tooltips, help).clicked() {
@@ -83,7 +83,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
             let w = theme::row_width(ui, 4, 4.0);
             ui.spacing_mut().item_spacing.x = 4.0;
             for mode in EditMode::ALL {
-                let active = (s.mode() == mode).then_some(ACCENT);
+                let active = (s.mode() == mode).then_some(ACCENT());
                 let badge = mode.hotkey().to_string();
                 let r = theme::tile(ui, vec2(w, 46.0), state.assets.icon(mode.icon()), mode.name(), &badge, active);
                 let text = format!("{} ({})\n{}", mode.name(), mode.hotkey(), mode.description());
@@ -98,7 +98,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
         if let Some(note) = s.note() {
             line(ui, note, theme::OK);
         } else if count == 0 {
-            line(ui, "Click in the viewport to place the first sphere. Drag to size it.", theme::HINT);
+            line(ui, "Click in the viewport to place the first sphere. Drag to size it.", theme::HINT());
         } else if let Some(error) = s.skin_error() {
             line(ui, error, theme::ERROR);
         } else if let Some(stats) = shown {
@@ -106,11 +106,11 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
             let text = format!("{count} spheres   skin {} tris{draft}", fmt_count(stats.triangles));
             line(ui, &text, theme::OK);
         } else {
-            line(ui, &format!("{count} spheres."), theme::HINT);
+            line(ui, &format!("{count} spheres."), theme::HINT());
         }
         match s.undo_summary() {
-            Some((label, steps)) => line(ui, &format!("Undo (Z): {label}. {steps} step(s) held."), theme::HINT),
-            None => line(ui, "Sphere history empty.", theme::HINT),
+            Some((label, steps)) => line(ui, &format!("Undo (Z): {label}. {steps} step(s) held."), theme::HINT()),
+            None => line(ui, "Sphere history empty.", theme::HINT()),
         }
         if count == 0 {
             new_rig_button(ui, state.assets.icon("tool_sspheres"), tips, actions);
@@ -172,7 +172,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
                 let text = format!("Attached to \"{}\". The spheres follow it and mirror across its plane.", o.name);
                 line(ui, &text, theme::OK);
             }
-            None => line(ui, "Not attached. A first sphere placed on a model attaches to that model.", theme::HINT),
+            None => line(ui, "Not attached. A first sphere placed on a model attaches to that model.", theme::HINT()),
         }
         let selected = scene.active();
         ui.horizontal(|ui| {
@@ -237,12 +237,12 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
     let summary = shown.map_or(String::new(), |stats| fmt_count(stats.triangles));
     theme::category(ui, "Skin", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {
         tip(
-            theme::checkbox(ui, &mut s.show_skin, "Show Skin", ACCENT),
+            theme::checkbox(ui, &mut s.show_skin, "Show Skin", ACCENT()),
             tips,
             "Shows the surface the spheres make as a see-through shell that updates while you edit.",
         );
         tip(
-            theme::checkbox(ui, &mut s.preview, "Solid Preview", ACCENT),
+            theme::checkbox(ui, &mut s.preview, "Solid Preview", ACCENT()),
             tips,
             "Shows the solid skin with the spheres hidden, to judge the final shape (A). Limbs can still be dragged.",
         );
@@ -277,20 +277,20 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
 
         theme::heading(ui, "Make It a Model");
         if let Some(tris) = s.final_triangles() {
-            line(ui, &format!("About {} triangles at this detail.", fmt_count(tris)), theme::HINT);
+            line(ui, &format!("About {} triangles at this detail.", fmt_count(tris)), theme::HINT());
         }
         tip(
-            theme::checkbox(ui, &mut s.keep_rig, "Keep Spheres Afterwards", ACCENT),
+            theme::checkbox(ui, &mut s.keep_rig, "Keep Spheres Afterwards", ACCENT()),
             tips,
             "Leaves the spheres in place, so you can change them later and make a fresh skin.",
         );
         tip(
-            theme::checkbox(ui, &mut s.snap_to_surface, "First Sphere Rests on the Model", ACCENT),
+            theme::checkbox(ui, &mut s.snap_to_surface, "First Sphere Rests on the Model", ACCENT()),
             tips,
             "The first sphere of a rig sits on the model under the cursor, touching it. Later spheres are free.",
         );
         ui.add_enabled_ui(count > 0, |ui| {
-            let style = ButtonStyle { active: Some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
             if tip(
                 theme::button(ui, ui.available_width(), "Make Skin", style),
                 tips,
@@ -335,7 +335,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
                 Align2::LEFT_CENTER,
                 what,
                 theme::font(11.0),
-                theme::TEXT,
+                theme::TEXT(),
             );
         }
     });

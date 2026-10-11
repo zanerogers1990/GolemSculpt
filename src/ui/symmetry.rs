@@ -58,7 +58,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
             }
         });
         radial(ui, &mut symmetry.radial, symmetry.space, tips, down_the_view);
-        let guides = theme::checkbox(ui, &mut doc.opts.symmetry_guides, "Show Symmetry Guides", ACCENT);
+        let guides = theme::checkbox(ui, &mut doc.opts.symmetry_guides, "Show Symmetry Guides", ACCENT());
         tip(guides, tips, "Draws the selected object's mirror planes and radial sectors on it.");
         cut_and_mirror(ui, before.space, tips, actions);
     });
@@ -73,7 +73,7 @@ fn space_row(ui: &mut egui::Ui, space: &mut Space, tips: bool) {
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 2, 6.0);
         for choice in Space::ALL {
-            let style = ButtonStyle { active: (*space == choice).then_some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: (*space == choice).then_some(ACCENT()), ..Default::default() };
             let help = match choice {
                 Space::Local => {
                     "Symmetry through the object's own centre along its own axes: it moves and turns with the object."

@@ -77,7 +77,7 @@ impl Choice {
 
     /// Cancel where it is the answer Enter gives: lit as the safe one.
     fn safe_cancel() -> Choice {
-        Choice { label: "Cancel", tint: Some(theme::ACCENT), action: None }
+        Choice { label: "Cancel", tint: Some(theme::ACCENT()), action: None }
     }
 
     /// Cancel for a question that will be asked again: nothing is given up.
@@ -246,7 +246,7 @@ impl Question {
     /// The answers. Cancel is last. Enter gives the first, unless the
     /// question names work that would be lost: then it gives Cancel.
     fn choices(&self) -> Vec<Choice> {
-        let (safe, lossy) = (Some(theme::ACCENT), Some(theme::SUB));
+        let (safe, lossy) = (Some(theme::ACCENT()), Some(theme::SUB));
         // Saving first is the safe answer only while it saves everything.
         let saving = safe.filter(|_| !self.names_lost_work());
         let cancel = if self.names_lost_work() { Choice::safe_cancel() } else { Choice::cancel() };
@@ -333,7 +333,7 @@ impl Question {
         let Some(text) = self.text(doc) else { return Some(None) };
         let choices = self.choices();
         let frame = egui::Frame::new()
-            .fill(theme::CARD)
+            .fill(theme::CARD())
             .corner_radius(10.0)
             .stroke(theme::hairline())
             .inner_margin(egui::Margin::same(16));
@@ -341,7 +341,7 @@ impl Question {
         egui::Modal::new(Id::new("question")).frame(frame).show(ctx, |ui| {
             ui.set_width(320.0);
             ui.spacing_mut().item_spacing = vec2(8.0, 12.0);
-            ui.add(egui::Label::new(egui::RichText::new(text).font(theme::font(13.0)).color(theme::TEXT)).wrap());
+            ui.add(egui::Label::new(egui::RichText::new(text).font(theme::font(13.0)).color(theme::TEXT())).wrap());
             let (last, enter) = (choices.len() - 1, self.enter(choices.len()));
             let button = |ui: &mut egui::Ui, width: f32, index: usize| {
                 let badge = match (index == enter, index == last) {
@@ -449,7 +449,7 @@ mod tests {
         assert!(enter_is_cancel(&question), "Save and Exit would still lose the tubes: Enter is Cancel");
         let saves = question.choices().into_iter().next().unwrap();
         assert!(saves.tint.is_none(), "saving is not lit as the safe answer when it does not save everything");
-        assert_eq!(question.choices().pop().unwrap().tint, Some(theme::ACCENT), "Cancel is");
+        assert_eq!(question.choices().pop().unwrap().tint, Some(theme::ACCENT()), "Cancel is");
         let file = PathBuf::from("dragon head.sclp");
         let text = exit_words(Some(&file), true, &[TUBES.to_owned()]);
         assert!(text.starts_with("Close GolemSculpt? \"dragon head.sclp\" has changes that have not been saved."));
@@ -514,7 +514,7 @@ mod tests {
         let question = new_scene(false, &[TUBES, KEYS]);
         assert_eq!(labels(&question), ["New Scene and Lose Them", "Cancel"]);
         assert!(enter_is_cancel(&question), "Enter is Cancel");
-        assert_eq!(question.choices().pop().unwrap().tint, Some(theme::ACCENT), "and Cancel is the answer that is lit");
+        assert_eq!(question.choices().pop().unwrap().tint, Some(theme::ACCENT()), "and Cancel is the answer that is lit");
         let text = new_scene_words(None, false, &[TUBES.to_owned(), KEYS.to_owned()]);
         assert_eq!(
             text,

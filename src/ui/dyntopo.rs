@@ -25,7 +25,7 @@ pub fn section(ui: &mut egui::Ui, dyntopo: &mut DynTopo, tips: bool) {
     ui.add_space(6.0);
     theme::heading(ui, "Dynamic Topology");
     tip(
-        theme::checkbox(ui, &mut dyntopo.enabled, "Dynamic Topology", ACCENT),
+        theme::checkbox(ui, &mut dyntopo.enabled, "Dynamic Topology", ACCENT()),
         tips,
         "Adds triangles under the brush as you sculpt, so detail appears where you work. Standard, Clay, Crease, \
          Inflate, Flatten and Layer refine; Move, Pose, Snake Hook and Smooth don't. Remesh evens the whole model \

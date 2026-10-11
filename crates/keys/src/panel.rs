@@ -22,7 +22,7 @@ use crate::tool::Keys;
 const GAP: f32 = 6.0;
 
 fn lit(on: bool) -> ButtonStyle<'static> {
-    ButtonStyle { active: on.then_some(ACCENT), ..Default::default() }
+    ButtonStyle { active: on.then_some(ACCENT()), ..Default::default() }
 }
 
 /// A slider over a length kept in world units and shown in millimetres.
@@ -80,13 +80,13 @@ fn pieces(keys: &mut Keys, ui: &mut Ui, cx: &mut Ctx) {
         Some(line) => {
             let unfit = keys.invalid_count();
             let unfit = if unfit > 0 { format!(", {unfit} will not fit") } else { String::new() };
-            theme::line(ui, &format!("{line}: {} joint{}{unfit}", keys.key_count(), if keys.key_count() == 1 { "" } else { "s" }), theme::TEXT);
+            theme::line(ui, &format!("{line}: {} joint{}{unfit}", keys.key_count(), if keys.key_count() == 1 { "" } else { "s" }), theme::TEXT());
         }
-        None => theme::line(ui, "No pieces yet. Split a model in two, select one half and press J.", theme::HINT),
+        None => theme::line(ui, "No pieces yet. Split a model in two, select one half and press J.", theme::HINT()),
     }
     let notes = keys.notes();
     if !notes.is_empty() {
-        theme::line(ui, &format!("{notes}."), theme::HINT);
+        theme::line(ui, &format!("{notes}."), theme::HINT());
     }
 
     let r = theme::checkbox(ui, &mut keys.auto_plan, "Plan joints automatically", PEG);
@@ -138,7 +138,7 @@ fn pieces(keys: &mut Keys, ui: &mut Ui, cx: &mut Ctx) {
             }
         });
 
-        let ready = (keys.key_count() > 0).then_some(ACCENT);
+        let ready = (keys.key_count() > 0).then_some(ACCENT());
         let style = ButtonStyle { icon: cx.icon("tool_keys"), active: ready, badge: "Enter", ..Default::default() };
         let r = theme::button(ui, ui.available_width(), "Build Keys", style);
         if theme::tip(r, cx.tips, "Builds the joints into both pieces: one undo step. Undo gives the planned joints back.").clicked() {

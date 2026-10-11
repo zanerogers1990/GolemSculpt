@@ -61,7 +61,7 @@ pub fn settings(ui: &mut Ui, s: &mut Settings, tips: bool) {
         ui.spacing_mut().item_spacing.x = 4.0;
         let w = theme::row_width(ui, PoseMode::ALL.len(), 4.0);
         for mode in PoseMode::ALL {
-            let style = ButtonStyle { active: (pose.mode == mode).then_some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: (pose.mode == mode).then_some(ACCENT()), ..Default::default() };
             if theme::tip(theme::button(ui, w, mode.name(), style), tips, mode.help()).clicked() {
                 pose.mode = mode;
             }

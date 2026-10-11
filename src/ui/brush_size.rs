@@ -41,7 +41,7 @@ pub fn slider(ui: &mut Ui, s: &mut Settings, tips: bool) {
 
 pub fn toggle(ui: &mut Ui, s: &mut Settings, tips: bool) {
     theme::tip(
-        theme::checkbox(ui, &mut s.screen_space_size, "Screen-Space Size", ACCENT),
+        theme::checkbox(ui, &mut s.screen_space_size, "Screen-Space Size", ACCENT()),
         tips,
         "On: the brush stays the same size on screen as you zoom. Off: the brush has a fixed size on the model.",
     );

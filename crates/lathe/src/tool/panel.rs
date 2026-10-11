@@ -52,7 +52,7 @@ impl Lathe {
             self.top_row(ui, cx);
             match &self.job {
                 Some(job) => theme::line(ui, &format!("Making: {}", job.progress()), theme::OK),
-                None => theme::line(ui, "Shaping - drag the handles on the outline in the viewport.", theme::HINT),
+                None => theme::line(ui, "Shaping - drag the handles on the outline in the viewport.", theme::HINT()),
             }
             self.presets(ui, cx);
             self.history_row(ui, cx);
@@ -73,7 +73,7 @@ impl Lathe {
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 2, 6.0);
             ui.add_enabled_ui(self.job.is_none() && self.built.has_mesh, |ui| {
-                let style = ButtonStyle { icon: cx.icon("check"), active: Some(ACCENT), ..Default::default() };
+                let style = ButtonStyle { icon: cx.icon("check"), active: Some(ACCENT()), ..Default::default() };
                 let r = theme::button(ui, w, "Create Mesh", style);
                 let help = "Turns the shape into a real sculptable object (Enter). The profile is kept, so you can make variations.";
                 if theme::tip(r, cx.tips, help).clicked() {
@@ -227,7 +227,7 @@ impl Lathe {
     /// What Create will make, and what is wrong with the outline if anything is.
     fn stats(&self, ui: &mut egui::Ui) {
         if !self.built.has_mesh {
-            theme::line(ui, self.built.error.as_deref().unwrap_or("No shape yet."), theme::HINT);
+            theme::line(ui, self.built.error.as_deref().unwrap_or("No shape yet."), theme::HINT());
             return;
         }
         let watertight = self.build.watertight;

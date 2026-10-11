@@ -206,16 +206,16 @@ pub fn tiles(ui: &mut Ui, recent: &mut Recent, tips: bool, actions: &mut Vec<Act
             for tile in row {
                 let (rect, response) = ui.allocate_exact_size(size, Sense::click());
                 let p = ui.painter();
-                p.rect_filled(rect, 6.0, theme::CONTROL);
+                p.rect_filled(rect, 6.0, theme::CONTROL());
                 let frame = Rect::from_min_size(rect.min + vec2(4.0, 4.0), vec2(width - 8.0, picture_height));
-                p.rect_filled(frame, 4.0, theme::FIELD);
+                p.rect_filled(frame, 4.0, theme::FIELD());
                 match &tile.picture {
                     Some(picture) => {
                         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
                         p.image(picture.id(), frame, uv, Color32::WHITE);
                     }
                     None => {
-                        p.text(frame.center(), Align2::CENTER_CENTER, "No picture yet", theme::font(10.0), theme::HINT);
+                        p.text(frame.center(), Align2::CENTER_CENTER, "No picture yet", theme::font(10.0), theme::HINT());
                     }
                 }
                 let caption = Rect::from_min_max(pos2(rect.left() + 4.0, frame.bottom()), pos2(rect.right() - 4.0, rect.bottom()));
@@ -224,7 +224,7 @@ pub fn tiles(ui: &mut Ui, recent: &mut Recent, tips: bool, actions: &mut Vec<Act
                     Align2::CENTER_CENTER,
                     &tile.name,
                     theme::font(10.0),
-                    theme::TEXT,
+                    theme::TEXT(),
                 );
                 if response.hovered() {
                     p.rect_filled(rect, 6.0, Color32::from_white_alpha(20));

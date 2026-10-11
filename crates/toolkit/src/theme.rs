@@ -17,14 +17,9 @@ use egui::{
     Response, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2, pos2, vec2,
 };
 
-pub const PANEL: Color32 = Color32::from_rgba_premultiplied(18, 18, 23, 224);
-pub const CARD: Color32 = Color32::from_rgb(29, 29, 36);
-pub const HEADER: Color32 = Color32::from_rgb(38, 38, 47);
-pub const CONTROL: Color32 = Color32::from_rgb(51, 51, 56);
-pub const FIELD: Color32 = Color32::from_rgb(15, 15, 19);
-pub const ACCENT: Color32 = Color32::from_rgb(64, 140, 242);
-pub const TEXT: Color32 = Color32::from_rgb(230, 230, 237);
-pub const HINT: Color32 = Color32::from_rgb(166, 166, 178);
+pub use crate::palette::{ACCENT, CARD, CONTROL, FIELD, HEADER, HINT, PANEL, Palette, TEXT, THEMES};
+pub use crate::palette::{current as current_theme, palette, set as set_theme};
+
 pub const SUB: Color32 = Color32::from_rgb(219, 92, 92);
 pub const MASK: Color32 = Color32::from_rgb(242, 166, 38);
 pub const OK: Color32 = Color32::from_rgb(140, 217, 140);
@@ -48,12 +43,21 @@ pub fn bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("bold".into()))
 }
 
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
-    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+use crate::palette::mix;
+
+/// `color` a step brighter: a tile of that colour with the pointer on it.
+pub fn lit(color: Color32) -> Color32 {
+    mix(color, Color32::WHITE, 0.15)
 }
 
-/// Installs Segoe UI (the Unity app's face) and the dark visuals.
+/// The disc the hold-Space wheels are laid out on: dark and see-through.
+pub fn wheel_disc() -> Color32 {
+    let field = FIELD();
+    Color32::from_rgba_unmultiplied(field.r(), field.g(), field.b(), 200)
+}
+
+/// Installs Segoe UI (the Unity app's face) and the visuals of the theme
+/// that is up (see [`crate::palette`]).
 pub fn install(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     let mut add = |name: &str, file: &str, family: FontFamily| {
@@ -78,25 +82,8 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 
     ctx.set_theme(egui::Theme::Dark);
+    crate::palette::visuals(ctx);
     ctx.all_styles_mut(|style| {
-        let v = &mut style.visuals;
-        v.override_text_color = Some(TEXT);
-        v.panel_fill = Color32::TRANSPARENT;
-        v.window_fill = Color32::from_rgb(20, 20, 26);
-        v.window_stroke = hairline();
-        v.extreme_bg_color = FIELD;
-        v.selection.bg_fill = ACCENT.gamma_multiply(0.6);
-        v.widgets.inactive.bg_fill = CONTROL;
-        v.widgets.inactive.weak_bg_fill = CONTROL;
-        v.widgets.hovered.bg_fill = mix(CONTROL, Color32::WHITE, 0.08);
-        v.widgets.hovered.weak_bg_fill = mix(CONTROL, Color32::WHITE, 0.08);
-        v.widgets.active.bg_fill = ACCENT;
-        v.widgets.active.weak_bg_fill = ACCENT;
-        for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
-            w.corner_radius = CornerRadius::same(5);
-            w.bg_stroke = Stroke::NONE;
-            w.fg_stroke = Stroke::new(1.0, TEXT);
-        }
         style.spacing.item_spacing = vec2(6.0, 6.0);
         style.spacing.scroll.bar_width = 5.0;
         style.spacing.scroll.floating = true;
@@ -158,7 +145,7 @@ pub fn category_as(
     }
     let width = ui.available_width();
     let mut pulled_out = None;
-    egui::Frame::new().fill(CARD).corner_radius(7.0).show(ui, |ui| {
+    egui::Frame::new().fill(CARD()).corner_radius(7.0).show(ui, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing.y = 0.0;
         let (rect, response) = ui.allocate_exact_size(vec2(width, CARD_HEADER_HEIGHT), Sense::click());
@@ -230,7 +217,7 @@ pub(crate) fn paint_card_header(
     button: &Response,
 ) {
     let CardHeader { title, accent, summary } = *header;
-    let fill = if corner.open() { mix(HEADER, accent, 0.10) } else { HEADER };
+    let fill = if corner.open() { mix(HEADER(), accent, 0.10) } else { HEADER() };
     let rounding = if corner.open() { CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 } } else { CornerRadius::same(7) };
     let p = ui.painter();
     p.rect_filled(rect, rounding, fill);
@@ -240,9 +227,9 @@ pub(crate) fn paint_card_header(
         1.5,
         accent,
     );
-    let title = p.layout_no_wrap(title.to_owned(), bold(13.0), TEXT);
+    let title = p.layout_no_wrap(title.to_owned(), bold(13.0), TEXT());
     let title_end = rect.left() + 17.0 + title.size().x;
-    p.galley(pos2(rect.left() + 17.0, rect.center().y - title.size().y * 0.5), title, TEXT);
+    p.galley(pos2(rect.left() + 17.0, rect.center().y - title.size().y * 0.5), title, TEXT());
     let button_rect = corner.button(rect);
     if let Corner::Chevron(open) = corner {
         // Chevron: right when closed, down when open.
@@ -331,11 +318,11 @@ fn asked_open(ctx: &egui::Context, title: &str) -> bool {
 /// Sub-heading inside a category.
 pub fn heading(ui: &mut Ui, text: &str) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, text, bold(12.0), TEXT);
+    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, text, bold(12.0), TEXT());
 }
 
 pub fn hint(ui: &mut Ui, text: &str) {
-    ui.add(egui::Label::new(egui::RichText::new(text).font(font(11.0)).italics().color(HINT)).wrap());
+    ui.add(egui::Label::new(egui::RichText::new(text).font(font(11.0)).italics().color(HINT())).wrap());
 }
 
 pub struct ButtonStyle<'a> {
@@ -359,14 +346,14 @@ pub fn button(ui: &mut Ui, width: f32, text: &str, style: ButtonStyle) -> Respon
     }
     let enabled = ui.is_enabled();
     let p = ui.painter();
-    p.rect_filled(rect, 5.0, style.active.unwrap_or(CONTROL));
+    p.rect_filled(rect, 5.0, style.active.unwrap_or(CONTROL()));
     hover_overlay(ui, rect, 5.0, &response);
     let ink = if !enabled {
         Color32::from_white_alpha(70)
     } else if style.active.is_some() {
         Color32::WHITE
     } else {
-        TEXT
+        TEXT()
     };
     let galley = p.layout_no_wrap(text.to_owned(), font(12.0), ink);
     let icon_w = if style.icon.is_some() { 16.0 + 5.0 } else { 0.0 };
@@ -404,7 +391,7 @@ pub fn tile(
         return response;
     }
     let p = ui.painter();
-    p.rect_filled(rect, 5.0, active.unwrap_or(CONTROL));
+    p.rect_filled(rect, 5.0, active.unwrap_or(CONTROL()));
     hover_overlay(ui, rect, 5.0, &response);
     let tint = if active.is_some() { Color32::WHITE } else { Color32::from_white_alpha(210) };
     let icon_size = if caption.is_empty() { (size.y - 12.0).min(28.0) } else { 22.0 };
@@ -494,19 +481,19 @@ pub fn slider_in(
         return response;
     }
     let p = ui.painter();
-    p.text(rect.left_top() + vec2(0.0, 1.0), Align2::LEFT_TOP, label, font(12.0), TEXT);
-    p.text(rect.right_top() + vec2(0.0, 2.0), Align2::RIGHT_TOP, readout(*value), font(11.0), HINT);
+    p.text(rect.left_top() + vec2(0.0, 1.0), Align2::LEFT_TOP, label, font(12.0), TEXT());
+    p.text(rect.right_top() + vec2(0.0, 2.0), Align2::RIGHT_TOP, readout(*value), font(11.0), HINT());
     let t = ((*value - min) / (max - min)).clamp(0.0, 1.0);
     let x = left + (right - left) * t;
     p.rect_filled(
         Rect::from_min_max(pos2(rect.left(), track_y - 2.0), pos2(rect.right(), track_y + 2.0)),
         2.0,
-        FIELD,
+        FIELD(),
     );
     p.rect_filled(
         Rect::from_min_max(pos2(rect.left(), track_y - 2.0), pos2(x, track_y + 2.0)),
         2.0,
-        ACCENT,
+        ACCENT(),
     );
     let thumb = if response.is_pointer_button_down_on() {
         Color32::from_rgb(204, 224, 255)
@@ -522,7 +509,7 @@ pub fn slider_in(
 
 pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str, fill: Color32) -> Response {
     let width = ui.available_width();
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font(12.0), TEXT);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font(12.0), TEXT());
     let size = vec2((24.0 + galley.size().x).min(width), 22.0);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
     if response.clicked() {
@@ -531,7 +518,7 @@ pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str, fill: Color32) -> Re
     }
     let p = ui.painter();
     let well = Rect::from_min_size(pos2(rect.left(), rect.center().y - 8.0), Vec2::splat(16.0));
-    p.rect_filled(well, 4.0, if *value { fill } else { FIELD });
+    p.rect_filled(well, 4.0, if *value { fill } else { FIELD() });
     p.rect_stroke(well, 4.0, Stroke::new(1.0, Color32::from_white_alpha(36)), StrokeKind::Inside);
     if response.hovered() {
         p.rect_filled(well, 4.0, Color32::from_white_alpha(20));
@@ -543,7 +530,7 @@ pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str, fill: Color32) -> Re
             Stroke::new(2.0, Color32::WHITE),
         );
     }
-    p.galley(pos2(rect.left() + 24.0, rect.center().y - galley.size().y * 0.5), galley, TEXT);
+    p.galley(pos2(rect.left() + 24.0, rect.center().y - galley.size().y * 0.5), galley, TEXT());
     response
 }
 
@@ -568,7 +555,7 @@ pub fn shortcuts(ui: &mut Ui, rows: &[(&str, &str)]) {
     for (key, what) in rows {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::hover());
         ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, key, font(11.0), KEY);
-        ui.painter().text(rect.left_center() + vec2(118.0, 0.0), Align2::LEFT_CENTER, what, font(11.0), TEXT);
+        ui.painter().text(rect.left_center() + vec2(118.0, 0.0), Align2::LEFT_CENTER, what, font(11.0), TEXT());
     }
 }
 
@@ -583,7 +570,7 @@ pub fn text_field(ui: &mut Ui, text: &mut String, width: f32) -> Response {
 pub fn labelled_field(ui: &mut Ui, label: &str, text: &mut String) -> Response {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(96.0, 22.0), Sense::hover());
-        ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, label, font(12.0), TEXT);
+        ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, label, font(12.0), TEXT());
         text_field(ui, text, ui.available_width())
     })
     .inner
@@ -637,8 +624,8 @@ mod tests {
                 if ask {
                     open_category(ui, "Size");
                 }
-                category(ui, "Size", ACCENT, "", false, |_| drawn = true);
-                category(ui, "Other", ACCENT, "", false, |_| {});
+                category(ui, "Size", ACCENT(), "", false, |_| drawn = true);
+                category(ui, "Other", ACCENT(), "", false, |_| {});
             };
             if folded {
                 crate::floating::only(root, "right", 240.0, panel);

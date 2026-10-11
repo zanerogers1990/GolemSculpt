@@ -217,10 +217,10 @@ impl Tool for Studs {
             theme::slider(ui, "Stud Size", &mut self.size, 0.01..=0.5, |v| format!("{v:.2}"));
             match &self.job {
                 Some(job) => theme::line(ui, &format!("Making: {}", job.progress()), theme::OK),
-                None => theme::line(ui, &format!("{} studs.", self.studs.len()), theme::HINT),
+                None => theme::line(ui, &format!("{} studs.", self.studs.len()), theme::HINT()),
             }
             ui.add_enabled_ui(!self.studs.is_empty() && self.job.is_none(), |ui| {
-                let style = ButtonStyle { active: Some(ACCENT), badge: "Enter", ..Default::default() };
+                let style = ButtonStyle { active: Some(ACCENT()), badge: "Enter", ..Default::default() };
                 let r = theme::button(ui, ui.available_width(), "Make Studs", style);
                 if theme::tip(r, cx.tips, "Turns the studs into one new object you can sculpt.").clicked() {
                     self.make(cx, Duration::ZERO);

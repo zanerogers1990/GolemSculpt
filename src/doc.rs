@@ -45,6 +45,10 @@ pub struct Options {
     /// tab at the edge of the screen. Unlike the clean view this hides
     /// nothing else and switches nothing off.
     pub folded: [bool; 2],
+    /// Which tab of each panel is showing.
+    pub tabs: crate::ui::tabs::Showing,
+    /// The interface's colours: a place in `ui::theme::THEMES`.
+    pub theme: usize,
     /// Which way the transform gizmo's arrows and rings point.
     pub gizmo_axes: crate::gizmo::Orientation,
     /// Finishes, lighting, environment and post effects.
@@ -76,6 +80,8 @@ impl Default for Options {
             new_shape_tris: 200_000.0,
             clean_view: false,
             folded: [false; 2],
+            tabs: Default::default(),
+            theme: 0,
             gizmo_axes: Default::default(),
             look: Look::default(),
         }

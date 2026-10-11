@@ -130,14 +130,18 @@ fn plate_rect(size: Vec2, screen: Rect, folded: [bool; 2]) -> Rect {
 
 /// The notes only the Sculpt panel shows that matter while it is folded
 /// away. A card that floats still shows its own, so that one is left out.
-fn sculpt_panel_notes(ctx: &egui::Context, doc: &Doc) -> Vec<Line> {
+fn sculpt_panel_notes(ctx: &egui::Context, doc: &Doc, folded: bool) -> Vec<Line> {
     let away = |card: &str| !floating::is_floating(ctx, card);
     let note = |text: &str, color| Line { text: text.to_owned(), color, strength: 1.0 };
     if doc.tool == Tool::SSpheres {
-        return doc.spheres.note().filter(|_| away("Spheres")).map(|text| note(text, theme::OK)).into_iter().collect();
+        let unseen = folded && away("Spheres");
+        return doc.spheres.note().filter(|_| unseen).map(|text| note(text, theme::OK)).into_iter().collect();
     }
-    // The Remesh card is in the panel unless a hosted tool's panel has its place.
-    let remesh_card = doc.tools.active(doc.tool).is_none() && away("Remesh");
+    // The Remesh card is on the panel's Mesh tab, unless a hosted tool's
+    // panel has the tabs' place: out of sight while the panel is folded away
+    // or on its other tab.
+    let unseen = folded || doc.opts.tabs.sculpt != super::tabs::Sculpt::Mesh;
+    let remesh_card = doc.tools.active(doc.tool).is_none() && away("Remesh") && unseen;
     let limit = dyntopo::limit_note(&doc.sculptor.dyntopo).filter(|_| remesh_card);
     limit.map(|text| note(&text, dyntopo::WARNING)).into_iter().collect()
 }
@@ -177,9 +181,7 @@ pub fn overlay(ctx: &egui::Context, doc: &Doc, state: &mut UiState, folded: [boo
             }
         }
     }
-    if folded[Side::Left.index()] {
-        lines.extend(sculpt_panel_notes(ctx, doc));
-    }
+    lines.extend(sculpt_panel_notes(ctx, doc, folded[Side::Left.index()]));
     if !lines.is_empty() && show(ctx, &lines, status, folded, doc.opts.tooltips) {
         state.status_seen.put_away = true;
         ctx.request_repaint();
@@ -209,12 +211,12 @@ fn show(ctx: &egui::Context, lines: &[Line], dismissable: bool, folded: [bool; 2
     area.fixed_pos(at).show(ctx, |ui| {
         let (rect, response) = ui.allocate_exact_size(size, if dismissable { Sense::click() } else { Sense::hover() });
         let p = ui.painter();
-        p.rect_filled(rect, 7.0, theme::PANEL.gamma_multiply(strongest));
+        p.rect_filled(rect, 7.0, theme::PANEL().gamma_multiply(strongest));
         let edge = Stroke::new(1.0, Color32::from_white_alpha(18).gamma_multiply(strongest));
         p.rect_stroke(rect, 7.0, edge, StrokeKind::Inside);
         let mut y = rect.top() + PAD.y;
         for galley in &galleys {
-            p.galley(pos2(rect.left() + PAD.x, y), galley.clone(), theme::TEXT);
+            p.galley(pos2(rect.left() + PAD.x, y), galley.clone(), theme::TEXT());
             y += galley.size().y + LINE_GAP;
         }
         if dismissable {
@@ -290,7 +292,7 @@ mod tests {
         assert!(strength > 0.0 && strength < 1.0 && next == Some(Duration::ZERO), "and every frame while it lasts");
         assert_eq!(shown(&saved, Seen::at(10.0), 30.0), None);
         // The hint the app starts with is not an error either; nothing to say is nothing to show.
-        assert_eq!(shown(&("Import adds a model.".to_owned(), theme::HINT), Seen::default(), 600.0), None);
+        assert_eq!(shown(&("Import adds a model.".to_owned(), theme::HINT()), Seen::default(), 600.0), None);
         assert_eq!(shown(&("  ".to_owned(), theme::ERROR), Seen::at(0.0), 1.0), None);
     }
 

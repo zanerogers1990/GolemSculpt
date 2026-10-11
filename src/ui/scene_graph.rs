@@ -129,7 +129,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<A
         summary += &format!(", {picked} selected");
     }
     let (assets, st) = (&state.assets, &mut state.graph);
-    theme::category(ui, "Objects", Color32::from_rgb(76, 153, 255), &summary, true, |ui| {
+    theme::category(ui, "Objects", theme::lit(ACCENT()), &summary, true, |ui| {
         theme::heading(ui, "Add");
         for row in Primitive::ALL.chunks(3) {
             ui.horizontal(|ui| {
@@ -203,11 +203,11 @@ fn paint_row(p: &Painter, rect: Rect, object: &Object, look: &Look, assets: &Ass
     };
     if !look.editing {
         let fill = if look.selected {
-            ACCENT
+            ACCENT()
         } else if look.also {
             ALSO
         } else {
-            theme::CONTROL
+            theme::CONTROL()
         };
         p.rect_filled(name, 5.0, fill);
         glow(name, look.hover[0]);
@@ -215,7 +215,7 @@ fn paint_row(p: &Painter, rect: Rect, object: &Object, look: &Look, assets: &Ass
             (true, _, _) => Color32::WHITE,
             (false, true, _) => LINKED,
             (false, false, true) => MIRRORED,
-            (false, false, false) => theme::TEXT,
+            (false, false, false) => theme::TEXT(),
         };
         if !object.visible {
             ink = ink.gamma_multiply(0.55);
@@ -243,7 +243,7 @@ fn paint_row(p: &Painter, rect: Rect, object: &Object, look: &Look, assets: &Ass
         p.image(icon, Rect::from_center_size(eye.center(), Vec2::splat(16.0)), uv, Color32::from_white_alpha(alpha));
     }
 
-    p.rect_filled(trash, 5.0, theme::CONTROL);
+    p.rect_filled(trash, 5.0, theme::CONTROL());
     glow(trash, look.hover[2] && look.can_delete);
     if let Some(icon) = assets.icon("trash") {
         let alpha = if look.can_delete { 210 } else { 60 };
@@ -427,15 +427,15 @@ fn rows(ui: &mut Ui, scene: &Scene, assets: &Assets, st: &mut State, tips: bool,
     if let Some((id, slot)) = lifted {
         // The gap it would drop into...
         let gap = row_at(slot as f32);
-        ui.painter().rect_filled(gap, 5.0, theme::FIELD);
-        ui.painter().rect_stroke(gap, 5.0, Stroke::new(1.0, ACCENT.gamma_multiply(0.6)), StrokeKind::Inside);
+        ui.painter().rect_filled(gap, 5.0, theme::FIELD());
+        ui.painter().rect_stroke(gap, 5.0, Stroke::new(1.0, ACCENT().gamma_multiply(0.6)), StrokeKind::Inside);
         // ...and the row itself, drawn above everything so it can leave the list.
         if let Some(o) = scene.get(id) {
             let place = st.places.get(&id).copied().unwrap_or(slot as f32);
             let rect = row_at(place).expand2(vec2(4.0, 1.0));
             let p = ui.ctx().layer_painter(LayerId::new(Order::Tooltip, Id::new("object_lifted")));
             p.rect_filled(rect.translate(vec2(0.0, 4.0)).expand(2.0), 8.0, Color32::from_black_alpha(110));
-            p.rect_filled(rect.expand(2.0), 7.0, theme::HEADER);
+            p.rect_filled(rect.expand(2.0), 7.0, theme::HEADER());
             let mut look = look_of(o);
             look.hover[0] = true;
             paint_row(&p, rect, o, &look, assets);
@@ -620,18 +620,18 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
     let help = "Deletes the other selected objects instead of just hiding them (hidden ones can be shown again from the list). Undo (Z) brings them back either way.";
     // Unity's label is "Delete the other objects instead of hiding", which
     // is wider than this panel.
-    tip(theme::checkbox(ui, &mut st.bool_delete, "Delete the others instead of hiding", ACCENT), tips, help);
+    tip(theme::checkbox(ui, &mut st.bool_delete, "Delete the others instead of hiding", ACCENT()), tips, help);
 
     // Join and its own setting, a little apart from the booleans'.
     ui.add_space(6.0);
     let help = "Rebuilds the joined result on a clean voxel grid, welding away the seams where the objects met. Like any remesh, it clears the mask.";
-    tip(theme::checkbox(ui, &mut st.join_remesh, "Remesh after Join", ACCENT), tips, help);
+    tip(theme::checkbox(ui, &mut st.join_remesh, "Remesh after Join", ACCENT()), tips, help);
     if st.join_remesh {
         // The Remesh card's own setting, so the two cannot disagree.
         let mut log = doc.opts.remesh_resolution.log2();
         let slider =
             theme::slider(ui, "Remesh Resolution", &mut log, 4f32.log2()..=1024f32.log2(), |v| format!("{:.0}", v.exp2()));
-        let help = "Voxel density of the remesh after the join: higher is more detailed but slower. The same setting as Resolution in the Remesh card.";
+        let help = "Voxel density of the remesh after the join: higher is more detailed but slower. The same setting as Resolution in the Remesh card, on the Sculpt panel's Mesh tab.";
         if tip(slider, tips, help).changed() {
             doc.opts.remesh_resolution = log.exp2().round();
         }

@@ -38,7 +38,7 @@ fn unit_row(ui: &mut egui::Ui, cx: &mut Ctx) {
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 2, 6.0);
         for unit in LengthUnit::ALL {
-            let style = ButtonStyle { active: (cx.unit == unit).then_some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: (cx.unit == unit).then_some(ACCENT()), ..Default::default() };
             let help = format!("Show and type every length in {} (U toggles while measuring).", unit_name(unit).to_lowercase());
             if theme::tip(theme::button(ui, w, unit_name(unit), style), cx.tips, &help).clicked() {
                 cx.set_unit(unit);
@@ -72,11 +72,11 @@ pub fn panel(rulers: &mut Rulers, ui: &mut egui::Ui, cx: &mut Ctx) {
         match rulers.selected() {
             Some(ruler) => {
                 let length = units::format(ruler.length(), cx.unit, true);
-                coloured_line(ui, &[("Ruler: ".to_owned(), theme::TEXT), (length, Color32::WHITE)], 13.0);
+                coloured_line(ui, &[("Ruler: ".to_owned(), theme::TEXT()), (length, Color32::WHITE)], 13.0);
                 coloured_line(ui, &axis_breakdown(ruler.delta(), cx.unit), 11.0);
             }
-            None if count > 0 => theme::line(ui, &format!("{summary}. Click one for its detail."), theme::HINT),
-            None => theme::line(ui, "No rulers yet. Drag across the model to lay one.", theme::HINT),
+            None if count > 0 => theme::line(ui, &format!("{summary}. Click one for its detail."), theme::HINT()),
+            None => theme::line(ui, "No rulers yet. Drag across the model to lay one.", theme::HINT()),
         }
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 2, 6.0);
@@ -215,7 +215,7 @@ impl SizeCard {
             unit_row(ui, cx);
 
             theme::heading(ui, "Measure");
-            let (label, active) = if cx.active { ("Done", Some(ACCENT)) } else { ("Measure", None) };
+            let (label, active) = if cx.active { ("Done", Some(ACCENT())) } else { ("Measure", None) };
             let style = ButtonStyle { icon: cx.icon("tool_measure"), active, badge: "L", ..Default::default() };
             let r = theme::button(ui, ui.available_width(), label, style);
             let help = "Lay rulers on the model: drag from one point to another, then drag either end to re-measure. Ends snap to the surface. L toggles the tool.";
@@ -232,10 +232,10 @@ impl SizeCard {
         let measured = self.measure(cx, false);
         let name = cx.scene().active_info().map(|info| info.name.to_owned());
         let Some((measured, name)) = measured.zip(name) else {
-            theme::line(ui, "Nothing to measure.", theme::HINT);
+            theme::line(ui, "Nothing to measure.", theme::HINT());
             return;
         };
-        theme::line(ui, &name, theme::HINT);
+        theme::line(ui, &name, theme::HINT());
 
         let unit = cx.unit;
         let size = measured.bounds.size();
@@ -260,7 +260,7 @@ impl SizeCard {
             theme::tip(r, cx.tips, help);
         }
         let label = if self.keep_proportions { "Keep Proportions" } else { "Keep Proportions (Off)" };
-        let r = theme::checkbox(ui, &mut self.keep_proportions, label, ACCENT);
+        let r = theme::checkbox(ui, &mut self.keep_proportions, label, ACCENT());
         theme::tip(
             r,
             cx.tips,

@@ -9,6 +9,9 @@
 //! `wheel` (the brush wheel in the middle of the window; `wheel=low` near
 //! the bottom, where its bar goes above it; `wheel=left` at the left edge),
 //! `fold=left`, `fold=right` or `fold=both` (panels folded away),
+//! `theme=Clay` (the interface's colours, by the theme's name), `tab=Mesh`
+//! or `tab=Look` (that tab of its panel showing, by the name on it; as many
+//! as wanted),
 //! `float=Brushes@300:200` (that card floating with its top-left corner
 //! there, in the interface's points; as many as wanted), `status=error`,
 //! `status=ok` or `status=fading` (a long error, a short success, or that
@@ -30,7 +33,7 @@ use winit::keyboard::KeyCode;
 use super::{Drag, Running};
 use crate::doc::Tool;
 use crate::sculpt::Brush;
-use crate::ui::status;
+use crate::ui::{status, tabs};
 use sculpt_toolkit::floating;
 
 /// What `status=error` and `status=ok` write, and `play` with them: made up,
@@ -86,6 +89,20 @@ impl Running {
                 ("strength", strength) => s.current_mut().strength = strength.parse().unwrap_or(0.5),
                 ("wheel", place) => wheel = Some(place.to_owned()),
                 ("fold", which) => self.doc.opts.folded = [which != "right", which != "left"],
+                ("theme", name) => match sculpt_toolkit::palette::named(name) {
+                    Some(theme) => self.doc.opts.theme = theme,
+                    None => eprintln!("--demo-ui: no theme is called {name}"),
+                },
+                ("tab", name) => {
+                    let tabs = &mut self.doc.opts.tabs;
+                    if let Some(tab) = tabs::Sculpt::ALL.into_iter().find(|tab| tab.name().eq_ignore_ascii_case(name)) {
+                        tabs.sculpt = tab;
+                    } else if let Some(tab) = tabs::Scene::ALL.into_iter().find(|tab| tab.name().eq_ignore_ascii_case(name)) {
+                        tabs.scene = tab;
+                    } else {
+                        eprintln!("--demo-ui: no tab is called {name}");
+                    }
+                }
                 ("float", card) => self.ui_demo_float(card),
                 ("status", "ok") => self.status(OK_SAMPLE, true),
                 ("status", "fading") => {
@@ -619,13 +636,14 @@ impl Running {
     /// folded away: Measure's, which opens itself when the tool comes up.
     fn ui_demo_card_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
         let ctx = self.egui_ctx.clone();
-        // How tall the Measure & Size card is in the Scene panel: from its
-        // header down to the header of the card under it.
-        let header = |card: &str| floating::button(&ctx, card).map(|rect| rect.top());
-        let height = header("Measure & Size").zip(header("File")).map(|(top, next)| next - top);
+        // Whether the Measure & Size card is open in the Scene panel. It
+        // starts closed, so it is among the cards that are not as they start
+        // out exactly when it is open.
+        let open = crate::prefs::cards::snapshot(&ctx).get("Measure & Size") == Some(&true);
         match step {
             0 => {
-                expect("the Measure & Size card starts closed", height.is_some_and(|height| height < 60.0));
+                let drawn = floating::button(&ctx, "Measure & Size").is_some();
+                expect("the Measure & Size card starts closed", drawn && !open);
                 // The Scene panel away, and run out of sight because a card floats.
                 self.doc.opts.folded = [false, true];
                 floating::float(&ctx, "Brushes", pos2(400.0, 120.0));
@@ -639,7 +657,6 @@ impl Running {
             }
             2 => self.doc.opts.folded = [false; 2],
             3 => {
-                let open = height.is_some_and(|height| height > 100.0);
                 expect("brought up while the Scene panel was folded away, Measure finds its card open when the panel is back", open);
                 floating::dock(&ctx, "Brushes");
                 self.tools_leave();

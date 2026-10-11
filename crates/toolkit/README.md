@@ -495,12 +495,16 @@ panels use the same module (`src/ui/theme.rs` re-exports it), so they match.
 
 `category(ui, title, accent, summary, default_open, |ui| ..)` is the card
 everything sits in. Inside: `heading`, `hint`, `line(ui, text, OK | ERROR |
-HINT)`, `button(ui, width, text, ButtonStyle { icon, active, badge, height })`,
+HINT())`, `button(ui, width, text, ButtonStyle { icon, active, badge, height })`,
 `tile`, `slider(ui, label, &mut f32, range, |v| text)`, `checkbox`,
 `text_field` / `labelled_field`, `shortcuts(ui, &[(key, what)])`,
 `row_width(ui, n, gap)` for a row of equal buttons, `tip(response, cx.tips,
-text)`, `count(n)`, and the colours (`ACCENT`, `TEXT`, `HINT`, `OK`, `ERROR`,
-`MASK`, `AXIS`...). `open_category` opens a card from code: ask once, and the
+text)`, `count(n)`, and the colours. Those the user's theme sets are read by
+calling them, so a panel is in the theme's colours the moment it changes
+(`ACCENT()`, `TEXT()`, `HINT()`, `CARD()`, `CONTROL()`, `FIELD()`; see
+`palette.rs`); those that say something by their colour are the same in
+every theme and are constants (`OK`, `ERROR`, `MASK`, `SUB`, `KEY`, `AXIS`).
+`open_category` opens a card from code: ask once, and the
 card is open the next time it is drawn in view, even if its panel was folded
 away when you asked.
 
@@ -612,7 +616,7 @@ impl Tool for Dropper {
         }
     }
     fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
-        theme::category(ui, "Dropper", theme::ACCENT, "", true, |ui| {
+        theme::category(ui, "Dropper", theme::ACCENT(), "", true, |ui| {
             theme::hint(ui, "Click the model to drop a cube. Each is one undo step.");
             if theme::button(ui, ui.available_width(), "Done", Default::default()).clicked() { cx.finish(); }
         });

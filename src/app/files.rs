@@ -194,6 +194,8 @@ impl Running {
         opts.ui_scale = kept.interface_size();
         opts.tooltips = kept.tooltips;
         opts.folded = [kept.left_panel_folded, kept.right_panel_folded];
+        opts.tabs = kept.tabs();
+        opts.theme = kept.theme();
         opts.remesh_resolution = kept.remesh_resolution();
         opts.quad_target = kept.quad_target();
         opts.decimate_target = kept.decimate_target();
@@ -222,6 +224,9 @@ impl Running {
             cards: prefs::cards::snapshot(&self.egui_ctx),
             left_panel_folded: opts.folded[0],
             right_panel_folded: opts.folded[1],
+            sculpt_tab: opts.tabs.sculpt.name().to_owned(),
+            scene_tab: opts.tabs.scene.name().to_owned(),
+            theme: crate::ui::theme::THEMES[opts.theme.min(crate::ui::theme::THEMES.len() - 1)].name.to_owned(),
             floating_cards: sculpt_toolkit::floating::snapshot(&self.egui_ctx),
             brush: BrushPrefs::of(&self.doc.sculptor.settings),
             remesh_resolution: opts.remesh_resolution,

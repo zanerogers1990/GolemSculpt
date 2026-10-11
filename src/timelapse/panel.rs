@@ -14,7 +14,7 @@ fn choice(ui: &mut egui::Ui, labels: &[&str], tips: Option<&[&str]>, current: Op
         ui.spacing_mut().item_spacing.x = 4.0;
         let w = theme::row_width(ui, labels.len(), 4.0);
         for (i, label) in labels.iter().enumerate() {
-            let style = ButtonStyle { active: (current == Some(i)).then_some(ACCENT), height: 24.0, ..Default::default() };
+            let style = ButtonStyle { active: (current == Some(i)).then_some(ACCENT()), height: 24.0, ..Default::default() };
             let mut button = theme::button(ui, w, label, style);
             if let Some(tip) = tips.and_then(|t| t.get(i)) {
                 button = button.on_hover_text(*tip);
@@ -46,7 +46,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
             return;
         }
         let (label, style) = match t.phase {
-            Phase::Idle => ("Start Timelapse", ButtonStyle { active: Some(ACCENT), ..Default::default() }),
+            Phase::Idle => ("Start Timelapse", ButtonStyle { active: Some(ACCENT()), ..Default::default() }),
             Phase::Recording => ("Stop Timelapse", ButtonStyle { active: Some(theme::SUB), ..Default::default() }),
             Phase::Saving => ("Saving...", ButtonStyle::default()),
         };
@@ -60,7 +60,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
             let color = match (t.phase, t.status_ok) {
                 (Phase::Idle, true) => theme::OK,
                 (Phase::Idle, false) => theme::ERROR,
-                _ => theme::HINT,
+                _ => theme::HINT(),
             };
             theme::line(ui, &t.status, color);
         }
@@ -135,7 +135,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
                     o.orbit_height = o.orbit_height.round();
                 }
                 tip(
-                    theme::checkbox(ui, &mut o.follow_subject, "Follow Subject", ACCENT),
+                    theme::checkbox(ui, &mut o.follow_subject, "Follow Subject", ACCENT()),
                     "Re-frames as the model grows or you pick another object.",
                 );
             }

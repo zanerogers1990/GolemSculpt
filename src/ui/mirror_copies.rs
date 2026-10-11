@@ -104,7 +104,7 @@ fn sides(ui: &mut Ui, doc: &Doc, tips: bool, mirror: &MirrorRepeater, actions: &
             ui.spacing_mut().item_spacing.x = 4.0;
             let w = theme::row_width(ui, 3, 4.0);
             for (copy, label) in row {
-                let active = (*copy == selected).then_some(ACCENT);
+                let active = (*copy == selected).then_some(ACCENT());
                 let style = ButtonStyle { active, height: 24.0, ..Default::default() };
                 let help = if *copy == 0 {
                     "Puts the gizmo on the object itself.".to_owned()

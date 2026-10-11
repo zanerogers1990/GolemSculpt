@@ -124,15 +124,28 @@ pub fn bottom_bar_origin(screen: Rect, left_folded: bool) -> Pos2 {
     pos2(screen.left() + taken(Side::Left, left_folded) + 12.0, screen.bottom() - 12.0 - 22.0)
 }
 
-/// One panel: `body` in a frame down its side of the window, scrolling when
-/// it is taller than the window. Folded away, nothing of it shows but the
-/// cards that float: `body` is then run out of sight, for those alone.
-/// `root` is the interface's own `Ui`, which that needs.
-pub fn panel(root: &mut egui::Ui, side: Side, folded: bool, body: &mut dyn FnMut(&mut egui::Ui)) {
+/// The two parts a panel is drawn in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Part {
+    /// What stays at the top of the panel however far its cards are scrolled.
+    Head,
+    /// The cards, which scroll when they are taller than the window.
+    Body,
+}
+
+/// One panel: what `draw` draws, in a frame down its side of the window.
+/// `draw` is called for the panel's [`Part::Head`], which stays put, and
+/// then for its [`Part::Body`], which scrolls under it when it is taller
+/// than the window. `page` names what the body is showing, where a panel has
+/// several pages: each keeps its own place in the scroll. Folded away,
+/// nothing of the panel shows but the cards that float: the body alone is
+/// then run, out of sight, for those. `root` is the interface's own `Ui`,
+/// which that needs.
+pub fn panel(root: &mut egui::Ui, side: Side, folded: bool, page: &str, draw: &mut dyn FnMut(&mut egui::Ui, Part)) {
     let ctx = root.ctx().clone();
     let width = side.width();
     if folded {
-        return sculpt_toolkit::floating::only(root, side.name(), width - 20.0, body);
+        return sculpt_toolkit::floating::only(root, side.name(), width - 20.0, |ui| draw(ui, Part::Body));
     }
     let screen = ctx.content_rect();
     let max_height = (screen.height() - 2.0 * MARGIN).max(300.0);
@@ -145,15 +158,23 @@ pub fn panel(root: &mut egui::Ui, side: Side, folded: bool, body: &mut dyn FnMut
         // window height so the panel can grow with its content.
         ui.set_max_height(max_height);
         egui::Frame::new()
-            .fill(theme::PANEL)
+            .fill(theme::PANEL())
             .corner_radius(10.0)
             .stroke(theme::hairline())
             .inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 10 })
             .show(ui, |ui| {
                 ui.set_width(width - 20.0);
-                egui::ScrollArea::vertical().max_height(max_height - 20.0).auto_shrink([false, true]).show(ui, |ui| {
+                let top = ui.cursor().top();
+                draw(ui, Part::Head);
+                // What the head took, with the gap under it; nothing if there is none.
+                let head = ui.cursor().top() - top;
+                let mut cards = egui::ScrollArea::vertical().max_height((max_height - 20.0 - head).max(60.0));
+                if !page.is_empty() {
+                    cards = cards.id_salt(page);
+                }
+                cards.auto_shrink([false, true]).show(ui, |ui| {
                     ui.set_width(width - 20.0);
-                    body(ui)
+                    draw(ui, Part::Body)
                 });
             });
     });
@@ -193,7 +214,7 @@ fn paint_tab(p: &egui::Painter, side: Side, folded: bool, rect: Rect, hovered: b
         egui::CornerRadius { nw: 8, sw: 8, ne: 0, se: 0 }
     };
     // Solid, where the panels are a little see-through: it sits on the model.
-    p.rect_filled(rect, rounding, theme::HEADER);
+    p.rect_filled(rect, rounding, theme::HEADER());
     p.rect_stroke(rect, rounding, theme::hairline(), egui::StrokeKind::Inside);
     if hovered {
         p.rect_filled(rect, rounding, Color32::from_white_alpha(20));

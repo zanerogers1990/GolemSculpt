@@ -35,7 +35,7 @@ pub fn section(ui: &mut Ui, s: &mut Settings, tips: bool) {
     theme::heading(ui, "Falloff Curve");
     let slot = s.brush.index();
     let mut custom = s.falloff[slot].is_some();
-    let tick = theme::checkbox(ui, &mut custom, "Custom Falloff (this brush)", ACCENT);
+    let tick = theme::checkbox(ui, &mut custom, "Custom Falloff (this brush)", ACCENT());
     let tick = theme::tip(
         tick,
         tips,
@@ -57,7 +57,7 @@ pub fn section(ui: &mut Ui, s: &mut Settings, tips: bool) {
         let w = theme::row_width(ui, FalloffPreset::ALL.len(), 4.0);
         for preset in FalloffPreset::ALL {
             let shape = FalloffCurve::preset(preset);
-            let style = ButtonStyle { active: (*curve == shape).then_some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: (*curve == shape).then_some(ACCENT()), ..Default::default() };
             let text = format!("Start this brush's curve from the {} shape.", preset.name());
             if theme::tip(theme::button(ui, w, preset.name(), style), tips, &text).clicked() {
                 *curve = shape;
@@ -148,7 +148,7 @@ fn graph(ui: &mut Ui, curve: &mut FalloffCurve, focal: f32) {
         return;
     }
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, 5.0, theme::FIELD);
+    p.rect_filled(rect, 5.0, theme::FIELD());
     for k in 0..=4 {
         let t = k as f32 / 4.0;
         let (x, y) = (plot.left() + plot.width() * t, plot.top() + plot.height() * t);
@@ -175,6 +175,6 @@ fn graph(ui: &mut Ui, curve: &mut FalloffCurve, focal: f32) {
         let lit = held == Some(i) || (held.is_none() && hovered == Some(i));
         let size = if lit { POINT_SIZE + 3.0 } else { POINT_SIZE };
         let square = Rect::from_center_size(to_screen(point), vec2(size, size));
-        p.rect_filled(square, 1.5, if lit { ACCENT } else { Color32::WHITE });
+        p.rect_filled(square, 1.5, if lit { ACCENT() } else { Color32::WHITE });
     }
 }

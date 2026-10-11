@@ -56,6 +56,7 @@ pen last had (a mouse has no pressure and always sculpts at full strength).
 | O | Spin the view round the model (turntable) |
 | F11 | Fullscreen |
 | Ctrl + = / Ctrl + - | Interface size |
+| (Tabs at the top of the Scene panel, and under the tools in the Sculpt panel) | Show that tab's cards: Brush or Mesh; Scene, Look, File or Settings |
 
 Dragging on the background to orbit is the one addition to the Unity app's
 controls; everything else matches it.
@@ -139,7 +140,7 @@ mask or set up first. It works as the Pose brush in Blender does.
 
 ## Symmetry
 
-The **Symmetry** card of the Sculpt panel makes every stroke in several
+The **Symmetry** card on the Sculpt panel's Mesh tab makes every stroke in several
 places at once: on both sides of a plane, all the way round an axis, or both.
 
 **Every object has its own symmetry**, as in the Unity app. The card shows the
@@ -289,7 +290,7 @@ that is kept.
 
 ## Dynamic topology
 
-**Dynamic Topology**, in the Remesh card of the Sculpt panel, adds triangles
+**Dynamic Topology**, in the Remesh card on the Sculpt panel's Mesh tab, adds triangles
 under the brush as you sculpt, so detail appears where you work and nowhere
 else. It starts off, and the app remembers how you left it.
 
@@ -1062,9 +1063,9 @@ pair; after that they can be moved apart and the joints stay on them.
   lives in one place, `crates/geom/src/units.rs`. **Export STL for Printing**
   looks the object over first, and asks before writing one with holes in it
   (see Checking a model for printing).
-- **The app remembers how you left it**: interface size, tooltips on or off,
-  which cards are open, which float over the view and where, which panels
-  are folded away, fullscreen, millimetres or inches, the remesh settings,
+- **The app remembers how you left it**: interface size, the theme, tooltips
+  on or off, which cards are open, which float over the view and where, which
+  panels are folded away and which tab each is on, fullscreen, millimetres or inches, the remesh settings,
   Decimate's target, dynamic topology and every brush's tuning. They are kept in
   `%APPDATA%\Sculpt\settings.json`, with the recent files; deleting that file
   puts everything back to how the app first starts.
@@ -1196,7 +1197,7 @@ triangles (`crates/geom/src/edge_census.rs`); the wording is in
 
 ## Look
 
-How the model is shaded is in three cards of the Scene panel. The shaders and
+How the model is shaded is in three cards on the Scene panel's Look tab. The shaders and
 numbers are the Unity app's, so the same settings give the same picture.
 
 - **Material**: a matcap, or (Matcap off) a lit surface. Lit surfaces are a
@@ -1391,7 +1392,7 @@ The **Objects** card at the top of the Scene panel is the scene graph.
     first. Only the very last step is kept whatever it holds, so the last
     thing done can always be undone; a step that big is let go by the next
     edit.
-  - The **Performance** card at the bottom of the Scene panel shows how much
+  - The **Performance** card on the Scene panel's Settings tab shows how much
     undo is holding ("History").
 
 ## Hidden parts
@@ -1427,7 +1428,7 @@ any other surface. Nothing is cut away.
 
 ## Turntable
 
-Press **O** (or **Spin** in the Turntable card of the Scene panel) and the
+Press **O** (or **Spin** in the Turntable card on the Scene panel's File tab) and the
 view goes round the model, easing in and out. The camera turns, not the
 model, so nothing about the scene changes. **Speed** is 5 to 180 degrees a
 second and **Reverse Direction** goes the other way. Alt + drag still orbits
@@ -1470,7 +1471,7 @@ default.
 
 ## Timelapse
 
-**Start Timelapse** (the Timelapse card of the Scene panel) records a sped-up
+**Start Timelapse** (the Timelapse card on the Scene panel's File tab) records a sped-up
 video of your sculpting, and **Stop Timelapse** saves it as an MP4 in
 `Videos\Sculpt`. Only the time the model is actually changing is kept:
 thinking, orbiting, and undo and redo are left out. **Speed** then squeezes
@@ -1507,12 +1508,60 @@ bar goes beside the wheel instead, and where there is no room there either
 the wheel comes up without it. The wheel itself opens on a window of any
 size; on one smaller than the wheel, part of it is off the edge.
 
+**Each panel shows a tab's worth of its cards at a time**, so no card is a
+long scroll away.
+
+- The **Sculpt** panel keeps Undo, Redo and the tools at its top. Under them
+  are two tabs: **Brush** (the brushes, the settings of the one in hand, the
+  stroke) and **Mesh** (Symmetry, Remesh with Dynamic Topology, Quad Remesh
+  and Decimate, Masking, Hidden Parts). A tool with a panel of its own
+  (SSpheres, Tube, Lathe...) shows that in place of the tabs while it is up.
+- The **Scene** panel has four tabs along its top, which stay put however far
+  the cards under them are scrolled: **Scene** (the objects, and Measure &
+  Size), **Look** (Material, Lighting, Backdrop & Effects), **File** (the
+  file buttons and recent files, Turntable, Timelapse) and **Settings**
+  (Theme, Interface, Keyboard Shortcuts, Performance). The status line is
+  under the tabs whichever is showing, and each tab keeps its own place in
+  its scroll.
+- A card that floats over the view stays up whichever tab is showing. Put it
+  back while its tab is not the one showing and the panel turns to that tab,
+  so the card does not simply vanish.
+- Every key works whichever tab is showing: R remeshes from the Brush tab as
+  it does from the Mesh tab. While the Mesh tab is not showing, dynamic
+  topology's "Triangle limit reached" is said on the plate over the view (see
+  below), since the Remesh card that says it is out of sight.
+- Which tab each panel is on is remembered between runs.
+
+**The interface comes in eight colour themes.** The **Theme** card on the
+Scene panel's Settings tab has a tile for each, painted in its own colours:
+Midnight (the one the app starts in), Graphite, Slate (the lightest),
+Clay, Forest, Lagoon, Plum and Carbon (black, for a dark room). A tap changes
+the panels, the cards, the buttons, the wheels and the accent that marks what
+is switched on, at once, and it is remembered between runs. What says
+something by its colour is the same in every theme: the axes, Sub's red,
+Mask's orange, a result in green and an error in red, and the coloured mark
+on each card.
+
+The backdrop behind the model goes with the theme, as long as it is one
+nobody chose: pick a colour of your own for it (Backdrop & Effects, on the
+Look tab) and it stays yours through every theme, and in the sculpt's file. A
+sculpt saved with a theme's own backdrop opens with the backdrop of whichever
+theme is up. Every theme has light text on a dark or middling surface; there
+is no white one, because the icons and the hover looks are painted in white.
+The themes are a list in `crates/toolkit/src/palette.rs`, where one can be
+changed or added.
+
+**The interface can be drawn smaller or larger.** The **Interface** card on
+the Settings tab has 75%, 100%, 125%, 150% and 200%; Ctrl + = and Ctrl + -
+step between 75% and 300% a tenth at a time. Tooltips are switched on and
+off in the same card.
+
 **Either panel folds away.** Each panel has a small arrow tab on its inner
 edge, just under the view gizmo's buttons. Tap it and the whole panel
 goes, leaving only a slim tab at the edge of the screen; tap that and the
 panel is back as it was, cards and scrolling included. The two sides fold
-separately. Everything else stays: the view gizmo and the Tooltips / Flat
-Shading / Wireframe row move out to the screen edge, the brush, the tools,
+separately. Everything else stays: the view gizmo and the Flat Shading /
+Wireframe row move out to the screen edge, the brush, the tools,
 the wheel and every key work as before, and the model has the room. This is
 not the clean view (Tab), which is for looking and switches strokes off; Tab
 still hides everything, tabs included, and brings the panels back folded or
@@ -1537,7 +1586,8 @@ and beside the view gizmo; a long message wraps onto several lines.
   beside it you are sculpting.
 - With the Sculpt panel folded away, two notes from its cards join the
   plate: dynamic topology's "Triangle limit reached", for as long as that
-  holds, and the SSphere tool's one-off results. They go by themselves, so a
+  holds (it is there too while the panel is up but on its Brush tab), and the
+  SSphere tool's one-off results. They go by themselves, so a
   plate with only those on it lets the pen through to the model.
 - The clean view (Tab) hides the plate with everything else.
 

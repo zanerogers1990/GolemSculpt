@@ -25,7 +25,7 @@ pub fn buttons(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState) {
                 let Some(info) = doc.tools.info(index) else { continue };
                 let style = ButtonStyle {
                     icon: state.assets.icon(info.icon),
-                    active: (active == Some(index)).then_some(ACCENT),
+                    active: (active == Some(index)).then_some(ACCENT()),
                     // No hotkey badge: at a third of the panel it would sit
                     // on the name. The tooltip gives the key.
                     ..Default::default()
@@ -142,7 +142,7 @@ pub fn radial(ctx: &egui::Context, doc: &mut Doc, state: &UiState) {
         let scale = 0.85 + 0.15 * open;
         let fade = |c: Color32| c.gamma_multiply(open);
         let c = rect.center();
-        p.circle_filled(c, 134.0 * scale, fade(Color32::from_rgba_unmultiplied(14, 14, 18, 200)));
+        p.circle_filled(c, 134.0 * scale, fade(theme::wheel_disc()));
         p.circle_stroke(c, 134.0 * scale, Stroke::new(1.0, fade(Color32::from_white_alpha(18))));
         let pointer = response.hover_pos();
         let mut hovered_name = None;
@@ -152,11 +152,11 @@ pub fn radial(ctx: &egui::Context, doc: &mut Doc, state: &UiState) {
             let hovered = pointer.is_some_and(|q| q.distance(at) < 34.0);
             let size = 58.0 * scale * if hovered { 1.1 } else { 1.0 };
             let fill = if hovered {
-                Color32::from_rgb(92, 163, 255)
+                theme::lit(ACCENT())
             } else if tile.on {
-                ACCENT
+                ACCENT()
             } else {
-                Color32::from_rgb(43, 43, 54)
+                theme::HEADER()
             };
             p.rect_filled(Rect::from_center_size(at, Vec2::splat(size)), 11.0, fade(fill));
             if let Some(id) = state.assets.icon(tile.icon) {
@@ -167,7 +167,7 @@ pub fn radial(ctx: &egui::Context, doc: &mut Doc, state: &UiState) {
                     fade(Color32::WHITE),
                 );
             }
-            p.text(at + vec2(0.0, 18.0), Align2::CENTER_CENTER, tile.label, theme::bold(10.0), fade(theme::TEXT));
+            p.text(at + vec2(0.0, 18.0), Align2::CENTER_CENTER, tile.label, theme::bold(10.0), fade(theme::TEXT()));
             if hovered {
                 hovered_name = Some(tile.label);
                 if response.clicked() {
@@ -175,8 +175,8 @@ pub fn radial(ctx: &egui::Context, doc: &mut Doc, state: &UiState) {
                 }
             }
         }
-        p.circle_filled(c, 40.0 * scale, fade(Color32::from_rgb(26, 26, 32)));
-        p.text(c, Align2::CENTER_CENTER, hovered_name.unwrap_or(current), theme::bold(14.0), fade(theme::TEXT));
+        p.circle_filled(c, 40.0 * scale, fade(theme::CARD()));
+        p.text(c, Align2::CENTER_CENTER, hovered_name.unwrap_or(current), theme::bold(14.0), fade(theme::TEXT()));
     });
     if let Some(i) = clicked {
         Tools::call(doc, &state.assets, index, |tool, cx| tool.input(cx, Event::Radial(i)));
@@ -199,20 +199,20 @@ pub fn jobs(ctx: &egui::Context, doc: &Doc) {
         .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -112.0))
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(theme::PANEL)
+                .fill(theme::PANEL())
                 .corner_radius(8.0)
                 .stroke(theme::hairline())
                 .inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 8 })
                 .show(ui, |ui| {
                     for (i, job) in running.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
+                            ui.add(egui::Spinner::new().size(14.0).color(ACCENT()));
                             let text = if job.progress.is_empty() {
                                 format!("{}...", job.label)
                             } else {
                                 format!("{}: {}", job.label, job.progress)
                             };
-                            ui.label(egui::RichText::new(text).font(theme::font(12.0)).color(theme::TEXT));
+                            ui.label(egui::RichText::new(text).font(theme::font(12.0)).color(theme::TEXT()));
                             let style = ButtonStyle { height: 22.0, ..Default::default() };
                             if theme::button(ui, 60.0, "Cancel", style).clicked() {
                                 doc.tools.jobs.cancel(i);

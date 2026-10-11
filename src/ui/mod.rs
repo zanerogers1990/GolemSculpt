@@ -1,7 +1,9 @@
 //! The interface: two floating panels over a full-window viewport, a view
-//! gizmo, the brush cursor and the radial brush menu. Layout and wording
-//! follow the Unity app. Either panel folds away to a tab (see `panels`);
-//! what it alone would have said is then said over the view (see `status`).
+//! gizmo, the brush cursor and the radial brush menu. Wording follows the
+//! Unity app. Each panel shows a tab's worth of its cards at a time (see
+//! `tabs`), and either folds away to a tab at the screen's edge (see
+//! `panels`); what it alone would have said is then said over the view (see
+//! `status`). The colours are a theme the user picks (see `settings`).
 
 pub mod assets;
 mod brush_size;
@@ -14,9 +16,11 @@ mod panels;
 mod pose;
 pub mod question;
 mod scene_graph;
+mod settings;
 mod spheres;
 pub mod status;
 mod symmetry;
+pub mod tabs;
 pub mod theme;
 mod tools;
 
@@ -31,7 +35,7 @@ pub use overlay::Cursor;
 pub mod overlay_colors {
     pub use super::overlay::{ADD, SMOOTH, SUBTRACT};
 }
-use panels::Side;
+use panels::{Part, Side};
 use theme::{ButtonStyle, ACCENT};
 
 pub struct UiState {
@@ -62,7 +66,7 @@ impl UiState {
         Self {
             assets: Assets::load(ctx),
             toast: None,
-            status: ("Import adds a model (.obj / .stl).".into(), theme::HINT),
+            status: ("Import adds a model (.obj / .stl).".into(), theme::HINT()),
             status_seen: Default::default(),
             radial: None,
             graph: Default::default(),
@@ -97,6 +101,7 @@ pub fn build(
     let ctx = ui.ctx().clone();
     let mut actions = Vec::new();
     let screen = ctx.content_rect();
+    settings::apply_theme(&ctx, &mut doc.opts);
 
     overlay::transform_gizmo(&ctx, &state.gizmo);
     overlay::cursor(&ctx, cursor);
@@ -107,8 +112,17 @@ pub fn build(
         // Each panel, unless it is folded away, and the tab that folds it.
         let (tips, mut folded) = (doc.opts.tooltips, doc.opts.folded);
         sculpt_toolkit::floating::set_room(&ctx, panels::room_for_cards(screen, folded));
-        panels::panel(ui, Side::Left, folded[0], &mut |ui| sculpt_panel(ui, doc, state, &mut actions));
-        panels::panel(ui, Side::Right, folded[1], &mut |ui| scene_panel(ui, doc, state, &mut actions));
+        panels::panel(ui, Side::Left, folded[0], "", &mut |ui, part| {
+            if part == Part::Body {
+                sculpt_panel(ui, doc, state, &mut actions);
+            }
+        });
+        // Each tab of the Scene panel keeps its own place in its scroll.
+        let page = doc.opts.tabs.scene.name();
+        panels::panel(ui, Side::Right, folded[1], page, &mut |ui, part| match part {
+            Part::Head => scene_head(ui, doc, state),
+            Part::Body => scene_panel(ui, doc, state, &mut actions),
+        });
         for side in [Side::Left, Side::Right] {
             let away = &mut folded[side.index()];
             *away ^= panels::tab(&ctx, side, *away, tips);
@@ -116,7 +130,7 @@ pub fn build(
 
         overlay::view_gizmo(&ctx, doc, panels::gizmo_origin(screen, folded[1]), &mut actions);
 
-        // Bottom bar: the two things toggled constantly.
+        // Bottom bar: the two ways of looking at the surface toggled constantly.
         egui::Area::new(Id::new("bottom_bar"))
             .order(Order::Middle)
             .fade_in(false)
@@ -124,10 +138,8 @@ pub fn build(
             .show(&ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 14.0;
-                    let label = if doc.opts.tooltips { "Tooltips: On" } else { "Tooltips: Off" };
-                    theme::checkbox(ui, &mut doc.opts.tooltips, label, ACCENT);
-                    theme::checkbox(ui, &mut doc.opts.flat_shading, "Flat Shading", ACCENT);
-                    theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT);
+                    theme::checkbox(ui, &mut doc.opts.flat_shading, "Flat Shading", ACCENT());
+                    theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT());
                 });
             });
         doc.opts.folded = folded;
@@ -153,7 +165,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
 
     // Title and mesh size.
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "Sculpt", theme::bold(19.0), theme::TEXT);
+    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "Sculpt", theme::bold(19.0), theme::TEXT());
     ui.painter().text(
         rect.right_center(),
         Align2::RIGHT_CENTER,
@@ -163,7 +175,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             fmt_count(doc.mesh.vertex_count())
         ),
         theme::font(11.0),
-        theme::HINT,
+        theme::HINT(),
     );
 
     ui.horizontal(|ui| {
@@ -194,7 +206,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
     if doc.tool == Tool::Transform {
         let count = doc.scene.selected().len();
         let summary = if count > 1 { format!("{count} objects") } else { doc.scene.active().name.clone() };
-        theme::category(ui, "Transform", Color32::from_rgb(76, 153, 255), &summary, true, |ui| {
+        theme::category(ui, "Transform", theme::lit(ACCENT()), &summary, true, |ui| {
             theme::hint(ui, "Drag an arrow to move, a ring to turn, a cube on an arm to stretch that way, or the white cube to resize.");
             theme::hint(ui, "Click another object to select it; Shift or Ctrl + click adds it to the selection or takes it out. Several selected objects go together, about their shared centre. Drag anywhere else to orbit.");
             theme::hint(ui, "If part of the object is masked, the gizmo reshapes the rest and leaves the masked part where it is.");
@@ -203,7 +215,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, 3, 6.0);
                 for axes in crate::gizmo::Orientation::ALL {
-                    let style = ButtonStyle { active: (doc.opts.gizmo_axes == axes).then_some(ACCENT), ..Default::default() };
+                    let style = ButtonStyle { active: (doc.opts.gizmo_axes == axes).then_some(ACCENT()), ..Default::default() };
                     let help = format!("{} The scale cubes always follow the object's own axes.", axes.tip());
                     if tip(theme::button(ui, w, axes.name(), style), doc.opts.tooltips, &help).clicked() {
                         doc.opts.gizmo_axes = axes;
@@ -217,16 +229,32 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         });
     }
 
+    let mut showing = doc.opts.tabs.sculpt;
+    tabs::sculpt_strip(ui, &mut showing, tips);
+    if tabs::page(ui, showing == tabs::Sculpt::Brush, "brush", |ui| brush_page(ui, doc, state)) {
+        showing = tabs::Sculpt::Brush;
+    }
+    if tabs::page(ui, showing == tabs::Sculpt::Mesh, "mesh", |ui| mesh_page(ui, doc, state, actions)) {
+        showing = tabs::Sculpt::Mesh;
+    }
+    doc.opts.tabs.sculpt = showing;
+}
+
+/// The Sculpt panel's Brush tab: the brushes, the settings of the one in
+/// hand, and the stroke.
+fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
+    let tips = doc.opts.tooltips;
+    let icon = |name: &str| state.assets.icon(name);
     let s = &mut doc.sculptor.settings;
     let brush = s.brush;
     let summary = if s.mask_mode { "Mask" } else { brush.name() };
-    theme::category(ui, "Brushes", Color32::from_rgb(76, 153, 255), summary, true, |ui| {
+    theme::category(ui, "Brushes", theme::lit(ACCENT()), summary, true, |ui| {
         let w = theme::row_width(ui, 5, 4.0);
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         for row in Brush::ALL.chunks(5) {
             ui.horizontal(|ui| {
                 for &b in row {
-                    let active = (b == s.brush && !s.mask_mode).then_some(ACCENT);
+                    let active = (b == s.brush && !s.mask_mode).then_some(ACCENT());
                     let badge = b.hotkey().to_string();
                     let r = theme::tile(ui, vec2(w, 40.0), icon(b.icon()), "", &badge, active);
                     let text = format!("{} ({})\n{}", b.name(), b.hotkey(), b.description());
@@ -246,7 +274,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             let polar = s.brush.has_polarity() && !s.mask_mode;
             let add = ButtonStyle {
                 icon: icon("polarity_add"),
-                active: (polar && positive).then_some(ACCENT),
+                active: (polar && positive).then_some(ACCENT()),
                 ..Default::default()
             };
             if tip(theme::button(ui, w, "Add", add), tips, "Brush adds material. Hold Ctrl or use the right button to flip.").clicked() {
@@ -307,7 +335,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         if accumulates {
             let label = if bs.accumulate { "Accumulate" } else { "Accumulate (Off)" };
             tip(
-                theme::checkbox(ui, &mut bs.accumulate, label, ACCENT),
+                theme::checkbox(ui, &mut bs.accumulate, label, ACCENT()),
                 tips,
                 "On: every pass over the same spot adds more. Off: the stroke builds to a fixed height.",
             );
@@ -320,7 +348,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         if brush != Brush::Pose {
             let label = if bs.front_facing { "Front Facing Only" } else { "Front Facing Only (Off)" };
             tip(
-                theme::checkbox(ui, &mut bs.front_facing, label, ACCENT),
+                theme::checkbox(ui, &mut bs.front_facing, label, ACCENT()),
                 tips,
                 "Ignore surface that faces away from the camera, so thin shapes are not hit on the far side.",
             );
@@ -343,7 +371,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             }
             Brush::Move => {
                 tip(
-                    theme::checkbox(ui, &mut s.move_connected, "Connected Only", ACCENT),
+                    theme::checkbox(ui, &mut s.move_connected, "Connected Only", ACCENT()),
                     tips,
                     "Grab only the surface joined to the point under the pointer: moving one finger leaves the one next to it alone.",
                 );
@@ -356,12 +384,12 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
 
     theme::category(ui, "Stroke", Color32::from_rgb(168, 133, 255), "", false, |ui| {
         tip(
-            theme::checkbox(ui, &mut s.build_up_on_hold, "Build Up on Hold", ACCENT),
+            theme::checkbox(ui, &mut s.build_up_on_hold, "Build Up on Hold", ACCENT()),
             tips,
             "Keep adding while the pointer rests in one place.",
         );
         tip(
-            theme::checkbox(ui, &mut s.lazy_mouse, "Lazy Mouse", ACCENT),
+            theme::checkbox(ui, &mut s.lazy_mouse, "Lazy Mouse", ACCENT()),
             tips,
             "The brush trails the pointer on a short rope, steadying long curves.",
         );
@@ -372,6 +400,56 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         theme::heading(ui, "Stylus Pressure");
         theme::slider(ui, "Light-Touch Floor", &mut s.pressure_floor, 0.0..=0.5, |v| format!("{v:.2}"));
         theme::slider(ui, "Curve", &mut s.pressure_curve, 0.5..=3.0, |v| format!("{v:.2}"));
+    });
+}
+
+/// The Sculpt panel's Mesh tab: what is done to the whole mesh.
+fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
+    let tips = doc.opts.tooltips;
+    symmetry::card(ui, doc, actions);
+
+    let summary = fmt_count(doc.mesh.triangle_count());
+    theme::category(ui, "Remesh", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {
+        theme::hint(ui, "Rebuilds the surface with even triangles. Use it after big shape changes, or to add detail.");
+        // Log slider: equal travel doubles the resolution.
+        let mut log = doc.opts.remesh_resolution.log2();
+        if theme::slider(ui, "Resolution", &mut log, 4f32.log2()..=1024f32.log2(), |v| format!("{:.0}", v.exp2())).changed() {
+            doc.opts.remesh_resolution = log.exp2().round();
+        }
+        let style = ButtonStyle { badge: "R", active: Some(ACCENT()), ..Default::default() };
+        if tip(
+            theme::button(ui, ui.available_width(), "Remesh", style),
+            tips,
+            "Voxel remesh at this resolution (R).",
+        )
+        .clicked()
+        {
+            actions.push(Action::Remesh);
+        }
+        dyntopo::section(ui, &mut doc.sculptor.dyntopo, tips);
+
+        ui.add_space(6.0);
+        theme::hint(ui, "Quad Remesh rebuilds it as even quads that follow the form. Export keeps the quads.");
+        let range = crate::quadremesh::TARGET_RANGE;
+        let mut log = doc.opts.quad_target.log2();
+        if theme::slider(ui, "Quads", &mut log, range.start().log2()..=range.end().log2(), |v| fmt_count(v.exp2() as usize)).changed() {
+            // Two significant figures: 5,200 rather than 5,187.
+            let step = 10f32.powf(log.exp2().log10().floor() - 1.0);
+            doc.opts.quad_target = ((log.exp2() / step).round() * step).clamp(*range.start(), *range.end());
+        }
+        let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
+        if tip(
+            theme::button(ui, ui.available_width(), "Quad Remesh", style),
+            tips,
+            "Rebuild as about this many quads.",
+        )
+        .clicked()
+        {
+            actions.push(Action::QuadRemesh);
+        }
+
+        ui.add_space(6.0);
+        decimate(ui, doc, tips, actions);
     });
 
     theme::category(ui, "Masking", theme::MASK, "", false, |ui| {
@@ -416,117 +494,6 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             });
         });
     });
-
-    symmetry::card(ui, doc, actions);
-
-    let summary = fmt_count(doc.mesh.triangle_count());
-    theme::category(ui, "Remesh", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {
-        theme::hint(ui, "Rebuilds the surface with even triangles. Use it after big shape changes, or to add detail.");
-        // Log slider: equal travel doubles the resolution.
-        let mut log = doc.opts.remesh_resolution.log2();
-        if theme::slider(ui, "Resolution", &mut log, 4f32.log2()..=1024f32.log2(), |v| format!("{:.0}", v.exp2())).changed() {
-            doc.opts.remesh_resolution = log.exp2().round();
-        }
-        let style = ButtonStyle { badge: "R", active: Some(ACCENT), ..Default::default() };
-        if tip(
-            theme::button(ui, ui.available_width(), "Remesh", style),
-            tips,
-            "Voxel remesh at this resolution (R).",
-        )
-        .clicked()
-        {
-            actions.push(Action::Remesh);
-        }
-        dyntopo::section(ui, &mut doc.sculptor.dyntopo, tips);
-
-        ui.add_space(6.0);
-        theme::hint(ui, "Quad Remesh rebuilds it as even quads that follow the form. Export keeps the quads.");
-        let range = crate::quadremesh::TARGET_RANGE;
-        let mut log = doc.opts.quad_target.log2();
-        if theme::slider(ui, "Quads", &mut log, range.start().log2()..=range.end().log2(), |v| fmt_count(v.exp2() as usize)).changed() {
-            // Two significant figures: 5,200 rather than 5,187.
-            let step = 10f32.powf(log.exp2().log10().floor() - 1.0);
-            doc.opts.quad_target = ((log.exp2() / step).round() * step).clamp(*range.start(), *range.end());
-        }
-        let style = ButtonStyle { active: Some(ACCENT), ..Default::default() };
-        if tip(
-            theme::button(ui, ui.available_width(), "Quad Remesh", style),
-            tips,
-            "Rebuild as about this many quads.",
-        )
-        .clicked()
-        {
-            actions.push(Action::QuadRemesh);
-        }
-
-        ui.add_space(6.0);
-        decimate(ui, doc, tips, actions);
-    });
-
-    theme::category(ui, "Interface Size", Color32::from_rgb(242, 158, 89), &format!("{:.0}%", doc.opts.ui_scale * 100.0), false, |ui| {
-        ui.horizontal(|ui| {
-            let w = theme::row_width(ui, 4, 4.0);
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for scale in [1.0f32, 1.25, 1.5, 2.0] {
-                let style = ButtonStyle {
-                    active: ((doc.opts.ui_scale - scale).abs() < 0.01).then_some(ACCENT),
-                    ..Default::default()
-                };
-                if theme::button(ui, w, &format!("{:.0}%", scale * 100.0), style).clicked() {
-                    doc.opts.ui_scale = scale;
-                }
-            }
-        });
-        theme::hint(ui, "Ctrl + = and Ctrl + - also work.");
-    });
-
-    theme::category(ui, "Keyboard Shortcuts", Color32::from_rgb(230, 204, 102), "", false, |ui| {
-        let rows: &[(&str, &str)] = &[
-            ("1 - 0", "Pick a brush"),
-            ("Shift (hold)", "Smooth"),
-            ("Ctrl / Right button", "Invert the brush"),
-            ("S + drag", "Brush size"),
-            ("F + drag", "Brush strength"),
-            ("D + drag", "Focal shift"),
-            ("Scroll on model", "Brush size"),
-            ("Space (hold)", "Brush menu"),
-            ("M", "Mask painting"),
-            ("X", "Mirror X"),
-            ("R", "Remesh"),
-            ("G", "Transform gizmo"),
-            ("L", "Measure"),
-            ("Z / Shift+Z", "Undo / redo"),
-            ("Alt + drag", "Orbit"),
-            ("Drag on background", "Orbit"),
-            ("Middle drag", "Pan"),
-            ("Alt + Shift + drag", "Pan"),
-            ("Ctrl + Alt + drag", "Zoom"),
-            ("Scroll off model", "Zoom"),
-            ("F F", "Frame the selection"),
-            ("Double-click object", "Select it"),
-            ("Ctrl + click a row", "Add to the selection"),
-            ("H / Shift + H", "Hide selected / the rest"),
-            ("Alt + H", "Show everything"),
-            ("/", "Local View: solo selected"),
-            ("Delete", "Delete the object (asks)"),
-            ("Tab", "Hide panels (clean view)"),
-            ("O", "Spin the view"),
-            ("F11", "Fullscreen"),
-            ("Ctrl + S", "Save"),
-            ("Ctrl + N", "New scene"),
-        ];
-        for (key, what) in rows {
-            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::hover());
-            ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, key, theme::font(11.0), theme::KEY);
-            ui.painter().text(
-                rect.left_center() + vec2(118.0, 0.0),
-                Align2::LEFT_CENTER,
-                what,
-                theme::font(11.0),
-                theme::TEXT,
-            );
-        }
-    });
 }
 
 /// Two significant figures: 5,200 rather than 5,187.
@@ -566,7 +533,7 @@ fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Acti
     });
     let target = doc.opts.decimate_target.round() as usize;
     ui.add_enabled_ui(now > target, |ui| {
-        let style = ButtonStyle { active: Some(ACCENT), ..Default::default() };
+        let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
         let help = "Brings the selected object down to about Target Triangles, taking them from where the surface is flat and keeping them where it bends. A closed model stays closed. Fully masked surface is left as it is; hidden parts are decimated too and stay hidden. It works in the background on a large model, with its progress and a Cancel at the bottom of the view. It asks first if the object has symmetry on, which it does not keep exactly. Undo (Z) brings the triangles back.";
         if tip(theme::button(ui, ui.available_width(), "Decimate", style), tips, help).clicked() {
             actions.push(Action::Decimate);
@@ -577,21 +544,43 @@ fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Acti
     }
 }
 
-fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
-    let tips = doc.opts.tooltips;
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "Scene", theme::bold(19.0), theme::TEXT);
+/// What stays at the top of the Scene panel whichever tab is showing: the
+/// tabs, and the status line.
+fn scene_head(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState) {
+    tabs::scene_strip(ui, &mut doc.opts.tabs.scene, doc.opts.tooltips);
     ui.add(
         egui::Label::new(
             egui::RichText::new(&state.status.0).font(theme::font(11.0)).color(state.status.1),
         )
         .wrap(),
     );
+}
 
-    scene_graph::show(ui, doc, state, actions);
-    // Cards the hosted tools keep here whichever tool is up (Measure & Size).
-    tools::cards(ui, doc, state);
+fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
+    use tabs::Scene;
+    let showing = doc.opts.tabs.scene;
+    let mut put_back = None;
+    let objects = tabs::page(ui, showing == Scene::Objects, "objects", |ui| {
+        scene_graph::show(ui, doc, state, actions);
+        // Cards the hosted tools keep here whichever tool is up (Measure & Size).
+        tools::cards(ui, doc, state);
+    });
+    let look = tabs::page(ui, showing == Scene::Look, "look", |ui| look_page(ui, doc, state, actions));
+    let file = tabs::page(ui, showing == Scene::File, "file", |ui| file_page(ui, doc, state, actions));
+    let settings = tabs::page(ui, showing == Scene::Settings, "settings", |ui| settings::page(ui, doc));
+    for (tab, back) in [(Scene::Objects, objects), (Scene::Look, look), (Scene::File, file), (Scene::Settings, settings)] {
+        if back {
+            put_back = Some(tab);
+        }
+    }
+    if let Some(tab) = put_back {
+        doc.opts.tabs.scene = tab;
+    }
+}
 
+/// The Scene panel's File tab: the file, and the videos made of the model.
+fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
+    let tips = doc.opts.tooltips;
     let file = doc
         .path
         .as_ref()
@@ -654,12 +643,18 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
             "Close GolemSculpt, as the window's close button does (Ctrl+Q). It asks first if anything would be lost.",
         )]);
     });
+    crate::turntable::card(ui, doc);
+    crate::timelapse::card(ui, doc);
+}
 
+/// The Scene panel's Look tab: material, lighting, backdrop and effects.
+fn look_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
+    let tips = doc.opts.tooltips;
     let model_size = crate::look::model_size(&doc.scene, &doc.mesh);
     let o = &mut doc.opts;
     theme::category(ui, "Material", Color32::from_rgb(242, 217, 102), "", true, |ui| {
         tip(
-            theme::checkbox(ui, &mut o.matcap_on, "Matcap", ACCENT),
+            theme::checkbox(ui, &mut o.matcap_on, "Matcap", ACCENT()),
             tips,
             "Shade with a picture of a lit sphere: quick, and the same from every angle.",
         );
@@ -681,7 +676,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
                     while i < count && n < cols && state.assets.matcaps[i].category == category {
                         let m = &state.assets.matcaps[i];
                         let (rect, response) = ui.allocate_exact_size(Vec2::splat(w), Sense::click());
-                        ui.painter().rect_filled(rect, 7.0, theme::FIELD);
+                        ui.painter().rect_filled(rect, 7.0, theme::FIELD());
                         ui.painter().image(
                             m.thumb.id(),
                             rect.shrink(3.0),
@@ -692,7 +687,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
                             ui.painter().rect_stroke(
                                 rect,
                                 7.0,
-                                egui::Stroke::new(2.0, ACCENT),
+                                egui::Stroke::new(2.0, ACCENT()),
                                 egui::StrokeKind::Inside,
                             );
                         } else if response.hovered() {
@@ -709,7 +704,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
         }
         look::material(ui, o, model_size, actions);
         theme::heading(ui, "Cavity");
-        theme::checkbox(ui, &mut o.cavity, "Enabled", ACCENT);
+        theme::checkbox(ui, &mut o.cavity, "Enabled", ACCENT());
         if o.cavity {
             theme::slider(ui, "Ridge", &mut o.cavity_ridge, 0.0..=2.0, |v| format!("{v:.2}"));
             theme::slider(ui, "Valley", &mut o.cavity_valley, 0.0..=2.0, |v| format!("{v:.2}"));
@@ -717,20 +712,4 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
     });
     look::lighting(ui, &mut doc.opts, actions);
     look::effects(ui, &mut doc.opts);
-    crate::turntable::card(ui, doc);
-    crate::timelapse::card(ui, doc);
-
-    theme::category(ui, "Performance", Color32::from_rgb(158, 158, 173), &format!("{:.1} ms", doc.stats.frame_ms), false, |ui| {
-        let (undo, redo) = doc.history.steps();
-        let lines = [
-            format!("Frame: {:.2} ms", doc.stats.frame_ms),
-            format!("Sculpting: {:.2} ms per frame", doc.stats.sculpt_ms),
-            format!("Sent to GPU: {:.0} KB per update", doc.stats.upload_kb),
-            format!("History: {undo} undo, {redo} redo, {:.0} MB", doc.history.bytes() as f64 / 1e6),
-            doc.stats.adapter.clone(),
-        ];
-        for line in lines {
-            ui.add(egui::Label::new(egui::RichText::new(line).font(theme::font(11.0)).color(theme::HINT)).wrap());
-        }
-    });
 }

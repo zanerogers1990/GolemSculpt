@@ -368,6 +368,14 @@ pub struct Prefs {
     /// tab at the edge of the screen.
     pub left_panel_folded: bool,
     pub right_panel_folded: bool,
+    /// The tab each panel was left on, by name. A name that is no tab's
+    /// gives that panel's first.
+    pub sculpt_tab: String,
+    pub scene_tab: String,
+    /// The interface's colours, by the theme's name (see
+    /// `sculpt_toolkit::palette`). A name that is no theme's gives the
+    /// built-in one.
+    pub theme: String,
     /// Cards pulled out of their panel to float over the viewport, by name:
     /// the left and top of each one's window, in the interface's points. A
     /// card that is not here is in its panel (see `sculpt_toolkit::floating`).
@@ -401,6 +409,9 @@ impl Default for Prefs {
             cards: BTreeMap::new(),
             left_panel_folded: opts.folded[0],
             right_panel_folded: opts.folded[1],
+            sculpt_tab: opts.tabs.sculpt.name().to_owned(),
+            scene_tab: opts.tabs.scene.name().to_owned(),
+            theme: crate::ui::theme::THEMES[opts.theme].name.to_owned(),
             floating_cards: BTreeMap::new(),
             brush: BrushPrefs::default(),
             remesh_resolution: opts.remesh_resolution,
@@ -427,6 +438,16 @@ impl Prefs {
 
     pub fn length_unit(&self) -> LengthUnit {
         LengthUnit::ALL.into_iter().find(|u| u.suffix() == self.unit).unwrap_or_default()
+    }
+
+    /// The theme's place in `ui::theme::THEMES`.
+    pub fn theme(&self) -> usize {
+        sculpt_toolkit::palette::named(&self.theme).unwrap_or(0)
+    }
+
+    /// The tab each panel was left on.
+    pub fn tabs(&self) -> crate::ui::tabs::Showing {
+        crate::ui::tabs::Showing::named(&self.sculpt_tab, &self.scene_tab)
     }
 
     /// The values the app reads from here, brought into range.
@@ -674,6 +695,36 @@ mod tests {
         let odd = r#"{ "left_panel_folded": 1, "right_panel_folded": null, "tooltips": false }"#;
         let prefs = Prefs::parse(odd);
         assert!(!prefs.left_panel_folded && !prefs.right_panel_folded && !prefs.tooltips);
+    }
+
+    /// The theme and the tab each panel is on: a file from before there
+    /// were such things starts in the built-in theme on each panel's first
+    /// tab, both are kept by name, and a name that is nobody's (or is not a
+    /// name at all) costs only itself.
+    #[test]
+    fn the_theme_and_the_tabs_are_remembered_by_name_and_old_files_start_as_before() {
+        use crate::ui::tabs::{Scene, Sculpt, Showing};
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        let fields = older.as_object_mut().unwrap();
+        assert!(["theme", "sculpt_tab", "scene_tab"].iter().all(|field| fields.remove(*field).is_some()));
+        fields.insert("tooltips".into(), false.into());
+        let prefs = Prefs::parse(&older.to_string());
+        assert_eq!((prefs.theme(), prefs.tabs(), prefs.tooltips), (0, Showing::default(), false));
+        assert_eq!(Prefs::default().theme, "Midnight", "the built-in theme, by the name on its tile");
+
+        let (home, _) = settings_in("theme");
+        let chosen = Prefs { theme: "Clay".into(), sculpt_tab: "Mesh".into(), scene_tab: "Look".into(), ..Prefs::default() };
+        home.save(&chosen).unwrap();
+        let kept = home.load();
+        assert_eq!(kept, chosen);
+        assert_eq!(crate::ui::theme::THEMES[kept.theme()].name, "Clay");
+        assert_eq!(kept.tabs(), Showing { sculpt: Sculpt::Mesh, scene: Scene::Look });
+
+        let odd = r#"{ "theme": "Neon", "sculpt_tab": 3, "scene_tab": "settings", "interface_size": 0.75 }"#;
+        let prefs = Prefs::parse(odd);
+        assert_eq!(prefs.theme(), 0, "a theme this version does not have gives the built-in one");
+        assert_eq!(prefs.tabs(), Showing { sculpt: Sculpt::Brush, scene: Scene::Settings });
+        assert_eq!(prefs.interface_size(), 0.75, "the settings beside them are still read");
     }
 
     /// Which cards float, and where. A file from before cards could float

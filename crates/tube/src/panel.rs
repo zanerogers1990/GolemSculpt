@@ -60,7 +60,7 @@ fn pair(ui: &mut egui::Ui, cx: &Ctx, first_on: bool, labels: [&str; 2], tips: [&
         let w = theme::row_width(ui, 2, 6.0);
         for (i, (label, tip)) in labels.into_iter().zip(tips).enumerate() {
             let on = (i == 0) == first_on;
-            let style = ButtonStyle { active: on.then_some(ACCENT), height: 24.0, ..Default::default() };
+            let style = ButtonStyle { active: on.then_some(ACCENT()), height: 24.0, ..Default::default() };
             if theme::tip(theme::button(ui, w, label, style), cx.tips, tip).clicked() {
                 clicked = Some(i);
             }
@@ -118,7 +118,7 @@ impl TubeTool {
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 2, 6.0);
             ui.add_enabled_ui(mergeable > 0 && !merging, |ui| {
-                let style = ButtonStyle { active: Some(ACCENT), badge: "Enter", ..Default::default() };
+                let style = ButtonStyle { active: Some(ACCENT()), badge: "Enter", ..Default::default() };
                 let help = "Fuses every live tube into the object it was drawn on: one solid surface with a smooth join. \
                             The object is rebuilt at its current density. Undo (Z) gives the tubes back.";
                 if theme::tip(theme::button(ui, w, "Merge", style), cx.tips, help).clicked() {
@@ -151,11 +151,11 @@ impl TubeTool {
             }
             _ => format!("{count} live tube{}.", plural(count)),
         };
-        theme::line(ui, &line, theme::HINT);
+        theme::line(ui, &line, theme::HINT());
         if let Some(symmetry) = symmetry_summary(cx) {
             let text = format!(
                 "Symmetry of the selected object: {symmetry}. A tube is made under the symmetry of the object it is \
-                 drawn on (the Symmetry card of the Sculpt panel shows the selected object's)."
+                 drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's)."
             );
             theme::hint(ui, &text);
         }
@@ -202,7 +202,7 @@ impl TubeTool {
         theme::tip(r, cx.tips, "Narrows the tube toward its end: 0 is even thickness, 1 comes to a point, for a horn or a claw.");
 
         let mut flip = settings.flip_taper;
-        let r = theme::checkbox(ui, &mut flip, "Thick End at the Tip", ACCENT);
+        let r = theme::checkbox(ui, &mut flip, "Thick End at the Tip", ACCENT());
         if r.changed() {
             self.set_flip_taper(flip);
         }
@@ -237,7 +237,7 @@ impl TubeTool {
             (true, false) => format!("Size {:.2}x", self.selected_point_size()),
             (true, true) => format!("Size {:.2}x, sharp", self.selected_point_size()),
         };
-        theme::line(ui, &line, theme::HINT);
+        theme::line(ui, &line, theme::HINT());
         ui.add_enabled_ui(selected, |ui| {
             let mut log_size = self.selected_point_size().ln();
             let range = TubeSettings::MIN_SIZE.ln()..=TubeSettings::MAX_SIZE.ln();

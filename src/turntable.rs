@@ -277,7 +277,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 2, 6.0);
             let on = doc.turntable.spin.on;
-            let style = ButtonStyle { active: on.then_some(ACCENT), badge: "O", ..Default::default() };
+            let style = ButtonStyle { active: on.then_some(ACCENT()), badge: "O", ..Default::default() };
             let spin = theme::button(ui, w, if on { "Stop Spin" } else { "Spin" }, style);
             if tip(spin, "Turns the view around the model, like a turntable. Alt + drag still orbits while it spins, and the spin carries on from wherever you leave it.").clicked()
                 && recording.is_none()
@@ -298,7 +298,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
         if tip(speed, "Degrees per second. Also sets how long a recorded 360 loop is.").changed() {
             s.speed = s.speed.round();
         }
-        tip(theme::checkbox(ui, &mut s.reverse, "Reverse Direction", ACCENT), "Spins the other way.");
+        tip(theme::checkbox(ui, &mut s.reverse, "Reverse Direction", ACCENT()), "Spins the other way.");
 
         theme::heading(ui, "360 Loop");
         ui.add_enabled_ui(recording.is_none(), |ui| {
@@ -307,7 +307,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
                 let w = theme::row_width(ui, LOOP_SIZES.len(), 4.0);
                 for (label, width, height) in LOOP_SIZES {
                     let chosen = (s.loop_width, s.loop_height) == (width, height);
-                    let style = ButtonStyle { active: chosen.then_some(ACCENT), height: 24.0, ..Default::default() };
+                    let style = ButtonStyle { active: chosen.then_some(ACCENT()), height: 24.0, ..Default::default() };
                     if tip(theme::button(ui, w, label, style), &format!("{width} x {height}")).clicked() {
                         (s.loop_width, s.loop_height) = (width, height);
                     }
@@ -317,7 +317,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let w = theme::row_width(ui, FRAME_RATES.len(), 4.0);
                 for fps in FRAME_RATES {
-                    let style = ButtonStyle { active: (s.loop_fps == fps).then_some(ACCENT), height: 24.0, ..Default::default() };
+                    let style = ButtonStyle { active: (s.loop_fps == fps).then_some(ACCENT()), height: 24.0, ..Default::default() };
                     let button = theme::button(ui, w, &format!("{fps} fps"), style);
                     if tip(button, &format!("{fps} frames per second in the finished loop.")).clicked() {
                         s.loop_fps = fps;
@@ -338,7 +338,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
                         ),
                     ];
                     for (format, label, what) in formats {
-                        let active = (s.loop_format == format).then_some(ACCENT);
+                        let active = (s.loop_format == format).then_some(ACCENT());
                         let style = ButtonStyle { active, height: 24.0, ..Default::default() };
                         if tip(theme::button(ui, w, label, style), what).clicked() {
                             s.loop_format = format;
@@ -360,14 +360,14 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
 
         let (label, style) = match recording {
             Some(_) => ("Cancel Recording", ButtonStyle { active: Some(theme::SUB), badge: "Esc", ..Default::default() }),
-            None => ("Record 360\u{b0} Loop", ButtonStyle { active: Some(ACCENT), ..Default::default() }),
+            None => ("Record 360\u{b0} Loop", ButtonStyle { active: Some(ACCENT()), ..Default::default() }),
         };
         let record = theme::button(ui, ui.available_width(), label, style);
         if tip(record, "Saves exactly one turn, starting from the view as it is now and at the speed above, as an MP4 video or numbered PNG pictures, as chosen. The last picture flows straight back into the first: a seamless loop. The panels hide while it records. Esc cancels.").clicked() {
             doc.turntable.request = Some(if recording.is_some() { Request::CancelLoop } else { Request::RecordLoop });
         }
         if let Some(p) = recording {
-            theme::line(ui, &format!("Recording {} / {}", p.written, p.total), theme::HINT);
+            theme::line(ui, &format!("Recording {} / {}", p.written, p.total), theme::HINT());
         } else if !doc.turntable.status.is_empty() {
             let color = if doc.turntable.status_ok { theme::OK } else { theme::ERROR };
             theme::line(ui, &doc.turntable.status, color);
@@ -401,9 +401,9 @@ pub fn recording_overlay(ctx: &egui::Context, doc: &mut Doc) {
             } else {
                 format!("Recording 360\u{b0} loop   {} / {}", progress.written, progress.total)
             };
-            p.text(rect.center_top() + vec2(0.0, 16.0), Align2::CENTER_CENTER, text, theme::bold(13.0), theme::TEXT);
+            p.text(rect.center_top() + vec2(0.0, 16.0), Align2::CENTER_CENTER, text, theme::bold(13.0), theme::TEXT());
             let bar = egui::Rect::from_min_size(rect.left_top() + vec2(14.0, 30.0), vec2(size.x - 28.0, 5.0));
-            p.rect_filled(bar, 2.5, theme::FIELD);
+            p.rect_filled(bar, 2.5, theme::FIELD());
             let fraction = progress.written as f32 / progress.total.max(1) as f32;
             let filled = egui::Rect::from_min_size(bar.min, vec2(bar.width() * fraction.clamp(0.0, 1.0), bar.height()));
             p.rect_filled(filled, 2.5, theme::SUB);

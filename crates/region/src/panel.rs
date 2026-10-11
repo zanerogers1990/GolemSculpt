@@ -35,9 +35,9 @@ pub fn panel(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
         theme::hint(ui, tool.action.prompt(tool.shape));
 
         if tool.action.cuts() && cx.radial_count > 1 {
-            theme::line(ui, "Radial symmetry is on: the cut repeats all the way round.", theme::HINT);
+            theme::line(ui, "Radial symmetry is on: the cut repeats all the way round.", theme::HINT());
         } else if tool.action.cuts() && cx.mirror.iter().any(|&on| on) {
-            theme::line(ui, "Mirror is on: the cut repeats on the other side.", theme::HINT);
+            theme::line(ui, "Mirror is on: the cut repeats on the other side.", theme::HINT());
         }
         match (&tool.job, &tool.last) {
             (Some(job), _) => {
@@ -87,7 +87,7 @@ fn shape_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, shapes.len(), 6.0);
         for &shape in shapes {
-            let active = (tool.shape == shape).then_some(ACCENT);
+            let active = (tool.shape == shape).then_some(ACCENT());
             let r = theme::tile(ui, vec2(w, 46.0), cx.icon(tool.action.icon(shape)), shape.name(), "", active);
             if theme::tip(r, cx.tips, help(shape)).clicked() {
                 tool.set_shape(cx, shape);

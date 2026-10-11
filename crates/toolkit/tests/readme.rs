@@ -54,7 +54,7 @@ impl Tool for Dropper {
     }
 
     fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
-        theme::category(ui, "Dropper", theme::ACCENT, "", true, |ui| {
+        theme::category(ui, "Dropper", theme::ACCENT(), "", true, |ui| {
             theme::hint(ui, "Click the model to drop a cube. Each is one undo step.");
             if theme::button(ui, ui.available_width(), "Done", Default::default()).clicked() {
                 cx.finish();

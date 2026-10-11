@@ -24,7 +24,7 @@ fn to_color(c: Rgb) -> Color32 {
 fn color_row(ui: &mut egui::Ui, label: &str, color: &mut Rgb) {
     ui.horizontal(|ui| {
         ui.color_edit_button_rgb(color);
-        ui.label(egui::RichText::new(label).font(theme::font(12.0)).color(theme::TEXT));
+        ui.label(egui::RichText::new(label).font(theme::font(12.0)).color(theme::TEXT()));
     });
 }
 
@@ -44,7 +44,7 @@ fn preset_grid(
             ui.spacing_mut().item_spacing.x = 6.0;
             for (col, (name, description, color)) in pair.iter().enumerate() {
                 let i = row * 2 + col;
-                let style = ButtonStyle { active: (selected == Some(i)).then_some(ACCENT), ..Default::default() };
+                let style = ButtonStyle { active: (selected == Some(i)).then_some(ACCENT()), ..Default::default() };
                 let response = theme::button(ui, w, name, style);
                 let dot = pos2(response.rect.left() + 9.0, response.rect.center().y);
                 ui.painter().circle_filled(dot, 4.5, to_color(*color));
@@ -66,7 +66,7 @@ fn choice(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Option<usize> 
         ui.spacing_mut().item_spacing.x = 6.0;
         let w = theme::row_width(ui, labels.len(), 6.0);
         for (i, label) in labels.iter().enumerate() {
-            let style = ButtonStyle { active: (selected == i).then_some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: (selected == i).then_some(ACCENT()), ..Default::default() };
             if theme::button(ui, w, label, style).clicked() {
                 picked = Some(i);
             }
@@ -160,7 +160,7 @@ pub fn material(ui: &mut egui::Ui, o: &mut Options, size: f32, actions: &mut Vec
     theme::heading(ui, "Glow");
     let mut on = o.look.glow.on;
     let toggled = tip(
-        theme::checkbox(ui, &mut on, "Enabled", ACCENT),
+        theme::checkbox(ui, &mut on, "Enabled", ACCENT()),
         tips,
         "Light the surface gives off, over whatever shades it. Bloom turns it into a halo.",
     );
@@ -300,15 +300,15 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
         theme::slider(ui, "Brightness", &mut look.brightness, 0.0..=look::MAX_BRIGHTNESS, two);
         theme::slider(ui, "Rotation", &mut look.rotation, -180.0..=180.0, |v| format!("{v:.0}\u{b0}"));
         tip(
-            theme::checkbox(ui, &mut look.follow_camera, "Follow Camera", ACCENT),
+            theme::checkbox(ui, &mut look.follow_camera, "Follow Camera", ACCENT()),
             tips,
             "Keep the key light at the upper left of the view. Off freezes the lights where they are.",
         );
-        tip(theme::checkbox(ui, &mut look.shadows, "Shadows", ACCENT), tips, "The key light casts a soft shadow.");
+        tip(theme::checkbox(ui, &mut look.shadows, "Shadows", ACCENT()), tips, "The key light casts a soft shadow.");
 
         theme::heading(ui, "HDRI Environment");
         let hdri = &mut look.hdri;
-        let color = if hdri.failed { theme::ERROR } else { theme::HINT };
+        let color = if hdri.failed { theme::ERROR } else { theme::HINT() };
         ui.add(egui::Label::new(egui::RichText::new(&hdri.status).font(theme::font(11.0)).color(color)).wrap());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -324,7 +324,7 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
             });
         });
         if hdri.loaded {
-            theme::checkbox(ui, &mut hdri.enabled, "Light with the HDRI", ACCENT);
+            theme::checkbox(ui, &mut hdri.enabled, "Light with the HDRI", ACCENT());
             theme::slider(ui, "HDRI Rotation", &mut hdri.rotation, 0.0..=360.0, |v| format!("{v:.0}\u{b0}"));
             theme::slider(ui, "Exposure", &mut hdri.exposure, 0.0..=4.0, two);
             theme::slider(ui, "Ambient", &mut hdri.ambient, 0.0..=3.0, two);
@@ -365,20 +365,20 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
 
         let look = &mut o.look;
         theme::heading(ui, "Bloom");
-        theme::checkbox(ui, &mut look.bloom, "Enabled", ACCENT);
+        theme::checkbox(ui, &mut look.bloom, "Enabled", ACCENT());
         if look.bloom {
             theme::slider(ui, "Intensity", &mut look.bloom_intensity, 0.0..=3.0, two);
             theme::slider(ui, "Threshold", &mut look.bloom_threshold, 0.0..=2.0, two);
         }
         theme::heading(ui, "Vignette");
-        theme::checkbox(ui, &mut look.vignette, "Enabled", ACCENT);
+        theme::checkbox(ui, &mut look.vignette, "Enabled", ACCENT());
         if look.vignette {
             theme::slider(ui, "Intensity", &mut look.vignette_intensity, 0.0..=1.0, two);
             theme::slider(ui, "Smoothness", &mut look.vignette_smoothness, 0.01..=1.0, two);
         }
         theme::heading(ui, "Depth of Field");
         tip(
-            theme::checkbox(ui, &mut look.depth_of_field, "Enabled", ACCENT),
+            theme::checkbox(ui, &mut look.depth_of_field, "Enabled", ACCENT()),
             tips,
             "Blurs what is nearer or farther than the focus distance, like a camera lens.",
         );
@@ -397,7 +397,7 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
             );
         }
         theme::heading(ui, "Colour");
-        theme::checkbox(ui, &mut look.grading, "Adjust", ACCENT);
+        theme::checkbox(ui, &mut look.grading, "Adjust", ACCENT());
         if look.grading {
             theme::slider(ui, "Saturation", &mut look.saturation, -100.0..=100.0, |v| format!("{v:.0}"));
             theme::slider(ui, "Contrast", &mut look.contrast, -100.0..=100.0, |v| format!("{v:.0}"));
@@ -413,7 +413,7 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
         }
         ui.add_space(4.0);
         tip(
-            theme::checkbox(ui, &mut look.ambient_occlusion, "Ambient Occlusion", ACCENT),
+            theme::checkbox(ui, &mut look.ambient_occlusion, "Ambient Occlusion", ACCENT()),
             tips,
             "Soft contact shadows in creases and where forms meet (lit shading only).",
         );

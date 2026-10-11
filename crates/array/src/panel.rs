@@ -108,7 +108,7 @@ fn make_row(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, state: &Array
     let kind = state.settings.kind;
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 3, 6.0);
-        let active = |on: bool| ButtonStyle { active: on.then_some(ACCENT), ..Default::default() };
+        let active = |on: bool| ButtonStyle { active: on.then_some(ACCENT()), ..Default::default() };
 
         let r = theme::button(ui, w, "Line", active(kind == ArrayKind::Line));
         if theme::tip(r, cx.tips, "A straight row of copies. Drag the end point in the viewport to aim and stretch it.")
@@ -221,7 +221,7 @@ fn mirror_row(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 3, 6.0);
         for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
-            let style = ButtonStyle { active: (axes >> axis & 1 != 0).then_some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: (axes >> axis & 1 != 0).then_some(ACCENT()), ..Default::default() };
             let help = format!(
                 "Repeats the object and every copy on the other side of the scene's centre along world {name} - a \
                  strap down one side is on the other too. This is the object's own Mirror, so it stays live."
@@ -267,7 +267,7 @@ fn size_slider(
 /// A tick box. The new value when it was clicked.
 fn toggle(ui: &mut egui::Ui, tips: bool, caption: &str, value: bool, help: &str) -> Option<bool> {
     let mut on = value;
-    let r = theme::checkbox(ui, &mut on, caption, ACCENT);
+    let r = theme::checkbox(ui, &mut on, caption, ACCENT());
     (theme::tip(r, tips, help).changed() && on != value).then_some(on)
 }
 
@@ -277,7 +277,7 @@ fn circle_controls(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, s: &Ar
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 3, 6.0);
         for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
-            let style = ButtonStyle { active: (s.axis == axis as i32).then_some(ACCENT), ..Default::default() };
+            let style = ButtonStyle { active: (s.axis == axis as i32).then_some(ACCENT()), ..Default::default() };
             let help = format!("The copies go round the world {name} axis, through the centre point.");
             if theme::tip(theme::button(ui, w, name, style), cx.tips, &help).clicked() && s.axis != axis as i32 {
                 tool.edit(cx, "Array Axis", false, |a| a.set_axis(axis as i32));
@@ -312,7 +312,7 @@ fn circle_controls(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, s: &Ar
 fn done_row(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, state: &ArrayState) {
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 2, 6.0);
-        let style = ButtonStyle { active: Some(ACCENT), badge: "Y", ..Default::default() };
+        let style = ButtonStyle { active: Some(ACCENT()), badge: "Y", ..Default::default() };
         let r = theme::button(ui, w, "Done", style);
         let help = "Put the tool away and sculpt. The copies stay on screen and follow the object; press Y to edit the \
                     path again.";
