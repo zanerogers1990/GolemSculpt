@@ -630,6 +630,11 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
                 Action::ExportObj,
                 "Write the selected object as a Wavefront OBJ, placed as it is in the scene (position, rotation and scale included).",
             ),
+            (
+                "Export FBX...",
+                Action::ExportFbx,
+                "Write the selected object as an Autodesk FBX, for Blender, Unity and the like: placed as it is in the scene, Y up, at real size (1 unit is 1 cm).",
+            ),
         ]);
         row(ui, actions, &[(
             "Export STL for Printing (mm)...",

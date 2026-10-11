@@ -1,5 +1,5 @@
 //! Files: the app's own `.sclp` scenes, and mesh import and export as
-//! Wavefront OBJ and STL (binary and ASCII).
+//! Wavefront OBJ and STL (binary and ASCII). Export as FBX is in `io/fbx.rs`.
 //!
 //! A `.sclp` keeps the whole scene exactly: every mesh as raw arrays, then
 //! one JSON section for everything else (objects, look, camera, tool state).
@@ -44,11 +44,15 @@ use crate::mesh::{Mesh, Polys};
 
 pub type Result<T> = std::result::Result<T, String>;
 
+mod fbx;
 mod tool_data;
 mod repair;
 #[cfg(test)]
 mod damage_tests;
 
+#[cfg(test)]
+use fbx::export_fbx;
+pub use fbx::export_fbx_placed;
 pub use repair::{note_saved, notes_opened};
 
 /// A model as read from a file, already in the app's axes and units.

@@ -50,6 +50,7 @@ fn an_export_that_fails_leaves_the_file_already_there_whole() {
     for (name, export) in [
         ("keep.obj", export_obj as fn(&Mesh, Mat4, &Path) -> Result<usize>),
         ("keep.stl", export_stl as fn(&Mesh, Mat4, &Path) -> Result<usize>),
+        ("keep.fbx", export_fbx as fn(&Mesh, Mat4, &Path) -> Result<usize>),
     ] {
         let path = temp(name);
         std::fs::write(&path, b"the model that was already here").unwrap();

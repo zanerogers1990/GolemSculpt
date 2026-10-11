@@ -1002,7 +1002,8 @@ impl Running {
                 // answer it, so the file is written and the answer says if it may not print.
                 self.export_stl_to(&path)
             }
-            _ => Err("The path must end in .sclp (the whole scene), or .obj or .stl (the active object).".into()),
+            "fbx" => self.export_fbx_to(&path),
+            _ => Err("The path must end in .sclp (the whole scene), or .obj, .fbx or .stl (the active object).".into()),
         }
     }
 

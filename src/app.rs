@@ -35,6 +35,7 @@ mod cut_mirror;
 mod decimate;
 mod dyntopo;
 mod echo;
+mod export_fbx;
 mod recording;
 mod faces;
 mod file_arrays;
@@ -1385,6 +1386,7 @@ impl Running {
                     self.report(result, format!("Exported \"{name}\"{note} to {}{mended}", path.display()));
                 }
             }
+            Action::ExportFbx => self.export_fbx_action(),
             // Checking and exporting for printing are in app/print_check.rs.
             Action::ExportStl => self.export_stl_asking(),
             Action::ExportStlAnyway => self.export_stl_now(),

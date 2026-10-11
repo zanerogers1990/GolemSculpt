@@ -228,6 +228,7 @@ pub enum Action {
     /// The answer to the question about a copy a crash left behind.
     Recover(Recover),
     ExportObj,
+    ExportFbx,
     /// Export STL for Printing: checks the object first, and asks before
     /// writing one that is not a closed surface.
     ExportStl,

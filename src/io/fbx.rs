@@ -1,0 +1,719 @@
+//! Export as Autodesk FBX, for Blender, Unity and the other programs that
+//! take one.
+//!
+//! The file is binary FBX 7.4, the form every one of them reads (Blender reads
+//! no text FBX at all). FBX has no public specification; the layout here is
+//! the one Blender's exporter writes, which Autodesk's own reader accepts,
+//! down to the fixed file id and closing bytes that reader checks.
+//!
+//! A binary FBX is a tree of named records. Each begins with the offset in the
+//! file at which it ends, so the whole size is worked out before a byte is
+//! written (`Node::len`), and the big arrays are then written straight from
+//! the mesh rather than gathered in memory first (`Fill`).
+//!
+//! Axes and units: FBX says which way is up and how long a unit is, and the
+//! reader converts. The app is right-handed with Y up, which is FBX's own
+//! default, so points go out as they are; one app unit is 10 mm, which is the
+//! centimetre FBX counts in, so the model arrives at its real size.
+//!
+//! As the OBJ does, an export bakes each place's position, rotation and scale
+//! into its points, one mesh for the object and one for each live copy, and
+//! keeps a quad-remeshed mesh's quads.
+
+use std::io::Write;
+use std::path::Path;
+
+use glam::{Mat3, Mat4, Vec3};
+use sculpt_geom::units;
+
+use super::{Points, Result, export_points, nothing_to_export, replace_file, time_stamp};
+use crate::mesh::Mesh;
+
+const VERSION: u32 = 7400;
+const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
+/// What ends a record's list of children: an empty record.
+const SENTINEL: [u8; 13] = [0; 13];
+/// The id, time and closing bytes go together: Autodesk's reader checks the
+/// last against the first two, by a rule nobody outside has worked out. These
+/// are the three Blender writes into every file.
+const FILE_ID: &[u8; 16] = b"\x28\xb3\x2a\xeb\xb6\x24\xcc\xc2\xbf\xc8\xb0\x2a\xa9\x2b\xfc\xf1";
+const FILE_TIME: &str = "1970-01-01 10:00:00:000";
+const FOOT_ID: &[u8; 16] = b"\xfa\xbc\xab\x09\xd0\xc8\xd4\x66\xb1\x76\xfb\x83\x1c\xf7\x26\x7e";
+const FOOT_END: &[u8; 16] = b"\xf8\x5a\x8c\x6a\xde\xf5\xd9\x7e\xec\xe9\x0c\xe3\x75\x8f\x29\x0b";
+const CREATOR: &str = "GolemSculpt";
+
+/// Writes the numbers of one array, which `Value` has already counted.
+type Fill<'a> = Box<dyn Fn(&mut dyn Write) -> std::io::Result<()> + 'a>;
+
+enum Value<'a> {
+    Int(i32),
+    Long(i64),
+    Double(f64),
+    Text(Vec<u8>),
+    Raw(&'static [u8]),
+    Ints(usize, Fill<'a>),
+    Doubles(usize, Fill<'a>),
+}
+
+impl Value<'_> {
+    /// Bytes in the file, the letter that says its kind included.
+    fn len(&self) -> u64 {
+        match self {
+            Value::Int(_) => 5,
+            Value::Long(_) | Value::Double(_) => 9,
+            Value::Text(bytes) => 5 + bytes.len() as u64,
+            Value::Raw(bytes) => 5 + bytes.len() as u64,
+            Value::Ints(count, _) => 13 + 4 * *count as u64,
+            Value::Doubles(count, _) => 13 + 8 * *count as u64,
+        }
+    }
+
+    fn write(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        let lead = |w: &mut dyn Write, kind: u8, length: usize| {
+            w.write_all(&[kind])?;
+            w.write_all(&(length as u32).to_le_bytes())
+        };
+        // An array says how many numbers, that they are not compressed, and how many bytes.
+        let array = |w: &mut dyn Write, kind: u8, count: usize, width: usize, fill: &Fill| {
+            lead(w, kind, count)?;
+            w.write_all(&0u32.to_le_bytes())?;
+            w.write_all(&((count * width) as u32).to_le_bytes())?;
+            fill(w)
+        };
+        match self {
+            Value::Int(v) => {
+                w.write_all(b"I")?;
+                w.write_all(&v.to_le_bytes())
+            }
+            Value::Long(v) => {
+                w.write_all(b"L")?;
+                w.write_all(&v.to_le_bytes())
+            }
+            Value::Double(v) => {
+                w.write_all(b"D")?;
+                w.write_all(&v.to_le_bytes())
+            }
+            Value::Text(bytes) => {
+                lead(w, b'S', bytes.len())?;
+                w.write_all(bytes)
+            }
+            Value::Raw(bytes) => {
+                lead(w, b'R', bytes.len())?;
+                w.write_all(bytes)
+            }
+            Value::Ints(count, fill) => array(w, b'i', *count, 4, fill),
+            Value::Doubles(count, fill) => array(w, b'd', *count, 8, fill),
+        }
+    }
+}
+
+struct Node<'a> {
+    name: &'static str,
+    values: Vec<Value<'a>>,
+    children: Vec<Node<'a>>,
+}
+
+impl Node<'_> {
+    fn values_len(&self) -> u64 {
+        self.values.iter().map(Value::len).sum()
+    }
+
+    /// Bytes in the file. A record with children closes them with a sentinel;
+    /// one with nothing in it at all has a sentinel too, unless it is the last
+    /// of its family (which is how Autodesk's files are, so it is kept).
+    fn len(&self, last: bool) -> u64 {
+        13 + self.name.len() as u64 + self.values_len() + self.tail_len(last)
+    }
+
+    fn tail_len(&self, last: bool) -> u64 {
+        if self.children.is_empty() {
+            return if self.values.is_empty() && !last { SENTINEL.len() as u64 } else { 0 };
+        }
+        children_len(&self.children)
+    }
+
+    /// Writes the record, which begins at `start` in the file, and returns where it ends.
+    fn write(&self, w: &mut dyn Write, start: u64, last: bool) -> std::io::Result<u64> {
+        let end = start + self.len(last);
+        w.write_all(&(end as u32).to_le_bytes())?;
+        w.write_all(&(self.values.len() as u32).to_le_bytes())?;
+        w.write_all(&(self.values_len() as u32).to_le_bytes())?;
+        w.write_all(&[self.name.len() as u8])?;
+        w.write_all(self.name.as_bytes())?;
+        for value in &self.values {
+            value.write(w)?;
+        }
+        if self.children.is_empty() {
+            if self.values.is_empty() && !last {
+                w.write_all(&SENTINEL)?;
+            }
+        } else {
+            write_children(w, &self.children, end - children_len(&self.children))?;
+        }
+        Ok(end)
+    }
+}
+
+fn children_len(children: &[Node]) -> u64 {
+    let last = children.len() - 1;
+    children.iter().enumerate().map(|(i, child)| child.len(i == last)).sum::<u64>() + SENTINEL.len() as u64
+}
+
+fn write_children(w: &mut dyn Write, children: &[Node], mut at: u64) -> std::io::Result<()> {
+    let last = children.len() - 1;
+    for (i, child) in children.iter().enumerate() {
+        at = child.write(w, at, i == last)?;
+    }
+    w.write_all(&SENTINEL)
+}
+
+fn node<'a>(name: &'static str, values: Vec<Value<'a>>, children: Vec<Node<'a>>) -> Node<'a> {
+    Node { name, values, children }
+}
+
+fn text<'a>(text: &str) -> Value<'a> {
+    Value::Text(text.as_bytes().to_vec())
+}
+
+/// A record holding one value and nothing else.
+fn leaf<'a>(name: &'static str, value: Value<'a>) -> Node<'a> {
+    node(name, vec![value], Vec::new())
+}
+
+/// An object's name as FBX keeps it: the name, then what kind of thing it is.
+fn named<'a>(name: &str, class: &str) -> Value<'a> {
+    let mut bytes = name.as_bytes().to_vec();
+    bytes.extend_from_slice(b"\x00\x01");
+    bytes.extend_from_slice(class.as_bytes());
+    Value::Text(bytes)
+}
+
+/// One line of a `Properties70` list: the property's name, its kind twice
+/// over (FBX's own and the interface's), its flags, then its values.
+fn property<'a>(name: &str, kind: [&str; 2], flags: &str, values: Vec<Value<'a>>) -> Node<'a> {
+    let mut all = vec![text(name), text(kind[0]), text(kind[1]), text(flags)];
+    all.extend(values);
+    node("P", all, Vec::new())
+}
+
+fn whole<'a>(name: &str, value: i32) -> Node<'a> {
+    property(name, ["int", "Integer"], "", vec![Value::Int(value)])
+}
+
+fn vector<'a>(name: &str, v: [f64; 3]) -> Node<'a> {
+    property(name, [name, ""], "A", v.map(Value::Double).into())
+}
+
+/// Autodesk FBX of one object as it sits in the scene: placed by `model`, as
+/// [`super::export_obj`] places it.
+#[allow(dead_code)] // the app writes placed copies (`export_fbx_placed`); this is the one-place form
+pub fn export_fbx(mesh: &Mesh, model: Mat4, path: &Path) -> Result<usize> {
+    export_fbx_placed(mesh, &[("", model)], path)
+}
+
+/// [`export_fbx`] for a mesh drawn in several places at once (an object and
+/// its live copies): an object of its own in the file for each, under the
+/// name it is given, so what reaches the other program is what is on screen.
+///
+/// Returns how many points of the mesh were not numbers and were written
+/// mended, as [`super::export_obj_placed`] does.
+pub fn export_fbx_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> Result<usize> {
+    nothing_to_export(mesh)?;
+    let (points, mended) = export_points(mesh);
+    let top = document(mesh, &points, places);
+    // Every offset in the file is four bytes.
+    let nodes_end = MAGIC.len() as u64 + 4 + children_len(&top);
+    if nodes_end > u32::MAX as u64 {
+        return Err("That is more than an FBX file holds (4 GB). Lower the array's count, or the object's detail.".into());
+    }
+    replace_file(path, |w| {
+        w.write_all(MAGIC)?;
+        w.write_all(&VERSION.to_le_bytes())?;
+        write_children(w, &top, MAGIC.len() as u64 + 4)?;
+        // The close: its id, then zeros up to a multiple of sixteen bytes (a
+        // whole sixteen when already there), the version again, and the end.
+        w.write_all(FOOT_ID)?;
+        w.write_all(&[0; 4])?;
+        let at = nodes_end + FOOT_ID.len() as u64 + 4;
+        let pad = 16 - (at % 16) as usize;
+        w.write_all(&[0u8; 16][..pad])?;
+        w.write_all(&VERSION.to_le_bytes())?;
+        w.write_all(&[0; 120])?;
+        w.write_all(FOOT_END)
+    })?;
+    Ok(mended)
+}
+
+/// The records at the top of the file, in the order FBX has them.
+fn document<'a>(mesh: &'a Mesh, points: &'a Points<'a>, places: &[(&str, Mat4)]) -> Vec<Node<'a>> {
+    let count = places.len() as i32;
+    // Ids only have to differ from one another, and from 0, which is the scene itself.
+    let geometry_id = |place: usize| 1_000 + 2 * place as i64;
+    let model_id = |place: usize| 1_001 + 2 * place as i64;
+
+    let mut objects = Vec::new();
+    let mut links = Vec::new();
+    let link = |child: i64, parent: i64| node("C", vec![text("OO"), Value::Long(child), Value::Long(parent)], Vec::new());
+    for (i, &(name, model)) in places.iter().enumerate() {
+        let name = if name.is_empty() { "Object" } else { name };
+        objects.push(geometry(geometry_id(i), name, mesh, points, model));
+        objects.push(node("Model", vec![Value::Long(model_id(i)), named(name, "Model"), text("Mesh")], vec![
+            leaf("Version", Value::Int(232)),
+            node("Properties70", Vec::new(), vec![
+                vector("Lcl Translation", [0.0; 3]),
+                vector("Lcl Rotation", [0.0; 3]),
+                vector("Lcl Scaling", [1.0; 3]),
+            ]),
+            leaf("Culling", text("CullingOff")),
+        ]));
+        links.push(link(model_id(i), 0));
+        links.push(link(geometry_id(i), model_id(i)));
+    }
+
+    let kind = |name: &str, count: i32| node("ObjectType", vec![text(name)], vec![leaf("Count", Value::Int(count))]);
+    let centimetres = f64::from(units::MILLIMETRES_PER_UNIT) / 10.0;
+    vec![
+        node("FBXHeaderExtension", Vec::new(), vec![
+            leaf("FBXHeaderVersion", Value::Int(1003)),
+            leaf("FBXVersion", Value::Int(VERSION as i32)),
+            leaf("EncryptionType", Value::Int(0)),
+            created(),
+            leaf("Creator", text(CREATOR)),
+        ]),
+        leaf("FileId", Value::Raw(FILE_ID)),
+        leaf("CreationTime", text(FILE_TIME)),
+        leaf("Creator", text(CREATOR)),
+        node("GlobalSettings", Vec::new(), vec![
+            leaf("Version", Value::Int(1000)),
+            node("Properties70", Vec::new(), vec![
+                // Y up, Z toward the viewer, X to the right: the app's own axes.
+                whole("UpAxis", 1),
+                whole("UpAxisSign", 1),
+                whole("FrontAxis", 2),
+                whole("FrontAxisSign", 1),
+                whole("CoordAxis", 0),
+                whole("CoordAxisSign", 1),
+                whole("OriginalUpAxis", -1),
+                whole("OriginalUpAxisSign", 1),
+                // How many centimetres one unit of the file is.
+                property("UnitScaleFactor", ["double", "Number"], "", vec![Value::Double(centimetres)]),
+                property("OriginalUnitScaleFactor", ["double", "Number"], "", vec![Value::Double(centimetres)]),
+            ]),
+        ]),
+        node("Documents", Vec::new(), vec![
+            leaf("Count", Value::Int(1)),
+            node("Document", vec![Value::Long(999), text("Scene"), text("Scene")], vec![
+                node("Properties70", Vec::new(), vec![
+                    property("SourceObject", ["object", ""], "", Vec::new()),
+                    property("ActiveAnimStackName", ["KString", ""], "", vec![text("")]),
+                ]),
+                leaf("RootNode", Value::Long(0)),
+            ]),
+        ]),
+        node("References", Vec::new(), Vec::new()),
+        node("Definitions", Vec::new(), vec![
+            leaf("Version", Value::Int(100)),
+            leaf("Count", Value::Int(1 + 2 * count)),
+            kind("GlobalSettings", 1),
+            kind("Geometry", count),
+            kind("Model", count),
+        ]),
+        node("Objects", Vec::new(), objects),
+        node("Connections", Vec::new(), links),
+        node("Takes", Vec::new(), vec![leaf("Current", text(""))]),
+    ]
+}
+
+/// When the file was made, as the header keeps it: each part a number of its own.
+fn created<'a>() -> Node<'a> {
+    // `time_stamp` is year-month-day_hourminutesecond: fourteen digits in all.
+    let digits: Vec<i32> = time_stamp().bytes().filter(u8::is_ascii_digit).map(|d| i32::from(d - b'0')).collect();
+    let part = |from: usize, to: usize| digits.get(from..to).map_or(0, |d| d.iter().fold(0, |sum, d| sum * 10 + d));
+    node("CreationTimeStamp", Vec::new(), vec![
+        leaf("Version", Value::Int(1000)),
+        leaf("Year", Value::Int(part(0, 4))),
+        leaf("Month", Value::Int(part(4, 6))),
+        leaf("Day", Value::Int(part(6, 8))),
+        leaf("Hour", Value::Int(part(8, 10))),
+        leaf("Minute", Value::Int(part(10, 12))),
+        leaf("Second", Value::Int(part(12, 14))),
+        leaf("Millisecond", Value::Int(0)),
+    ])
+}
+
+/// The faces of a mesh as an export writes them: a quad-remeshed mesh's
+/// quads, not their halves, and otherwise its triangles.
+fn faces(mesh: &Mesh) -> Box<dyn Iterator<Item = &[u32]> + '_> {
+    match &mesh.polys {
+        Some(polys) => Box::new(polys.start.windows(2).map(|f| &polys.indices[f[0] as usize..f[1] as usize])),
+        None => Box::new(mesh.indices.chunks_exact(3)),
+    }
+}
+
+fn put(w: &mut dyn Write, v: Vec3) -> std::io::Result<()> {
+    let mut bytes = [0u8; 24];
+    for (axis, value) in v.to_array().iter().enumerate() {
+        bytes[axis * 8..axis * 8 + 8].copy_from_slice(&f64::from(*value).to_le_bytes());
+    }
+    w.write_all(&bytes)
+}
+
+/// The mesh at `points`, placed by `model`: its points, its faces, and its
+/// normals when it has one for every point.
+fn geometry<'a>(id: i64, name: &str, mesh: &'a Mesh, points: &'a Points<'a>, model: Mat4) -> Node<'a> {
+    let linear = Mat3::from_mat4(model);
+    let determinant = linear.determinant();
+    // A negative scale mirrors the model and turns every face inside out.
+    let mirrored = determinant < 0.0;
+    // Normals go through the inverse transpose: a plain rotation would leave
+    // them skewed against a surface that has been stretched.
+    let normal_matrix = if determinant.abs() > 1e-20 { linear.inverse().transpose() } else { linear };
+
+    let point_count = points.positions.len();
+    let positions: Fill = Box::new(move |w| points.positions.iter().try_for_each(|&p| put(w, model.transform_point3(p))));
+    // A face is its corners in turn, and the last of them says so by being
+    // written as minus itself, less one.
+    let corner_count = faces(mesh).map(<[u32]>::len).sum();
+    let corners: Fill = Box::new(move |w| {
+        for face in faces(mesh) {
+            for k in 0..face.len() {
+                let corner = face[if mirrored { face.len() - 1 - k } else { k }] as i32;
+                let corner = if k + 1 == face.len() { !corner } else { corner };
+                w.write_all(&corner.to_le_bytes())?;
+            }
+        }
+        Ok(())
+    });
+    let mut children = vec![
+        leaf("GeometryVersion", Value::Int(124)),
+        leaf("Vertices", Value::Doubles(3 * point_count, positions)),
+        leaf("PolygonVertexIndex", Value::Ints(corner_count, corners)),
+    ];
+    if points.normals.len() == point_count {
+        let normals: Fill =
+            Box::new(move |w| points.normals.iter().try_for_each(|&n| put(w, (normal_matrix * n).normalize_or_zero())));
+        children.push(node("LayerElementNormal", vec![Value::Int(0)], vec![
+            leaf("Version", Value::Int(101)),
+            leaf("Name", text("")),
+            // One normal to a point, in the points' own order ("ByVertice" is FBX's spelling).
+            leaf("MappingInformationType", text("ByVertice")),
+            leaf("ReferenceInformationType", text("Direct")),
+            leaf("Normals", Value::Doubles(3 * point_count, normals)),
+        ]));
+        children.push(node("Layer", vec![Value::Int(0)], vec![
+            leaf("Version", Value::Int(100)),
+            node("LayerElement", Vec::new(), vec![
+                leaf("Type", text("LayerElementNormal")),
+                leaf("TypedIndex", Value::Int(0)),
+            ]),
+        ]));
+    }
+    node("Geometry", vec![Value::Long(id), named(name, "Geometry"), text("Mesh")], children)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mesh::primitives::{self, Primitive};
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("sculpt_io_fbx_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Got {
+        Int(i32),
+        Long(i64),
+        Double(f64),
+        Text(Vec<u8>),
+        Raw(Vec<u8>),
+        Ints(Vec<i32>),
+        Doubles(Vec<f64>),
+    }
+
+    struct Record {
+        name: String,
+        values: Vec<Got>,
+        children: Vec<Record>,
+    }
+
+    impl Record {
+        fn child(&self, name: &str) -> &Record {
+            self.children.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no {name} in {}", self.name))
+        }
+
+        fn all(&self, name: &str) -> Vec<&Record> {
+            self.children.iter().filter(|c| c.name == name).collect()
+        }
+
+        fn doubles(&self, name: &str) -> &[f64] {
+            match &self.child(name).values[0] {
+                Got::Doubles(v) => v,
+                other => panic!("{name} is {other:?}"),
+            }
+        }
+
+        fn ints(&self, name: &str) -> &[i32] {
+            match &self.child(name).values[0] {
+                Got::Ints(v) => v,
+                other => panic!("{name} is {other:?}"),
+            }
+        }
+
+        fn text(&self, at: usize) -> String {
+            match &self.values[at] {
+                Got::Text(v) => String::from_utf8_lossy(v).into_owned(),
+                other => panic!("{} value {at} is {other:?}", self.name),
+            }
+        }
+    }
+
+    fn u32_at(bytes: &[u8], at: usize) -> usize {
+        u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize
+    }
+
+    /// A family of records, up to and past the sentinel that closes it, as a
+    /// reader that trusts nothing reads it: every stated offset and length
+    /// has to be where the bytes really end.
+    fn read_family(bytes: &[u8], at: &mut usize) -> Vec<Record> {
+        let mut family = Vec::new();
+        loop {
+            let end = u32_at(bytes, *at);
+            if end == 0 {
+                assert_eq!(bytes[*at..*at + 13], SENTINEL);
+                *at += 13;
+                return family;
+            }
+            let (count, values_len, name_len) = (u32_at(bytes, *at + 4), u32_at(bytes, *at + 8), bytes[*at + 12] as usize);
+            *at += 13;
+            let name = String::from_utf8(bytes[*at..*at + name_len].to_vec()).unwrap();
+            *at += name_len;
+            let values_end = *at + values_len;
+            let values = (0..count).map(|_| read_value(bytes, at)).collect();
+            assert_eq!(*at, values_end, "{name}: its values are not the length it says");
+            let children = if *at < end { read_family(bytes, at) } else { Vec::new() };
+            assert_eq!(*at, end, "{name}: it does not end where it says");
+            family.push(Record { name, values, children });
+        }
+    }
+
+    fn read_value(bytes: &[u8], at: &mut usize) -> Got {
+        let kind = bytes[*at];
+        *at += 1;
+        let mut take = |n: usize| {
+            *at += n;
+            &bytes[*at - n..*at]
+        };
+        match kind {
+            b'I' => Got::Int(i32::from_le_bytes(take(4).try_into().unwrap())),
+            b'L' => Got::Long(i64::from_le_bytes(take(8).try_into().unwrap())),
+            b'D' => Got::Double(f64::from_le_bytes(take(8).try_into().unwrap())),
+            b'S' | b'R' => {
+                let length = u32::from_le_bytes(take(4).try_into().unwrap()) as usize;
+                let held = take(length).to_vec();
+                if kind == b'S' { Got::Text(held) } else { Got::Raw(held) }
+            }
+            b'i' | b'd' => {
+                let head = take(12);
+                let (count, packed, length) = (u32_at(head, 0), u32_at(head, 4), u32_at(head, 8));
+                assert_eq!(packed, 0, "arrays are written as they are");
+                let width = if kind == b'i' { 4 } else { 8 };
+                assert_eq!(length, count * width);
+                let held = take(length);
+                if kind == b'i' {
+                    Got::Ints(held.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect())
+                } else {
+                    Got::Doubles(held.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect())
+                }
+            }
+            other => panic!("a value of kind {:?}", other as char),
+        }
+    }
+
+    /// The whole file: its records under one root, with the close checked.
+    fn read(path: &Path) -> Record {
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(&bytes[..23], MAGIC);
+        assert_eq!(u32_at(&bytes, 23), 7400);
+        let mut at = 27;
+        let children = read_family(&bytes, &mut at);
+        assert_eq!(&bytes[at..at + 16], FOOT_ID);
+        // Zeros up to a multiple of sixteen bytes, then the 140 that end every file.
+        assert_eq!((bytes.len() - 140) % 16, 0, "the close is padded to sixteen bytes");
+        let pad = bytes.len() - 140 - (at + 20);
+        assert!((1..=16).contains(&pad), "{pad} bytes of padding");
+        assert!(bytes[at + 16..bytes.len() - 140].iter().all(|&b| b == 0));
+        assert_eq!(u32_at(&bytes, bytes.len() - 140), 7400);
+        assert!(bytes.ends_with(FOOT_END));
+        Record { name: String::new(), values: Vec::new(), children }
+    }
+
+    fn vec3s(numbers: &[f64]) -> Vec<Vec3> {
+        numbers.chunks_exact(3).map(|c| Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32)).collect()
+    }
+
+    /// The faces of a geometry record, each as its corners.
+    fn faces_of(geometry: &Record) -> Vec<Vec<usize>> {
+        let mut faces = vec![Vec::new()];
+        for &corner in geometry.ints("PolygonVertexIndex") {
+            let face = faces.last_mut().unwrap();
+            if corner < 0 {
+                face.push(!corner as usize);
+                faces.push(Vec::new());
+            } else {
+                face.push(corner as usize);
+            }
+        }
+        assert_eq!(faces.pop(), Some(Vec::new()), "the last face is closed");
+        faces
+    }
+
+    /// Six times the volume the faces enclose: above zero when they face outward.
+    fn volume(points: &[Vec3], faces: &[Vec<usize>]) -> f32 {
+        let fan = |f: &Vec<usize>| (1..f.len() - 1).map(|k| points[f[0]].dot(points[f[k]].cross(points[f[k + 1]]))).sum::<f32>();
+        faces.iter().map(fan).sum()
+    }
+
+    #[test]
+    fn each_place_is_an_object_of_its_own_where_it_stands() {
+        let mesh = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        let moved = Mat4::from_scale_rotation_translation(
+            Vec3::new(1.0, 2.0, 0.5),
+            glam::Quat::from_rotation_z(0.7),
+            Vec3::new(3.0, -1.0, 2.0),
+        );
+        let mirrored = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+        let path = temp("places.fbx");
+        assert_eq!(export_fbx_placed(&mesh, &[("Ball", moved), ("Ball_MirrorX", mirrored)], &path).unwrap(), 0);
+        let file = read(&path);
+
+        let order: Vec<&str> = file.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(order, [
+            "FBXHeaderExtension",
+            "FileId",
+            "CreationTime",
+            "Creator",
+            "GlobalSettings",
+            "Documents",
+            "References",
+            "Definitions",
+            "Objects",
+            "Connections",
+            "Takes",
+        ]);
+        assert_eq!(file.child("FileId").values, [Got::Raw(FILE_ID.to_vec())]);
+        let year = &file.child("FBXHeaderExtension").child("CreationTimeStamp").child("Year").values[0];
+        assert!(matches!(year, Got::Int(2024..=2200)), "{year:?}");
+
+        let objects = file.child("Objects");
+        let (geometries, models) = (objects.all("Geometry"), objects.all("Model"));
+        assert_eq!((geometries.len(), models.len()), (2, 2));
+        assert_eq!(models[0].text(1), "Ball\u{0}\u{1}Model");
+        assert_eq!(models[1].text(1), "Ball_MirrorX\u{0}\u{1}Model");
+        assert_eq!(geometries[1].text(1), "Ball_MirrorX\u{0}\u{1}Geometry");
+        for (geometry, model) in geometries.iter().zip([moved, mirrored]) {
+            let points = vec3s(geometry.doubles("Vertices"));
+            assert_eq!(points.len(), mesh.positions.len());
+            for (got, was) in points.iter().zip(&mesh.positions) {
+                assert!((*got - model.transform_point3(*was)).length() < 1e-5);
+            }
+            let faces = faces_of(geometry);
+            assert_eq!(faces.len(), mesh.triangle_count());
+            assert!(faces.iter().all(|f| f.len() == 3));
+            assert!(volume(&points, &faces) > 0.0, "the faces look outward, mirrored or not");
+            // A normal to a point, of length one, on the outward side of its faces.
+            let normals = vec3s(geometry.child("LayerElementNormal").doubles("Normals"));
+            assert_eq!(normals.len(), points.len());
+            assert!(normals.iter().all(|n| (n.length() - 1.0).abs() < 1e-4));
+            let face = &faces[0];
+            let facing = (points[face[1]] - points[face[0]]).cross(points[face[2]] - points[face[0]]);
+            assert!(face.iter().all(|&i| normals[i].dot(facing) > 0.0));
+        }
+
+        // Each model hangs from the scene (0), and each mesh from its model.
+        let id = |record: &Record| match record.values[0] {
+            Got::Long(id) => id,
+            _ => panic!("no id"),
+        };
+        let links: Vec<(i64, i64)> = file
+            .child("Connections")
+            .all("C")
+            .iter()
+            .map(|c| match (&c.values[1], &c.values[2]) {
+                (Got::Long(child), Got::Long(parent)) => (*child, *parent),
+                _ => panic!("a link without ids"),
+            })
+            .collect();
+        for (geometry, model) in geometries.iter().zip(&models) {
+            assert!(links.contains(&(id(model), 0)) && links.contains(&(id(geometry), id(model))));
+        }
+        assert_eq!(links.len(), 4);
+        assert_eq!(file.child("Definitions").child("Count").values, [Got::Int(5)]);
+    }
+
+    #[test]
+    fn the_file_is_y_up_in_centimetres_which_is_the_models_real_size() {
+        let mesh = primitives::build(Primitive::Sphere, 500, 0.5);
+        let path = temp("units.fbx");
+        export_fbx(&mesh, Mat4::IDENTITY, &path).unwrap();
+        let file = read(&path);
+        let settings = file.child("GlobalSettings").child("Properties70");
+        let setting = |name: &str| {
+            let found = settings.children.iter().find(|p| p.text(0) == name).unwrap();
+            match found.values[4] {
+                Got::Int(v) => f64::from(v),
+                Got::Double(v) => v,
+                _ => panic!("{name} is not a number"),
+            }
+        };
+        assert_eq!((setting("UpAxis"), setting("FrontAxis"), setting("CoordAxis")), (1.0, 2.0, 0.0));
+        // The default sphere is one unit across, which is 10 mm: one centimetre, written as 1.
+        assert_eq!(setting("UnitScaleFactor"), 1.0);
+        let geometry = file.child("Objects").child("Geometry");
+        let tallest = vec3s(geometry.doubles("Vertices")).iter().map(|p| p.y).fold(0.0, f32::max);
+        assert!((tallest - 0.5).abs() < 1e-3, "{tallest}");
+        // With no name given it still has one.
+        assert_eq!(file.child("Objects").child("Model").text(1), "Object\u{0}\u{1}Model");
+    }
+
+    #[test]
+    fn quads_go_out_as_quads() {
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::Y];
+        let (mut mesh, to_new) = Mesh::new_mapped(corners.to_vec(), vec![0, 1, 2, 0, 2, 3], None);
+        let quad: Vec<u32> = [0usize, 1, 2, 3].iter().map(|&i| to_new[i]).collect();
+        mesh.polys = Some(crate::mesh::Polys { start: vec![0, 4], indices: quad.clone() });
+        let path = temp("quad.fbx");
+        export_fbx(&mesh, Mat4::IDENTITY, &path).unwrap();
+        let file = read(&path);
+        let geometry = file.child("Objects").child("Geometry");
+        let want: Vec<usize> = quad.iter().map(|&i| i as usize).collect();
+        assert_eq!(faces_of(geometry), [want.clone()]);
+
+        // Mirrored, the same quad the other way round.
+        export_fbx(&mesh, Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0)), &path).unwrap();
+        let file = read(&path);
+        let turned: Vec<usize> = want.into_iter().rev().collect();
+        assert_eq!(faces_of(file.child("Objects").child("Geometry")), [turned]);
+    }
+
+    #[test]
+    fn a_damaged_model_is_written_mended_and_an_empty_one_not_at_all() {
+        let mut mesh = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        mesh.positions[10] = Vec3::NAN;
+        mesh.positions[20] = Vec3::new(f32::INFINITY, 0.0, f32::NEG_INFINITY);
+        let path = temp("damaged.fbx");
+        let places = [("a", Mat4::IDENTITY), ("b", Mat4::from_translation(Vec3::X))];
+        assert_eq!(export_fbx_placed(&mesh, &places, &path).unwrap(), 2, "the model's points, not its places'");
+        let file = read(&path);
+        for geometry in file.child("Objects").all("Geometry") {
+            assert!(geometry.doubles("Vertices").iter().all(|n| n.is_finite()));
+            assert!(geometry.child("LayerElementNormal").doubles("Normals").iter().all(|n| n.is_finite()));
+        }
+        assert!(mesh.positions[10].is_nan(), "the model is not touched");
+
+        let empty = Mesh::new(Vec::new(), Vec::new(), None);
+        assert!(export_fbx(&empty, Mat4::IDENTITY, &temp("empty.fbx")).is_err());
+    }
+}

@@ -644,10 +644,11 @@ fn tools() -> Value {
         ),
         tool(
             "save_file",
-            "Save to a file, replacing it if it exists. A .sclp path saves the whole scene; an .obj or .stl \
-             path exports the active object where it stands in the scene (STL in millimetres, Z up, 1 unit = 10 mm).",
+            "Save to a file, replacing it if it exists. A .sclp path saves the whole scene; an .obj, .fbx or .stl \
+             path exports the active object where it stands in the scene (STL in millimetres, Z up, 1 unit = 10 mm; \
+             FBX in centimetres, Y up).",
             json!({
-                "path": string("Full path to write, on this computer's own drives, ending in .sclp, .obj or .stl."),
+                "path": string("Full path to write, on this computer's own drives, ending in .sclp, .obj, .fbx or .stl."),
             }),
             &["path"],
         ),
