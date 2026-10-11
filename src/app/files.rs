@@ -32,6 +32,7 @@ use super::unsaved::opening_question;
 use super::{Running, import_mesh, install, is_native, stem};
 use crate::camera::{Camera, SavedView};
 use crate::doc::{Action, OpenHow};
+use crate::history::Restored;
 use crate::io;
 use crate::look::Look;
 use crate::mesh::Mesh;
@@ -269,8 +270,13 @@ impl Running {
     }
 
     /// The scene's file, for `file_undo.rs` to work on.
-    fn file(&mut self) -> File<'_> {
-        File { path: &mut self.doc.path, clean: &mut self.files.clean, history: &mut self.doc.history }
+    pub(super) fn file(&mut self) -> File<'_> {
+        File {
+            path: &mut self.doc.path,
+            clean: &mut self.files.clean,
+            restored: &mut self.recovery.restored,
+            history: &mut self.doc.history,
+        }
     }
 
     /// Undo (`undo`) or Redo has just taken a step: if it was an Open, or a
@@ -349,7 +355,8 @@ impl Running {
     fn ask_where_to_save(&self) -> Option<PathBuf> {
         let mut dialog = rfd::FileDialog::new().set_title("Save Sculpt").add_filter("Sculpt", &["sclp"]);
         // Save As starts from the file the scene already has; a scene
-        // restored after a crash, from the file it was a copy of.
+        // restored after a crash, from the file it was a copy of. (Only that
+        // scene: Undo of the restore takes the offer away with it.)
         dialog = match &self.doc.path.clone().or_else(|| self.recovered_document()) {
             Some(current) => {
                 let unity = unity_import::is_unity(current);
@@ -393,10 +400,11 @@ impl Running {
         };
         self.files.mended_on_save = mended;
         let now = self.history_mark();
-        self.file().written(path, now);
+        let restored = self.file().written(path, now);
         self.note_recent(path, true);
-        // The work is in a file of the user's: the recovery copies have had their day.
-        self.recovery_saved();
+        // The work is in a file of the user's: the recovery copies of this
+        // scene have had their day, and no others.
+        self.recovery_saved(restored);
         Ok(())
     }
 
@@ -729,7 +737,7 @@ impl Running {
     /// The file takes the scene's place and becomes the document: its look,
     /// mirror settings and view come with it, and Save writes back to it.
     fn open_replacing(&mut self, path: PathBuf) {
-        let (count, details) = match self.replace_scene(&path, true) {
+        let (count, details) = match self.replace_scene(&path) {
             Ok(opened) => opened,
             Err(e) => return self.status(e, false),
         };
@@ -743,15 +751,28 @@ impl Running {
         self.note_recent(&path, false);
     }
 
-    /// Puts a file's scene in place of the one that is open, as one undo
-    /// step, with its look, mirror settings and view. `document` says whether
-    /// the file becomes the scene's own, with nothing unsaved (an Open), or
-    /// the scene is left with no file and counts as unsaved (a restored
-    /// recovery copy). The step keeps the file of the scene it replaces, so
-    /// Undo gives that scene its file back (`file_undo.rs`). Gives back how
-    /// many objects came, and what else the file kept.
-    pub(super) fn replace_scene(&mut self, path: &Path, document: bool) -> io::Result<(usize, io::Details)> {
+    /// Opens `path` and puts its scene in place of the one that is open: the
+    /// file becomes the scene's own, with nothing unsaved. Nothing has been
+    /// touched if the file cannot be read.
+    fn replace_scene(&mut self, path: &Path) -> io::Result<(usize, io::Details)> {
         let saved = io::load_scene(path)?;
+        Ok(self.put_in_place(saved, Some(path.to_owned()), None))
+    }
+
+    /// Puts a scene that has been read from a file in place of the one that
+    /// is open, as one undo step, with its look, mirror settings and view.
+    /// `document` is the file that becomes the scene's own, with nothing
+    /// unsaved (an Open). With none the scene is left with no file and counts
+    /// as unsaved: a restored recovery copy, and `restored` says which. The
+    /// step keeps the file of the scene it replaces, so Undo gives that scene
+    /// its file back (`file_undo.rs`). Gives back how many objects came, and
+    /// what else the file kept.
+    pub(super) fn put_in_place(
+        &mut self,
+        saved: io::SavedScene,
+        document: Option<PathBuf>,
+        restored: Option<Restored>,
+    ) -> (usize, io::Details) {
         let count = saved.objects.len();
         self.files.repaired_on_open = saved.repaired;
         let before = self.history_mark();
@@ -765,10 +786,14 @@ impl Running {
         self.doc.history.keep_file(before);
         self.doc.mesh_replaced = true;
         self.sync_view();
+        if restored.is_some() {
+            // Where a scripted check of recovery may ask for a fault.
+            self.restore_fault_point();
+        }
         self.apply_details(&details);
         let now = self.history_mark();
-        self.file().became(document.then(|| path.to_owned()), now);
-        Ok((count, details))
+        self.file().became(document, restored, now);
+        (count, details)
     }
 
     /// The file's objects join the scene where they were saved. Nothing else

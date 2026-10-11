@@ -15,12 +15,33 @@
 //! %APPDATA%\Sculpt\log.txt   warnings, errors and what a fault said
 //! ```
 //!
-//! A run removes its copies when its scene is saved and when it closes
-//! properly. So nothing has to compare clocks or remember a clean exit: a
-//! copy that is still there when the app starts, in a folder no running copy
-//! of the app holds locked, is work that a crash left behind, and the app
-//! offers it. Two copies of the app open at once each have a folder, and
-//! neither offers the other's.
+//! When a copy is removed. Never, unless one of these holds:
+//!
+//! - (a) the scene it holds has been saved, by this run, to a file of the
+//!   user's: a run's own copies when its scene is saved, and an earlier
+//!   run's when the scene that was restored from them is;
+//! - (b) the user answered Discard It about that run's copies, and this run
+//!   has since saved or closed properly;
+//! - (c) the run that made it is closing properly, with nothing unsaved or
+//!   with the question about closing answered.
+//!
+//! (A run also drops its own regular copies beyond the newest three as it
+//! writes new ones.) Nothing else removes a copy: not restoring it, not this
+//! run writing a copy of its own, not Not Now, not Undo, and not an answer
+//! about another run's copies. Where it cannot be told, the copy stays and
+//! the next start asks again. This file only has the means ([`Store::clear`]
+//! for a run's own, [`Store::retire`] for a dead run's); `app/recovery.rs`
+//! decides when, and its tests walk the rule through runs that crash.
+//!
+//! So nothing has to compare clocks or remember a clean exit: a copy that is
+//! still there when the app starts, in a folder no running copy of the app
+//! holds locked, is work that a crash left behind, and the app offers it.
+//! Two copies of the app open at once each have a folder, and neither offers
+//! the other's. If several runs left copies, each is asked about by itself,
+//! the run that started last first; an answer touches that run's copies only.
+//! Which copy is the newest goes by the names (the run's folder, the copy's
+//! number), never by the dates of the files, which a backup or a plain copy
+//! of the folder changes.
 //!
 //! A copy is never written over another. Each goes to a new numbered file,
 //! whole or not at all (`io::replace_file`), and only then are older ones
@@ -33,7 +54,7 @@ use std::fs::{File, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -56,6 +77,13 @@ const STOPPED: &str = "stopped";
 const LOG: &str = "log.txt";
 /// The log starts again once it has grown past this.
 const LOG_LIMIT: u64 = 1 << 20;
+/// How many times, and how far apart, a run tries to take hold of the folder
+/// it has just made. Only another copy of the app looking at that folder in
+/// the same instant can be in the way, and it lets go at once.
+const HOLD_TRIES: u32 = 20;
+const HOLD_PAUSE: Duration = Duration::from_millis(10);
+/// How many folder names a run tries before it gives up keeping a copy for now.
+const NAMES: u32 = 5;
 
 // ---- what a copy is a copy of
 
@@ -113,8 +141,40 @@ pub struct Kept {
     pub file: PathBuf,
     /// Written as the app stopped on a fault: its last change may be half made.
     pub stopped: bool,
+    /// The number in its name. A run numbers its copies as it writes them.
+    pub number: u32,
     pub about: About,
-    modified: SystemTime,
+}
+
+/// What one run that is no longer running left behind.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Left {
+    /// That run's folder.
+    pub folder: PathBuf,
+    /// Its copies, newest first; there is at least one.
+    pub copies: Vec<Kept>,
+}
+
+impl Left {
+    /// The newest copy: the one Restore It brings back.
+    pub fn newest(&self) -> Option<&Kept> {
+        self.copies.first()
+    }
+
+    /// Where the newest copy was made as the app stopped on a fault: the
+    /// last regular copy before it, to offer instead.
+    pub fn earlier(&self) -> Option<&Kept> {
+        self.newest().filter(|newest| newest.stopped)?;
+        self.copies.iter().find(|kept| !kept.stopped)
+    }
+
+    /// The copies to try for an answer, in order: from the newest, or
+    /// (`earlier`) from the newest regular one. One that cannot be read is
+    /// passed over for the one before it.
+    pub fn to_try(&self, earlier: bool) -> &[Kept] {
+        let first = if earlier { self.copies.iter().position(|kept| !kept.stopped).unwrap_or(0) } else { 0 };
+        &self.copies[first.min(self.copies.len())..]
+    }
 }
 
 // ---- the folders
@@ -135,6 +195,8 @@ pub struct Store {
     session: Option<Session>,
     /// The number the last copy of this run was written under.
     number: u32,
+    /// The name for this run's folder where a test has given it one.
+    name: Option<String>,
 }
 
 /// The number in `copy-0007.sclp`, and whether it is a `stopped-` one.
@@ -151,28 +213,73 @@ fn parse_name(file: &Path) -> Option<(bool, u32)> {
     Some((stopped, number.parse().ok()?))
 }
 
-/// The copies in one run's folder.
+/// The copies in one run's folder, newest first. The newest is the one with
+/// the highest number, and a copy made as the app stopped comes after every
+/// regular copy of its run: it was the last thing the run did. The dates of
+/// the files say nothing here; copying the folder gives them all new ones.
 fn copies_in(dir: &Path) -> Vec<Kept> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut copies = Vec::new();
-    for file in entries.flatten().map(|entry| entry.path()) {
-        let Some((stopped, _)) = parse_name(&file) else { continue };
-        let Ok(modified) = std::fs::metadata(&file).and_then(|m| m.modified()) else { continue };
+    for file in entries.flatten().map(|entry| entry.path()).filter(|file| file.is_file()) {
+        let Some((stopped, number)) = parse_name(&file) else { continue };
         let about = std::fs::read_to_string(file.with_extension("json"))
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
-        copies.push(Kept { file, stopped, about, modified });
+        copies.push(Kept { file, stopped, number, about });
     }
+    copies.sort_by(|a, b| (b.stopped, b.number).cmp(&(a.stopped, a.number)).then_with(|| b.file.cmp(&a.file)));
     copies
 }
 
-/// Whether a run still holds this folder. One that cannot be told either way
-/// counts as running: its copies are then left alone rather than offered.
-fn is_running(dir: &Path) -> bool {
+/// A piece of a folder's name, for putting runs in order.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Part {
+    Number(u64),
+    Text(String),
+}
+
+/// A run's folder as something to order runs by: its name (when the run
+/// started, its process number, and a count where that name was taken) with
+/// each run of digits read as a number, so that `-10` comes after `-9`.
+fn run_order(dir: &Path) -> Vec<Part> {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    let mut parts: Vec<Part> = Vec::new();
+    for c in name.chars() {
+        match (c.to_digit(10), parts.last_mut()) {
+            (Some(digit), Some(Part::Number(n))) => *n = n.saturating_mul(10).saturating_add(digit as u64),
+            (Some(digit), _) => parts.push(Part::Number(digit as u64)),
+            (None, Some(Part::Text(text))) => text.push(c),
+            (None, _) => parts.push(Part::Text(c.to_string())),
+        }
+    }
+    parts
+}
+
+/// Whether the answer to "may I lock this run's file?" leaves it possible
+/// that the run is alive. Only a lock that was given says it is not. One
+/// that was refused says it is, and an error of any other kind says nothing,
+/// which has to count as alive: copies that may be a running app's are
+/// neither offered nor removed.
+fn may_be_running(tried: &Result<(), TryLockError>) -> bool {
+    tried.is_err()
+}
+
+/// What a look at a run's folder found.
+enum Probe {
+    /// A run holds it, or it cannot be told.
+    Running,
+    /// No run holds it. The lock is this look's own for as long as it is
+    /// kept (`None` where the folder has no `running` file to lock).
+    Dead(Option<File>),
+}
+
+fn probe(dir: &Path) -> Probe {
     match File::open(dir.join(RUNNING)) {
-        Ok(lock) => matches!(lock.try_lock(), Err(TryLockError::WouldBlock)),
-        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        Ok(lock) if may_be_running(&lock.try_lock()) => Probe::Running,
+        Ok(lock) => Probe::Dead(Some(lock)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Probe::Dead(None),
+        Err(_) => Probe::Running,
     }
 }
 
@@ -180,23 +287,81 @@ fn is_running(dir: &Path) -> bool {
 fn remove_copy(file: &Path) {
     let _ = std::fs::remove_file(file);
     let _ = std::fs::remove_file(file.with_extension("json"));
-    let _ = std::fs::remove_file(file.with_extension("sclp.tmp"));
 }
 
-/// Removes a run's folder once nothing of ours is left in it. Anything else
-/// someone put there stays, and then so does the folder.
-fn remove_folder(dir: &Path) {
-    if copies_in(dir).is_empty() {
-        let _ = std::fs::remove_file(dir.join(RUNNING));
-        let _ = std::fs::remove_dir(dir);
+/// Whether `file` is something of ours that is not a copy and is of no use
+/// without one: what a write that was cut short left behind
+/// (`copy-0007.sclp.tmp`; a run killed in the middle of writing never comes
+/// back to finish or remove it), or the notes of a copy that has gone.
+fn is_leftover(file: &Path) -> bool {
+    let ours = |file: &Path| parse_name(&file.with_extension("sclp")).is_some();
+    let kind = |file: &Path| file.extension().and_then(|kind| kind.to_str()).map(str::to_owned);
+    match kind(file).as_deref() {
+        Some("tmp") => {
+            let whole = file.with_extension("");
+            matches!(kind(&whole).as_deref(), Some("sclp" | "json")) && ours(&whole)
+        }
+        Some("json") => ours(file) && !file.with_extension("sclp").exists(),
+        _ => false,
     }
+}
+
+/// Removes a run's folder once no copy is left in it, with what a cut-short
+/// write left there. Anything else someone put there stays, and then so does
+/// the folder. `lock` is the lock on its `running` file, if the caller has it.
+fn remove_folder(dir: &Path, lock: Option<File>) {
+    if !copies_in(dir).is_empty() {
+        return;
+    }
+    let files = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path());
+    for file in files.filter(|file| is_leftover(file)) {
+        let _ = std::fs::remove_file(file);
+    }
+    // While the lock is still held: a run that made this folder a moment ago
+    // and has not taken hold of it yet then finds its `running` file gone,
+    // and takes another folder (`claim`).
+    let _ = std::fs::remove_file(dir.join(RUNNING));
+    drop(lock);
+    // And once more, for a system that will not remove a locked file.
+    let _ = std::fs::remove_file(dir.join(RUNNING));
+    let _ = std::fs::remove_dir(dir);
+}
+
+/// Takes the lock on a `running` file this run has just made, trying for a
+/// moment if another copy of the app is looking at it. False if it could
+/// not be had.
+fn hold(running: &File) -> bool {
+    (0..HOLD_TRIES).any(|round| {
+        if round > 0 {
+            std::thread::sleep(HOLD_PAUSE);
+        }
+        running.try_lock().is_ok()
+    })
+}
+
+/// Makes `dir`, which must not be there yet, and takes hold of it for this
+/// run. A folder this run does not hold is not one to write copies into:
+/// another copy of the app would take them for work a crash left behind. So
+/// one that cannot be held is given up, and the caller tries another name.
+fn claim(dir: &Path, hold: impl Fn(&File) -> bool) -> Result<Session, String> {
+    let made = std::fs::create_dir(dir).and_then(|()| File::create(dir.join(RUNNING)));
+    let running = made.map_err(|e| format!("Could not make {}: {e}", dir.display()))?;
+    // Whoever was looking may have taken the folder for an empty one that a
+    // run left behind, and removed it: the file must still be there.
+    if hold(&running) && dir.join(RUNNING).is_file() {
+        return Ok(Session { dir: dir.to_owned(), _running: running });
+    }
+    drop(running);
+    let _ = std::fs::remove_file(dir.join(RUNNING));
+    let _ = std::fs::remove_dir(dir);
+    Err(format!("Could not take hold of {} for this run's recovery copies.", dir.display()))
 }
 
 impl Store {
     /// Copies under `settings` (the folder the settings file is in).
     /// `writable` is whether this run may write there.
     pub fn at(settings: Option<&Path>, writable: bool) -> Store {
-        Store { root: settings.map(|dir| dir.join(FOLDER)), writable, session: None, number: 0 }
+        Store { root: settings.map(|dir| dir.join(FOLDER)), writable, session: None, number: 0, name: None }
     }
 
     /// Keeps nothing and finds nothing.
@@ -204,23 +369,45 @@ impl Store {
         Store::at(None, false)
     }
 
+    /// For tests: this run's folder is to be called `name`. (A real run's is
+    /// named for the second it started in and its process number, which
+    /// would give every run in a test the same name.)
+    #[cfg(test)]
+    pub fn named(mut self, name: &str) -> Store {
+        self.name = Some(name.to_owned());
+        self
+    }
+
+    /// For tests: the program ends without a word. The system lets go of the
+    /// lock, and nothing is tidied.
+    #[cfg(test)]
+    pub fn crash(&mut self) {
+        drop(self.session.take());
+    }
+
     /// Whether this run writes copies at all.
     pub fn keeps(&self) -> bool {
         self.root.is_some() && self.writable
     }
 
-    /// This run's folder, made and locked the first time it is needed.
+    /// This run's folder, made and locked the first time it is needed: a new
+    /// one, never a folder that is there already (an earlier run's copies
+    /// are numbered from one as well).
     fn session(&mut self) -> Result<&Path, String> {
         if self.session.is_none() {
             let root = self.root.as_ref().filter(|_| self.writable).ok_or("This run keeps no recovery copies.")?;
-            let dir = root.join(format!("{}-{}", crate::io::time_stamp(), std::process::id()));
-            let made = std::fs::create_dir_all(&dir).and_then(|()| File::create(dir.join(RUNNING)));
-            let running = made.map_err(|e| format!("Could not make {}: {e}", dir.display()))?;
-            // Nothing else has reason to hold a lock on a file made this instant.
-            if let Err(e) = running.try_lock() {
-                log::warn!("could not lock {}: {e}", dir.display());
+            std::fs::create_dir_all(root).map_err(|e| format!("Could not make {}: {e}", root.display()))?;
+            let stamped = || format!("{}-{}", crate::io::time_stamp(), std::process::id());
+            let name = self.name.clone().unwrap_or_else(stamped);
+            let mut failed = String::new();
+            let session = (1..=NAMES).find_map(|round| {
+                let dir = root.join(if round == 1 { name.clone() } else { format!("{name}-{round}") });
+                claim(&dir, hold).map_err(|e| failed = e).ok()
+            });
+            if !failed.is_empty() {
+                log::warn!("{failed}");
             }
-            self.session = Some(Session { dir, _running: running });
+            self.session = Some(session.ok_or(failed)?);
         }
         Ok(self.session.as_ref().map_or(Path::new(""), |session| session.dir.as_path()))
     }
@@ -243,52 +430,54 @@ impl Store {
             let _ = crate::io::replace_file(&file.with_extension("json"), |w| w.write_all(text.as_bytes()));
         }
         let (Some((false, _)), Some(dir)) = (parse_name(file), file.parent()) else { return };
-        let mut regular: Vec<(u32, PathBuf)> = copies_in(dir)
-            .into_iter()
-            .filter_map(|copy| parse_name(&copy.file).filter(|(stopped, _)| !stopped).map(|(_, n)| (n, copy.file)))
-            .collect();
-        regular.sort();
-        let extra = regular.len().saturating_sub(KEEP);
-        for (_, old) in regular.into_iter().take(extra) {
-            remove_copy(&old);
+        // Newest first, so the ones past the first `KEEP` are the oldest.
+        let regular = copies_in(dir).into_iter().filter(|copy| !copy.stopped);
+        for old in regular.skip(KEEP) {
+            remove_copy(&old.file);
         }
     }
 
-    /// The copies left by runs that are no longer running, newest first.
-    pub fn left_behind(&self) -> Vec<Kept> {
+    /// What the runs that are no longer running left behind: one entry for
+    /// each run that left a copy, the run that started last first.
+    pub fn left_behind(&self) -> Vec<Left> {
         let Some(root) = &self.root else { return Vec::new() };
         let Ok(entries) = std::fs::read_dir(root) else { return Vec::new() };
         let own = self.session.as_ref().map(|session| session.dir.as_path());
         let mut found = Vec::new();
-        for dir in entries.flatten().map(|entry| entry.path()).filter(|dir| dir.is_dir()) {
-            if Some(dir.as_path()) == own || is_running(&dir) {
+        for folder in entries.flatten().map(|entry| entry.path()).filter(|dir| dir.is_dir()) {
+            if Some(folder.as_path()) == own {
                 continue;
             }
-            let copies = copies_in(&dir);
-            if copies.is_empty() && self.writable {
-                // A run that ended before it had anything to keep.
-                remove_folder(&dir);
+            let Probe::Dead(lock) = probe(&folder) else { continue };
+            let copies = copies_in(&folder);
+            if !copies.is_empty() {
+                found.push(Left { folder, copies });
+            } else if self.writable {
+                // A run that ended before it had a whole copy to keep.
+                remove_folder(&folder, lock);
             }
-            found.extend(copies);
         }
-        found.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.file.cmp(&a.file)));
+        found.sort_by(|a, b| run_order(&b.folder).cmp(&run_order(&a.folder)));
         found
     }
 
-    /// Removes copies that [`Self::left_behind`] found, and their folders.
-    /// Does nothing in a run that may only look.
-    pub fn remove(&self, copies: &[Kept]) {
-        if !self.writable {
+    /// Removes everything a run that is no longer running left: its copies,
+    /// what a cut-short write left beside them, and its folder. When that
+    /// may be done is the rule at the top of this file, and the caller's to
+    /// keep. Does nothing in a run that may only look, and nothing to a
+    /// folder that is not a run's of this store, that is this run's own, or
+    /// that a run may still hold.
+    pub fn retire(&self, folder: &Path) {
+        let a_run_here = self.root.as_deref().is_some_and(|root| folder.parent() == Some(root));
+        let own = self.session.as_ref().is_some_and(|session| session.dir == folder);
+        if !self.writable || !a_run_here || own {
             return;
         }
-        for copy in copies {
+        let Probe::Dead(lock) = probe(folder) else { return };
+        for copy in copies_in(folder) {
             remove_copy(&copy.file);
         }
-        for dir in copies.iter().filter_map(|copy| copy.file.parent()) {
-            if !is_running(dir) {
-                remove_folder(dir);
-            }
-        }
+        remove_folder(folder, lock);
     }
 
     /// Removes this run's own copies and its folder: the scene is in a file
@@ -300,9 +489,10 @@ impl Store {
             remove_copy(&copy.file);
         }
         let dir = session.dir.clone();
-        // The lock goes first: a locked file cannot be removed.
+        // The lock goes first: nobody else has reason to take it, and the
+        // folder cannot go while its file is held open.
         drop(session);
-        remove_folder(&dir);
+        remove_folder(&dir, None);
     }
 }
 
@@ -373,21 +563,28 @@ impl Schedule {
 
 // ---- a scene that can be trusted to a file
 
-/// Whether these meshes can be written as a file that will open again: every
-/// triangle whole and naming vertices that exist, every vertex somewhere.
-/// After a fault the scene may have been caught mid-change; one that fails
-/// here is not written, and the regular copies stand.
+/// Whether these meshes can be written as a file at all: every triangle
+/// whole, and naming vertices that exist. After a fault the scene may have
+/// been caught mid-change, and a mesh whose triangle list was cut short or
+/// names a vertex that is not there would be written as garbage, or bring
+/// the app down when it is opened; such a scene is not written, and the
+/// regular copies stand.
+///
+/// This is the last chance to keep the work, so it refuses nothing that an
+/// ordinary Save would write. A vertex that is not a number (a brush can
+/// make one) is not a reason: Save mends those as it writes, and the same
+/// code writes this copy. Nor is a mesh with no triangles at all: nothing in
+/// it can be wrong, a save writes it and it opens again
+/// (`an_empty_mesh_is_saved_and_opened_like_any_other`), and refusing the
+/// copy for one empty object would lose every other object with it.
 pub fn sound(meshes: &[&Mesh]) -> Result<(), String> {
     for (number, mesh) in meshes.iter().enumerate() {
-        let verts = mesh.positions.len();
-        if mesh.indices.is_empty() || mesh.indices.len() % 3 != 0 {
-            return Err(format!("mesh {number} has {} triangle corners", mesh.indices.len()));
+        let (verts, corners) = (mesh.positions.len(), mesh.indices.len());
+        if corners % 3 != 0 {
+            return Err(format!("mesh {number} has {corners} triangle corners, which is not a whole number of triangles"));
         }
         if mesh.indices.par_iter().any(|&corner| corner as usize >= verts) {
             return Err(format!("mesh {number} has a triangle on a vertex it does not have"));
-        }
-        if mesh.positions.par_iter().any(|position| !position.is_finite()) {
-            return Err(format!("mesh {number} has a vertex that is nowhere"));
         }
     }
     Ok(())
@@ -621,6 +818,22 @@ mod tests {
         copies.iter().map(|copy| copy.file.file_name().unwrap().to_string_lossy().into_owned()).collect()
     }
 
+    /// A run called `name` that wrote `copies` regular copies and died.
+    fn dead_run(dir: &Path, name: &str, copies: usize) -> PathBuf {
+        let mut run = Store::at(Some(dir), true).named(name);
+        for i in 0..copies {
+            keep(&mut run, false, &format!("{name} scene {i}"));
+        }
+        let folder = run.session.as_ref().unwrap().dir.clone();
+        run.crash();
+        folder
+    }
+
+    /// The folders of the runs that left copies, as `left_behind` orders them.
+    fn runs(left: &[Left]) -> Vec<String> {
+        left.iter().map(|run| run.folder.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
     #[test]
     fn a_copy_goes_to_a_new_file_each_time_and_the_last_three_are_kept() {
         let dir = settings("keep_three");
@@ -653,14 +866,18 @@ mod tests {
     fn copies_of_a_run_that_is_still_running_are_not_offered() {
         let dir = settings("still_running");
         let mut running = Store::at(Some(&dir), true);
-        keep(&mut running, false, "scene");
+        let copy = keep(&mut running, false, "scene");
         // A second copy of the app, started while the first is open.
         let second = Store::at(Some(&dir), true);
         assert!(second.left_behind().is_empty(), "the first run holds its folder");
         assert!(running.left_behind().is_empty(), "and a run does not offer itself its own");
+        second.retire(copy.parent().unwrap());
+        assert!(copy.is_file(), "nor can another run remove what a running one holds");
         // The first run ends without a word; the system lets go of its lock.
-        drop(running.session.take());
-        assert_eq!(names(&second.left_behind()), ["copy-0001.sclp"], "now it is work a crash left behind");
+        running.crash();
+        let left = second.left_behind();
+        assert_eq!(left.len(), 1, "now it is work a crash left behind");
+        assert_eq!(names(&left[0].copies), ["copy-0001.sclp"]);
     }
 
     #[test]
@@ -668,16 +885,84 @@ mod tests {
         let dir = settings("died");
         let mut died = Store::at(Some(&dir), true);
         let first = keep(&mut died, false, "scene 0");
-        std::thread::sleep(Duration::from_millis(20));
         let last = keep(&mut died, true, "scene 1");
         // The program ending is what lets go of the lock; nothing is tidied.
-        drop(died.session.take());
+        died.crash();
         let next = Store::at(Some(&dir), true);
-        let found = next.left_behind();
-        assert_eq!(names(&found), ["stopped-0002.sclp", "copy-0001.sclp"]);
+        let left = next.left_behind();
+        let found = &left[0].copies;
+        assert_eq!(names(found), ["stopped-0002.sclp", "copy-0001.sclp"]);
         assert!(found[0].stopped && !found[1].stopped);
         assert_eq!(found[0].about.objects, 1, "what it is a copy of is read from beside it");
         assert_eq!((found[0].file.as_path(), found[1].file.as_path()), (last.as_path(), first.as_path()));
+        assert_eq!(left[0].newest(), Some(&found[0]));
+        assert_eq!(left[0].earlier(), Some(&found[1]), "the regular copy is the one to offer instead");
+        assert_eq!(names(left[0].to_try(false)), ["stopped-0002.sclp", "copy-0001.sclp"]);
+        assert_eq!(names(left[0].to_try(true)), ["copy-0001.sclp"]);
+    }
+
+    /// Review point 7: the dates of the files decided which copy was the
+    /// newest, and a plain copy of the folder gives them all new dates.
+    #[test]
+    fn the_newest_copy_goes_by_its_number_and_not_by_the_date_of_its_file() {
+        let dir = settings("dates");
+        let mut died = Store::at(Some(&dir), true);
+        let files: Vec<PathBuf> = (0..3).map(|i| keep(&mut died, false, &format!("scene {i}"))).collect();
+        let stopped = keep(&mut died, true, "scene 3");
+        died.crash();
+        // As a copy of the folder, or a backup put back, might leave them: the
+        // oldest copy with the latest date, the newest with the earliest.
+        let day = Duration::from_secs(86_400);
+        let now = std::time::SystemTime::now();
+        let dated = |file: &Path, at| File::options().write(true).open(file).unwrap().set_modified(at).unwrap();
+        dated(&files[0], now);
+        dated(&files[1], now - day);
+        dated(&files[2], now - day * 2);
+        dated(&stopped, now - day * 3);
+        let left = Store::at(Some(&dir), true).left_behind();
+        let order = ["stopped-0004.sclp", "copy-0003.sclp", "copy-0002.sclp", "copy-0001.sclp"];
+        assert_eq!(names(&left[0].copies), order, "by number, the copy made as the app stopped last of all");
+        assert_eq!(left[0].earlier().map(|kept| kept.number), Some(3));
+    }
+
+    /// Review point 3: every dead run's copies were one list.
+    #[test]
+    fn each_run_that_died_is_found_by_itself_and_the_last_to_start_comes_first() {
+        let dir = settings("several_runs");
+        // Started in this order; the names are as a real run's, with the
+        // count that a name already taken is given.
+        let second = "2026-10-10_101500-41";
+        let (ninth, tenth) = (format!("{second}-9"), format!("{second}-10"));
+        let order = ["2026-10-09_230000-777", second, ninth.as_str(), tenth.as_str()];
+        for (i, name) in order.iter().enumerate() {
+            dead_run(&dir, name, i + 1);
+        }
+        let left = Store::at(Some(&dir), true).left_behind();
+        let newest_first: Vec<&str> = order.iter().rev().copied().collect();
+        assert_eq!(runs(&left), newest_first);
+        for (run, copies) in left.iter().zip([4, 3, 2, 1]) {
+            assert_eq!(run.copies.len(), copies.min(KEEP), "{}: its own copies and no other run's", run.folder.display());
+            assert!(run.copies.iter().all(|kept| kept.file.parent() == Some(run.folder.as_path())));
+        }
+    }
+
+    #[test]
+    fn retiring_one_run_leaves_every_other_run_as_it_was() {
+        let dir = settings("retire_one");
+        let folders: Vec<PathBuf> = ["run-1", "run-2", "run-3"].iter().map(|name| dead_run(&dir, name, 2)).collect();
+        let next = Store::at(Some(&dir), true);
+        next.retire(&folders[1]);
+        assert!(!folders[1].exists(), "the run that was answered about has gone, folder and all");
+        assert_eq!(runs(&next.left_behind()), ["run-3", "run-1"]);
+        let files = ["copy-0001.sclp", "copy-0002.sclp", "copy-0001.json", RUNNING];
+        let whole = |folder: &Path| files.iter().all(|file| folder.join(file).is_file());
+        assert!(whole(&folders[0]) && whole(&folders[2]), "nothing of another run is touched");
+        // A folder that is not a run's of this store is not this store's to remove.
+        let elsewhere = dir.join("somewhere else");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("copy-0001.sclp"), "not ours").unwrap();
+        next.retire(&elsewhere);
+        assert!(elsewhere.join("copy-0001.sclp").is_file());
     }
 
     #[test]
@@ -695,23 +980,21 @@ mod tests {
     }
 
     #[test]
-    fn copies_that_were_answered_can_be_removed_and_a_run_that_only_looks_removes_nothing() {
+    fn a_run_that_was_answered_about_can_be_retired_and_a_run_that_only_looks_removes_nothing() {
         let dir = settings("answered");
-        let mut died = Store::at(Some(&dir), true);
-        keep(&mut died, false, "scene");
-        drop(died.session.take());
+        let folder = dead_run(&dir, "died", 1);
+        let copy = folder.join("copy-0001.sclp");
 
         let looking = Store::at(Some(&dir), false);
         assert!(!looking.keeps());
-        let found = looking.left_behind();
-        assert_eq!(found.len(), 1);
-        looking.remove(&found);
-        assert!(found[0].file.is_file(), "a run that may not write leaves the copy where it is");
+        assert_eq!(looking.left_behind().len(), 1);
+        looking.retire(&folder);
+        assert!(copy.is_file(), "a run that may not write leaves the copy where it is");
 
         let next = Store::at(Some(&dir), true);
-        next.remove(&found);
-        assert!(!found[0].file.exists() && next.left_behind().is_empty());
-        assert!(!found[0].file.parent().unwrap().exists(), "the dead run's folder goes with its last copy");
+        next.retire(&folder);
+        assert!(!copy.exists() && next.left_behind().is_empty());
+        assert!(!folder.exists(), "the dead run's folder goes with its last copy");
     }
 
     #[test]
@@ -734,12 +1017,95 @@ mod tests {
         let (half, mine) = (folder.join("copy-0009.sclp.tmp"), folder.join("my own notes.txt"));
         std::fs::write(&half, "half written").unwrap();
         std::fs::write(&mine, "keep me").unwrap();
-        drop(died.session.take());
+        let theirs = [folder.join("holiday.sclp"), folder.join("holiday.sclp.tmp"), folder.join("copy.json")];
+        theirs.iter().for_each(|file| std::fs::write(file, "keep me too").unwrap());
+        died.crash();
         let next = Store::at(Some(&dir), true);
-        let found = next.left_behind();
-        assert_eq!(names(&found), ["copy-0001.sclp"], "a file still being written is not a copy");
-        next.remove(&found);
+        let left = next.left_behind();
+        assert_eq!(names(&left[0].copies), ["copy-0001.sclp"], "a file still being written is not a copy");
+        next.retire(&folder);
         assert!(mine.is_file() && folder.is_dir(), "someone else's file, and so the folder, stay");
+        assert!(theirs.iter().all(|file| file.is_file()), "and whatever else is not named as a copy of ours is");
+        assert!(!copy.exists() && !half.exists(), "the copy has gone, and the half-written one with it");
+    }
+
+    /// Review point 7: a write cut short by the program being killed left a
+    /// `.tmp` that nothing removed, and its folder stayed for ever.
+    #[test]
+    fn what_a_write_that_was_cut_short_left_goes_with_its_run() {
+        let dir = settings("cut_short");
+        let folder = dead_run(&dir, "killed mid-write", 2);
+        let halves = ["copy-0003.sclp.tmp", "copy-0003.json.tmp", "stopped-0004.sclp.tmp"].map(|name| folder.join(name));
+        halves.iter().for_each(|file| std::fs::write(file, "half").unwrap());
+        // A run killed while it wrote its very first copy: nothing whole to offer.
+        let first = dir.join(FOLDER).join("killed at once");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::write(first.join(RUNNING), "").unwrap();
+        std::fs::write(first.join("copy-0001.sclp.tmp"), "half").unwrap();
+
+        let next = Store::at(Some(&dir), true);
+        let left = next.left_behind();
+        assert_eq!(runs(&left), ["killed mid-write"], "only the run with whole copies is offered");
+        assert!(!first.exists(), "the folder with nothing but a half-written file has gone");
+        assert!(halves.iter().all(|file| file.is_file()), "while its copies stay, nothing in a run's folder is touched");
+        next.retire(&folder);
+        assert!(!folder.exists(), "and when they are retired the folder goes, half-written files and all");
+    }
+
+    /// Review point 7: an error from asking for the lock, other than "it is
+    /// held", counted as "nobody holds it".
+    #[test]
+    fn a_lock_that_cannot_be_asked_about_counts_as_a_run_that_may_be_alive() {
+        assert!(!may_be_running(&Ok(())), "the lock was given: nobody holds the folder");
+        assert!(may_be_running(&Err(TryLockError::WouldBlock)), "a run holds it");
+        let unknown = TryLockError::Error(std::io::Error::other("the disk did not answer"));
+        assert!(may_be_running(&Err(unknown)), "not known: its copies are neither offered nor removed");
+    }
+
+    /// Review point 7: a run that could not lock its new folder went on to
+    /// write copies into it all the same.
+    #[test]
+    fn a_run_takes_a_folder_of_its_own_and_never_one_that_is_there() {
+        let dir = settings("folder_taken");
+        // Another run's folder under the name this run would use, with a copy in it.
+        let theirs = dead_run(&dir, "same name", 1);
+        let their_copy = theirs.join("copy-0001.sclp");
+        let mut run = Store::at(Some(&dir), true).named("same name");
+        let mine = keep(&mut run, false, "mine");
+        assert_eq!(mine.parent().unwrap().file_name().unwrap(), "same name-2", "a folder of its own");
+        assert_eq!(std::fs::read_to_string(&their_copy).unwrap(), "same name scene 0", "theirs is not written over");
+        let left = run.left_behind();
+        assert_eq!(runs(&left), ["same name"], "and its own is held: only the other is a dead run's");
+        assert!(Store::at(Some(&dir), true).left_behind().iter().all(|left| left.folder != mine.parent().unwrap()));
+    }
+
+    #[test]
+    fn taking_hold_of_a_folder_waits_out_a_passing_look_and_gives_up_on_one_that_is_held() {
+        let dir = settings("hold");
+        let file = dir.join(RUNNING);
+        let running = File::create(&file).unwrap();
+        // Another copy of the app looks at the folder for a moment (`probe`).
+        let look = File::open(&file).unwrap();
+        look.try_lock().unwrap();
+        assert!(running.try_lock().is_err(), "the first try is refused");
+        let passing = std::thread::spawn(move || {
+            std::thread::sleep(HOLD_PAUSE * 3);
+            drop(look);
+        });
+        assert!(hold(&running), "it is tried again until the look has passed");
+        passing.join().unwrap();
+        drop(running);
+
+        // One that never lets go: given up, with nothing left behind to mistake for a run.
+        let folder = dir.join("never mine");
+        let refused = claim(&folder, |_| false);
+        assert!(refused.is_err_and(|e| e.contains("Could not take hold of")));
+        assert!(!folder.exists(), "the folder it could not hold is not left lying");
+        // And the store then keeps its copies under another name.
+        let held = claim(&folder, hold).unwrap();
+        assert!(matches!(probe(&folder), Probe::Running), "a folder that is held reads as a run that is alive");
+        drop(held);
+        assert!(matches!(probe(&folder), Probe::Dead(Some(_))));
     }
 
     #[test]
@@ -817,15 +1183,40 @@ mod tests {
         stray.indices[7] = stray.positions.len() as u32;
         assert!(sound(&[&whole, &stray]).unwrap_err().contains("mesh 1"), "a corner past the last vertex");
 
-        let mut nowhere = primitives::build(Primitive::Sphere, 2_000, 0.5);
-        nowhere.positions[3].y = f32::NAN;
-        assert!(sound(&[&nowhere]).is_err(), "a vertex that is not a number");
-
         let mut torn = primitives::build(Primitive::Sphere, 2_000, 0.5);
         torn.indices.pop();
         assert!(sound(&[&torn]).is_err(), "a triangle with two corners");
-        torn.indices.clear();
-        assert!(sound(&[&torn]).is_err(), "no triangles at all");
+    }
+
+    /// Review point 4: the copy made as the app stops was refused for a
+    /// vertex that is not a number, and for a mesh with no triangles, though
+    /// an ordinary Save writes both.
+    #[test]
+    fn the_last_copy_is_not_refused_for_what_an_ordinary_save_writes() {
+        let dir = settings("sound_as_save");
+        let mut nowhere = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        nowhere.positions[3].y = f32::NAN;
+        nowhere.positions[9] = glam::Vec3::splat(f32::INFINITY);
+        assert_eq!(sound(&[&nowhere]), Ok(()), "a vertex that is not a number");
+        crate::io::save_scene(&[&nowhere], &[object("Ball", 0)], 0, &dir.join("nowhere.sclp")).expect("Save writes it");
+
+        let mut empty = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        empty.indices.clear();
+        let whole = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        assert_eq!(sound(&[&whole, &empty]), Ok(()), "no triangles at all");
+    }
+
+    #[test]
+    fn an_empty_mesh_is_saved_and_opened_like_any_other() {
+        let dir = settings("empty_mesh");
+        let empty = Mesh::new(Vec::new(), Vec::new(), None);
+        let whole = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        let objects = [object("Ball", 0), object("Nothing", 1)];
+        let file = dir.join("with an empty object.sclp");
+        crate::io::save_scene(&[&whole, &empty], &objects, 0, &file).expect("Save writes it");
+        let opened = crate::io::load_scene(&file).expect("and it opens again");
+        assert_eq!(opened.objects.len(), 2);
+        assert_eq!((opened.meshes[0].triangle_count(), opened.meshes[1].triangle_count()), (whole.triangle_count(), 0));
     }
 
     fn object(name: &str, mesh: usize) -> SavedObject {

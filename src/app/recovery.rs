@@ -36,9 +36,22 @@
 //! it is owed a copy and gets into one. What is in no file is in no copy
 //! either: SSpheres, unmerged tubes, rulers, planned keys and a lathe outline
 //! do not survive a crash (app/unsaved.rs lists them for the questions).
+//!
+//! When a copy is removed is the rule at the top of `crate::recovery`, and
+//! [`State`] is where it is kept: [`State::saved`] and [`State::closed`] are
+//! the only places a copy goes, apart from a run dropping its own oldest as
+//! it writes new ones. Restoring a copy removes nothing. The restored scene
+//! carries a note of the run it came from (`history::Restored`), which Undo
+//! and Redo move with the scene as they move its file (`file_undo.rs`), and
+//! only a save of that very scene retires that run's copies. Of several runs
+//! that left copies, one is asked about at a start, the one that started
+//! last; the answer restores from and removes that run's copies and no
+//! other's, and the rest are asked about at later starts. `recovery/rule.rs`
+//! walks all of this through runs that end every way a run can.
 
+use std::ffi::OsString;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
@@ -47,15 +60,25 @@ use sculpt_toolkit::{Job, JobCtx};
 use super::files::Mark;
 use super::{Drag, Running};
 use crate::doc::{Action, Recover};
+use crate::history::Restored;
 use crate::io;
 use crate::prefs::{self, Home};
-use crate::recovery::{self, About, Faults, Kept, Outcome, Schedule, Store};
+use crate::recovery::{self, About, Faults, Kept, Left, Outcome, Schedule, Store};
 use crate::sculpt::PointerSample;
 use crate::ui::question::Question;
 
 /// The variable that makes a scripted run a check of recovery itself (see
 /// [`Script`]).
 const CHECK: &str = "SCULPT_TEST_RECOVERY";
+
+/// The variable that gives a run a settings folder of its own (`prefs.rs`).
+/// Without it the check variable is not heeded at all.
+const OWN_SETTINGS: &str = "SCULPT_SETTINGS_DIR";
+
+/// In the script of a check: a fault strikes while the copy is being
+/// restored, when its objects have taken the scene's place and nothing else
+/// has been done.
+const RESTORE_FAULT: &str = "restore-fault";
 
 /// In the script of a check: put the closing message up even though the run
 /// is a scripted one.
@@ -80,33 +103,100 @@ const LOOK_EVERY: Duration = Duration::from_millis(200);
 /// without taking the keyboard and leaves the Claude bridge's port alone,
 /// like a screenshot run.
 pub(super) fn checking() -> bool {
-    std::env::var_os(CHECK).is_some_and(|spec| !spec.is_empty())
+    check_spec().is_some()
+}
+
+/// What the check variable asks of this run, if anything.
+fn check_spec() -> Option<String> {
+    heeded(std::env::var(CHECK).ok(), std::env::var_os(OWN_SETTINGS))
+}
+
+/// The script of a check, if it is to be heeded: only in a run that was
+/// given a settings folder of its own. A check answers the question about
+/// the copies by itself, Discard It among the answers, and a run with
+/// neither that folder nor any `--option` works in the user's own folder,
+/// on the copies of their real work.
+fn heeded(spec: Option<String>, own_settings: Option<OsString>) -> Option<String> {
+    let own = own_settings.is_some_and(|dir| !dir.is_empty());
+    spec.filter(|spec| !spec.is_empty() && own)
 }
 
 pub(super) struct State {
     store: Store,
     schedule: Schedule,
-    /// The scene's mark when this run's newest copy was written: that copy
-    /// holds every step up to it.
+    /// The scene's mark at which a copy on disk holds every step up to it:
+    /// where this run's newest copy was written, or where a copy of an
+    /// earlier run's was restored.
     held: Option<Mark>,
     /// Whether the scene held unsaved work that is in no copy, when that was
     /// last looked at (`copy_owed`), and when that was.
     owed: bool,
     looked: Option<Instant>,
-    /// Copies an earlier run left behind, newest first, as found at start-up.
-    found: Vec<Kept>,
-    /// The user has answered the question about them. They are removed once
-    /// this run has a copy or a save of its own, or closes properly; until
-    /// then they are still the only copy of that work.
-    answered: bool,
-    /// The scene was restored from one of them, and this run has no copy of
-    /// its own yet: they are still what holds that work.
-    restored: bool,
-    /// The file a restored copy was a copy of, for Save to offer.
-    document: Option<PathBuf>,
+    /// The run whose copies the question at start-up was about: of the runs
+    /// that left any, the one that started last. This run restores from no
+    /// other run's copies, and an answer removes no other run's.
+    offered: Option<Left>,
+    /// The user answered Discard It about that run's copies. They go when
+    /// this run saves or closes properly; until then they are still there
+    /// to be opened by hand, if the answer was a slip.
+    discarded: bool,
+    /// The copy the scene on screen was restored from, until that scene is
+    /// saved; `None` for any other scene. It follows the scene through Undo
+    /// and Redo (`file_undo.rs`), and only a save of that scene retires the
+    /// copies it names.
+    pub(super) restored: Option<Restored>,
     /// Where the graphics device leaves word of a fault.
     pub(super) faults: Faults,
     script: Script,
+}
+
+/// What the question at start-up has to say.
+#[derive(Debug, PartialEq)]
+pub(super) struct Offer {
+    /// The copy Restore It brings back: the newest of the run asked about.
+    newest: Kept,
+    /// The last regular copy before it, where it was made on a fault.
+    earlier: Option<Kept>,
+    /// How many other runs left copies. They are asked about at later starts.
+    others: usize,
+}
+
+/// What came of putting one copy in place of the scene.
+pub(super) enum Tried {
+    /// It is the scene now, with this many objects.
+    Restored(usize),
+    /// It could not be read. Nothing has been touched.
+    Unreadable(String),
+    /// A fault struck after the scene had begun to change.
+    Broke,
+}
+
+/// What came of an answer to restore.
+#[derive(Debug, PartialEq)]
+pub(super) enum Restoring<'a> {
+    /// This copy is the scene now; `passed_over` newer ones could not be read.
+    Done { kept: &'a Kept, objects: usize, passed_over: usize },
+    /// None could be read. The scene is as it was.
+    NoneRead,
+    /// A fault part of the way through one: what is on screen is neither the
+    /// scene from before nor the copy.
+    Broke,
+}
+
+/// Puts the first of `copies` that can be read in place of the scene, by
+/// `put`. A copy that cannot be read is passed over for the one before it.
+/// After a fault part of the way through one, no other is tried: the scene
+/// is in no state to have another laid over it, and what is said about it
+/// has to be about what happened.
+pub(super) fn restore_first<'a>(copies: &'a [Kept], mut put: impl FnMut(&'a Kept) -> Tried) -> Restoring<'a> {
+    for (passed_over, kept) in copies.iter().enumerate() {
+        match put(kept) {
+            Tried::Restored(objects) => return Restoring::Done { kept, objects, passed_over },
+            Tried::Unreadable(e) => log::error!("{e}"),
+            Tried::Broke => return Restoring::Broke,
+        }
+    }
+    Restoring::NoneRead
 }
 
 impl State {
@@ -119,16 +209,19 @@ impl State {
         // it is a check of this very thing.
         let store =
             if prefs::scripted() && !script.on { Store::nowhere() } else { Store::at(home.folder(), home.writable()) };
+        State::with(store, script)
+    }
+
+    fn with(store: Store, script: Script) -> State {
         State {
             store,
             schedule: Schedule::new(script.every.unwrap_or(recovery::EVERY)),
             held: None,
             owed: false,
             looked: None,
-            found: Vec::new(),
-            answered: false,
-            restored: false,
-            document: None,
+            offered: None,
+            discarded: false,
+            restored: None,
             faults: Faults::default(),
             script,
         }
@@ -136,7 +229,88 @@ impl State {
 
     /// Whether any copy of this scene's work is on disk.
     fn has_copy(&self) -> bool {
-        self.held.is_some() || self.restored
+        self.held.is_some() || self.restored.is_some()
+    }
+
+    /// Start-up: looks for copies that runs before this one left behind, and
+    /// picks the run to ask about: the one that started last.
+    fn look(&mut self) -> Option<Offer> {
+        let mut left = self.store.left_behind();
+        let others = left.len().saturating_sub(1);
+        self.offered = (!left.is_empty()).then(|| left.remove(0));
+        let run = self.offered.as_ref()?;
+        Some(Offer { newest: run.newest()?.clone(), earlier: run.earlier().cloned(), others })
+    }
+
+    /// The answer Discard It: the copies asked about are to go, once this
+    /// run has saved or closed properly. Gives back the folder they are in.
+    fn discard(&mut self) -> Option<&Path> {
+        self.discarded = self.offered.is_some();
+        self.offered.as_ref().map(|run| run.folder.as_path())
+    }
+
+    /// The copies to try for Restore It, or (`earlier`) for Restore the
+    /// Earlier Copy Instead, in order: the offered run's and no other's.
+    fn to_restore(&self, earlier: bool) -> Vec<Kept> {
+        self.offered.as_ref().map_or(Vec::new(), |run| run.to_try(earlier).to_vec())
+    }
+
+    /// The note a scene restored from `kept` carries with it.
+    fn note(kept: &Kept) -> Restored {
+        let run = kept.file.parent().unwrap_or(Path::new("")).to_owned();
+        Restored { run, document: kept.about.document.clone() }
+    }
+
+    /// A copy has been put in place as the scene, which now stands at
+    /// `mark`. That copy holds the scene as it is, so none is owed until the
+    /// scene changes. Nothing is removed: the copy is still the only place
+    /// the work is.
+    fn restored_at(&mut self, mark: Mark) {
+        self.held = Some(mark);
+    }
+
+    /// This run has written a copy of the scene as it stands at `mark`.
+    /// Nothing of an earlier run's goes for that: its copies hold work the
+    /// user may yet want as it was (the earlier copy beside one made on a
+    /// fault, most of all), and they have not said otherwise.
+    fn copied(&mut self, mark: Mark) {
+        self.held = Some(mark);
+    }
+
+    /// The scene has been saved to a file of the user's; `restored` is the
+    /// copy that scene had been restored from, if it had. Rule (a): this
+    /// run's own copies go, and that earlier run's. Rule (b): so do the
+    /// copies the user said to discard. No others.
+    fn saved(&mut self, restored: Option<Restored>) {
+        self.store.clear();
+        self.held = None;
+        self.schedule.restart();
+        if let Some(from) = restored {
+            self.store.retire(&from.run);
+        }
+        self.retire_discarded();
+    }
+
+    fn retire_discarded(&mut self) {
+        if !std::mem::take(&mut self.discarded) {
+            return;
+        }
+        if let Some(run) = self.offered.take() {
+            self.store.retire(&run.folder);
+        }
+    }
+
+    /// The app is closing. `settled` is whether it is closing properly: the
+    /// question about closing was answered, or there was nothing unsaved to
+    /// ask about. Then (rule (c)) this run's own copies go, and (rule (b))
+    /// those the user said to discard. Otherwise everything stays, and the
+    /// next start asks.
+    fn closed(&mut self, settled: bool) {
+        if !settled {
+            return;
+        }
+        self.store.clear();
+        self.retire_discarded();
     }
 }
 
@@ -144,16 +318,20 @@ impl Running {
     // ---- start-up: a copy an earlier run left behind
 
     /// Start-up: if a run before this one ended without closing properly and
-    /// left copies of its work, asks whether to bring the newest back.
+    /// left copies of its work, asks whether to bring the newest back. Of
+    /// several such runs, this start asks about the one that started last.
     pub(super) fn recovery_start(&mut self) {
-        self.recovery.found = self.recovery.store.left_behind();
-        let Some(newest) = self.recovery.found.first() else { return };
+        let Some(offer) = self.recovery.look() else { return };
         let today = io::time_stamp();
         let when = |kept: &Kept| recovery::when_words(&kept.about.when, &today);
-        let regular = self.recovery.found.iter().find(|kept| !kept.stopped).filter(|_| newest.stopped);
-        let earlier = regular.map(|kept| when(kept).unwrap_or_else(|| "before that".to_owned()));
-        let question =
-            Question::Recover { when: when(newest), what: newest.about.words(), stopped: newest.stopped, earlier };
+        let earlier = offer.earlier.as_ref().map(|kept| when(kept).unwrap_or_else(|| "before that".to_owned()));
+        let question = Question::Recover {
+            when: when(&offer.newest),
+            what: offer.newest.about.words(),
+            stopped: offer.newest.stopped,
+            earlier,
+            others: offer.others,
+        };
         self.ui.graph.ask(question);
         self.redraw = true;
         if let Some(answer) = self.recovery.script.answer.take() {
@@ -165,45 +343,40 @@ impl Running {
     }
 
     /// The answer to that question. (Not Now does not come here: it leaves
-    /// the copies as they are, to be asked about next time.)
+    /// the copies as they are, to be asked about next time.) No answer
+    /// removes a copy by itself; see the rule in `crate::recovery`.
     pub(super) fn recover(&mut self, answer: Recover) {
-        self.recovery.answered = true;
-        let found = self.recovery.found.clone();
         if answer == Recover::Discard {
-            let folder = found.first().and_then(|kept| kept.file.parent()).map(|dir| dir.display().to_string());
-            let folder = folder.unwrap_or_default();
+            let folder = self.recovery.discard().map_or(String::new(), |dir| dir.display().to_string());
             let text = format!("Not restored. The copy stays in {folder} until you save the scene or close the app.");
             return self.status(text, true);
         }
-        let first = match answer {
-            Recover::Earlier => found.iter().position(|kept| !kept.stopped).unwrap_or(0),
-            _ => 0,
-        };
-        // A copy that cannot be read is passed over for the one before it.
-        let mut unread = 0;
-        for kept in &found[first.min(found.len())..] {
-            match self.restore(kept) {
-                Ok(objects) => {
-                    let when = recovery::when_words(&kept.about.when, &io::time_stamp());
-                    let when = when.map_or(String::new(), |when| format!(" kept {when}"));
-                    let note = if unread > 0 { " A newer copy could not be read." } else { "" };
-                    let objects = if objects == 1 { "1 object".to_owned() } else { format!("{objects} objects") };
-                    let text = format!(
-                        "Restored the copy{when} ({objects}).{note} \
-                         It is not saved yet: Save (Ctrl + S) asks where to keep it."
-                    );
-                    return self.status(text, unread == 0);
-                }
-                Err(e) => {
-                    log::error!("{e}");
-                    unread += 1;
-                }
+        let copies = self.recovery.to_restore(answer == Recover::Earlier);
+        match restore_first(&copies, |kept| self.restore(kept)) {
+            Restoring::Done { kept, objects, passed_over } => {
+                let when = recovery::when_words(&kept.about.when, &io::time_stamp());
+                let when = when.map_or(String::new(), |when| format!(" kept {when}"));
+                let note = if passed_over > 0 { " A newer copy could not be read." } else { "" };
+                let objects = if objects == 1 { "1 object".to_owned() } else { format!("{objects} objects") };
+                let text = format!(
+                    "Restored the copy{when} ({objects}).{note} It is not saved yet: \
+                     Save (Ctrl + S) asks where to keep it, and the copy stays until it is saved."
+                );
+                self.status(text, passed_over == 0);
+            }
+            // Nothing was restored, so nothing is settled: the copies stay,
+            // and the next start asks again.
+            Restoring::NoneRead => {
+                self.status("The recovery copy could not be read, and stays where it is. The scene is as it was.", false);
+            }
+            Restoring::Broke => {
+                let text = "A fault stopped the recovery copy part of the way in, so the scene on screen may be \
+                            incomplete. It has no file now: Save (Ctrl + S) asks where to keep it, and writes over \
+                            nothing of yours. The copy itself is untouched, and the next start offers it again.";
+                recovery::log(text);
+                self.status(text, false);
             }
         }
-        // Nothing was restored, so nothing is settled: the copies stay, and
-        // the next start asks again.
-        self.recovery.answered = false;
-        self.status("The recovery copy could not be read. The scene is as it was.", false);
     }
 
     /// Puts a recovery copy in place of the scene, as one undo step. The
@@ -211,19 +384,66 @@ impl Running {
     /// it should go and closing asks first: the copy is never written over
     /// the user's own file without their say. Undo of it gives the scene
     /// from before its own file back, as Undo of an Open does.
-    fn restore(&mut self, kept: &Kept) -> io::Result<usize> {
-        // A copy that brings a fault of its own with it must not take the
-        // app down: the next start would offer it again and fall the same way.
-        let opened = catch_unwind(AssertUnwindSafe(|| self.replace_scene(&kept.file, false)));
-        let (objects, _) = opened.unwrap_or_else(|_| Err(format!("{} could not be opened.", kept.file.display())))?;
-        self.recovery.restored = true;
-        self.recovery.document = kept.about.document.clone();
-        Ok(objects)
+    ///
+    /// A copy that brings a fault of its own with it must not take the app
+    /// down: the next start would offer it again and fall the same way. So
+    /// a panic is caught here, in two steps that are told apart. Reading
+    /// the copy touches nothing, and a fault there is a copy that cannot be
+    /// read. A fault after that has left the scene part the old one and
+    /// part the copy, still under the old scene's file name, and that is not
+    /// passed off as either (`restore_broke`).
+    fn restore(&mut self, kept: &Kept) -> Tried {
+        let saved = match catch_unwind(AssertUnwindSafe(|| io::load_scene(&kept.file))) {
+            Ok(Ok(saved)) => saved,
+            Ok(Err(e)) => return Tried::Unreadable(e),
+            Err(_) => return Tried::Unreadable(format!("{} could not be opened.", kept.file.display())),
+        };
+        let note = Some(State::note(kept));
+        let placed = catch_unwind(AssertUnwindSafe(|| self.put_in_place(saved, None, note)));
+        match placed {
+            Ok((objects, _)) => {
+                let mark = self.history_mark();
+                self.recovery.restored_at(mark);
+                Tried::Restored(objects)
+            }
+            Err(_) => {
+                self.restore_broke();
+                Tried::Broke
+            }
+        }
     }
 
-    /// The file a restored scene was a copy of, for the Save dialog to start from.
+    /// A fault struck while a copy was taking the scene's place. Whatever is
+    /// on screen now is no file's scene: it gets no file and counts as
+    /// unsaved, so that Save cannot write it over the file the scene before
+    /// it came from, and closing asks first. It is nobody's restored copy
+    /// either, so saving it retires nothing.
+    fn restore_broke(&mut self) {
+        self.file().broke();
+        self.recovery.held = None;
+        self.doc.mesh_replaced = true;
+        // What the frame draws from, brought up to whatever the scene now
+        // holds. If that faults as well there is nothing more to be done here.
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            self.scene_changed();
+            self.sync_view();
+        }));
+        self.redraw = true;
+    }
+
+    /// For a scripted check (`restore-fault`): a fault at the worst moment of
+    /// a restore, with the copy's objects in place of the scene's and the
+    /// scene's file still the one from before.
+    pub(super) fn restore_fault_point(&self) {
+        if self.recovery.script.restore_fault {
+            panic!("a fault made on purpose while a copy was restored ({CHECK})");
+        }
+    }
+
+    /// The file a restored scene was a copy of, for the Save dialog to start
+    /// from. Only while that scene is the one on screen.
     pub(super) fn recovered_document(&self) -> Option<PathBuf> {
-        self.recovery.document.clone()
+        self.recovery.restored.as_ref().and_then(|from| from.document.clone())
     }
 
     // ---- while the app runs: a copy every few minutes
@@ -287,9 +507,7 @@ impl Running {
         };
         self.recovery.store.wrote(&file, &about);
         if !stopped {
-            self.recovery.held = Some(mark);
-            // This run has a copy of its own now.
-            self.forget_answered();
+            self.recovery.copied(mark);
         }
         let took = started.elapsed();
         if self.recovery.script.on {
@@ -302,31 +520,22 @@ impl Running {
         Ok(())
     }
 
-    /// Removes the copies an earlier run left, once the user has answered
-    /// about them and this run no longer needs them.
-    fn forget_answered(&mut self) {
-        if self.recovery.answered {
-            let found = std::mem::take(&mut self.recovery.found);
-            self.recovery.store.remove(&found);
-            (self.recovery.answered, self.recovery.restored) = (false, false);
-        }
-    }
-
     /// The scene has been saved to a file of the user's: its copies are
     /// removed, so a crash after this offers nothing older than that file.
-    pub(super) fn recovery_saved(&mut self) {
-        self.recovery.store.clear();
-        self.recovery.held = None;
-        self.recovery.document = None;
-        self.recovery.schedule.restart();
-        self.forget_answered();
+    /// `restored` is the copy the saved scene had been restored from, if it
+    /// had (`File::written`).
+    pub(super) fn recovery_saved(&mut self, restored: Option<Restored>) {
+        self.recovery.saved(restored);
     }
 
-    /// The app is closing properly (the user said so, with or without
-    /// saving): nothing is left for the next start to ask about.
+    /// The app is closing. If it is closing properly (the user answered the
+    /// question about closing, or there was nothing unsaved to ask about),
+    /// this run's copies go, and those the user said to discard. Closed any
+    /// other way over unsaved work, they stay, and the next start offers
+    /// them.
     pub(super) fn recovery_exit(&mut self) {
-        self.recovery.store.clear();
-        self.forget_answered();
+        let settled = self.quitting() || !self.unsaved();
+        self.recovery.closed(settled);
     }
 
     // ---- stopping on a fault
@@ -455,6 +664,7 @@ impl Running {
                 let file = file.map_or("none".into(), |name| name.to_string_lossy());
                 println!("file: {file}, unsaved {}", self.unsaved());
             }
+            Step::Status => println!("status: {}", self.ui.status.0),
             Step::Kept(what) => {
                 self.kept_change(what);
                 println!("{what}: unsaved {}", self.unsaved());
@@ -514,7 +724,7 @@ fn close(cause: &str, outcome: Outcome) -> ! {
     recovery::log(&words.replace("\n\n", " "));
     // A scripted run has nobody to press OK, unless the check is of the
     // message itself (`message` in the script).
-    let shown = std::env::var(CHECK).is_ok_and(|spec| spec.split(',').any(|part| part.trim() == SHOW_MESSAGE));
+    let shown = check_spec().is_some_and(|spec| spec.split(',').any(|part| part.trim() == SHOW_MESSAGE));
     if prefs::scripted() {
         println!("stopped: {outcome:?}");
         eprintln!("{words}");
@@ -563,6 +773,8 @@ enum Step {
     Redo,
     /// Prints the name of the scene's file and whether anything is unsaved.
     File,
+    /// Prints the status line.
+    Status,
     /// A change that a file keeps and no undo step records, by the key that
     /// makes it (`Running::kept_change`): `mirror` (X), `hide` (H), `show`
     /// (Alt + H) or `local` (/).
@@ -591,18 +803,22 @@ enum Step {
 /// - `answer=restore | earlier | discard | later`: answers the question at start-up;
 /// - `message`: the message the app closes with on a fault is put up, as it
 ///   is for a person, and the run waits for it to be closed;
+/// - `restore-fault`: a fault strikes while the copy is being restored;
 /// - `stroke@30`, `scene@40`, `save@45`, `open@46`, `undo@47`, `redo@48`,
-///   `file@49`, `mirror@50`, `hide@50`, `show@50`, `local@50`, `kept@50`,
+///   `file@49`, `status@49`, `mirror@50`, `hide@50`, `show@50`, `local@50`, `kept@50`,
 ///   `close@50`, `panic@50`, `stroke-panic@50`, `job-panic@50`,
 ///   `graphics-error@50`, `device-lost@50`, `kill@50`, `quit@50`: does that
 ///   in the frame of that number (see [`Step`]).
 ///
 /// Setting it at all (`on` will do) switches recovery on for a scripted run,
-/// which otherwise keeps no copies. It needs `SCULPT_SETTINGS_DIR` to say where.
+/// which otherwise keeps no copies. It needs `SCULPT_SETTINGS_DIR` to say
+/// where, and does nothing at all without it ([`heeded`]).
 #[derive(Default)]
 struct Script {
     on: bool,
     every: Option<Duration>,
+    /// A fault is to strike while a copy is being restored.
+    restore_fault: bool,
     /// The answer to give at start-up; `Some(None)` is Not Now.
     answer: Option<Option<Recover>>,
     steps: Vec<(u32, Step)>,
@@ -614,8 +830,10 @@ struct Script {
 
 impl Script {
     fn from_env() -> Script {
-        let spec = std::env::var(CHECK).ok().filter(|spec| !spec.is_empty());
-        spec.map_or_else(Script::default, |spec| Script::parse(&spec))
+        if check_spec().is_none() && std::env::var_os(CHECK).is_some_and(|spec| !spec.is_empty()) {
+            eprintln!("{CHECK} is not heeded without {OWN_SETTINGS}: it would work on your own copies.");
+        }
+        check_spec().map_or_else(Script::default, |spec| Script::parse(&spec))
     }
 
     fn parse(spec: &str) -> Script {
@@ -624,7 +842,9 @@ impl Script {
         let step_at = |(name, at): (&str, &str)| Some((at.parse().ok()?, step_named(name)?));
         let words = ["on", SHOW_MESSAGE];
         for part in spec.split(',').map(str::trim).filter(|part| !part.is_empty() && !words.contains(part)) {
-            if let Some(seconds) = part.strip_prefix("every=").and_then(seconds) {
+            if part == RESTORE_FAULT {
+                script.restore_fault = true;
+            } else if let Some(seconds) = part.strip_prefix("every=").and_then(seconds) {
                 script.every = Some(Duration::from_secs_f32(seconds.clamp(0.01, 86_400.0)));
             } else if let Some(answer) = part.strip_prefix("answer=").and_then(answer_named) {
                 script.answer = Some(answer);
@@ -664,6 +884,7 @@ fn step_named(name: &str) -> Option<Step> {
         "undo" => Step::Undo,
         "redo" => Step::Redo,
         "file" => Step::File,
+        "status" => Step::Status,
         "mirror" => Step::Kept("mirror"),
         "hide" => Step::Kept("hide"),
         "show" => Step::Kept("show"),
@@ -679,8 +900,59 @@ fn step_named(name: &str) -> Option<Step> {
 }
 
 #[cfg(test)]
+mod rule;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review point 8: the variable alone, in a run with no `--option`, put
+    /// a check to work in the user's own settings folder.
+    #[test]
+    fn a_check_is_not_heeded_without_a_settings_folder_of_its_own() {
+        let spec = || Some("answer=discard,quit@8".to_owned());
+        let folder = |name: &str| Some(OsString::from(name));
+        assert_eq!(heeded(spec(), None), None, "it would discard the copies of real work");
+        assert_eq!(heeded(spec(), folder("")), None, "an empty name is no folder");
+        assert_eq!(heeded(spec(), folder("D:/some/folder")), spec());
+        assert_eq!(heeded(Some(String::new()), folder("D:/some/folder")), None, "nothing asked");
+        assert_eq!(heeded(None, folder("D:/some/folder")), None);
+    }
+
+    #[test]
+    fn a_script_can_ask_for_a_fault_while_a_copy_is_restored() {
+        let script = Script::parse("answer=restore,restore-fault,file@5,status@6");
+        assert!(script.restore_fault && script.steps == [(5, Step::File), (6, Step::Status)]);
+        assert!(!Script::parse("answer=restore").restore_fault);
+    }
+
+    fn copy(name: &str) -> Kept {
+        Kept { file: PathBuf::from("run").join(name), stopped: false, number: 1, about: About::default() }
+    }
+
+    /// Review point 5: a fault part of the way through a copy was taken for
+    /// a copy that could not be read, and the next one was laid over it.
+    #[test]
+    fn after_a_fault_part_of_the_way_through_a_copy_no_other_copy_is_tried() {
+        let copies = [copy("stopped-0003.sclp"), copy("copy-0002.sclp"), copy("copy-0001.sclp")];
+        let mut tried = Vec::new();
+        let came = restore_first(&copies, |kept| {
+            tried.push(kept.file.clone());
+            if tried.len() == 1 { Tried::Unreadable("damaged".into()) } else { Tried::Broke }
+        });
+        assert_eq!(came, Restoring::Broke);
+        assert_eq!(tried, [copies[0].file.clone(), copies[1].file.clone()], "the third is not laid over the wreck");
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_read_is_passed_over_for_the_one_before_it() {
+        let copies = [copy("copy-0003.sclp"), copy("copy-0002.sclp"), copy("copy-0001.sclp")];
+        let unread = |kept: &Kept| Tried::Unreadable(format!("{} is damaged", kept.file.display()));
+        let came = restore_first(&copies, |kept| if kept == &copies[0] { unread(kept) } else { Tried::Restored(4) });
+        assert_eq!(came, Restoring::Done { kept: &copies[1], objects: 4, passed_over: 1 });
+        assert_eq!(restore_first(&copies, unread), Restoring::NoneRead);
+        assert_eq!(restore_first(&[], unread), Restoring::NoneRead, "nothing to try");
+    }
 
     #[test]
     fn a_script_reads_its_interval_its_answer_and_its_steps() {

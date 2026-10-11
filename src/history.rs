@@ -71,6 +71,21 @@ pub struct FileState {
     pub path: Option<std::path::PathBuf>,
     /// Whether that scene is what its file holds.
     pub saved: bool,
+    /// The recovery copy that scene was restored from, if it was and has not
+    /// been saved since.
+    pub restored: Option<Restored>,
+}
+
+/// Where a scene that was restored from a recovery copy came from. It stays
+/// with that scene through Undo and Redo, as its file does: only a save of
+/// that very scene may retire the copies it came from (app/recovery.rs), and
+/// Undo of the restore puts another scene on screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Restored {
+    /// The folder of the run that left the copy.
+    pub run: std::path::PathBuf,
+    /// The file the copy was a copy of, for Save to offer.
+    pub document: Option<std::path::PathBuf>,
 }
 
 struct Step {

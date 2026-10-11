@@ -38,8 +38,10 @@ pub enum Question {
     /// the work was kept. `when` is when ("today at 14:35"), `what` what it
     /// holds; `stopped` says it was made as the app stopped on a fault, and
     /// `earlier` is when the last regular copy before it was made, if there
-    /// is one to offer instead. (See app/recovery.rs.)
-    Recover { when: Option<String>, what: String, stopped: bool, earlier: Option<String> },
+    /// is one to offer instead. `others` is how many other times the app did
+    /// not close properly and left copies: this question is about the latest
+    /// only, and they are asked about at later starts. (See app/recovery.rs.)
+    Recover { when: Option<String>, what: String, stopped: bool, earlier: Option<String>, others: usize },
     /// Export STL for Printing was pressed on an object that is not a closed
     /// surface. `text` is the question, with what is wrong (`printable.rs`).
     ExportNotClosed { object: u64, text: String },
@@ -132,7 +134,9 @@ fn open_words(path: &std::path::Path, unsaved: bool, lost: &[String]) -> String 
 }
 
 /// The question about a copy a crash left behind (`Question::Recover`).
-fn recover_words(when: Option<&str>, what: &str, stopped: bool, earlier: Option<&str>) -> String {
+/// With copies from more than one such time, it says which this is about and
+/// that the answer leaves the rest alone: each is asked about by itself.
+fn recover_words(when: Option<&str>, what: &str, stopped: bool, earlier: Option<&str>, others: usize) -> String {
     let when = when.map_or(String::new(), |when| format!(" {when}"));
     let kept = if stopped {
         let earlier = earlier.map_or(String::new(), |at| format!(" There is also an earlier copy, from {at}."));
@@ -143,9 +147,21 @@ fn recover_words(when: Option<&str>, what: &str, stopped: bool, earlier: Option<
     } else {
         format!("It kept a copy of your work,{when} ({what}).")
     };
+    let ask = "Restore it? Not Now keeps the copy and asks again next time.";
+    let rest = match others {
+        0 => return format!("GolemSculpt did not close properly last time. {kept} {ask}"),
+        1 => "The copy from the other time is kept, and GolemSculpt will ask about it at a later start, \
+              once this one has been saved or discarded."
+            .to_owned(),
+        n => format!(
+            "The copies from the other {n} times are kept, and GolemSculpt will ask about each at a later \
+             start, once this one has been saved or discarded."
+        ),
+    };
     format!(
-        "GolemSculpt did not close properly last time. {kept} Restore it? \
-         Not Now keeps the copy and asks again next time."
+        "GolemSculpt did not close properly {} times, and kept a copy of your work each time. \
+         This question is about the latest. {kept} {ask}\n\nYour answer is about this copy only. {rest}",
+        others + 1
     )
 }
 
@@ -164,8 +180,8 @@ impl Question {
             }
             Question::Exit { unsaved, lost } => exit_words(doc.path.as_deref(), *unsaved, lost),
             Question::Open { path, unsaved, lost } => open_words(path, *unsaved, lost),
-            Question::Recover { when, what, stopped, earlier } => {
-                recover_words(when.as_deref(), what, *stopped, earlier.as_deref())
+            Question::Recover { when, what, stopped, earlier, others } => {
+                recover_words(when.as_deref(), what, *stopped, earlier.as_deref(), *others)
             }
             // It was asked of the selected object, and is about no other.
             Question::ExportNotClosed { object, text } => {
@@ -318,6 +334,7 @@ mod tests {
             what: WHAT.to_owned(),
             stopped,
             earlier: earlier.map(str::to_owned),
+            others: 0,
         }
     }
 
@@ -428,7 +445,7 @@ mod tests {
         assert_eq!(question.default_action(), Some(Action::Recover(Recover::Newest)), "Enter restores");
         let last = question.choices().pop().unwrap();
         assert!(last.action.is_none(), "Esc is Not Now: it neither restores nor discards");
-        let text = recover_words(Some(WHEN), WHAT, false, None);
+        let text = recover_words(Some(WHEN), WHAT, false, None, 0);
         assert!(text.contains("did not close properly") && text.contains("today at 14:35"));
         assert!(text.contains("dragon head.sclp") && !text.contains("incomplete"));
     }
@@ -437,12 +454,34 @@ mod tests {
     fn a_copy_made_as_the_app_stopped_says_so_and_offers_the_one_before_it() {
         let question = recover(true, Some("today at 14:32"));
         assert_eq!(labels(&question), ["Restore It", "Restore the Earlier Copy Instead", "Discard It", "Not Now"]);
-        let text = recover_words(Some(WHEN), WHAT, true, Some("today at 14:32"));
+        let text = recover_words(Some(WHEN), WHAT, true, Some("today at 14:32"), 0);
         assert!(text.contains("as it stopped") && text.contains("may be incomplete"));
         assert!(text.contains("earlier copy, from today at 14:32"));
         // With no regular copy before it there is nothing else to offer.
         let alone = recover(true, None);
         assert_eq!(labels(&alone), ["Restore It", "Discard It", "Not Now"]);
-        assert!(!recover_words(None, WHAT, true, None).contains("earlier copy"));
+        assert!(!recover_words(None, WHAT, true, None, 0).contains("earlier copy"));
+    }
+
+    /// Review point 3: with copies from two runs the question was about the
+    /// newest copy of them all, and said nothing of the rest.
+    #[test]
+    fn with_copies_from_more_than_one_time_the_question_says_which_it_is_about_and_that_the_rest_stay() {
+        let one = recover_words(Some(WHEN), WHAT, false, None, 0);
+        assert!(one.starts_with("GolemSculpt did not close properly last time. It kept a copy of your work, today"));
+        assert!(!one.contains("other time") && !one.contains("this copy only"));
+
+        let two = recover_words(Some(WHEN), WHAT, false, None, 1);
+        assert!(two.starts_with("GolemSculpt did not close properly 2 times, and kept a copy of your work each time."));
+        assert!(two.contains("This question is about the latest. It kept a copy of your work, today at 14:35"));
+        assert!(two.contains("Your answer is about this copy only. The copy from the other time is kept"));
+        assert!(two.ends_with("ask about it at a later start, once this one has been saved or discarded."));
+
+        let four = recover_words(Some(WHEN), WHAT, true, Some("today at 14:32"), 3);
+        assert!(four.contains("did not close properly 4 times") && four.contains("The copies from the other 3 times"));
+        assert!(four.contains("may be incomplete") && four.contains("earlier copy, from today at 14:32"));
+        // The answers are the same: they are about the one copy.
+        let question = Question::Recover { when: None, what: WHAT.into(), stopped: false, earlier: None, others: 2 };
+        assert_eq!(labels(&question), ["Restore It", "Discard It", "Not Now"]);
     }
 }

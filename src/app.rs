@@ -311,8 +311,8 @@ impl ApplicationHandler for App {
     }
 
     /// The loop is closing, whichever way it was asked to: the last chance
-    /// to write the settings. This is the app closing properly, so the
-    /// recovery copies go: the next start has nothing to ask about.
+    /// to write the settings. If this is the app closing properly, this
+    /// run's recovery copies go (`recovery_exit` says when it is).
     fn exiting(&mut self, _: &ActiveEventLoop) {
         self.guarded(|app| {
             if let Some(running) = &mut app.running {
@@ -342,19 +342,31 @@ impl App {
             running.repaint_at = None;
             running.redraw = true;
         }
-        if running.redraw || running.busy() {
+        let frame_asked = running.redraw || running.busy();
+        if frame_asked {
             running.window.request_redraw();
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
         }
-        // Whichever comes first: the next frame that is wanted, or the next
-        // look at whether a copy is due (which needs no frame).
-        let wake = match (running.repaint_at, copy_at) {
-            (Some(frame), Some(copy)) => Some(frame.min(copy)),
-            (frame, copy) => frame.or(copy),
-        };
-        event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+        event_loop.set_control_flow(wait_for(frame_asked, running.repaint_at, copy_at));
     }
+}
+
+/// How the event loop should wait for what comes next. `frame_asked`: a
+/// frame has just been asked for, and drawing it brings the loop round
+/// again. `repaint_at`: when a frame is next wanted otherwise. `copy_at`:
+/// when to look again at whether a recovery copy is due.
+///
+/// The look needs no frame and must not wait for one. A window that is
+/// minimised draws none however often it is asked, so with a frame asked for
+/// and nothing else to wake the loop, the copies would stop for as long as
+/// the window stayed down.
+fn wait_for(frame_asked: bool, repaint_at: Option<Instant>, copy_at: Option<Instant>) -> ControlFlow {
+    // The frame that has been asked for is the repaint, when it comes.
+    let frame = repaint_at.filter(|_| !frame_asked);
+    let wake = match (frame, copy_at) {
+        (Some(frame), Some(copy)) => Some(frame.min(copy)),
+        (frame, copy) => frame.or(copy),
+    };
+    wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil)
 }
 
 impl Running {
@@ -2002,3 +2014,27 @@ fn disable_pen_gestures(window: &Window) {
 
 #[cfg(not(windows))]
 fn disable_pen_gestures(_: &Window) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A review point about the recovery copies: with a frame asked for, the
+    /// loop waited for it alone, and a minimised window never draws one.
+    #[test]
+    fn a_frame_that_never_comes_does_not_hold_up_the_look_at_whether_a_copy_is_due() {
+        let now = Instant::now();
+        let (soon, later) = (now + Duration::from_millis(200), now + Duration::from_secs(180));
+        // A frame has been asked for, as it stays while the window is minimised.
+        assert_eq!(wait_for(true, None, Some(later)), ControlFlow::WaitUntil(later), "the copy is still looked at");
+        assert_eq!(wait_for(true, Some(soon), Some(later)), ControlFlow::WaitUntil(later));
+        assert_eq!(wait_for(true, Some(soon), None), ControlFlow::Wait, "the frame asked for is that repaint");
+        assert_eq!(wait_for(true, None, None), ControlFlow::Wait);
+        // None asked for: whichever comes first.
+        assert_eq!(wait_for(false, Some(soon), Some(later)), ControlFlow::WaitUntil(soon));
+        assert_eq!(wait_for(false, Some(later), Some(soon)), ControlFlow::WaitUntil(soon));
+        assert_eq!(wait_for(false, None, Some(later)), ControlFlow::WaitUntil(later));
+        assert_eq!(wait_for(false, Some(soon), None), ControlFlow::WaitUntil(soon));
+        assert_eq!(wait_for(false, None, None), ControlFlow::Wait, "nothing is wanted: until the next event");
+    }
+}

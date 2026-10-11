@@ -918,15 +918,41 @@ pair; after that they can be moved apart and the joints stay on them.
   made as the app stopped may have caught the last change half done, so the
   question says so and offers the last regular copy as well. Discard It
   leaves the scene alone; Not Now (Esc) keeps the copy and asks again next
-  time.
-  **A clean exit leaves nothing to ask about.** The copies of a run are
-  removed when its scene is saved (the work is in your file now) and when the
-  app is closed in the ordinary way, with or without saving; so are copies
-  from an earlier crash once they have been restored or discarded and this
-  run has saved, written a copy of its own or closed. Until then they stay,
-  and can be opened with Open like any sculpt. A copy is only ever offered if
+  time. If the app failed to close properly more than once (two windows open
+  when the power went, or a second crash before the first was dealt with),
+  each time's copies are kept apart and asked about by themselves, the latest
+  first: the question says so, and an answer touches that one time's copies
+  and no others. The rest are asked about at a later start, once this one has
+  been saved or discarded. Which copy is the newest goes by the names of the
+  folder and the file, not by the dates of the files, so a backup or a copy
+  of the folder does not change what Restore It restores.
+  **A clean exit leaves nothing to ask about**, and nothing else removes a
+  recovery copy. A copy is removed only when one of these holds:
+  (a) the scene it holds has been saved to a file of yours by this run: the
+  run's own copies when its scene is saved, and a crashed run's copies when
+  the scene that was restored from them is saved;
+  (b) you answered Discard It about that crashed run's copies, and this run
+  has since saved or been closed in the ordinary way;
+  (c) the run that made it is closed in the ordinary way, with nothing
+  unsaved or with the question about closing answered (Save and Exit, or
+  Exit Without Saving).
+  (A run also drops its own regular copies beyond the newest three.) So
+  Restore It removes nothing by itself: the copies stay until the restored
+  scene is saved. Restore It followed by Exit Without Saving, or by Undo (Z)
+  and closing, leaves them where they are, and the next start asks again;
+  the earlier copy beside one made on a fault is still there to be had if
+  the newest turns out bad. Undo of the restore puts the scene from before
+  back, and saving that scene, or a file opened over the restored one,
+  settles nothing about the copies either. Not Now removes nothing. Whenever
+  it cannot be told, the copy stays and the app asks again; the cost is being
+  asked once more, and Discard It ends it. Until they are removed the copies
+  can be opened with Open like any sculpt. A copy is only ever offered if
   the run that wrote it is no longer running, so a second copy of the app
-  open at the same time does not offer the first one's work. What is lost in
+  open at the same time does not offer the first one's work; a folder the
+  app cannot tell about is left alone, neither offered nor removed. If
+  restoring a copy itself runs into a fault part of the way, the app says so,
+  the scene on screen has no file (so Save asks where, and writes over
+  nothing) and the copy is kept for the next start. What is lost in
   the worst case (the power going, the program being killed) is the work
   since the last copy, three minutes at most. A copy holds what a save
   holds: a change that is saved without being an undo step (a symmetry, the
@@ -1330,15 +1356,21 @@ without that folder), for the Claude bridge (its key is kept there too, so a
 scripted run without the folder has no bridge) and for recovery: a scripted
 run keeps no recovery copies and offers none, even with a settings folder, unless
 `SCULPT_TEST_RECOVERY` is set, which makes the run a check of recovery
-itself. It is a list separated by commas: `every=0.3` (seconds between
+itself. That variable does nothing at all unless `SCULPT_SETTINGS_DIR` is
+set too: a check answers the question by itself, Discard It included, and
+must never be let loose on the copies in your own `%APPDATA%\Sculpt`. It is
+a list separated by commas: `every=0.3` (seconds between
 copies), `answer=restore | earlier | discard | later` (the answer to the
 question at start-up), `message` (the message the app closes with on a fault
-is really put up, and waits to be closed), and steps to take in a numbered
-frame: `stroke@30`, `scene@40` (prints a fingerprint of the scene),
+is really put up, and waits to be closed), `restore-fault` (a fault strikes
+while the copy is being restored, when its objects have taken the scene's
+place and nothing else has been done),
+and steps to take in a numbered frame: `stroke@30`, `scene@40` (prints a
+fingerprint of the scene),
 `save@45` (to `saved by the check.sclp` in the settings folder), `open@46`
 (opens `to open.sclp` from that folder in place of the scene), `undo@47`,
 `redo@48`, `file@49` (prints the name of the scene's file and whether
-anything is unsaved), `mirror@50`, `hide@50`, `show@50` and `local@50` (the
+anything is unsaved), `status@49` (prints the status line), `mirror@50`, `hide@50`, `show@50` and `local@50` (the
 X, H, Alt + H and / keys: changes that are saved without an undo step),
 `kept@50` (prints a fingerprint of what the file would keep of the objects
 besides their meshes: the same after a restore as before the crash),
@@ -1352,10 +1384,14 @@ A crash and what follows it, end to end:
 export SCULPT_SETTINGS_DIR=D:/some/empty/folder   # every line below needs it
 SCULPT_TEST_RECOVERY=every=0.3,stroke@20,scene@200,stroke@205,scene@210,panic@211 sculpt.exe --size 1600x960 --demo   # two fingerprints, then "stopped: Kept"; log.txt and recovery/ appear in the folder
 SCULPT_TEST_RECOVERY=on sculpt.exe --size 1600x960 --screenshot out.png                     # the question about the copy
-SCULPT_TEST_RECOVERY=answer=restore,scene@5,quit@8 sculpt.exe --size 1600x960               # prints the second fingerprint again; recovery/ is then empty
+SCULPT_TEST_RECOVERY=answer=restore,scene@5,quit@8 sculpt.exe --size 1600x960               # prints the second fingerprint again; restoring and closing without saving removes nothing, so recovery/ still holds the copies
+SCULPT_TEST_RECOVERY=answer=restore,undo@5,close@6,quit@8 sculpt.exe --size 1600x960        # Restore It, one Undo, close: "closes without asking", and the copies are still there
+SCULPT_TEST_RECOVERY=answer=restore,restore-fault,file@5,status@6,quit@8 sculpt.exe --size 1600x960 some.sclp   # a fault while restoring: "file: none, unsaved true", never some.sclp, and a status line that says what happened
+SCULPT_TEST_RECOVERY=answer=restore,scene@5,save@6,quit@8 sculpt.exe --size 1600x960        # saving the restored scene is what retires the copies: recovery/ is then empty
 SCULPT_TEST_RECOVERY=every=0.3,mirror@20,kept@26,kill@200 sculpt.exe --size 1600x960        # a change that is no undo step still gets a copy ("copy copy-0001.sclp ...")
 SCULPT_TEST_RECOVERY=answer=restore,kept@5,quit@8 sculpt.exe --size 1600x960                # and comes back with it: the same "kept" line
 cargo test --release timing_of_a_recovery_copy -- --ignored --nocapture                     # what a copy costs at 1M / 4M / 12M triangles
+cargo test --release recovery::rule -- --nocapture                                          # when a copy may be removed, walked through random runs that crash, close and save
 ```
 
 The release build unwinds on a panic (`panic = "unwind"` in `Cargo.toml`)

@@ -12,7 +12,7 @@ use super::File;
 use crate::app::files::Mark;
 use crate::app::install;
 use crate::app::tools::Tools;
-use crate::history::History;
+use crate::history::{History, Restored};
 use crate::io;
 use crate::mesh::Mesh;
 use crate::mesh::primitives::{self, Primitive};
@@ -27,6 +27,8 @@ struct Desk {
     tools: Tools,
     path: Option<PathBuf>,
     clean: Option<Mark>,
+    /// The recovery copy the scene on screen was restored from (`recovery::State::restored`).
+    restored: Option<Restored>,
     folder: PathBuf,
 }
 
@@ -70,7 +72,8 @@ impl Desk {
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).expect("a folder for the test");
         let (scene, mesh, history) = (Scene::new("start"), ball(), History::default());
-        let mut desk = Desk { scene, mesh, history, tools: Tools::default(), path: None, clean: None, folder };
+        let tools = Tools::default();
+        let mut desk = Desk { scene, mesh, history, tools, path: None, clean: None, restored: None, folder };
         // As `Running::mark_saved` at start-up.
         desk.clean = Some(desk.mark());
         desk
@@ -123,7 +126,7 @@ impl Desk {
     }
 
     fn file(&mut self) -> File<'_> {
-        File { path: &mut self.path, clean: &mut self.clean, history: &mut self.history }
+        File { path: &mut self.path, clean: &mut self.clean, restored: &mut self.restored, history: &mut self.history }
     }
 
     fn unsaved(&mut self) -> bool {
@@ -155,7 +158,7 @@ impl Desk {
         self.history.push_scene(before);
     }
 
-    /// As `Running::replace_scene`.
+    /// As `Running::put_in_place`: an Open (`document`), or a recovery copy restored.
     fn replace(&mut self, path: &Path, document: bool) {
         let saved = io::load_scene(path).expect("the file reads");
         let now = self.mark();
@@ -167,7 +170,8 @@ impl Desk {
         // As `Running::apply_details`: each object's symmetry comes with it.
         self.scene.restore_symmetry(&details);
         let now = self.mark();
-        self.file().became(document.then(|| path.to_owned()), now);
+        let restored = (!document).then(|| Restored { run: path.parent().unwrap().to_owned(), document: None });
+        self.file().became(document.then(|| path.to_owned()), restored, now);
     }
 
     /// Open, in place of the scene.
@@ -378,6 +382,56 @@ fn a_restored_recovery_copy_has_no_file_and_undo_gives_the_scene_before_it_its_f
     desk.redo();
     assert_eq!(desk.all(), all("copy", None, true));
     assert_eq!(held(&copy), "copy");
+}
+
+/// A review point about restoring: a fault after the copy had begun to take
+/// the scene's place left it under the name of the file the app was started
+/// with, and Ctrl + S wrote it over that file unasked.
+#[test]
+fn a_restore_that_broke_off_half_way_leaves_a_scene_with_no_file_that_counts_as_unsaved() {
+    for half in [false, true] {
+        let mut desk = Desk::with_open(if half { "broke_early" } else { "broke_late" }, "first");
+        let copy = desk.file_of("copy");
+        if half {
+            // The fault struck with the objects changed and nothing else done.
+            desk.scene.objects[0].name = "half a copy".into();
+        } else {
+            // Or with everything done, in what follows.
+            desk.restore(&copy);
+            assert!(desk.restored.is_some());
+        }
+        desk.file().broke();
+        assert_eq!(desk.stands(), (None, true), "no file, and unsaved, so closing asks");
+        assert_eq!(desk.save(), None, "Save has no file to write to: it asks where");
+        assert_eq!(held(&desk.at("first")), "first", "the file the scene before it came from is as it was");
+        assert_eq!(desk.restored, None, "and it is nobody's restored copy: saving it retires none");
+    }
+}
+
+/// A scene restored from a recovery copy carries where it came from, and
+/// Undo and Redo move that with the scene, as they move its file.
+#[test]
+fn where_a_scene_was_restored_from_crosses_undo_and_redo_with_it_and_a_save_takes_it() {
+    let mut desk = Desk::with_open("restored_from", "first");
+    let (copy, second) = (desk.file_of("copy"), desk.file_of("second"));
+    let from = Some(Restored { run: desk.folder.clone(), document: None });
+    desk.restore(&copy);
+    assert_eq!(desk.restored, from);
+    desk.undo();
+    assert_eq!((desk.shown(), &desk.restored), ("first", &None), "the scene from before is not the restored copy");
+    let now = desk.mark();
+    let path = desk.at("first");
+    assert_eq!(desk.file().written(&path, now), None, "saving it is not a save of the restored scene");
+    desk.redo();
+    assert_eq!((desk.shown(), &desk.restored), ("copy", &from));
+    // An Open over the restored scene puts it aside, note and all.
+    desk.open(&second);
+    assert_eq!(desk.restored, None);
+    desk.undo();
+    assert_eq!(desk.restored, from);
+    let (now, kept) = (desk.mark(), desk.at("kept"));
+    assert_eq!(desk.file().written(&kept, now), from, "the save of that scene gives the note up");
+    assert_eq!(desk.restored, None, "once: the copies it names are retired by that save");
 }
 
 #[test]
