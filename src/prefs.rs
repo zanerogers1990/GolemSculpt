@@ -53,8 +53,18 @@ impl Home {
         Home { dir: user_dir(), writable: true }
     }
 
+    /// Where the app as a person starts it keeps its settings, whatever kind
+    /// of run is asking: the folder `SCULPT_SETTINGS_DIR` names, else the
+    /// user's own. Claude's server (`sculpt.exe --mcp`) looks here for the
+    /// running app's bridge key (`bridge_guard.rs`); it is itself started
+    /// with an `--option`, so [`Home::for_run`] would send it nowhere.
+    pub fn of_the_app() -> Option<PathBuf> {
+        std::env::var_os("SCULPT_SETTINGS_DIR").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(user_dir)
+    }
+
     /// The folder itself, for what else is kept beside the settings: the
-    /// recovery copies and the log (`recovery.rs`).
+    /// recovery copies, the log (`recovery.rs`) and the Claude bridge's key
+    /// (`bridge_guard.rs`).
     pub fn folder(&self) -> Option<&Path> {
         self.dir.as_deref()
     }
@@ -110,7 +120,16 @@ impl Home {
 /// Whether this run was started with any `--option`: a scripted one, which
 /// keeps out of the user's own folder (see the top of this file).
 pub fn scripted() -> bool {
-    std::env::args().skip(1).any(|arg| arg.starts_with("--"))
+    std::env::args().skip(1).any(|arg| is_option(&arg))
+}
+
+/// Whether an argument the program was started with is an option. Anything
+/// else is a file to open, and that is all the app does with it. This is the
+/// one place that says which is which: `main.rs` reads its arguments by it,
+/// and the Claude bridge's `launch` counts on a full path never being one
+/// (`mcp::launch_file`).
+pub fn is_option(arg: &str) -> bool {
+    arg.starts_with("--")
 }
 
 /// `%APPDATA%\Sculpt`; elsewhere the usual per-user config folder.

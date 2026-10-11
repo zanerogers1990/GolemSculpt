@@ -7,12 +7,27 @@
 //! code paths the interface uses, so what Claude does is undoable like
 //! anything else.
 //!
+//! Who may connect is `crate::bridge_guard`'s business: every run makes a new
+//! key, leaves it in a file in the settings folder for Claude's server to
+//! read, and runs nothing for a connection that has not shown it as its
+//! first line. A run with no settings folder (a scripted one that was not
+//! given `SCULPT_SETTINGS_DIR`) has nowhere to leave the key, so it has no
+//! bridge. Each connection has a thread of its own, so one that says nothing
+//! holds nobody else up. There is a limit on how many may be waiting to show
+//! the key and another on how many have shown it, kept apart so that no crowd
+//! of the first kind can keep Claude out (`bridge_guard::Door`).
+//!
+//! What the bridge will not do behind the user's back: close the app, or
+//! open a scene in place of the one on screen, while there is unsaved work
+//! (`quit` and `open_file` say so and do nothing, unless told to `discard`),
+//! or touch a path that is not on this computer's own drives.
+//!
 //! Screen positions are fractions of the window: (0, 0) is the top-left
 //! corner and (1, 1) the bottom-right, whatever size a screenshot was sent at.
 
-use std::io::{BufRead, BufReader, Cursor, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::io::Cursor;
+use std::net::{Ipv4Addr, TcpListener};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -21,6 +36,7 @@ use serde_json::{Value, json};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
 use super::{Drag, Running, is_native};
+use crate::bridge_guard::{self as guard, Key};
 use crate::doc::{Action, MaskOp, Options};
 use crate::io;
 use crate::mesh::bvh::Aabb;
@@ -60,6 +76,9 @@ struct Request {
 
 pub struct Bridge {
     requests: Receiver<Request>,
+    /// This run's key in its file. Dropped with the bridge when the app
+    /// closes, which removes the file.
+    _key: guard::Posted,
 }
 
 /// A screenshot waiting for the next frame to be drawn.
@@ -71,10 +90,16 @@ pub struct Capture {
 }
 
 /// Starts listening. `wake` rouses the event loop, which sleeps while nothing
-/// is happening. Returns `None` if the port is taken, which is what happens
-/// when a second copy of the app is opened: the first keeps the bridge.
-pub fn start(wake: EventLoopProxy<()>) -> Option<Bridge> {
+/// is happening. `folder` is this run's settings folder, where the key goes.
+/// Returns `None` if there is no such folder, or if the port is taken, which
+/// is what happens when a second copy of the app is opened: the first keeps
+/// the bridge, and its key file is left alone.
+pub fn start(wake: EventLoopProxy<()>, folder: Option<&Path>) -> Option<Bridge> {
     let port = crate::mcp::port();
+    let Some(folder) = folder else {
+        log::info!("the Claude bridge is off: this run keeps no settings folder to leave its key in");
+        return None;
+    };
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
         Ok(listener) => listener,
         Err(e) => {
@@ -82,48 +107,38 @@ pub fn start(wake: EventLoopProxy<()>) -> Option<Bridge> {
             return None;
         }
     };
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let (tx, wake) = (tx.clone(), wake.clone());
-            std::thread::spawn(move || serve(stream, tx, wake));
+    // The port is ours, so the file is ours to replace: only now is the key
+    // written, and only once it is do connections get an answer.
+    let key = Key::new().map_err(|e| e.to_string());
+    let (posted, key) = match key.and_then(|key| Ok((guard::Posted::post(folder, port, &key)?, key))) {
+        Ok(both) => both,
+        Err(e) => {
+            log::warn!("the Claude bridge is off ({e})");
+            return None;
         }
-    });
-    Some(Bridge { requests: rx })
+    };
+    let (tx, rx) = mpsc::channel();
+    let door = guard::Door::new(guard::MAX_WAITING, guard::MAX_ADMITTED);
+    let run = move |request| answer(request, &tx, &wake);
+    std::thread::spawn(move || guard::listen(listener, key, door, guard::HELLO_WAIT, run));
+    Some(Bridge { requests: rx, _key: posted })
 }
 
-/// One connection: a request per line in, a reply per line out.
-fn serve(stream: TcpStream, requests: Sender<Request>, wake: EventLoopProxy<()>) {
-    let Ok(mut out) = stream.try_clone() else { return };
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { return };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => {
-                let (tx, rx) = mpsc::channel();
-                let request = Request {
-                    tool: message["tool"].as_str().unwrap_or_default().to_owned(),
-                    args: message["args"].clone(),
-                    reply: tx,
-                };
-                if requests.send(request).is_err() || wake.send_event(()).is_err() {
-                    return;
-                }
-                rx.recv_timeout(REPLY_TIMEOUT)
-                    .unwrap_or_else(|_| Reply::from(Err("The app did not answer in time.".into())))
-            }
-            Err(e) => Reply::from(Err(format!("Bad request: {e}"))),
-        };
-        let mut message = json!({ "ok": reply.ok, "text": reply.text });
-        if let Some(png) = reply.image {
-            message["image"] = base64(&png).into();
-        }
-        if writeln!(out, "{message}").is_err() {
-            return;
-        }
+/// Hands one request to the main thread and waits for what it says: the
+/// line to send back. `None` once the app is closing.
+fn answer(request: guard::Request, requests: &Sender<Request>, wake: &EventLoopProxy<()>) -> Option<String> {
+    let (tx, rx) = mpsc::channel();
+    let request = Request { tool: request.tool, args: request.args, reply: tx };
+    if requests.send(request).is_err() || wake.send_event(()).is_err() {
+        return None;
     }
+    let reply =
+        rx.recv_timeout(REPLY_TIMEOUT).unwrap_or_else(|_| Reply::from(Err("The app did not answer in time.".into())));
+    let mut message = json!({ "ok": reply.ok, "text": reply.text });
+    if let Some(png) = reply.image {
+        message["image"] = base64(&png).into();
+    }
+    Some(message.to_string())
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -153,8 +168,12 @@ impl Bridge {
                 // Answered by the next frame, once it has been drawn.
                 "screenshot" => app.request_capture(request),
                 "quit" => {
-                    let _ = request.reply.send(Reply::from(Ok("Sculpt is closing.".into())));
-                    event_loop.exit();
+                    let outcome = app.quit_for_claude(&request.args);
+                    let closing = outcome.is_ok();
+                    let _ = request.reply.send(Reply::from(outcome));
+                    if closing {
+                        event_loop.exit();
+                    }
                 }
                 tool => {
                     let result = app.call(tool, &request.args);
@@ -233,7 +252,77 @@ fn point(v: Vec3) -> [f64; 3] {
     [round(v.x), round(v.y), round(v.z)]
 }
 
+/// What `open_file` says instead of opening a sculpt over unsaved work.
+const REPLACING_UNSAVED: &str = "The scene has unsaved work, and opening this file would put the scene aside. Nothing \
+was opened. Ask the user what to do with the work first. Then either save it (save_file with a .sclp path) and open \
+again, or, if the user says it can go, call open_file again with discard: true.";
+
+/// What `quit` says instead of closing the app in the middle of a stroke.
+const STROKE_UNDER_WAY: &str = "Someone is in the middle of a stroke or drag in the app, so Sculpt was not closed. \
+Try again in a moment.";
+
+/// What a `quit` from Claude comes to.
+#[derive(Debug, PartialEq)]
+enum Leave {
+    Close,
+    /// Save the scene to this file, then close.
+    SaveFirst(PathBuf),
+    /// Stay open, and say this.
+    Stay(String),
+}
+
+/// Decides a `quit`. `mid_stroke` is whether a stroke or drag is under way
+/// in the app, and `file` is where Save would write the scene, if it has
+/// such a file. Work is never dropped on the quiet. A stroke under way is
+/// work that is in no undo step yet and that no flag speaks for, so the app
+/// stays open whatever the call says. With unsaved work it stays open unless
+/// the call says which is wanted, saving or discarding, and saying both is
+/// saying neither.
+fn leave(mid_stroke: bool, unsaved: bool, file: Option<&Path>, save: bool, discard: bool) -> Leave {
+    const ASK: &str = "The scene has unsaved work, so Sculpt was not closed. Ask the user what to do with it first.";
+    if mid_stroke {
+        return Leave::Stay(STROKE_UNDER_WAY.into());
+    }
+    if !unsaved {
+        return Leave::Close;
+    }
+    match (save, discard, file) {
+        (true, true, _) => Leave::Stay(format!("{ASK} Then call quit with save: true or with discard: true, not both.")),
+        (false, true, _) => Leave::Close,
+        (true, false, Some(file)) => Leave::SaveFirst(file.to_owned()),
+        (true, false, None) => Leave::Stay(format!(
+            "{ASK} It has no .sclp file of its own to save to: call save_file with a full path ending in .sclp, \
+             then quit."
+        )),
+        (false, false, Some(file)) => Leave::Stay(format!(
+            "{ASK} Then call quit with save: true to save it to {} and close, or with discard: true to close \
+             without saving.",
+            file.display()
+        )),
+        (false, false, None) => Leave::Stay(format!(
+            "{ASK} Then call save_file with a full path ending in .sclp and quit again, or call quit with \
+             discard: true to close without saving."
+        )),
+    }
+}
+
+/// Decides an `open_file`: whether the file may be opened as things stand,
+/// or what to say instead. `takes_the_scene_s_place` is whether it is a
+/// sculpt, which is opened in place of the scene, and not a model, which is
+/// added to it. The interface asks before a sculpt puts unsaved work aside;
+/// here there is nobody to ask but Claude, which is told to ask the user and
+/// to say `discard` once the user has agreed.
+fn may_open(takes_the_scene_s_place: bool, unsaved: bool, discard: bool) -> Result<(), &'static str> {
+    if takes_the_scene_s_place && unsaved && !discard { Err(REPLACING_UNSAVED) } else { Ok(()) }
+}
+
 impl Running {
+    /// Whether a stroke or a drag is under way in the app. Nothing of
+    /// Claude's is run across one (`get_state` apart, which changes nothing).
+    fn mid_stroke(&self) -> bool {
+        self.doc.sculptor.is_active() || self.input.drag != Drag::None
+    }
+
     fn request_capture(&mut self, request: Request) {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 || self.window.is_minimized() == Some(true) {
@@ -257,7 +346,7 @@ impl Running {
         if tool == "get_state" {
             return Ok(self.state().to_string());
         }
-        if self.doc.sculptor.is_active() || self.input.drag != Drag::None {
+        if self.mid_stroke() {
             return Err("Someone is in the middle of a stroke or drag in the app. Try again in a moment.".into());
         }
         match tool {
@@ -278,6 +367,24 @@ impl Running {
             "save_file" => self.save_file(args),
             "set_options" => self.set_options(args),
             other => Err(format!("Sculpt has no tool called \"{other}\".")),
+        }
+    }
+
+    /// `quit`: closes the app, unless that would lose work. `Ok` means the
+    /// app is to close now. With unsaved work it closes only if told to
+    /// `discard` it, or to `save` it first; saving goes to the scene's own
+    /// file and never puts up a dialog (nobody may be at the screen).
+    fn quit_for_claude(&mut self, args: &Value) -> Result<String, String> {
+        // Save never writes over a sculpt from the Unity app (see `save_action`).
+        let file = self.doc.path.clone().filter(|path| !crate::unity_import::is_unity(path));
+        let (save, discard) = (flag(args, "save").unwrap_or(false), flag(args, "discard").unwrap_or(false));
+        match leave(self.mid_stroke(), self.unsaved(), file.as_deref(), save, discard) {
+            Leave::Close => Ok("Sculpt is closing.".into()),
+            Leave::SaveFirst(path) => {
+                self.save_scene(&path)?;
+                Ok(format!("Saved {}. Sculpt is closing.", path.display()))
+            }
+            Leave::Stay(why) => Err(why),
         }
     }
 
@@ -751,10 +858,17 @@ impl Running {
         self.reported(|app| app.act(Action::DeleteObject(id)))
     }
 
-    /// The `path` argument, which must be absolute: the app's own working
-    /// folder is not one a caller can know.
+    /// The `path` argument, which must be on one of this computer's own
+    /// drives (`bridge_guard::off_limits`; checked first, before anything
+    /// looks at the disk) and absolute: the app's own working folder is not
+    /// one a caller can know. `open_file` and `save_file` are the tools that
+    /// take a path, and both come through here.
     fn path(args: &Value) -> Result<(PathBuf, String), String> {
-        let path = PathBuf::from(text(args, "path").ok_or("A path is needed.")?);
+        let given = text(args, "path").ok_or("A path is needed.")?;
+        if let Some(why) = guard::off_limits(given) {
+            return Err(why.into());
+        }
+        let path = PathBuf::from(given);
         if !path.is_absolute() {
             return Err(format!("{} is not a full path. Give one that starts at the drive.", path.display()));
         }
@@ -771,6 +885,7 @@ impl Running {
             return Err(format!("There is no file at {}.", path.display()));
         }
         let native = is_native(&path);
+        may_open(native, self.unsaved(), flag(args, "discard").unwrap_or(false))?;
         self.reported(|app| app.load(path, native))
     }
 
@@ -818,5 +933,87 @@ impl Running {
             opts.ui_scale = scale.clamp(0.75, 3.0);
         }
         Ok(self.state()["options"].to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILE: &str = "C:\\Models\\head.sclp";
+
+    const EITHER: [bool; 2] = [false, true];
+
+    /// `leave` with no stroke under way.
+    fn leave_idle(unsaved: bool, file: Option<&Path>, save: bool, discard: bool) -> Leave {
+        leave(false, unsaved, file, save, discard)
+    }
+
+    #[test]
+    fn quit_closes_at_once_only_when_nothing_would_be_lost() {
+        for (save, discard) in [(false, false), (true, false), (false, true), (true, true)] {
+            assert_eq!(leave_idle(false, None, save, discard), Leave::Close);
+            assert_eq!(leave_idle(false, Some(Path::new(FILE)), save, discard), Leave::Close);
+        }
+    }
+
+    #[test]
+    fn quit_never_closes_the_app_in_the_middle_of_a_stroke() {
+        // Whatever else is so and whatever the call says: discard speaks for
+        // saved-or-not work, not for a stroke somebody's hand is still on.
+        for unsaved in EITHER {
+            for file in [None, Some(Path::new(FILE))] {
+                for (save, discard) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let decided = leave(true, unsaved, file, save, discard);
+                    assert_eq!(decided, Leave::Stay(STROKE_UNDER_WAY.into()), "{unsaved} {file:?} {save} {discard}");
+                }
+            }
+        }
+        assert!(STROKE_UNDER_WAY.contains("was not closed") && STROKE_UNDER_WAY.contains("Try again"));
+    }
+
+    #[test]
+    fn quit_with_unsaved_work_stays_open_until_told_which() {
+        let file = Path::new(FILE);
+        // Neither flag: refused, with or without a file, and the answer says what to do.
+        for file in [None, Some(file)] {
+            let Leave::Stay(why) = leave_idle(true, file, false, false) else { panic!("closed over unsaved work") };
+            let says = |words: &str| why.contains(words);
+            assert!(says("unsaved work") && says("Ask the user") && says("discard: true"), "{why}");
+        }
+        let Leave::Stay(why) = leave_idle(true, Some(file), false, false) else { unreachable!() };
+        assert!(why.contains("save: true") && why.contains("head.sclp"), "{why}");
+        // Told to discard: closes. Told to save: saves to the scene's own file first.
+        assert_eq!(leave_idle(true, None, false, true), Leave::Close);
+        assert_eq!(leave_idle(true, Some(file), false, true), Leave::Close);
+        assert_eq!(leave_idle(true, Some(file), true, false), Leave::SaveFirst(file.to_owned()));
+        // Nowhere to save to: stays open, and says to save_file first.
+        let Leave::Stay(why) = leave_idle(true, None, true, false) else { panic!("closed with nowhere to save") };
+        assert!(why.contains("save_file"), "{why}");
+        // Both at once is not an answer.
+        assert!(matches!(leave_idle(true, Some(file), true, true), Leave::Stay(_)));
+        assert!(matches!(leave_idle(true, None, true, true), Leave::Stay(_)));
+    }
+
+    #[test]
+    fn a_sculpt_is_not_opened_over_unsaved_work_unless_told_to_discard_it() {
+        for sculpt in EITHER {
+            for unsaved in EITHER {
+                for discard in EITHER {
+                    let decided = may_open(sculpt, unsaved, discard);
+                    // Refused in one case of the eight: a sculpt, over unsaved work, with no word to discard it.
+                    let refused = sculpt && unsaved && !discard;
+                    assert_eq!(decided.is_err(), refused, "sculpt {sculpt}, unsaved {unsaved}, discard {discard}");
+                }
+            }
+        }
+        // Spelt out, the cases that matter: work is kept, a model is always added, a saved scene always gives way.
+        assert_eq!(may_open(true, true, false), Err(REPLACING_UNSAVED));
+        assert_eq!(may_open(true, true, true), Ok(()));
+        assert_eq!(may_open(false, true, false), Ok(()));
+        assert_eq!(may_open(true, false, false), Ok(()));
+        // And the refusal tells Claude what to do about it.
+        let says = |words: &str| REPLACING_UNSAVED.contains(words);
+        assert!(says("unsaved work") && says("Nothing was opened") && says("Ask the user") && says("discard: true"));
     }
 }

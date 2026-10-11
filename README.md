@@ -1212,7 +1212,7 @@ sculpt.exe --screenshot out.png --demo-tool lathe:radial  # Create with Radial S
 sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hint (SCULPT_DEMO_CAMERA=turntable | timelapse | recording shows a card or the recording bar instead)
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
 sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a name ending in .mp4): then reads the file back and checks its frames, size, frame rate and length
-sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 frames (SCULPT_DEMO_CAMERA=close closes the app instead) and checks nothing is left
+sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 frames (SCULPT_DEMO_CAMERA=close closes the app instead) and checks nothing of the loop is left; a folder or file of that name that was already there is checked to be exactly as it was
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-open-clean | play
@@ -1235,8 +1235,9 @@ writes the user's settings file, so a visual check never depends on how the
 app was last left and never leaves its brush settings behind. Set
 `SCULPT_SETTINGS_DIR` to a folder to give such a run settings of its own.
 The same goes for the log (it is written beside the settings, so nowhere
-without that folder) and for recovery: a scripted run keeps no recovery
-copies and offers none, even with a settings folder, unless
+without that folder), for the Claude bridge (its key is kept there too, so a
+scripted run without the folder has no bridge) and for recovery: a scripted
+run keeps no recovery copies and offers none, even with a settings folder, unless
 `SCULPT_TEST_RECOVERY` is set, which makes the run a check of recovery
 itself. It is a list separated by commas: `every=0.3` (seconds between
 copies), `answer=restore | earlier | discard | later` (the answer to the
@@ -1290,6 +1291,80 @@ each tool call on to the app. `Sculpt-mcp.bat` starts that server from a copy
 of the program in `target\mcp`, so a connected session never blocks a rebuild.
 A new tool needs its description in `mcp.rs` and its code in `bridge.rs`.
 Set `SCULPT_BRIDGE_PORT` to use another port.
+
+**Who may connect** (`src/bridge_guard.rs`). "This machine only" is not enough
+by itself: a web page open in a browser can make the browser send a request to
+`127.0.0.1`, and the bridge used to run a line of JSON it found in one. So
+every time the app starts it makes a new random key and leaves it in
+`%APPDATA%\Sculpt\claude-bridge-47823.json` (the number is the port; the file
+also holds the app's process number, and is removed when the app closes). The
+server reads that file each time it connects and shows the key as its first
+line. The app runs nothing for a connection until it has seen the key, and
+closes one whose first line is anything else: a wrong key, a web request,
+noise, a line over a kilobyte, or nothing at all for five seconds. After the
+key, the first line that is not a tool call closes the connection too.
+
+Connections that have shown the key and connections that have not are counted
+apart, because any program on the machine can open connections and say
+nothing, and with one count for both enough of them kept Claude out. Up to 64
+sessions can be connected with the key; a 65th is told there is no room. Up
+to 64 connections can be waiting to show a key, and when a 65th arrives the
+one that has waited longest is closed to make room. A real server shows its
+key the moment it connects, so it is never the one that has waited longest. If
+it is ever turned out all the same it tries again by itself, and if it still
+cannot get in it says that it "could not get a turn", not that the builds do
+not match.
+
+In use there is nothing to set up, and several Claude sessions can be
+connected at once:
+
+- Close the app and start it again, and connected sessions pick the new key up
+  by themselves at their next call.
+- **After rebuilding the app, restart any Claude session that was already
+  open** (or reconnect its `sculpt` server with `/mcp`). Its server is the copy
+  made when the session started, and one from before this key existed is
+  turned down with a message saying so. The other way round, a new server on
+  an app that has not been rebuilt and restarted, says to close the app and
+  start it again. Neither waits or hangs.
+- If the app crashes, its key file is left behind. That is harmless: the
+  server goes by whether the port answers, not by the file, and says "Sculpt
+  is not running" as before.
+- A run started with an `--option` keeps no settings folder, so it has
+  nowhere to leave a key and has no bridge. Give it one with
+  `SCULPT_SETTINGS_DIR` (and a port of its own with `SCULPT_BRIDGE_PORT`) to
+  drive a scripted run; set the same two for `sculpt.exe --mcp`.
+
+**What the bridge will not do behind your back.**
+
+- `quit` does not close the app over unsaved work. It answers that there is
+  unsaved work and that the user is to be asked; then `save: true` saves to the
+  scene's own `.sclp` first (never through a dialog: a scene with no file yet
+  has to be saved with `save_file` first), and `discard: true` closes without
+  saving.
+- `open_file` does not open a sculpt in place of a scene with unsaved work
+  unless told `discard: true`, for the same reason: the interface asks, so
+  Claude is told to. Adding an `.obj` or `.stl` needs no such answer.
+- `open_file`, `save_file` and `launch` take only full paths on this
+  computer's own drives. A network share (`\\server\folder`, `//server/folder`,
+  `\\?\UNC\...`), a drive letter that stands for one (`Z:\head.sclp`, with `Z:`
+  mapped to a share), a device (`\\.\COM1`, or any of the names Windows keeps
+  for devices, such as `NUL`, `COM0` to `COM9` and `LPT0` to `LPT9`, as any
+  part of the path and with any ending) and a name with a hidden stream
+  (`x.sclp:other`) are refused before the disk is looked at, since merely
+  asking Windows about a share signs in to that server. So Claude cannot open
+  or save a sculpt on a network drive; the app's own Open and Save still can.
+  (A folder on a local drive that is really a link to a share is not seen for
+  what it is.)
+- `launch` starts the program itself with the file as one argument, never
+  through a command line, so nothing in a file's name can be run. The name
+  must be a full path to a file that is there. (The app is started by way of
+  a copy of the program that exits at once, `sculpt.exe --start-app`, so it
+  is not tied to the Claude session and stays open when the session ends.)
+
+Left as they were: `save_file` replaces a file that is already there (a
+`.sclp` is written whole beside the old one and then swapped in; an export is
+written straight over it), and `delete_object`, like every other change, is
+one undo step.
 
 Matcap images in `assets/matcaps` keep their original credits files. Icons in
 `assets/icons` come from the Unity project's `Design/Icons`.

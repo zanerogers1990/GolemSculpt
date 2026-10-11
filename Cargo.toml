@@ -31,6 +31,14 @@ serde_json = "1"
 wgpu = "30"
 winit = "0.30"
 
+# Starts a program the way the Claude bridge's `launch` starts the app and
+# checks the arguments it was given (tests/launch_args.rs). It is its own
+# stand-in for the app, so it cannot be built on the test harness, which
+# would read a file's name as the name of a test.
+[[test]]
+name = "launch_args"
+harness = false
+
 # Sculpting is unusable without optimisation, so even `cargo run` builds the
 # hot code optimised; only our own crate keeps fast incremental compiles.
 [profile.dev]

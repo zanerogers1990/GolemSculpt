@@ -57,7 +57,7 @@ mod visibility;
 const DOUBLE_CLICK: Duration = Duration::from_millis(350);
 const DOUBLE_CLICK_PX: f32 = 12.0;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct Args {
     /// Render one frame to this PNG and exit.
     pub screenshot: Option<PathBuf>,
@@ -245,7 +245,10 @@ pub fn run(args: Args) -> Result<(), String> {
     let event_loop = EventLoop::new().map_err(|e| format!("Could not start the event loop: {e}"))?;
     // A one-frame screenshot run would only take the port from the real app.
     let scripted = args.screenshot.is_some() || args.records() || recovery::checking();
-    let bridge = if scripted { None } else { bridge::start(event_loop.create_proxy()) };
+    // The bridge's key is kept in the settings folder: a run with none has no bridge.
+    let home = crate::prefs::Home::for_run(false);
+    let folder = home.folder().filter(|_| home.writable());
+    let bridge = if scripted { None } else { bridge::start(event_loop.create_proxy(), folder) };
     let mut app = App { args, running: None, error: None, bridge };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     app.error.map_or(Ok(()), Err)

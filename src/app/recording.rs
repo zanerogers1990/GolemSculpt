@@ -116,8 +116,19 @@ enum Script {
     /// `path` is a folder for numbered pictures, or a file ending in `.mp4`
     /// for a video. `stop_after` cancels the loop (or, with
     /// `SCULPT_DEMO_CAMERA=close`, closes the app) once that many pictures
-    /// are in, to see that nothing is left behind.
-    Loop { path: PathBuf, size: (u32, u32), frames: u32, fps: u32, stop_after: Option<u32>, started: bool },
+    /// are in, to see that nothing is left behind. `before` is what was at
+    /// `path` when the recording started (see [`names_at`]): the folder or
+    /// file named may be one the user already had, and that is not the
+    /// recording's to remove.
+    Loop {
+        path: PathBuf,
+        size: (u32, u32),
+        frames: u32,
+        fps: u32,
+        stop_after: Option<u32>,
+        started: bool,
+        before: Option<Vec<String>>,
+    },
     /// `frame` is the next step of the scripted session; `since` is when it
     /// began. The steps are paced by the clock (sixty a second), not by the
     /// app's frames, because the timelapse itself runs on real time.
@@ -213,9 +224,30 @@ fn report_video(path: &Path, frames: u32, size: (u32, u32), fps: u32) {
     }
 }
 
-/// A loop that was cancelled, or failed, leaves nothing: lists whatever is
-/// still under its name.
-fn report_leftovers(path: &Path) {
+/// What is at `path`: nothing (`None`), a file (no names), or a folder (the
+/// names in it, in order).
+fn names_at(path: &Path) -> Option<Vec<String>> {
+    if !path.exists() {
+        return None;
+    }
+    let found = std::fs::read_dir(path).into_iter().flatten().flatten();
+    let mut names: Vec<String> = found.map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    Some(names)
+}
+
+/// A loop that was cancelled, or failed, leaves nothing of its own and
+/// takes nothing else with it. `before` is what was at `path` when it
+/// started: if something was, it must be there still, exactly as it was;
+/// if nothing was, this lists whatever is still under the loop's name.
+fn report_leftovers(path: &Path, before: Option<&[String]>) {
+    if let Some(before) = before {
+        let now = names_at(path);
+        let unchanged = now.as_deref() == Some(before) && !capture::partial_name(path).exists();
+        let ok = if unchanged { "ok" } else { "FAILED" };
+        println!("loop check: {} was there before, and is as it was ({now:?}) ... {ok}", path.display());
+        return;
+    }
     let (Some(folder), Some(stem)) = (path.parent(), path.file_stem()) else { return };
     let stem = stem.to_string_lossy().into_owned();
     let found = std::fs::read_dir(folder).into_iter().flatten().flatten();
@@ -270,7 +302,8 @@ impl Running {
             let frames = self.args.loop_frames.unwrap_or(12).max(2);
             let fps = self.args.loop_fps.unwrap_or(30).clamp(1, 120);
             let stop_after = self.args.loop_cancel;
-            self.recording.script = Some(Script::Loop { path: folder, size, frames, fps, stop_after, started: false });
+            let script = Script::Loop { path: folder, size, frames, fps, stop_after, started: false, before: None };
+            self.recording.script = Some(script);
         } else if let Some(path) = self.args.demo_timelapse.clone() {
             self.recording.script = Some(Script::Timelapse { path, frame: 0, since: None });
         }
@@ -847,8 +880,9 @@ impl Running {
     fn script_step(&mut self) {
         let lead_in = self.frames >= SCRIPT_LEAD_IN;
         match &mut self.recording.script {
-            Some(Script::Loop { path, size, frames, fps, started, .. }) if lead_in && !*started => {
+            Some(Script::Loop { path, size, frames, fps, started, before, .. }) if lead_in && !*started => {
                 *started = true;
+                *before = names_at(path);
                 // A file name asks for a video, a folder for pictures.
                 let is_video = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
                 let format = if is_video { LoopFormat::Video } else { LoopFormat::Pictures };
@@ -964,11 +998,11 @@ impl Running {
             None => false,
         };
         if done {
-            if let Some(Script::Loop { path, .. }) = &self.recording.script {
+            if let Some(Script::Loop { path, before, .. }) = &self.recording.script {
                 let table = &self.doc.turntable;
                 if !table.status_ok {
                     eprintln!("loop: {}", table.status);
-                    report_leftovers(path);
+                    report_leftovers(path, before.as_deref());
                 }
             } else if !self.doc.timelapse.status_ok {
                 eprintln!("timelapse: {}", self.doc.timelapse.status);

@@ -4,6 +4,7 @@
 mod app;
 mod bench;
 mod bench_matched;
+mod bridge_guard;
 mod camera;
 mod capture;
 mod doc;
@@ -59,15 +60,54 @@ fn attach_console() {
 #[cfg(not(windows))]
 fn attach_console() {}
 
+/// What a run is for when it is not the window, going by its arguments.
+#[derive(Debug, PartialEq)]
+enum Errand {
+    /// `--start-app`, which must come first: start the app named next, and go.
+    StartApp,
+    /// `--mcp`: the server Claude talks to.
+    Server,
+    /// `--bench`, with what follows it: triangle counts, e.g. `--bench 1000000`.
+    Bench(Vec<usize>),
+    /// `--bench-matched`, with what follows it: icosphere subdivisions.
+    BenchMatched(Vec<usize>),
+    /// `--bench-volume`: remesh and boolean costs, on the source the Unity engine benchmarks use.
+    BenchVolume,
+}
+
+/// The errand the arguments ask for, if any; `None` is the app itself, with
+/// its window. An errand is always asked for by an option, one of its own
+/// arguments spelt exactly, so a file handed to the app to open is never
+/// taken for one whatever it is called (see `mcp::launch_file`).
+fn errand(args: &[String]) -> Option<Errand> {
+    let after = |option: &str| args.iter().position(|a| a == option).map(|i| &args[i + 1..]);
+    let numbers = |rest: &[String]| rest.iter().filter_map(|a| a.parse().ok()).collect::<Vec<usize>>();
+    if args.first().is_some_and(|a| a == mcp::START_APP) {
+        Some(Errand::StartApp)
+    } else if after("--mcp").is_some() {
+        Some(Errand::Server)
+    } else if let Some(rest) = after("--bench") {
+        Some(Errand::Bench(numbers(rest)))
+    } else if let Some(rest) = after("--bench-matched") {
+        Some(Errand::BenchMatched(numbers(rest)))
+    } else {
+        after("--bench-volume").map(|_| Errand::BenchVolume)
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--mcp") {
-        // The server Claude talks to. It owns stdin and stdout, so this comes
-        // before anything that could touch a console. `--app` names the
-        // program its launch tool starts.
-        let app = args.iter().position(|a| a == "--app").and_then(|i| args.get(i + 1)).map(PathBuf::from);
-        mcp::run(app);
-        return;
+    let errand = errand(&args);
+    match errand {
+        Some(Errand::StartApp) => return mcp::start_and_leave(&args[1..]),
+        Some(Errand::Server) => {
+            // It owns stdin and stdout, so this comes before anything that
+            // could touch a console. `--app` names the program its launch
+            // tool starts.
+            let app = args.iter().position(|a| a == "--app").and_then(|i| args.get(i + 1)).map(PathBuf::from);
+            return mcp::run(app);
+        }
+        _ => {}
     }
     if !args.is_empty() {
         attach_console();
@@ -78,30 +118,30 @@ fn main() {
     recovery::start_log(home.folder().filter(|_| home.writable()));
     recovery::Logger::install();
 
-    if let Some(i) = args.iter().position(|a| a == "--bench") {
-        // Optional triangle counts after the flag, e.g. `--bench 1000000`.
-        let mut sizes: Vec<usize> = args[i + 1..].iter().filter_map(|a| a.parse().ok()).collect();
-        if sizes.is_empty() {
-            sizes = vec![200_000, 1_000_000, 4_000_000];
-        }
-        bench::run(&sizes);
-        return;
-    }
-    if let Some(i) = args.iter().position(|a| a == "--bench-matched") {
-        // Optional icosphere subdivisions after the flag: 7 (327k tris) and 8 (1.3M) by default.
-        let mut subdivisions: Vec<usize> = args[i + 1..].iter().filter_map(|a| a.parse().ok()).collect();
-        if subdivisions.is_empty() {
-            subdivisions = vec![7, 8];
-        }
-        bench_matched::run(&subdivisions);
-        return;
-    }
-    if args.iter().any(|a| a == "--bench-volume") {
-        // Remesh and boolean costs, on the source the Unity engine benchmarks use.
-        bench_matched::run_volume();
-        return;
+    let or = |given: Vec<usize>, usual: &[usize]| if given.is_empty() { usual.to_vec() } else { given };
+    match errand {
+        Some(Errand::Bench(sizes)) => return bench::run(&or(sizes, &[200_000, 1_000_000, 4_000_000])),
+        // 7 subdivisions (327k triangles) and 8 (1.3M) unless told otherwise.
+        Some(Errand::BenchMatched(subdivisions)) => return bench_matched::run(&or(subdivisions, &[7, 8])),
+        Some(Errand::BenchVolume) => return bench_matched::run_volume(),
+        _ => {}
     }
 
+    if let Err(e) = app::run(window_options(&args)) {
+        eprintln!("{e}");
+        recovery::log(&format!("The app could not start: {e}"));
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("GolemSculpt")
+            .set_description(e)
+            .show();
+        std::process::exit(1);
+    }
+}
+
+/// What the arguments ask of the app and its window. An argument that is not
+/// an option (`prefs::is_option`) is the file to open.
+fn window_options(args: &[String]) -> app::Args {
     let mut opts = app::Args::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -157,19 +197,9 @@ fn main() {
             "--test-keep-pointer" => opts.keep_pointer = true,
             "--remesh" => opts.remesh = it.next().and_then(|s| s.parse().ok()),
             "--quad-remesh" => opts.quad_remesh = it.next().and_then(|s| s.parse().ok()),
-            other if !other.starts_with("--") => opts.open = Some(PathBuf::from(other)),
+            other if !prefs::is_option(other) => opts.open = Some(PathBuf::from(other)),
             other => eprintln!("unknown option {other}"),
         }
     }
-
-    if let Err(e) = app::run(opts) {
-        eprintln!("{e}");
-        recovery::log(&format!("The app could not start: {e}"));
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("GolemSculpt")
-            .set_description(e)
-            .show();
-        std::process::exit(1);
-    }
+    opts
 }

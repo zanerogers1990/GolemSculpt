@@ -279,16 +279,27 @@ struct Shared {
     written: AtomicU32,
     cancelled: AtomicBool,
     error: Mutex<Option<String>>,
+    /// The picture files this recording has started to write, whole or not:
+    /// what [`LoopWriter::discard`] removes, and all it removes.
+    files: Mutex<Vec<PathBuf>>,
 }
 
-/// Writes a loop's pictures into a folder of their own, compressing them on
-/// the worker threads so the window keeps drawing meanwhile.
+/// Writes a loop's pictures into a folder, compressing them on the worker
+/// threads so the window keeps drawing meanwhile.
+///
+/// The Turntable card gives every loop a new folder of its own. A scripted
+/// run (`--record-loop <folder>`) names the folder itself, and that may be
+/// one with other things in it: so the writer keeps track of what is its own
+/// (the pictures it wrote, and the folder only if it made it) and never
+/// removes anything else.
 ///
 /// Unlike a timelapse, a loop cannot drop a frame: with one missing it would
 /// not close. So when the workers fall behind, [`LoopWriter::ready`] says no
 /// and the recording waits a frame, with the window still answering.
 pub struct LoopWriter {
     folder: PathBuf,
+    /// The folder was not there before this recording.
+    made_folder: bool,
     total: u32,
     issued: u32,
     limit: usize,
@@ -296,8 +307,10 @@ pub struct LoopWriter {
 }
 
 impl LoopWriter {
-    /// Makes `folder` and gets ready for `total` pictures of `size`.
+    /// Makes `folder` if it is not there and gets ready for `total` pictures
+    /// of `size`.
     pub fn create(folder: PathBuf, total: u32, size: (u32, u32)) -> Result<LoopWriter, String> {
+        let made_folder = !folder.exists();
         std::fs::create_dir_all(&folder).map_err(|e| format!("Could not make {}: {e}", folder.display()))?;
         // Pictures waiting for a worker are whole and uncompressed (33 MB
         // each at 4K), so how many may wait is set by memory.
@@ -308,8 +321,9 @@ impl LoopWriter {
             written: AtomicU32::new(0),
             cancelled: AtomicBool::new(false),
             error: Mutex::new(None),
+            files: Mutex::new(Vec::new()),
         };
-        Ok(LoopWriter { folder, total, issued: 0, limit, shared: Arc::new(shared) })
+        Ok(LoopWriter { folder, made_folder, total, issued: 0, limit, shared: Arc::new(shared) })
     }
 
     pub fn folder(&self) -> &Path {
@@ -358,6 +372,11 @@ impl LoopWriter {
         shared.in_flight.fetch_add(1, Ordering::AcqRel);
         rayon::spawn(move || {
             if !shared.cancelled.load(Ordering::Acquire) {
+                // Noted before it is written: a picture that fails part-way
+                // is still this recording's to take away.
+                if let Ok(mut files) = shared.files.lock() {
+                    files.push(path.clone());
+                }
                 // The picture is opaque; without the unused channel it is a
                 // quarter less to compress and to store.
                 match image::DynamicImage::ImageRgba8(picture).into_rgb8().save(&path) {
@@ -382,9 +401,19 @@ impl LoopWriter {
     }
 
     /// Removes what was written. Part of a loop is not a loop, and leaving
-    /// it behind invites someone to use it as one.
+    /// it behind invites someone to use it as one. Only what this recording
+    /// wrote goes: its own pictures, and the folder if this recording made
+    /// it and nothing else has been put in it since. A folder that was
+    /// already there keeps everything it had.
     pub fn discard(self) {
-        let _ = std::fs::remove_dir_all(&self.folder);
+        let written = self.shared.files.lock().map(|mut files| std::mem::take(&mut *files)).unwrap_or_default();
+        for picture in written {
+            let _ = std::fs::remove_file(picture);
+        }
+        if self.made_folder {
+            // Refused by the system unless the folder is empty, which is the rule wanted.
+            let _ = std::fs::remove_dir(&self.folder);
+        }
     }
 }
 
@@ -502,5 +531,74 @@ mod tests {
         writer.cancel();
         writer.discard();
         assert!(!folder.exists());
+    }
+
+    /// A folder that was there before the recording, with a file of the
+    /// user's in it and a picture from some earlier loop.
+    fn folder_in_use(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!("sculpt-loop-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("keep.txt"), b"mine").unwrap();
+        std::fs::write(folder.join(frame_name(100)), b"an older picture").unwrap();
+        folder
+    }
+
+    fn names_in(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(folder).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    fn push_pictures(writer: &mut LoopWriter, count: u32) {
+        for _ in 0..count {
+            wait_until(|| writer.ready());
+            writer.push(image::RgbaImage::from_pixel(64, 64, image::Rgba([90, 90, 90, 255])));
+        }
+        wait_until(|| writer.settled());
+    }
+
+    #[test]
+    fn a_cancelled_loop_removes_only_the_pictures_it_wrote() {
+        // `--record-loop <folder>` with a folder the user already keeps things in.
+        let folder = folder_in_use("cancel");
+        let mut writer = LoopWriter::create(folder.clone(), 6, (64, 64)).expect("the folder is there");
+        push_pictures(&mut writer, 3);
+        assert!(folder.join(frame_name(2)).is_file());
+        writer.cancel();
+        writer.discard();
+        assert_eq!(names_in(&folder), ["frame_0100.png", "keep.txt"]);
+        assert_eq!(std::fs::read(folder.join("keep.txt")).unwrap(), b"mine");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_loop_that_fails_removes_only_the_pictures_it_wrote() {
+        let folder = folder_in_use("fail");
+        // Picture 1 cannot be written: a folder has its name.
+        std::fs::create_dir_all(folder.join(frame_name(1))).unwrap();
+        let mut writer = LoopWriter::create(folder.clone(), 4, (64, 64)).expect("the folder is there");
+        push_pictures(&mut writer, 3);
+        assert!(writer.error().is_some_and(|e| e.contains("frame_0001.png")), "{:?}", writer.error());
+        writer.cancel();
+        writer.discard();
+        assert_eq!(names_in(&folder), ["frame_0001.png", "frame_0100.png", "keep.txt"]);
+        assert!(folder.join(frame_name(1)).is_dir(), "what stood in the way was not the loop's to remove");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_folder_the_loop_made_goes_only_if_nothing_else_is_in_it() {
+        let folder = std::env::temp_dir().join(format!("sculpt-loop-made-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let mut writer = LoopWriter::create(folder.clone(), 6, (64, 64)).expect("the folder is made");
+        push_pictures(&mut writer, 2);
+        // Something put there while it recorded.
+        std::fs::write(folder.join("notes.txt"), b"mine").unwrap();
+        writer.cancel();
+        writer.discard();
+        assert_eq!(names_in(&folder), ["notes.txt"]);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

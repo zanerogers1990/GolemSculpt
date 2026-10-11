@@ -210,11 +210,17 @@ impl VideoWriter {
     }
 
     /// Removes the video, finished or not. Part of a loop is not a loop, and
-    /// leaving it behind invites someone to use it as one.
+    /// leaving it behind invites someone to use it as one. The working file
+    /// is always this recording's. The finished name is only once this
+    /// recording has put its video there: until then a file of that name is
+    /// an older one (`--record-loop out.mp4` over a loop made earlier), and
+    /// it stays.
     pub fn discard(mut self) {
         self.stop();
         let _ = std::fs::remove_file(&self.partial);
-        let _ = std::fs::remove_file(&self.path);
+        if self.shared.outcome.load(Ordering::Acquire) == SAVED {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 
     /// Stops the encoder if the video is not finished, and lets go of it.
@@ -536,6 +542,36 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         writer.cancel();
         wait_until(|| writer.settled());
+        writer.discard();
+        assert_eq!(files_in(&folder), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_cancelled_loop_leaves_an_older_video_of_its_name_alone() {
+        // `--record-loop out.mp4` where out.mp4 is a loop recorded earlier.
+        let folder = scratch("older");
+        let path = folder.join("loop.mp4");
+        std::fs::write(&path, b"an older video").unwrap();
+        let mut writer = VideoWriter::create(path.clone(), 40, (320, 180), 30).expect("the encoder starts");
+        push_pictures(&mut writer, 4, (320, 180));
+        writer.cancel();
+        wait_until(|| writer.settled());
+        writer.discard();
+        assert_eq!(files_in(&folder), ["loop.mp4"]);
+        assert_eq!(std::fs::read(&path).unwrap(), b"an older video");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_finished_video_that_is_discarded_goes() {
+        // A cancel that arrives just as the last picture goes in: the file is this run's, and is removed.
+        let folder = scratch("finished");
+        let mut writer = VideoWriter::create(folder.join("loop.mp4"), 4, (320, 180), 30).expect("the encoder starts");
+        push_pictures(&mut writer, 4, (320, 180));
+        wait_until(|| writer.complete());
         writer.discard();
         assert_eq!(files_in(&folder), Vec::<String>::new());
         let _ = std::fs::remove_dir_all(&folder);
