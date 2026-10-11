@@ -3,7 +3,7 @@
 use glam::{Vec2, Vec3};
 use sculpt_geom::LengthUnit;
 use sculpt_toolkit::testing::{Bench, cube};
-use sculpt_toolkit::{Button, Draw, Key, ObjectId, Placement, Scene, Shape};
+use sculpt_toolkit::{Arrival, Button, Draw, Key, Loss, ObjectId, Placement, Scene, Shape, Tool};
 
 use crate::Measure;
 use crate::panel::resize;
@@ -243,4 +243,34 @@ fn sizing_to_the_size_it_already_has_leaves_no_undo_step() {
     bench.call(|cx| resize(cx, cube, 1, 1.0, false)).unwrap();
     assert_eq!(bench.doc.undo_steps(), 0);
     assert!(bench.call(|cx| resize(cx, ObjectId(999), 1, 1.0, false)).is_err());
+}
+
+/// A ruler is a reading, not work: one drag brings it back, and nothing could keep it. The app is not
+/// asked to hold up closing for one (see the top of lib.rs).
+#[test]
+fn rulers_are_not_work_the_app_is_asked_to_warn_about() {
+    let (mut bench, mut tool, _) = bench();
+    for loss in [Loss::Closing, Loss::SceneReplaced] {
+        assert_eq!(tool.scaffold_at_risk(loss), None, "nothing laid");
+    }
+    bench.drag(&mut tool, front(&bench, -0.4, 0.0), front(&bench, 0.4, 0.0));
+    bench.drag(&mut tool, front(&bench, 0.0, -0.4), front(&bench, 0.0, 0.4));
+    assert_eq!(tool.rulers().len(), 2);
+    for loss in [Loss::Closing, Loss::SceneReplaced] {
+        assert_eq!(tool.scaffold_at_risk(loss), None, "two rulers laid");
+    }
+}
+
+/// What Open does to rulers: they stand in the world, so they are still there on the new scene.
+#[test]
+fn a_scene_opened_in_place_of_this_one_leaves_the_rulers_where_they_are() {
+    let (mut bench, mut tool, _) = bench();
+    bench.drag(&mut tool, front(&bench, -0.4, 0.0), front(&bench, 0.4, 0.0));
+    let laid = tool.rulers().get(0).unwrap();
+    let ids = bench.open(vec![("Opened", cube(0.25))]);
+    bench.load_tool(&mut tool, &ids, vec![None], Arrival::Replaced);
+    bench.frame(&mut tool);
+    assert_eq!(tool.rulers().len(), 1);
+    let kept = tool.rulers().get(0).unwrap();
+    assert_eq!((kept.a, kept.b), (laid.a, laid.b));
 }

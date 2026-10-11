@@ -245,6 +245,11 @@ pub struct SSpheres {
     /// still here to be changed. The live skin stands in for it while the
     /// tool is up, and the next Make Skin supersedes it.
     pub skin_object: Option<u64>,
+    /// The spheres as Make Skin last used them: the rig's version and whether
+    /// it was mirrored. While they are still that, and the object it made is
+    /// still in the scene, the shape is in the scene and the spheres are only
+    /// what it was made from (see [`Self::unskinned`]).
+    skinned: Option<(u64, bool)>,
     pub settings: SkinSettings,
     drag: input::Drag,
     /// Press position of a press on empty space, until the pointer moves away.
@@ -282,6 +287,7 @@ impl Default for SSpheres {
             keep_rig: true,
             snap_to_surface: true,
             skin_object: None,
+            skinned: None,
             settings: SkinSettings::default(),
             drag: input::Drag::default(),
             tap: None,
@@ -725,6 +731,36 @@ impl SSpheres {
         Some((shown.stats.triangles as f64 * ratio * ratio) as usize)
     }
 
+    /// How many spheres would be lost for good if the app closed now: the
+    /// spheres on screen, mirrored twins included, when they are work that is
+    /// in no object. `skin_in_scene` says whether the object the last Make
+    /// Skin made is still in the scene.
+    ///
+    /// None for a single sphere, which is one click (New SSphere Rig places
+    /// it by itself). None once Make Skin has used the spheres as they stand,
+    /// for as long as that object is there: the shape is in the scene then,
+    /// and in its file. Changed since, or with the object undone or deleted,
+    /// they are the only place the shape is. Undo back to the skinned shape
+    /// still counts, which errs on the side of asking.
+    pub fn unskinned(&self, skin_in_scene: bool) -> usize {
+        let in_scene = skin_in_scene && self.skinned == Some((self.rig.version(), self.symmetry));
+        if self.rig.alive_count() < 2 || in_scene {
+            return 0;
+        }
+        self.rig.geometry(self.symmetry).0.len()
+    }
+
+    /// The spheres as a question about closing names them, or `None` when
+    /// closing would lose nothing of them (see [`Self::unskinned`]). A scene
+    /// opened in place of this one does not come here: the spheres stand in
+    /// the world and stay, let go of the object they were attached to.
+    pub fn at_risk(&self, skin_in_scene: bool) -> Option<String> {
+        match self.unskinned(skin_in_scene) {
+            0 => None,
+            count => Some(format!("an SSphere rig of {count} spheres (Make Skin first)")),
+        }
+    }
+
     /// Skins the rig at full detail, for turning into a real mesh, and says
     /// where in the scene it goes. Unless the spheres are being kept, they
     /// are cleared as an undo step of their own, so Undo here brings them
@@ -756,6 +792,7 @@ impl SSpheres {
             rotation: self.frame.rotation,
             scale: Vec3::splat(self.frame.scale),
         };
+        self.skinned = Some((self.rig.version(), self.symmetry));
 
         if !self.keep_rig {
             self.begin_edit("Make Skin");

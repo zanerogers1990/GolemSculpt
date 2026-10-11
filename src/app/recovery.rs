@@ -29,6 +29,13 @@
 //! the system running out of memory, none of which gives the program a last
 //! word. Then the newest regular copy, at most a few minutes old, is what
 //! there is.
+//!
+//! What a copy holds is what a save holds, since it is written by the same
+//! code. A change that is saved without being an undo step (a symmetry, the
+//! hide keys, an array's settings) moves the scene's mark like any other, so
+//! it is owed a copy and gets into one. What is in no file is in no copy
+//! either: SSpheres, unmerged tubes, rulers, planned keys and a lathe outline
+//! do not survive a crash (app/unsaved.rs lists them for the questions).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -61,6 +68,14 @@ const TO_OPEN: &str = "to open.sclp";
 /// could be felt, and should not be a mystery.
 const FELT: Duration = Duration::from_millis(200);
 
+/// How often, at most, the scene is looked at to see whether it is owed a
+/// copy. The look reads every object and asks every tool what it would save
+/// (18 microseconds for 200 objects, 400 with twenty arrays of 64 points
+/// among them: `timing_of_the_kept_fingerprint`), and the loop comes by
+/// between every batch of events, hundreds of times a second under a pen. A
+/// copy is due in minutes, so a fifth of a second late costs nothing.
+const LOOK_EVERY: Duration = Duration::from_millis(200);
+
 /// Whether this run is a scripted check of recovery. Such a run opens
 /// without taking the keyboard and leaves the Claude bridge's port alone,
 /// like a screenshot run.
@@ -74,6 +89,10 @@ pub(super) struct State {
     /// The scene's mark when this run's newest copy was written: that copy
     /// holds every step up to it.
     held: Option<Mark>,
+    /// Whether the scene held unsaved work that is in no copy, when that was
+    /// last looked at (`copy_owed`), and when that was.
+    owed: bool,
+    looked: Option<Instant>,
     /// Copies an earlier run left behind, newest first, as found at start-up.
     found: Vec<Kept>,
     /// The user has answered the question about them. They are removed once
@@ -104,6 +123,8 @@ impl State {
             store,
             schedule: Schedule::new(script.every.unwrap_or(recovery::EVERY)),
             held: None,
+            owed: false,
+            looked: None,
             found: Vec::new(),
             answered: false,
             restored: false,
@@ -212,10 +233,20 @@ impl Running {
     /// This is asked from the loop, not from the frame: a window that is
     /// minimised draws no frames, and its work is owed a copy all the same.
     pub(super) fn recovery_tick(&mut self) -> Option<Instant> {
+        let now = Instant::now();
         let busy = self.doc.sculptor.is_active() || self.input.drag != Drag::None;
-        let changed =
-            self.recovery.store.keeps() && self.unsaved() && self.recovery.held != Some(self.history_mark());
-        if self.recovery.schedule.due(Instant::now(), changed, busy) {
+        // While a stroke or a drag is under way no copy is written whatever
+        // the scene holds, and a look taken a moment ago still stands
+        // (`LOOK_EVERY`): the last answer serves until then.
+        let lately = self.recovery.looked.filter(|&at| now.saturating_duration_since(at) < LOOK_EVERY);
+        if !busy && lately.is_none() {
+            let mark = self.history_mark();
+            let (keeps, unsaved) = (self.recovery.store.keeps(), self.unsaved_at(mark));
+            self.recovery.owed = copy_owed(keeps, unsaved, self.recovery.held, mark);
+            self.recovery.looked = Some(now);
+        }
+        let changed = self.recovery.owed;
+        if self.recovery.schedule.due(now, changed, busy) {
             self.recovery.schedule.restart();
             if let Err(e) = self.keep_copy(false) {
                 log::warn!("no recovery copy was written: {e}");
@@ -224,7 +255,13 @@ impl Running {
             }
             self.redraw = true;
         }
-        self.recovery.schedule.wake()
+        // A look that was put off is still owed if nothing else happens: the
+        // change it would have seen may have come with the very last event.
+        let look = lately.map(|at| at + LOOK_EVERY);
+        match (self.recovery.schedule.wake(), look) {
+            (Some(copy), Some(look)) => Some(copy.min(look)),
+            (copy, look) => copy.or(look),
+        }
     }
 
     /// Writes the scene to a new recovery copy, through the code that saves
@@ -418,6 +455,15 @@ impl Running {
                 let file = file.map_or("none".into(), |name| name.to_string_lossy());
                 println!("file: {file}, unsaved {}", self.unsaved());
             }
+            Step::Kept(what) => {
+                self.kept_change(what);
+                println!("{what}: unsaved {}", self.unsaved());
+            }
+            Step::KeptPrint => println!("kept {:016x}", self.history_mark().kept()),
+            Step::Close => match self.question_before_closing() {
+                Some(question) => println!("close: asks {question:?}"),
+                None => println!("close: closes without asking"),
+            },
             Step::GraphicsError => {
                 // A texture no wider than nothing: the device refuses it.
                 let _ = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -483,6 +529,14 @@ fn close(cause: &str, outcome: Outcome) -> ! {
     std::process::exit(101)
 }
 
+/// Whether the scene is owed a recovery copy: copies are being kept, the
+/// scene has unsaved work, and it does not stand where the newest copy was
+/// written (`held`). `now` is the scene's mark, which every change that a
+/// save would keep moves, undo step or not.
+pub(super) fn copy_owed(keeps: bool, unsaved: bool, held: Option<Mark>, now: Mark) -> bool {
+    keeps && unsaved && held != Some(now)
+}
+
 // ---- the script of a scripted check
 
 /// One thing a scripted check does in a frame.
@@ -509,6 +563,16 @@ enum Step {
     Redo,
     /// Prints the name of the scene's file and whether anything is unsaved.
     File,
+    /// A change that a file keeps and no undo step records, by the key that
+    /// makes it (`Running::kept_change`): `mirror` (X), `hide` (H), `show`
+    /// (Alt + H) or `local` (/).
+    Kept(&'static str),
+    /// Prints a fingerprint of what the file would keep that is not an undo
+    /// step (symmetry, visibility, arrays): the same in a scene restored from
+    /// a copy as in the scene the copy was made of.
+    KeptPrint,
+    /// Prints what the close button would ask as things stand.
+    Close,
     /// Asks the graphics device for something it refuses.
     GraphicsError,
     /// Destroys the graphics device, which then reports itself lost.
@@ -528,7 +592,8 @@ enum Step {
 /// - `message`: the message the app closes with on a fault is put up, as it
 ///   is for a person, and the run waits for it to be closed;
 /// - `stroke@30`, `scene@40`, `save@45`, `open@46`, `undo@47`, `redo@48`,
-///   `file@49`, `panic@50`, `stroke-panic@50`, `job-panic@50`,
+///   `file@49`, `mirror@50`, `hide@50`, `show@50`, `local@50`, `kept@50`,
+///   `close@50`, `panic@50`, `stroke-panic@50`, `job-panic@50`,
 ///   `graphics-error@50`, `device-lost@50`, `kill@50`, `quit@50`: does that
 ///   in the frame of that number (see [`Step`]).
 ///
@@ -599,6 +664,12 @@ fn step_named(name: &str) -> Option<Step> {
         "undo" => Step::Undo,
         "redo" => Step::Redo,
         "file" => Step::File,
+        "mirror" => Step::Kept("mirror"),
+        "hide" => Step::Kept("hide"),
+        "show" => Step::Kept("show"),
+        "local" => Step::Kept("local"),
+        "kept" => Step::KeptPrint,
+        "close" => Step::Close,
         "graphics-error" => Step::GraphicsError,
         "device-lost" => Step::DeviceLost,
         "kill" => Step::Kill,
@@ -625,6 +696,14 @@ mod tests {
     fn a_script_can_open_a_file_and_step_through_undo() {
         let script = Script::parse("open@3,undo@4,file@5,redo@6");
         assert_eq!(script.steps, [(3, Step::Open), (4, Step::Undo), (5, Step::File), (6, Step::Redo)]);
+    }
+
+    #[test]
+    fn a_script_can_make_the_changes_that_are_saved_without_an_undo_step() {
+        let script = Script::parse("mirror@3,hide@4,show@5,local@6,close@7,kept@8");
+        let kept = ["mirror", "hide", "show", "local"].map(Step::Kept);
+        let steps = [kept[0], kept[1], kept[2], kept[3], Step::Close, Step::KeptPrint];
+        assert_eq!(script.steps.iter().map(|&(_, step)| step).collect::<Vec<_>>(), steps);
     }
 
     #[test]

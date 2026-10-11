@@ -9,7 +9,9 @@
 //! what it kept for them. The file code (`io::Details`) and the toolkit learn
 //! nothing about what is inside; a tool's id is the name its data goes under.
 
-use sculpt_toolkit::{Arrival, ObjectId};
+use std::hash::{Hash, Hasher};
+
+use sculpt_toolkit::{Arrival, Loss, ObjectId, Saved};
 
 use super::Tools;
 use crate::io::Details;
@@ -45,10 +47,54 @@ impl Tools {
         }
     }
 
+    /// Feeds `hasher` what every tool would keep in a file for the object with
+    /// this id (what `keep_in_file` would write for it), for the fingerprint
+    /// that tells a scene has changed in a way that is not an undo step
+    /// (app/unsaved.rs): an array reshaped, say.
+    pub fn hash_kept(&self, object: u64, hasher: &mut impl Hasher) {
+        for (index, slot) in self.slots.iter().enumerate() {
+            if let Some(saved) = slot.as_ref().and_then(|tool| tool.save_object(ObjectId(object))) {
+                index.hash(hasher);
+                hash_saved(&saved, hasher);
+            }
+        }
+        // Where this object's part ends, so that what one object keeps is
+        // never read as the next one's.
+        usize::MAX.hash(hasher);
+    }
+
+    /// What each tool holds that is in no file and that `loss` would cost
+    /// (`Tool::scaffold_at_risk`), in the order of the tools' buttons.
+    pub fn scaffolds_at_risk(&self, loss: Loss) -> Vec<String> {
+        self.slots.iter().flatten().filter_map(|tool| tool.scaffold_at_risk(loss)).collect()
+    }
+
     /// The rows of the scene as the file just read became its objects: every
     /// object, row by row. For a file that replaced the scene.
     pub fn rows_of(scene: &Scene) -> Vec<(usize, u64)> {
         scene.objects.iter().enumerate().map(|(row, o)| (row, o.id)).collect()
+    }
+}
+
+/// A saved value into a hasher, kind and all: `[1, 2]` and `"12"` are not the same.
+fn hash_saved(saved: &Saved, hasher: &mut impl Hasher) {
+    std::mem::discriminant(saved).hash(hasher);
+    match saved {
+        Saved::Null => {}
+        Saved::Bool(value) => value.hash(hasher),
+        Saved::Number(value) => value.to_bits().hash(hasher),
+        Saved::Text(text) => text.hash(hasher),
+        Saved::List(items) => {
+            items.len().hash(hasher);
+            items.iter().for_each(|item| hash_saved(item, hasher));
+        }
+        Saved::Fields(fields) => {
+            fields.len().hash(hasher);
+            for (name, value) in fields {
+                name.hash(hasher);
+                hash_saved(value, hasher);
+            }
+        }
     }
 }
 
@@ -58,8 +104,6 @@ mod tests {
 
     use glam::{Quat, Vec3};
     use sculpt_array::{ArrayKind, ArraySettings, ArrayState};
-    use sculpt_toolkit::Saved;
-
     use super::*;
     use crate::app::install;
     use crate::io::{self, SavedObject, slot};
@@ -312,6 +356,88 @@ mod tests {
         assert_eq!(now.len(), before + count);
         assert_eq!(now.iter().flatten().count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tool with work in hand that is in no file: what `scaffold_at_risk` is for.
+    struct Scaffolded(&'static str);
+
+    impl sculpt_toolkit::Tool for Scaffolded {
+        fn info(&self) -> sculpt_toolkit::Info {
+            sculpt_toolkit::Info { id: "scaffolded", name: "Scaffolded", icon: "prim_cube", tip: "", hotkey: None }
+        }
+
+        fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
+            // Work that stands in the world: only closing loses it.
+            (loss == Loss::Closing || self.0.contains("on the model")).then(|| self.0.to_owned())
+        }
+    }
+
+    #[test]
+    fn the_host_gathers_what_every_tool_says_it_would_lose_in_the_order_of_their_buttons() {
+        let mut tools = Tools::default();
+        for loss in [Loss::Closing, Loss::SceneReplaced] {
+            assert!(tools.scaffolds_at_risk(loss).is_empty(), "the tools as they start hold nothing");
+        }
+        // Two tools with work, one before and one after tools that have none.
+        let last = tools.slots.len() - 1;
+        tools.slots[1] = Some(Box::new(Scaffolded("3 things on the model")));
+        tools.slots[last] = Some(Box::new(Scaffolded("2 things in the world")));
+        assert_eq!(tools.scaffolds_at_risk(Loss::Closing), ["3 things on the model", "2 things in the world"]);
+        // Each tool says for itself what a new scene costs.
+        assert_eq!(tools.scaffolds_at_risk(Loss::SceneReplaced), ["3 things on the model"]);
+    }
+
+    fn kept_hash(tools: &Tools, scene: &Scene) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for object in &scene.objects {
+            tools.hash_kept(object.id, &mut hasher);
+        }
+        hasher.finish()
+    }
+
+    #[test]
+    fn what_the_tools_would_keep_for_an_object_hashes_the_same_until_it_changes() {
+        let (scene, _) = scene_of(3);
+        let mut tools = Tools::default();
+        let none = kept_hash(&tools, &scene);
+        assert_eq!(kept_hash(&Tools::default(), &scene), none, "nothing kept, the same from one moment to the next");
+        give(&mut tools, &scene, &[(1, array(ArrayKind::Line, 4))]);
+        let with = kept_hash(&tools, &scene);
+        assert_ne!(with, none, "an array is something the file would keep");
+        assert_eq!(kept_hash(&tools, &scene), with);
+        give(&mut tools, &scene, &[(1, array(ArrayKind::Line, 5))]);
+        let more = kept_hash(&tools, &scene);
+        assert_ne!(more, with, "one copy more is another file");
+        // The same array on another object is another file too.
+        let mut other = Tools::default();
+        give(&mut other, &scene, &[(2, array(ArrayKind::Line, 5))]);
+        assert_ne!(kept_hash(&other, &scene), more);
+    }
+
+    #[test]
+    fn a_saved_value_hashes_by_kind_as_well_as_by_content() {
+        let hash = |saved: &Saved| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            hash_saved(saved, &mut hasher);
+            hasher.finish()
+        };
+        let values = [
+            Saved::Null,
+            Saved::Bool(false),
+            Saved::Number(0.0),
+            Saved::Text(String::new()),
+            Saved::List(Vec::new()),
+            Saved::Fields(Vec::new()),
+            Saved::numbers(&[1.0, 2.0]),
+            Saved::List(vec![Saved::numbers(&[1.0]), Saved::numbers(&[2.0])]),
+            Saved::fields([("count", 5.into())]),
+            Saved::fields([("copies", 5.into())]),
+        ];
+        let hashes: Vec<u64> = values.iter().map(hash).collect();
+        for (i, a) in hashes.iter().enumerate() {
+            assert!(hashes[i + 1..].iter().all(|b| a != b), "{:?} hashes as another value does", values[i]);
+        }
+        assert_eq!(hash(&Saved::numbers(&[1.0, 2.0])), hashes[6], "and the same value the same way twice");
     }
 
     #[test]

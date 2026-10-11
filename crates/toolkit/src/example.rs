@@ -6,7 +6,8 @@
 //! history for Z, shows a ghost under the pointer and its studs as instances
 //! of one preview mesh, puts the transform gizmo on the stud placed last,
 //! builds its result on a background job with progress, commits it as one
-//! undo step, and draws its panel with the theme.
+//! undo step, says what closing the app would lose, and draws its panel with
+//! the theme.
 //!
 //! The app does not list it, but `--demo-tool studs` brings it up.
 
@@ -18,8 +19,8 @@ use sculpt_geom::TriMesh;
 
 use crate::theme::{self, ACCENT, ButtonStyle};
 use crate::{
-    Button, Command, Ctx, Draw, Event, GizmoTarget, Info, Job, Key, MeshData, NewObject, Placement, Preview, RadialItem, Style,
-    Tool, testing,
+    Button, Command, Ctx, Draw, Event, GizmoTarget, Info, Job, Key, Loss, MeshData, NewObject, Placement, Preview,
+    RadialItem, Style, Tool, testing,
 };
 
 const STUD: Color32 = Color32::from_rgb(214, 130, 92);
@@ -175,6 +176,17 @@ impl Tool for Studs {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Studs placed and not yet made into an object are in no file, so the
+    /// app asks before closing over them. They stand in the world, not on an
+    /// object, so a scene opened in place of this one leaves them be.
+    fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
+        match (loss, self.studs.len()) {
+            (Loss::SceneReplaced, _) | (_, 0) => None,
+            (Loss::Closing, 1) => Some("1 stud (Make Studs first)".to_owned()),
+            (Loss::Closing, count) => Some(format!("{count} studs (Make Studs first)")),
         }
     }
 
@@ -346,6 +358,28 @@ mod tests {
         // With the tool's own history empty, Z reaches the scene's.
         assert!(bench.undo(&mut tool));
         assert_eq!(bench.doc.objects().len(), 1);
+    }
+
+    #[test]
+    fn studs_not_yet_made_are_what_closing_would_lose() {
+        let (mut bench, mut tool) = bench();
+        assert_eq!(tool.scaffold_at_risk(Loss::Closing), None, "nothing placed, nothing to lose");
+        bench.click(&mut tool, bench.px(Vec3::new(0.1, 0.1, 0.5)), Button::Left);
+        assert_eq!(tool.scaffold_at_risk(Loss::Closing), Some("1 stud (Make Studs first)".to_owned()));
+        bench.click(&mut tool, bench.px(Vec3::new(-0.1, 0.1, 0.5)), Button::Left);
+        assert_eq!(tool.scaffold_at_risk(Loss::Closing), Some("2 studs (Make Studs first)".to_owned()));
+        assert_eq!(tool.scaffold_at_risk(Loss::SceneReplaced), None, "they stand in the world: a new scene keeps them");
+        // Z takes one back; made into an object, they are the scene's and nothing is at risk.
+        assert!(bench.undo(&mut tool));
+        assert_eq!(tool.scaffold_at_risk(Loss::Closing), Some("1 stud (Make Studs first)".to_owned()));
+        assert!(bench.key(&mut tool, Key::Enter));
+        let start = std::time::Instant::now();
+        while bench.doc.objects().len() < 2 {
+            assert!(start.elapsed() < Duration::from_secs(10), "the job never landed");
+            bench.frame(&mut tool);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(tool.scaffold_at_risk(Loss::Closing), None);
     }
 
     #[test]

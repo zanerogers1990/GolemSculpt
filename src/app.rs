@@ -47,6 +47,7 @@ mod symmetry;
 pub(crate) mod tools;
 mod transform;
 mod unity;
+mod unsaved;
 mod visibility;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(350);

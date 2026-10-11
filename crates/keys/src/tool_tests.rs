@@ -8,7 +8,8 @@ use sculpt_geom::TriMesh;
 use sculpt_geom::units::from_millimetres as mm;
 use sculpt_toolkit::testing::{Bench, cube};
 use sculpt_toolkit::{
-    Button, Command, Document, Event, Key, Look, MeshId, ObjectId, Placement, Scene, Shape, Tool, theme,
+    Arrival, Button, Command, Document, Event, Key, Look, Loss, MeshId, ObjectId, Placement, Scene, Shape, Tool,
+    theme,
 };
 
 use crate::cutting::split_by_plane;
@@ -573,4 +574,86 @@ fn the_panel_builds() {
     }
     wait_for_build(&mut bench, &mut tool);
     assert_eq!(tool.info().hotkey, Some(Key::J));
+}
+
+/// What the app asks before it closes, and before a file takes the scene's place.
+fn at_risk(tool: &Keys) -> Option<String> {
+    let closing = tool.scaffold_at_risk(Loss::Closing);
+    let replaced = tool.scaffold_at_risk(Loss::SceneReplaced);
+    assert_eq!(closing, replaced, "the joints stand on the pieces: a new scene costs them too");
+    closing
+}
+
+#[test]
+fn joints_the_tool_planned_by_itself_are_not_work_and_joints_changed_by_hand_are_until_built() {
+    let (mut bench, mut tool, ..) = up_on_a_cut_ball();
+    assert_eq!(tool.key_count(), 2, "the tool planned two joints as it came up");
+    assert_eq!(at_risk(&tool), None, "nobody has touched them: there is nothing to lose");
+
+    // One moved by hand: the plan is work now.
+    let (world, from) = key_at(&bench, &tool, 0);
+    bench.drag(&mut tool, from, bench.px(world + Vec3::new(0.0, 0.05, 0.0)));
+    let two = Some("2 planned keys (Build Keys first)".to_owned());
+    assert_eq!(at_risk(&tool), two);
+    // Put away, the joints are kept for next time: still there to lose.
+    bench.leave(&mut tool);
+    assert_eq!(at_risk(&tool), two);
+    bench.enter(&mut tool);
+    assert_eq!(at_risk(&tool), two);
+
+    // Z takes the move back: the joints are the tool's own again. Shift + Z: the user's.
+    assert!(bench.undo(&mut tool));
+    assert_eq!(at_risk(&tool), None);
+    assert!(bench.redo(&mut tool));
+    assert_eq!(at_risk(&tool), two);
+
+    // One removed: one left to lose.
+    let (_, first) = key_at(&bench, &tool, 0);
+    assert!(bench.press(&mut tool, first, Button::Right));
+    bench.release(&mut tool);
+    let one = Some("1 planned key (Build Keys first)".to_owned());
+    assert_eq!(at_risk(&tool), one);
+
+    // Built: they are geometry of the two pieces, which the file keeps.
+    assert!(bench.key(&mut tool, Key::Enter));
+    wait_for_build(&mut bench, &mut tool);
+    assert_eq!(at_risk(&tool), None, "built keys are part of the pieces");
+    // The scene's Z takes the keys off and hands the joints back, hand edits and all.
+    assert!(bench.undo(&mut tool));
+    bench.frame(&mut tool);
+    assert_eq!(at_risk(&tool), one);
+}
+
+#[test]
+fn a_drag_that_is_cancelled_and_joints_all_removed_leave_nothing_to_lose() {
+    let (mut bench, mut tool, ..) = up_on_a_cut_ball();
+    let (world, from) = key_at(&bench, &tool, 0);
+    // Esc in mid-drag puts the key back: no edit was made.
+    bench.press(&mut tool, from, Button::Left);
+    let to = bench.px(world + Vec3::new(0.0, 0.25, 0.0));
+    bench.drag_to(&mut tool, to);
+    assert!(bench.key(&mut tool, Key::Escape));
+    bench.release(&mut tool);
+    assert_eq!(at_risk(&tool), None);
+    // Every joint cleared by hand: an edit, but with no joint left there is nothing to build or to lose.
+    bench.call(|cx| tool.clear_keys(cx));
+    assert_eq!((tool.key_count(), at_risk(&tool)), (0, None));
+}
+
+/// What Open does to planned joints, which is what `Loss::SceneReplaced` has to tell the truth about.
+#[test]
+fn a_scene_opened_in_place_of_this_one_takes_the_planned_joints() {
+    let (mut bench, mut tool, ..) = up_on_a_cut_ball();
+    let (world, from) = key_at(&bench, &tool, 0);
+    bench.drag(&mut tool, from, bench.px(world + Vec3::new(0.0, 0.05, 0.0)));
+    assert!(at_risk(&tool).is_some());
+    let ids = bench.open(vec![("Opened", cube(0.5))]);
+    bench.load_tool(&mut tool, &ids, vec![None], Arrival::Replaced);
+    bench.frame(&mut tool);
+    assert!(tool.pair.is_none(), "the pieces went, and the joints planned on them");
+    assert_eq!(at_risk(&tool), None);
+    // Undo brings the pieces back, but not the joints.
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    assert!(tool.pair.is_none());
 }

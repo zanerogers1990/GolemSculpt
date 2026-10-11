@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use glam::{Vec2, Vec3};
 use sculpt_geom::TriMesh;
 use sculpt_toolkit::testing::{Bench, cube};
-use sculpt_toolkit::{Button, Draw, Key, ObjectId, Scene, Shape, Symmetry, Tool, theme};
+use sculpt_toolkit::{Button, Draw, Key, Loss, ObjectId, Scene, Shape, Symmetry, Tool, theme};
 
 use super::{Drag, Lathe, wants_draft};
 use crate::{LathePreset, curve};
@@ -1087,4 +1087,80 @@ fn timing_of_a_preview_rebuild_during_a_drag() {
             );
         }
     }
+}
+
+/// What the app asks before it closes.
+fn at_risk(tool: &Lathe) -> Option<String> {
+    assert_eq!(tool.scaffold_at_risk(Loss::SceneReplaced), None, "the profile stands by itself, whatever scene is open");
+    tool.scaffold_at_risk(Loss::Closing)
+}
+
+#[test]
+fn an_untouched_preset_is_not_work_and_an_outline_shaped_by_hand_is_until_created() {
+    assert_eq!(at_risk(&Lathe::new()), None, "a tool that was never brought up has nothing");
+    let (mut bench, mut tool) = bench();
+    assert_eq!(at_risk(&tool), None, "the starting vase is the tool's, not the user's");
+
+    // Moving the lathe, or changing how finely it is turned, shapes nothing.
+    tool.set_segments(48);
+    bench.call(|cx| tool.move_axis_to_view_centre(cx));
+    assert_eq!(at_risk(&tool), None);
+
+    // A handle dragged: the outline is the user's now.
+    drag_handle(&mut bench, &mut tool, 2, Vec2::new(-30.0, 0.0));
+    let shaped = Some("a lathe outline you have shaped (Create Mesh first)".to_owned());
+    assert_eq!(at_risk(&tool), shaped);
+    // Put away, the profile is kept for next time: still there to lose.
+    bench.leave(&mut tool);
+    assert_eq!(at_risk(&tool), shaped);
+    bench.enter(&mut tool);
+
+    // Z puts the vase back as it was loaded; Shift + Z the user's outline.
+    assert!(bench.undo(&mut tool));
+    assert_eq!(at_risk(&tool), None);
+    assert!(bench.redo(&mut tool));
+    assert_eq!(at_risk(&tool), shaped);
+
+    // Created: the outline is an object of the scene, and the profile kept for the next one is a copy.
+    create(&mut bench, &mut tool);
+    assert_eq!(at_risk(&tool), None, "created, the shape is in the scene and in its file");
+    // Z takes the object away again: the profile is the only place the shape is. Shift + Z: in the scene.
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    assert_eq!(at_risk(&tool), shaped);
+    assert!(bench.redo_scene());
+    bench.frame(&mut tool);
+    assert_eq!(at_risk(&tool), None);
+    // Shaped further for a variation: work again.
+    bench.enter(&mut tool);
+    drag_handle(&mut bench, &mut tool, 2, Vec2::new(-10.0, 0.0));
+    assert_eq!(at_risk(&tool), shaped);
+}
+
+#[test]
+fn a_preset_and_the_way_back_from_it_are_not_work_and_an_empty_profile_is_nothing_to_lose() {
+    let (mut bench, mut tool) = bench();
+    bench.call(|cx| tool.apply_preset(cx, LathePreset::Bowl));
+    assert_eq!(at_risk(&tool), None, "a preset as loaded");
+    // Z from the bowl back to the vase nobody touched.
+    assert!(bench.undo(&mut tool));
+    assert_eq!(at_risk(&tool), None);
+    // A drawn outline is work; cleared, there is nothing left of it to lose.
+    drag_handle(&mut bench, &mut tool, 1, Vec2::new(-20.0, 0.0));
+    assert!(at_risk(&tool).is_some());
+    clear(&mut bench, &mut tool);
+    assert_eq!(at_risk(&tool), None);
+}
+
+/// What Open does to the profile, which is what `Loss::SceneReplaced` has to tell the truth about.
+#[test]
+fn a_scene_opened_in_place_of_this_one_leaves_the_shaped_outline_as_it_was() {
+    let (mut bench, mut tool) = bench();
+    drag_handle(&mut bench, &mut tool, 2, Vec2::new(-30.0, 0.0));
+    let outline = tool.profile().points().to_vec();
+    let ids = bench.open(vec![("Opened", cube(0.5))]);
+    bench.load_tool(&mut tool, &ids, vec![None], sculpt_toolkit::Arrival::Replaced);
+    bench.frame(&mut tool);
+    assert_eq!(tool.profile().points(), outline.as_slice());
+    assert!(tool.scaffold_at_risk(Loss::Closing).is_some(), "and closing would still lose it");
 }

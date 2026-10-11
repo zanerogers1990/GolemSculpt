@@ -53,7 +53,7 @@ mod tool;
 pub mod types;
 
 use glam::{Vec2, Vec3};
-use sculpt_toolkit::{Button, Ctx, Draw, Event, Info, Key, RadialChange, Tool};
+use sculpt_toolkit::{Button, Ctx, Draw, Event, Info, Key, Loss, RadialChange, Tool};
 
 pub use field::TubeField;
 pub use live::{Symmetry, TubeState};
@@ -129,6 +129,16 @@ impl Tool for TubeTool {
 
     fn can_undo(&self, redo: bool) -> bool {
         if redo { TubeTool::can_redo(self) } else { TubeTool::can_undo(self) }
+    }
+
+    /// Live tubes are in no file. Every one was drawn by hand, so every one
+    /// counts; see [`TubeTool::unmerged`] for which a new scene costs.
+    fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
+        match self.unmerged(loss) {
+            0 => None,
+            1 => Some("1 unmerged tube (Merge or Keep Separate first)".to_owned()),
+            count => Some(format!("{count} unmerged tubes (Merge or Keep Separate first)")),
+        }
     }
 
     /// A tube drawn out of the selected object and left mid-edit, one point

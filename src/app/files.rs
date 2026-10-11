@@ -3,10 +3,16 @@
 //! the recent files. The formats themselves are in `io.rs`, `prefs.rs` and
 //! `recent.rs`; this is where they meet the running app.
 //!
-//! "Unsaved" means the undo history has moved since the scene was last saved
-//! or opened: something was sculpted, added, moved, undone. Changing only the
-//! look or the view does not count, so trying a matcap and closing the app
-//! asks nothing. (The Unity app has no such flag and asks every time.)
+//! "Unsaved" means the scene's mark has moved since the scene was last saved
+//! or opened. The mark is the undo history (something was sculpted, added,
+//! moved, undone) together with what a file keeps that is not an undo step:
+//! an object's symmetry, what the hide keys show, a live array's settings
+//! (`unsaved.rs`). Changing only the look or the view does not count, so
+//! trying a matcap and closing the app asks nothing. (The Unity app has no
+//! such flag and asks every time.)
+//!
+//! What is in no file at all (SSpheres, unmerged tubes and the like) is
+//! another matter, which the same questions name: also `unsaved.rs`.
 //!
 //! Which file the scene belongs to, and whether it is unsaved, follow the
 //! scene through Undo and Redo of an Open: see `file_undo.rs`.
@@ -15,12 +21,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
-use sculpt_toolkit::Arrival;
+use sculpt_toolkit::{Arrival, Loss};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Fullscreen;
 
 use super::file_undo::File;
 use super::tools::Tools;
+pub(super) use super::unsaved::Mark;
+use super::unsaved::opening_question;
 use super::{Running, import_mesh, install, is_native, stem};
 use crate::camera::{Camera, SavedView};
 use crate::doc::{Action, OpenHow};
@@ -37,10 +45,6 @@ use crate::unity_import;
 /// How often the settings are compared with what is on disk.
 const SETTINGS_CHECK: Duration = Duration::from_secs(1);
 
-/// Where the scene stands in its own history: steps ever recorded, steps to
-/// undo, steps to redo. Two marks that differ mean the scene has changed.
-pub(super) type Mark = (u64, usize, usize);
-
 pub(super) struct State {
     home: Home,
     /// The settings as last written or read, to tell when they have changed.
@@ -56,7 +60,8 @@ impl State {
     pub(super) fn new(screenshot: bool) -> State {
         let home = Home::for_run(screenshot);
         let kept = home.load();
-        State { home, kept, next_check: Instant::now() + SETTINGS_CHECK, clean: Some((0, 0, 0)), quit: false }
+        // `clean` is set once the scene the app starts with is in place (`mark_saved`).
+        State { home, kept, next_check: Instant::now() + SETTINGS_CHECK, clean: None, quit: false }
     }
 }
 
@@ -212,15 +217,16 @@ impl Running {
     /// The scene's mark now. This one function is what "the scene has
     /// changed" means, for the question about unsaved work and for the
     /// recovery copies (app/recovery.rs) alike: a change that should count
-    /// for both has to move it.
+    /// for both has to move it. It is the undo history's own count and, for
+    /// what a file keeps that is not an undo step (a symmetry, the hide keys,
+    /// an array's settings), a fingerprint of that part of the scene.
     pub(super) fn history_mark(&self) -> Mark {
-        let (undo, redo) = self.doc.history.steps();
-        (self.doc.history.edits, undo, redo)
+        self.doc.mark()
     }
 
     /// Start-up: the scene is the one the app starts with, or what the file
     /// named on the command line holds. Nothing in it is unsaved.
-    fn mark_saved(&mut self) {
+    pub(super) fn mark_saved(&mut self) {
         self.files.clean = Some(self.history_mark());
     }
 
@@ -229,11 +235,21 @@ impl Running {
     /// ever recorded, and that count never goes back, so undoing an edit made
     /// after a save still counts as unsaved although the scene is what the
     /// file holds again. Only Undo and then Redo back to the very point of
-    /// the save is clean. Undo or Redo of an Open is another matter: the
+    /// the save is clean. A change that is not an undo step (a symmetry, a
+    /// hide key, an array's settings) is unsaved until it is saved or put
+    /// back as it was. Undo or Redo of an Open is another matter: the
     /// scene it arrives at is unsaved exactly if it differs from what is in
     /// its own file (`File::stepped`).
+    ///
+    /// This is half of "would anything be lost": what is in no file at all
+    /// is `scaffolds_at_risk` (unsaved.rs).
     pub(super) fn unsaved(&self) -> bool {
-        Some(self.history_mark()) != self.files.clean
+        self.unsaved_at(self.history_mark())
+    }
+
+    /// The same, for a caller that has the scene's mark in hand already.
+    pub(super) fn unsaved_at(&self, now: Mark) -> bool {
+        Some(now) != self.files.clean
     }
 
     /// The scene's file, for `file_undo.rs` to work on.
@@ -268,13 +284,15 @@ impl Running {
     }
 
     /// The window's close button, Alt+F4 or Ctrl+Q. Closes at once unless
-    /// there is unsaved work; then it asks.
+    /// there is unsaved work, or work that is in no file (SSpheres, unmerged
+    /// tubes and the like); then it asks, naming what would be lost.
     pub(super) fn close_requested(&mut self, event_loop: &ActiveEventLoop) {
-        if self.args.screenshot.is_some() || !self.unsaved() {
+        let question = self.question_before_closing().filter(|_| self.args.screenshot.is_none());
+        let Some(question) = question else {
             event_loop.exit();
             return;
-        }
-        self.ui.graph.ask(Question::Exit);
+        };
+        self.ui.graph.ask(question);
         self.redraw = true;
     }
 
@@ -631,19 +649,20 @@ impl Running {
 
     /// A `.sclp` has been chosen. In place of the scene or added to it are
     /// both sensible, so that is asked, with a warning if replacing would put
-    /// unsaved work aside. Only the untouched scene the app starts with is
+    /// unsaved work aside, or lose work that stands on the scene's objects
+    /// and is in no file (unmerged tubes, planned keys). Only the untouched
+    /// scene the app starts with, with nothing of that kind on it, is
     /// replaced without a question: there is nothing in it to keep.
-    fn open_chosen(&mut self, path: PathBuf) {
+    pub(super) fn open_chosen(&mut self, path: PathBuf) {
         if !path.is_file() {
             self.ui.recent.remove(&path);
             self.status(format!("{} is no longer there.", file_name(&path)), false);
             return;
         }
-        if self.untouched() {
-            self.open_as(path, OpenHow::Replace);
-        } else {
-            let unsaved = self.unsaved();
-            self.ui.graph.ask(Question::Open { path, unsaved });
+        let lost = self.scaffolds_at_risk(Loss::SceneReplaced);
+        match opening_question(path.clone(), self.untouched(), self.unsaved(), lost) {
+            Some(question) => self.ui.graph.ask(question),
+            None => self.open_as(path, OpenHow::Replace),
         }
     }
 
@@ -784,10 +803,17 @@ impl Running {
     // ---- visual checks
 
     /// Brings up something of this file's to look at with `--screenshot`:
-    /// `recent` fills the File card's recent tiles, `ask-exit`, `ask-open`
-    /// and `ask-open-clean` put up the questions, `play` runs `files_play`
-    /// first, and `open-undo` the check of Undo across an Open
-    /// (app/file_undo/play.rs). Everything it writes goes under the temp folder.
+    /// `recent` fills the File card's recent tiles, `ask-exit` and `ask-open`
+    /// put up the question the close button, or choosing a file, would ask of
+    /// the scene as the other `--demo` options left it (`ask-open-clean`: of
+    /// a scene with nothing to lose), `play` runs `files_play` first, `lost`
+    /// the check of what closing and opening would lose (app/unsaved/play.rs),
+    /// and `open-undo` the check of Undo across an Open
+    /// (app/file_undo/play.rs). `ask-exit:mirror` makes a change first that
+    /// a file keeps and no undo step records: `mirror`, `hide` or `local`
+    /// (`Running::kept_change`); `ask-exit:saved` takes the scene as the
+    /// other options left it for saved, so that only what is in no file is
+    /// left to ask about. Everything it writes goes under the temp folder.
     pub(super) fn files_demo(&mut self, what: &str) {
         let folder = std::env::temp_dir().join("sculpt_files_demo");
         let _ = std::fs::remove_dir_all(&folder);
@@ -805,10 +831,19 @@ impl Running {
             "array" => self.arrays_play(&folder),
             // What Undo and Redo of an Open do to the scene's file (app/file_undo.rs).
             "open-undo" | "open-undo:opened" | "open-undo:undone" => self.open_undo_play(&folder, what),
-            "ask-exit" => self.ui.graph.ask(Question::Exit),
-            "ask-open" | "ask-open-clean" => {
+            // What closing and opening would lose, asked the way a person would (app/unsaved/play.rs).
+            "lost" => self.lost_play(&folder),
+            "ask-open-clean" => {
                 let path = folder.join("dragon head.sclp");
-                self.ui.graph.ask(Question::Open { path, unsaved: what == "ask-open" });
+                self.ui.graph.ask(Question::Open { path, unsaved: false, lost: Vec::new() });
+            }
+            _ if what.starts_with("ask-exit") || what.starts_with("ask-open") => {
+                match what.split_once(':') {
+                    Some((_, "saved")) => self.mark_saved(),
+                    Some((_, change)) => self.kept_change(change),
+                    None => {}
+                }
+                self.demo_question(&folder, what.starts_with("ask-open"));
             }
             _ => {
                 // The Objects card shut, as if it had been left that way, so
@@ -831,6 +866,37 @@ impl Running {
                 self.status("Saved lure v3.sclp", true);
             }
         }
+    }
+
+    /// Puts up the question the close button would ask of the scene as it
+    /// stands, or (`open`) the one choosing a file would: the app's own
+    /// decision, so the picture is of what a person would see. Says so if
+    /// there would be no question at all.
+    fn demo_question(&mut self, folder: &Path, open: bool) {
+        if !open {
+            match self.question_before_closing() {
+                Some(question) => self.ui.graph.ask(question),
+                None => println!("ask-exit: nothing would be lost, so the app would close without asking"),
+            }
+            return;
+        }
+        let path = folder.join("dragon head.sclp");
+        if let Err(e) = self.write_copy(&path) {
+            return log::error!("{e}");
+        }
+        let objects = self.doc.scene.objects.len();
+        self.open_chosen(path);
+        if !self.ui.graph.asking() {
+            let opened = self.doc.scene.objects.len();
+            println!("ask-open: nothing to keep, so the file opened without a question ({objects} -> {opened} objects)");
+        }
+    }
+
+    /// Writes the scene to `path` as a save would, and leaves what the scene
+    /// knows of its own file alone: a file for a scripted check to open.
+    pub(super) fn write_copy(&self, path: &Path) -> io::Result<()> {
+        let (meshes, objects, active) = self.scene_for_file()?;
+        io::save_scene_with(&meshes, &objects, active, &self.details(), path)
     }
 
     /// Works the file code the way a person would, in the real app, and

@@ -23,6 +23,13 @@
 //! L brings the tool up and puts it away. A drag on empty background orbits,
 //! as everywhere in the app; this is the one change from the Unity tool,
 //! where it laid a ruler in mid-air (Ctrl + drag still does).
+//!
+//! Rulers are in no file and go when the app closes, and the tool does not
+//! ask the app to warn about that (it leaves `Tool::scaffold_at_risk` at its
+//! default): a ruler is a reading, one drag brings it back, and there is
+//! nothing the user could do to keep it, so a question before closing would
+//! only be in the way. They stand in the world, not on an object, so a scene
+//! opened in place of this one leaves them where they are.
 
 mod panel;
 pub mod rulers;

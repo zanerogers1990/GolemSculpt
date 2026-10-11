@@ -34,6 +34,7 @@ pub trait Tool {
     fn gizmo(&self) -> Option<GizmoTarget> { None }           // something of yours for the transform gizmo to sit on
     fn save_object(&self, object: ObjectId) -> Option<Saved> { None }   // what the file keeps for an object
     fn load_objects(&mut self, objects: Vec<(ObjectId, Saved)>, arrival: Arrival) {}   // a file's objects came in
+    fn scaffold_at_risk(&self, loss: Loss) -> Option<String> { None }   // work in no file that closing or an Open would lose
     fn demo(&mut self, cx: &mut Ctx, what: &str) {}           // --demo-tool
 }
 ```
@@ -310,10 +311,66 @@ impl Tool for Counter {
   Say what you accept and put it through the same clamping you use for anything
   typed (the Array tool's `ArrayState::sanitized`).
 
+A change to what `save_object` returns is a change to save: the scene counts as unsaved
+until it is saved or the value is put back, with no undo step of the scene's involved.
+
 In tests, `bench.save_tool(&tool)` is what the app would write (one `Option<Saved>` per object,
 in list order), `bench.open(vec![(name, mesh)..])` opens a "file" (new objects in place of
 every object, one undo step, new ids) and `bench.load_tool(&mut tool, &ids, saved, arrival)`
 hands the tool what a file kept for them; `bench.undo_scene()` then takes the open back.
+
+## Work that is in no file
+
+What a tool does not keep with `save_object` is in no file: the user's work on
+a scaffold (tubes drawn, joints moved, an outline shaped) is gone when the app
+closes, saved scene or not. The app asks the user first, and it learns what to
+say from the tools:
+
+```rust
+fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
+    match (loss, self.studs.len()) {
+        (Loss::SceneReplaced, _) | (_, 0) => None,                       // studs stand in the world: an Open keeps them
+        (Loss::Closing, 1) => Some("1 stud (Make Studs first)".to_owned()),
+        (Loss::Closing, count) => Some(format!("{count} studs (Make Studs first)")),
+    }
+}
+```
+
+- **It is asked of every tool, up or put away,** before the app closes
+  (`Loss::Closing`) and before a file is opened in place of the scene
+  (`Loss::SceneReplaced`). Answer from the tool's state as it is.
+- **The answer goes into a sentence.** A short noun phrase, lower case, with a
+  count where there is one, and in brackets what the user can do to keep the
+  work: "3 unmerged tubes (Merge or Keep Separate first)", "a lathe outline you
+  have shaped (Create Mesh first)". The question reads "These are not kept in a
+  file and will be lost: an SSphere rig of 12 spheres (Make Skin first) and 3
+  unmerged tubes (Merge or Keep Separate first)."
+- **`Loss` says what is about to happen.** Closing costs everything that is in
+  no file. A new scene costs only what stands on this scene's objects: answer
+  `None` to `SceneReplaced` for work that stands by itself and is still there
+  afterwards (a profile beside the model, a ruler in the world), and make sure
+  that is true: `bench.open(..)` in a test shows what your tool does when the
+  objects go.
+- **Only work, and only work that can be kept.** `None`, the default, is right
+  for most tools. Do not answer for what the tool laid out by itself and the
+  user never touched (the Lathe's starting vase, joints the Keys tool planned),
+  for what one gesture brings back (Measure says nothing of its rulers: a
+  question with no way to keep them would only be in the way), or once the work
+  has been made part of the scene (merged, built, created) for as long as it is
+  there: if Z takes the object away again, the scaffold is the only place the
+  work is, and it counts again.
+- What `save_object` keeps needs none of this: it is in the file, and the app
+  counts a change to it as a change to save by itself (it compares what
+  `save_object` returns for every object with what it returned at the last
+  save). For that to work `save_object` has to answer the same from one moment
+  to the next while nothing was edited: no value that drifts with the frame.
+
+The tools that answer: Tube (every live tube; for `SceneReplaced` the ones
+drawn on an object), Keys (the planned keys, once one was placed, moved, turned
+or removed by hand, until they are built), Lathe (an outline that is not a
+preset as loaded nor the outline of the object Create made; `Closing` only),
+and the Studs example. SSpheres are not a hosted tool; the app asks them the
+same thing itself.
 
 ## Drawing
 
@@ -565,7 +622,8 @@ impl Tool for Dropper {
   shell; only `draw.copies` of a real object uses the scene material.
 - **A tool's state in the scene's undo history.** A scaffold lives in the tool
   and has its own Z while the tool is up (it can be saved in the file: see
-  "Keeping something in the scene's file"), and the two histories are not
+  "Keeping something in the scene's file"; what is not saved can at least be
+  named before it is lost: see "Work that is in no file"), and the two histories are not
   interleaved: the scene's Z answers when the tool's is empty or the tool is away.
   Scene-wide settings of a tool (as opposed to what it keeps for an object) have no
   place in the file yet.

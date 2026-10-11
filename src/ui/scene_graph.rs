@@ -102,13 +102,19 @@ impl State {
         self.confirm = Some(question);
     }
 
+    /// The question that is up, if one is.
+    pub fn question(&self) -> Option<&Question> {
+        self.confirm.as_ref()
+    }
+
     /// Whether a question is up, waiting for an answer.
     pub fn asking(&self) -> bool {
         self.confirm.is_some()
     }
 
-    /// Takes the question down. A yes (Enter) gives back what its first
-    /// answer sets in motion; a no (Esc) is Cancel.
+    /// Takes the question down. A yes (Enter) gives back what the answer
+    /// Enter stands for sets in motion (`Question::default_action`: the first
+    /// answer, or nothing where Enter is Cancel); a no (Esc) is Cancel.
     pub fn answer(&mut self, yes: bool) -> Option<Action> {
         self.confirm.take().filter(|_| yes).and_then(|question| question.default_action())
     }

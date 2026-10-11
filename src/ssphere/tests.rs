@@ -1264,3 +1264,45 @@ fn the_live_skin_follows_a_gizmo_drag() {
     assert!(generation > drafted && !tool.skin_is_draft());
     assert!(far_right(settled) > reach + 0.2);
 }
+
+/// What closing the app would lose of the spheres (`SSpheres::at_risk`, asked by app/unsaved.rs).
+#[test]
+fn spheres_are_work_until_make_skin_has_used_them_as_they_stand() {
+    let mut tool = SSpheres::default();
+    assert_eq!(tool.at_risk(false), None, "no spheres, nothing to lose");
+    // One sphere is one click (New SSphere Rig places it by itself): not worth a question.
+    tool.rig.add_root(Vec3::new(0.0, 1.0, 0.0), 0.2);
+    assert_eq!(tool.at_risk(false), None);
+
+    // A figure: fourteen spheres built, twenty-four on screen with their mirrored twins.
+    tool.rig = figure();
+    let shown = tool.rig.geometry(tool.symmetry()).0.len();
+    assert!(shown > tool.rig.alive_count(), "the mirrored half counts: it is what is on screen");
+    let rig = Some(format!("an SSphere rig of {shown} spheres (Make Skin first)"));
+    assert_eq!(tool.at_risk(false), rig);
+
+    // Make Skin, spheres kept: the shape is an object of the scene now.
+    tool.make_skin().unwrap();
+    assert_eq!(tool.rig.alive_count(), 14);
+    assert_eq!(tool.at_risk(true), None, "skinned as they stand, and the skin is in the scene");
+    // Z took the skin away again, or it was deleted: the spheres are the only place the shape is.
+    assert_eq!(tool.at_risk(false), rig);
+
+    // A sphere resized since the skin was made: the skin is not this shape.
+    tool.rig.set_radius(1, 0.2);
+    assert_eq!(tool.at_risk(true), rig);
+    tool.make_skin().unwrap();
+    assert_eq!(tool.at_risk(true), None);
+    // The mirror switched off is another shape too (the twins become spheres of their own).
+    tool.set_symmetry(false);
+    assert!(tool.at_risk(true).is_some());
+
+    // Skinned without keeping the spheres, or cleared: there are none to lose.
+    tool.keep_rig = false;
+    tool.make_skin().unwrap();
+    assert_eq!(tool.at_risk(true), None);
+    assert!(tool.undo(), "Undo brings the spheres back");
+    assert!(tool.at_risk(false).is_some());
+    tool.clear();
+    assert_eq!(tool.at_risk(false), None);
+}

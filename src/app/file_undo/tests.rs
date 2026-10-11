@@ -11,17 +11,20 @@ use glam::{Quat, Vec3};
 use super::File;
 use crate::app::files::Mark;
 use crate::app::install;
+use crate::app::tools::Tools;
 use crate::history::History;
 use crate::io;
 use crate::mesh::Mesh;
 use crate::mesh::primitives::{self, Primitive};
-use crate::scene::Scene;
+use crate::scene::{Scene, Symmetry};
 
 /// A scene with one object, told from another by that object's name.
 struct Desk {
     scene: Scene,
     mesh: Mesh,
     history: History,
+    /// The hosted tools, which the scene's mark asks what they would save.
+    tools: Tools,
     path: Option<PathBuf>,
     clean: Option<Mark>,
     folder: PathBuf,
@@ -31,16 +34,33 @@ fn ball() -> Mesh {
     primitives::build(Primitive::Sphere, 80, 0.5)
 }
 
-/// Writes a sculpt of one ball called `name`.
+/// Writes a sculpt of one ball called `name`, showing, with no symmetry.
 fn write(path: &Path, name: &str) {
+    write_kept(path, name, (true, false));
+}
+
+/// Writes a sculpt of one ball called `name`. `kept` is the part of it that
+/// is saved without being an undo step: whether the ball shows (the H key),
+/// and whether it is sculpted under Mirror X (the X key).
+fn write_kept(path: &Path, name: &str, (visible, mirror_x): (bool, bool)) {
     let (position, rotation, scale) = (Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
-    let object = io::SavedObject { name: name.into(), visible: true, mesh: 0, position, rotation, scale };
-    io::save_scene_with(&[&ball()], &[object], 0, &io::Details::default(), path).expect("the file writes");
+    let object = io::SavedObject { name: name.into(), visible, mesh: 0, position, rotation, scale };
+    let mut details = io::Details::default();
+    let symmetry = Symmetry { mirror: [mirror_x, false, false], ..Symmetry::default() };
+    details.set_object(0, io::slot::SYMMETRY, &symmetry);
+    io::save_scene_with(&[&ball()], &[object], 0, &details, path).expect("the file writes");
 }
 
 /// The name of the scene a file holds.
 fn held(path: &Path) -> String {
     io::load_scene(path).expect("the file reads").objects[0].name.clone()
+}
+
+/// Whether the ball a file holds shows, and whether it has Mirror X.
+fn held_kept(path: &Path) -> (bool, bool) {
+    let saved = io::load_scene(path).expect("the file reads");
+    let symmetry = crate::scene::saved_symmetry(&saved.details, 0).unwrap_or_default();
+    (saved.objects[0].visible, symmetry.mirror[0])
 }
 
 impl Desk {
@@ -50,7 +70,10 @@ impl Desk {
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).expect("a folder for the test");
         let (scene, mesh, history) = (Scene::new("start"), ball(), History::default());
-        Desk { scene, mesh, history, path: None, clean: Some((0, 0, 0)), folder }
+        let mut desk = Desk { scene, mesh, history, tools: Tools::default(), path: None, clean: None, folder };
+        // As `Running::mark_saved` at start-up.
+        desk.clean = Some(desk.mark());
+        desk
     }
 
     /// The app with `name` open from a file of that name, saved.
@@ -74,8 +97,29 @@ impl Desk {
 
     /// As `Running::history_mark`.
     fn mark(&self) -> Mark {
-        let (undo, redo) = self.history.steps();
-        (self.history.edits, undo, redo)
+        Mark::of(&self.history, &self.scene, &self.tools)
+    }
+
+    /// Whether the ball on screen shows, and whether it has Mirror X: what
+    /// `held_kept` reads of a file.
+    fn kept(&self) -> (bool, bool) {
+        let ball = &self.scene.objects[0];
+        (ball.visible, self.scene.symmetry(ball.id).mirror[0])
+    }
+
+    /// The H key, or Alt + H if the ball is hidden: not an undo step.
+    fn hide_key(&mut self) {
+        if self.scene.objects[0].visible {
+            self.scene.hide_selected(&mut self.mesh);
+        } else {
+            self.scene.unhide_all();
+        }
+    }
+
+    /// The X key: Mirror X of the ball on or off. Not an undo step.
+    fn mirror_key(&mut self) {
+        let ball = self.scene.active_id();
+        self.scene.edit_symmetry(ball, |symmetry| symmetry.mirror[0] = !symmetry.mirror[0]);
     }
 
     fn file(&mut self) -> File<'_> {
@@ -117,9 +161,11 @@ impl Desk {
         let now = self.mark();
         let before = self.file().state(now);
         let state = self.scene.state();
-        install(&mut self.scene, &mut self.mesh, saved);
+        let details = install(&mut self.scene, &mut self.mesh, saved);
         self.history.push_scene(state);
         self.history.keep_file(before);
+        // As `Running::apply_details`: each object's symmetry comes with it.
+        self.scene.restore_symmetry(&details);
         let now = self.mark();
         self.file().became(document.then(|| path.to_owned()), now);
     }
@@ -136,7 +182,7 @@ impl Desk {
 
     /// As `Running::save_scene` and the line after it in `save_to`.
     fn save_as(&mut self, path: &Path) {
-        write(path, &self.shown().to_owned());
+        write_kept(path, &self.shown().to_owned(), self.kept());
         let now = self.mark();
         self.file().written(path, now);
         self.path = Some(path.to_owned());
@@ -388,11 +434,65 @@ fn once_the_open_is_too_old_to_undo_the_file_stays_the_opened_one() {
     assert_eq!((held(&desk.at("first")), held(&second)), ("first".to_owned(), "second".to_owned()));
 }
 
-/// A long walk of opens, edits, saves, undos and redos, checked at every
-/// step against two things that must never fail: where the app says there is
-/// nothing unsaved, the scene's file really holds the scene on screen; and
-/// the scene's file is the one it was opened from or last saved as, worked
-/// out here a second way (a list of files beside the steps).
+/// The H and X keys change what a save writes without being undo steps. A
+/// scene they have changed is unsaved until it is saved, or until the change
+/// is taken back by the same key.
+#[test]
+fn a_change_that_is_saved_but_is_no_undo_step_is_unsaved_until_saved_or_put_back() {
+    for (name, key) in [("hide", Desk::hide_key as fn(&mut Desk)), ("mirror", Desk::mirror_key)] {
+        let mut desk = Desk::with_open(&format!("kept_{name}"), "first");
+        let first = desk.at("first");
+        assert_eq!(desk.stands(), (named("first"), false));
+        key(&mut desk);
+        assert!(!desk.history.can_undo() || desk.history.steps().0 == 1, "{name}: no undo step was recorded");
+        assert_eq!(desk.stands(), (named("first"), true), "{name}: the file does not hold it yet");
+        assert_ne!(held_kept(&first), desk.kept());
+        // Put back by the same key: the scene is what the file holds again.
+        key(&mut desk);
+        assert_eq!(desk.stands(), (named("first"), false), "{name}: taken back, nothing is unsaved");
+        // Changed and saved: the file holds it.
+        key(&mut desk);
+        assert_eq!(desk.save(), Some(first.clone()));
+        assert_eq!(desk.stands(), (named("first"), false), "{name}: Save makes it clean");
+        assert_eq!(held_kept(&first), desk.kept());
+    }
+}
+
+/// The same across an Open: the scene that Undo brings back is unsaved
+/// exactly if the H or X key had changed it since it was saved.
+#[test]
+fn such_a_change_is_still_unsaved_after_an_open_and_its_undo() {
+    let mut desk = Desk::with_open("kept_across_an_open", "first");
+    let second = desk.file_of("second");
+    desk.mirror_key();
+    // Open Without Saving.
+    desk.open(&second);
+    assert_eq!(desk.all(), all("second", named("second"), false));
+    assert_eq!(desk.kept(), (true, false), "the opened ball has the symmetry its file kept: none");
+    desk.undo();
+    assert_eq!(desk.all(), all("first", named("first"), true));
+    assert_eq!(desk.kept(), (true, true), "the first ball is back with Mirror X, which is in no file");
+    assert_eq!(desk.save(), Some(desk.at("first")));
+    assert_eq!(held_kept(&desk.at("first")), (true, true));
+    assert!(!desk.unsaved());
+
+    // The opened scene changed the same way and left by Undo: Redo finds it unsaved.
+    desk.redo();
+    desk.hide_key();
+    desk.undo();
+    assert_eq!(desk.all(), all("first", named("first"), false));
+    desk.redo();
+    assert_eq!(desk.all(), all("second", named("second"), true));
+    assert_eq!(desk.kept(), (false, false), "hidden, as it was left");
+}
+
+/// A long walk of opens, edits, saves, undos and redos, and of the H and X
+/// keys (which change what a save writes without being undo steps), checked
+/// at every step against two things that must never fail: where the app says
+/// there is nothing unsaved, the scene's file really holds the scene on
+/// screen, name, visibility and symmetry; and the scene's file is the one it
+/// was opened from or last saved as, worked out here a second way (a list of
+/// files beside the steps).
 #[test]
 fn a_long_walk_never_calls_a_scene_saved_that_is_not_in_its_file() {
     let mut desk = Desk::new("long_walk");
@@ -409,11 +509,19 @@ fn a_long_walk_never_calls_a_scene_saved_that_is_not_in_its_file() {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (seed >> 33) % below
     };
-    let mut crossed = 0;
-    for turn in 0..600 {
+    let (mut crossed, mut keys, mut clean_after_a_key) = (0, 0, 0);
+    for turn in 0..900 {
         let stretch = undo.iter().filter(|&&open| open).count();
         let file = desk.at(names[next(3) as usize]);
+        let key = matches!(next(4), 0).then(|| next(2));
+        if let Some(which) = key {
+            // Neither is an undo step: the history, and the files beside it, stand as they are.
+            if which == 0 { desk.hide_key() } else { desk.mirror_key() }
+            keys += 1;
+            clean_after_a_key += !desk.unsaved() as usize;
+        }
         match next(10) {
+            _ if key.is_some() => {}
             0 | 1 => {
                 // Redo ends here, and the files of everything it led to with it.
                 desk.edit(&format!("edit {turn}"));
@@ -454,7 +562,11 @@ fn a_long_walk_never_calls_a_scene_saved_that_is_not_in_its_file() {
         assert_eq!(desk.path, files[stretch], "turn {turn}: the scene's file is not its own");
         if let Some(path) = desk.path.clone().filter(|_| !desk.unsaved()) {
             assert_eq!(held(&path), desk.shown(), "turn {turn}: nothing unsaved, but the file holds another scene");
+            let (in_file, on_screen) = (held_kept(&path), desk.kept());
+            assert_eq!(in_file, on_screen, "turn {turn}: nothing unsaved, but the file shows and mirrors otherwise");
         }
     }
     assert!(crossed > 20, "the walk crossed an Open only {crossed} times");
+    assert!(keys > 100, "the walk pressed H or X only {keys} times");
+    assert!(clean_after_a_key > 5, "a key put a saved scene back as its file holds it only {clean_after_a_key} times");
 }

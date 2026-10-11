@@ -214,3 +214,57 @@ fn damaged_input_loads_what_it_can_and_never_fails() {
     assert!(copies(&draw, ObjectId(9999)).is_empty());
     assert!(draw.object_copies().iter().flat_map(|(_, m)| m).all(|m| m.is_finite()));
 }
+
+/// The app tells that a scene has changes to save partly by what `save_object` would write: an
+/// array reshaped is no step of the scene's history. So every edit has to show there, and nothing
+/// but an edit may: frames drawn, another object selected, the tool put away and brought back
+/// leave it exactly as it was, or a scene that was just saved would count as changed.
+#[test]
+fn every_edit_shows_in_what_the_file_would_keep_and_nothing_else_does() {
+    let (mut bench, mut tool, ids) = scene();
+    // The third cube has the line.
+    bench.select(&[ids[2]]);
+    bench.frame(&mut tool);
+    let mut kept = bench.save_tool(&tool);
+
+    // Nothing that is not an edit moves it.
+    for _ in 0..5 {
+        bench.frame(&mut tool);
+    }
+    bench.select(&[ids[0]]);
+    bench.frame(&mut tool);
+    bench.select(&[ids[2]]);
+    bench.leave(&mut tool);
+    bench.env.active = false;
+    bench.frame(&mut tool);
+    bench.env.active = true;
+    bench.enter(&mut tool);
+    bench.frame(&mut tool);
+    assert_eq!(bench.save_tool(&tool), kept, "looking at the array is not an edit");
+
+    // Each of the panel's controls and a handle dragged: one change each to what the file keeps.
+    let edits: [(&'static str, fn(&mut ArrayState)); 7] = [
+        ("Array Count", |a| a.settings.count += 3),
+        ("Array End Size", |a| a.settings.end_scale = 0.45),
+        ("Array Middle Size", |a| a.settings.mid_scale = 1.4),
+        ("Array Follow", |a| a.settings.follow = !a.settings.follow),
+        ("Array Spacing", |a| a.settings.space_by_size = !a.settings.space_by_size),
+        ("Move Array Point", |a| a.points[1] += Vec3::new(0.0, 0.5, 0.25)),
+        ("Add Array Point", |a| a.points.push(Vec3::new(4.0, 2.0, 0.0))),
+    ];
+    for (label, change) in edits {
+        bench.call(|cx| tool.edit(cx, label, false, change));
+        bench.frame(&mut tool);
+        let now = bench.save_tool(&tool);
+        assert_ne!(now, kept, "{label} does not show in what the file would keep");
+        kept = now;
+    }
+    // Z takes the last edit back, and what the file would keep goes back with it.
+    let with_the_point = kept.clone();
+    assert!(bench.undo(&mut tool));
+    bench.frame(&mut tool);
+    assert_ne!(bench.save_tool(&tool), with_the_point);
+    assert!(bench.redo(&mut tool));
+    bench.frame(&mut tool);
+    assert_eq!(bench.save_tool(&tool), with_the_point, "redone, it is exactly what it was");
+}

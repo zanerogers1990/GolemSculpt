@@ -6,7 +6,9 @@
 //!
 //! The keys are not undo steps, here as there; a toast and the status line
 //! say what happened instead. Whatever hides the object the brushes were on
-//! moves them to one that can still be seen.
+//! moves them to one that can still be seen. What they hide is saved with the
+//! scene all the same, so a scene they have changed counts as unsaved until
+//! it is saved or put back as it was (app/unsaved.rs).
 
 use super::Running;
 use crate::camera::Camera;
@@ -84,43 +86,53 @@ impl Running {
     /// H, Shift + H and Alt + H.
     pub(super) fn hide_key(&mut self) {
         let mods = self.input.mods;
-        let doc = &mut self.doc;
-        let was = doc.scene.active_id();
         if mods.alt_key() {
-            let shown = doc.scene.unhide_all();
-            let aside = doc.scene.in_local_view();
-            self.scene_changed();
-            self.toast(if shown > 0 { "Unhide All" } else { "Nothing Hidden" });
-            let what = if shown == 1 { "1 object".to_owned() } else { format!("{shown} objects") };
-            match (shown, aside) {
-                (0, false) => self.status("Nothing was hidden.", true),
-                (0, true) => self.status("Nothing else was hidden. Press / to leave Local View and see the rest.", true),
-                (_, false) => self.status(format!("Showing {what} again."), true),
-                (_, true) => self.status(
-                    format!("Showing {what} again. What Local View set aside comes back when you leave it (/)."),
-                    true,
-                ),
-            }
+            self.show_everything();
         } else if mods.shift_key() {
-            let hidden = doc.scene.hide_unselected();
+            let was = self.doc.scene.active_id();
+            let hidden = self.doc.scene.hide_unselected();
             if hidden > 0 {
                 self.toast("Hide Unselected");
                 let what = if hidden == 1 { "the 1 object".to_owned() } else { format!("the {hidden} objects") };
                 self.after_hiding(format!("{what} not selected"), was);
             }
         } else {
-            let scene = &doc.scene;
-            let names: Vec<String> = scene
-                .selected()
-                .iter()
-                .filter_map(|&id| scene.get(id))
-                .filter(|o| o.visible)
-                .map(|o| o.name.clone())
-                .collect();
-            if doc.scene.hide_selected(&mut doc.mesh) > 0 {
-                self.toast("Hide Selected");
-                self.after_hiding(named(&names), was);
-            }
+            self.hide_selection();
+        }
+    }
+
+    /// Alt + H: every hidden object shows again.
+    pub(super) fn show_everything(&mut self) {
+        let shown = self.doc.scene.unhide_all();
+        let aside = self.doc.scene.in_local_view();
+        self.scene_changed();
+        self.toast(if shown > 0 { "Unhide All" } else { "Nothing Hidden" });
+        let what = if shown == 1 { "1 object".to_owned() } else { format!("{shown} objects") };
+        match (shown, aside) {
+            (0, false) => self.status("Nothing was hidden.", true),
+            (0, true) => self.status("Nothing else was hidden. Press / to leave Local View and see the rest.", true),
+            (_, false) => self.status(format!("Showing {what} again."), true),
+            (_, true) => self.status(
+                format!("Showing {what} again. What Local View set aside comes back when you leave it (/)."),
+                true,
+            ),
+        }
+    }
+
+    /// H: hides the selected objects.
+    pub(super) fn hide_selection(&mut self) {
+        let doc = &mut self.doc;
+        let (scene, was) = (&doc.scene, doc.scene.active_id());
+        let names: Vec<String> = scene
+            .selected()
+            .iter()
+            .filter_map(|&id| scene.get(id))
+            .filter(|o| o.visible)
+            .map(|o| o.name.clone())
+            .collect();
+        if doc.scene.hide_selected(&mut doc.mesh) > 0 {
+            self.toast("Hide Selected");
+            self.after_hiding(named(&names), was);
         }
     }
 

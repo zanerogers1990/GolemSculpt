@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use glam::{Vec2, Vec3};
 use sculpt_geom::TriMesh;
 use sculpt_toolkit::testing::{Bench, cube};
-use sculpt_toolkit::{Button, Command, Draw, Key, ObjectId, Placement, Scene, Shape, Symmetry, Tool};
+use sculpt_toolkit::{Button, Command, Draw, Key, Loss, ObjectId, Placement, Scene, Shape, Symmetry, Tool};
 
 use crate::TubeTool;
 use crate::testing::{assert_closed, icosphere, shells, unmatched_across};
@@ -856,4 +856,82 @@ fn keep_separate_leaves_the_bodys_mask_and_hidden_faces_and_the_tube_starts_clea
     let kept = bench.doc.active_mesh().unwrap();
     assert_eq!(kept.mask.iter().sum::<f32>(), 0.0);
     assert!(kept.hidden_triangles.is_none());
+}
+
+/// What the app asks before it closes, and before a file takes the scene's place.
+fn at_risk(tool: &TubeTool, loss: Loss) -> Option<String> {
+    Tool::scaffold_at_risk(tool, loss)
+}
+
+#[test]
+fn live_tubes_are_work_that_closing_would_lose_until_they_are_merged_kept_or_deleted() {
+    let (mut bench, mut tool, _) = bench();
+    for loss in [Loss::Closing, Loss::SceneReplaced] {
+        assert_eq!(at_risk(&tool, loss), None, "the tool up with nothing drawn has nothing to lose");
+    }
+
+    draw_horn(&mut bench, &mut tool);
+    let one = Some("1 unmerged tube (Merge or Keep Separate first)".to_owned());
+    assert_eq!(at_risk(&tool, Loss::Closing), one);
+    assert_eq!(at_risk(&tool, Loss::SceneReplaced), one, "it stands on the body, which a new scene takes away");
+    // Put away, the tubes wait out of sight: they are still there to lose.
+    bench.leave(&mut tool);
+    assert_eq!(at_risk(&tool, Loss::Closing), one);
+    bench.enter(&mut tool);
+
+    let start = on_sphere(-0.3, 0.1);
+    stroke(&mut bench, &mut tool, &[start, Vec3::new(-0.6, 0.45, start.z), Vec3::new(-1.0, 0.5, start.z)]);
+    let two = Some("2 unmerged tubes (Merge or Keep Separate first)".to_owned());
+    assert_eq!(at_risk(&tool, Loss::Closing), two);
+
+    // Deleted: one fewer. Kept separate: none, they are objects of the scene now.
+    tool.delete_active_tube();
+    assert_eq!(at_risk(&tool, Loss::Closing), one);
+    bench.call(|cx| tool.keep_separate(cx));
+    for loss in [Loss::Closing, Loss::SceneReplaced] {
+        assert_eq!(at_risk(&tool, loss), None, "kept separate, the tube is in the scene and in its file");
+    }
+    // Z hands the tube back live, and with it the work.
+    assert!(bench.undo(&mut tool));
+    bench.frame(&mut tool);
+    assert_eq!(at_risk(&tool, Loss::Closing), one);
+
+    // Merged: none.
+    assert!(bench.key(&mut tool, Key::Enter));
+    wait_for_merge(&mut bench, &mut tool);
+    for loss in [Loss::Closing, Loss::SceneReplaced] {
+        assert_eq!(at_risk(&tool, loss), None, "merged, the tube is part of the body");
+    }
+}
+
+#[test]
+fn a_tube_drawn_on_nothing_is_lost_by_closing_but_not_by_a_new_scene() {
+    let mut bench = Bench::new();
+    let body = bench.add("Body", cube(0.5));
+    let mut tool = TubeTool::default();
+    bench.enter(&mut tool);
+    // The only object hidden: a mid-air stroke has no anchor.
+    bench.call(|cx| cx.commit("Hide", vec![Command::Show { object: body, visible: false }]));
+    bench.env.mods.ctrl = true;
+    bench.drag(&mut tool, Vec2::new(200.0, 300.0), Vec2::new(500.0, 250.0));
+    bench.env.mods.ctrl = false;
+    assert_eq!((tool.tube_count(), tool.mergeable_count()), (1, 0));
+    assert!(at_risk(&tool, Loss::Closing).is_some());
+    assert_eq!(at_risk(&tool, Loss::SceneReplaced), None, "it stands in the world, whatever scene is open");
+}
+
+/// What Open does to live tubes, which is what `Loss::SceneReplaced` has to tell the truth about.
+#[test]
+fn a_scene_opened_in_place_of_this_one_takes_the_tubes_drawn_on_its_objects() {
+    let (mut bench, mut tool, _) = bench();
+    draw_horn(&mut bench, &mut tool);
+    assert!(at_risk(&tool, Loss::SceneReplaced).is_some());
+    let ids = bench.open(vec![("Opened", cube(0.5))]);
+    bench.load_tool(&mut tool, &ids, vec![None], sculpt_toolkit::Arrival::Replaced);
+    bench.frame(&mut tool);
+    assert_eq!(tool.tube_count(), 0, "the body went, and its tube with it");
+    // Undo brings the body back, but not the tube.
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    assert_eq!(tool.tube_count(), 0);
 }

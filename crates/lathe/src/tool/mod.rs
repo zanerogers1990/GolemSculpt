@@ -43,13 +43,13 @@ use std::time::Instant;
 use glam::{Vec2, Vec3};
 use sculpt_geom::Aabb;
 use sculpt_toolkit::{
-    Button, Color32, Command, Ctx, Draw, Event, Info, Job, Key, MeshData, NewObject, ObjectId, Placement, Preview,
-    PreviewData, RadialChange, Style, Tool, View,
+    Button, Color32, Command, Ctx, Draw, Event, Info, Job, Key, Loss, MeshData, NewObject, ObjectId, Placement,
+    Preview, PreviewData, RadialChange, Style, Tool, View,
 };
 
 use crate::history::{COALESCE_SECONDS, History};
 use crate::plane::{MAX_SCALE, MIN_SCALE, Plane};
-use crate::{LatheBuild, LatheBuilder, LathePreset, LatheProfile, LatheSettings, round_segments};
+use crate::{LatheBuild, LatheBuilder, LathePreset, LatheProfile, LatheSettings, ProfilePoint, round_segments};
 
 /// Pick distances and thresholds, in interface points.
 const HANDLE_PICK: f32 = 11.0;
@@ -130,6 +130,12 @@ struct Made {
     watertight: bool,
 }
 
+/// How many presets, as they were loaded, are remembered (see `Lathe::loaded`).
+const LOADED: usize = 8;
+
+/// An outline as it stood at one moment: its points, and whether it is a closed loop.
+type Outline = (Vec<ProfilePoint>, bool);
+
 /// The object Create made, to notice when it is undone.
 #[derive(Clone, Copy)]
 struct Created {
@@ -162,6 +168,13 @@ pub struct Lathe {
     built: Built,
     job: Option<Job<Made>>,
     created: Option<Created>,
+    /// The presets as they were loaded: outlines that are the tool's, not the user's. While the
+    /// profile is one of these there is no work in it (see `Tool::scaffold_at_risk`). The last few are
+    /// kept, so that Z from a preset back to the one before it is not taken for work.
+    loaded: Vec<Outline>,
+    /// The outline `created` was made from. While that object is in the scene the outline is in the
+    /// scene's file, as the object, and the profile kept for the next Create is only a copy of it.
+    made: Option<Outline>,
 }
 
 impl Default for Lathe {
@@ -245,6 +258,8 @@ impl Lathe {
             built: Built::default(),
             job: None,
             created: None,
+            loaded: Vec::new(),
+            made: None,
         }
     }
 
@@ -395,6 +410,27 @@ impl Lathe {
         let (points, closed_loop) = preset.points(self.reference / self.plane.scale);
         self.profile.set_points(&points, closed_loop);
         self.selected = None;
+        let outline = self.outline();
+        self.loaded.retain(|kept| *kept != outline);
+        self.loaded.push(outline);
+        if self.loaded.len() > LOADED {
+            self.loaded.remove(0);
+        }
+    }
+
+    fn outline(&self) -> Outline {
+        (self.profile.points().to_vec(), self.profile.closed_loop())
+    }
+
+    /// Whether the outline is the user's own shaping and in no object of the scene: it has points, it
+    /// is not a preset as loaded, and it is not the outline of the object Create made (unless Z has
+    /// taken that object away again, which leaves the profile the only place the shape is). Moving the
+    /// lathe or changing its detail shapes nothing.
+    pub fn shaped(&self) -> bool {
+        let (points, closed_loop) = (self.profile.points(), self.profile.closed_loop());
+        let is = |(kept, closed): &Outline| kept == points && *closed == closed_loop;
+        let in_the_scene = self.created.is_some_and(|created| created.alive) && self.made.as_ref().is_some_and(is);
+        !points.is_empty() && !in_the_scene && !self.loaded.iter().any(is)
     }
 
     fn apply_preset(&mut self, cx: &mut Ctx, preset: LathePreset) {
@@ -668,6 +704,8 @@ impl Lathe {
         let Some(&id) = receipt.added.first() else {
             return cx.status("The lathe could not be added to the scene.", false);
         };
+        // The outline is an object of the scene now: the profile kept for the next one is a copy.
+        self.made = Some(self.outline());
         // The commit selected the new object, so it is that object's own symmetry that is set.
         if self.radial_on_create {
             turn_radial_on(cx);
@@ -791,6 +829,14 @@ impl Tool for Lathe {
 
     fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
         self.show_panel(ui, cx);
+    }
+
+    /// An outline shaped by hand and not yet created is in no file, so closing the app loses it. A
+    /// scene opened in place of this one does not: the profile stands beside the model, whichever
+    /// model that is, and is there the next time the tool comes up.
+    fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
+        let lost = loss == Loss::Closing && self.shaped();
+        lost.then(|| "a lathe outline you have shaped (Create Mesh first)".to_owned())
     }
 
     fn can_undo(&self, redo: bool) -> bool {

@@ -7,6 +7,12 @@
 //! button. The first answer is the one Enter gives, the last is Cancel, which
 //! Esc gives too. `scene_graph::State` holds the question that is up; the app
 //! sends it Enter and Esc and carries out the answer.
+//!
+//! Closing and opening can also cost work that is in no file at all: SSpheres,
+//! unmerged tubes, planned keys, a lathe outline (`lost`, from
+//! app/unsaved.rs). A question that names any is asked even when the scene
+//! itself is saved, says that saving does not keep them, and gives Cancel to
+//! Enter as well as to Esc: no key pressed in passing gives them up.
 
 use std::path::PathBuf;
 
@@ -19,11 +25,14 @@ use crate::doc::{Action, Doc, OpenHow, Recover};
 pub enum Question {
     /// The Delete key: delete this object?
     Delete(u64),
-    /// The app was asked to close with changes that have not been saved.
-    Exit,
+    /// The app was asked to close. `unsaved` says the scene has changes that
+    /// have not been saved; `lost` names the work that is in no file and
+    /// would go with the app, saved or not. At least one of them holds.
+    Exit { unsaved: bool, lost: Vec<String> },
     /// A `.sclp` file was chosen: open it in place of the scene, or add its
-    /// objects? `unsaved` says the scene has changes that are not saved.
-    Open { path: PathBuf, unsaved: bool },
+    /// objects? `unsaved` says the scene has changes that are not saved;
+    /// `lost` names the work in no file that replacing the scene would cost.
+    Open { path: PathBuf, unsaved: bool, lost: Vec<String> },
     /// At start-up: the app did not close properly last time and a copy of
     /// the work was kept. `when` is when ("today at 14:35"), `what` what it
     /// holds; `stopped` says it was made as the app stopped on a fault, and
@@ -51,6 +60,11 @@ impl Choice {
         Choice { label: "Cancel", tint: None, action: None }
     }
 
+    /// Cancel where it is the answer Enter gives: lit as the safe one.
+    fn safe_cancel() -> Choice {
+        Choice { label: "Cancel", tint: Some(theme::ACCENT), action: None }
+    }
+
     /// Cancel for a question that will be asked again: nothing is given up.
     fn not_now() -> Choice {
         Choice { label: "Not Now", tint: None, action: None }
@@ -60,6 +74,57 @@ impl Choice {
 /// A file's name without its folders, for a sentence.
 fn file_name(path: &std::path::Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// The things a question says would be lost, as they read in a sentence:
+/// "3 unmerged tubes (Merge or Keep Separate first) and an SSphere rig of 12
+/// spheres (Make Skin first)".
+fn listed(lost: &[String]) -> String {
+    match lost {
+        [] => String::new(),
+        [one] => one.clone(),
+        [most @ .., last] => format!("{} and {last}", most.join(", ")),
+    }
+}
+
+/// The question about closing (`Question::Exit`). `file` is the scene's file,
+/// if it has one.
+fn exit_words(file: Option<&std::path::Path>, unsaved: bool, lost: &[String]) -> String {
+    let changes = match file {
+        Some(path) => format!("\"{}\" has changes that have not been saved.", file_name(path)),
+        None => "This scene has not been saved.".to_owned(),
+    };
+    match (unsaved, lost.is_empty()) {
+        (_, true) => format!("Close GolemSculpt? {changes}"),
+        (true, false) => format!(
+            "Close GolemSculpt? {changes}\n\nSaving does not keep these, which will be lost either way: {}.",
+            listed(lost)
+        ),
+        (false, false) => {
+            format!("Close GolemSculpt? These are not kept in a file and will be lost: {}.", listed(lost))
+        }
+    }
+}
+
+/// The question about opening a file (`Question::Open`).
+fn open_words(path: &std::path::Path, unsaved: bool, lost: &[String]) -> String {
+    let name = file_name(path);
+    let aside = "The scene you have has changes that are not saved. Opening puts it aside: \
+                 Undo (Z) brings its objects back, but only until the app is closed.";
+    match (unsaved, lost.is_empty()) {
+        (true, true) => format!("Open \"{name}\"? {aside}"),
+        (false, true) => format!("Open \"{name}\" in place of the scene you have, or add its objects to it?"),
+        (true, false) => format!(
+            "Open \"{name}\"? {aside}\n\nSaving does not keep these, and opening loses them either way: {}. \
+             Adding the file's objects to this scene keeps them.",
+            listed(lost)
+        ),
+        (false, false) => format!(
+            "Open \"{name}\"? Opening it in place of the scene you have loses these, \
+             which are not kept in a file: {}. Adding its objects to this scene keeps them.",
+            listed(lost)
+        ),
+    }
 }
 
 /// The question about a copy a crash left behind (`Question::Recover`).
@@ -93,45 +158,60 @@ impl Question {
                     format!("Delete \"{}\"? Undo (Z) restores it.", object.name)
                 }
             }
-            Question::Exit => match &doc.path {
-                Some(path) => format!("Close Sculpt? \"{}\" has changes that have not been saved.", file_name(path)),
-                None => "Close Sculpt? This scene has not been saved.".to_owned(),
-            },
-            Question::Open { path, unsaved: true } => format!(
-                "Open \"{}\"? The scene you have has changes that are not saved. Opening puts it aside: Undo (Z) brings its objects back, but only until the app is closed.",
-                file_name(path)
-            ),
-            Question::Open { path, unsaved: false } => {
-                format!("Open \"{}\" in place of the scene you have, or add its objects to it?", file_name(path))
-            }
+            Question::Exit { unsaved, lost } => exit_words(doc.path.as_deref(), *unsaved, lost),
+            Question::Open { path, unsaved, lost } => open_words(path, *unsaved, lost),
             Question::Recover { when, what, stopped, earlier } => {
                 recover_words(when.as_deref(), what, *stopped, earlier.as_deref())
             }
         })
     }
 
-    /// The answers, the one Enter gives first and Cancel last.
+    /// Whether the question names work that is in no file. Every answer but
+    /// Cancel (and adding a file's objects) then gives that work up, so Enter
+    /// is Cancel and no answer is lit as the safe one but Cancel.
+    fn names_lost_work(&self) -> bool {
+        match self {
+            Question::Exit { lost, .. } | Question::Open { lost, .. } => !lost.is_empty(),
+            Question::Delete(_) | Question::Recover { .. } => false,
+        }
+    }
+
+    /// The answers. Cancel is last. Enter gives the first, unless the
+    /// question names work that would be lost: then it gives Cancel.
     fn choices(&self) -> Vec<Choice> {
         let (safe, lossy) = (Some(theme::ACCENT), Some(theme::SUB));
+        // Saving first is the safe answer only while it saves everything.
+        let saving = safe.filter(|_| !self.names_lost_work());
+        let cancel = if self.names_lost_work() { Choice::safe_cancel() } else { Choice::cancel() };
         match self {
-            Question::Delete(id) => vec![Choice::new("Delete", lossy, Action::DeleteObject(*id)), Choice::cancel()],
-            Question::Exit => vec![
-                Choice::new("Save and Exit", safe, Action::Quit { save: true }),
-                Choice::new("Exit Without Saving", lossy, Action::Quit { save: false }),
-                Choice::cancel(),
-            ],
-            Question::Open { path, unsaved } => {
+            Question::Delete(id) => vec![Choice::new("Delete", lossy, Action::DeleteObject(*id)), cancel],
+            Question::Exit { unsaved: false, .. } => {
+                vec![Choice::new("Exit and Lose Them", lossy, Action::Quit { save: false }), cancel]
+            }
+            Question::Exit { unsaved: true, lost } => {
+                let save = if lost.is_empty() { "Save and Exit" } else { "Save the Scene and Exit" };
+                vec![
+                    Choice::new(save, saving, Action::Quit { save: true }),
+                    Choice::new("Exit Without Saving", lossy, Action::Quit { save: false }),
+                    cancel,
+                ]
+            }
+            Question::Open { path, unsaved, lost } => {
                 let open = |how| Action::OpenAs(path.clone(), how);
-                let mut choices = if *unsaved {
-                    vec![
-                        Choice::new("Save, Then Open", safe, open(OpenHow::SaveThenReplace)),
+                let mut choices = match (*unsaved, lost.is_empty()) {
+                    (true, kept) => vec![
+                        Choice::new(
+                            if kept { "Save, Then Open" } else { "Save the Scene, Then Open" },
+                            saving,
+                            open(OpenHow::SaveThenReplace),
+                        ),
                         Choice::new("Open Without Saving", lossy, open(OpenHow::Replace)),
-                    ]
-                } else {
-                    vec![Choice::new("Open", safe, open(OpenHow::Replace))]
+                    ],
+                    (false, true) => vec![Choice::new("Open", safe, open(OpenHow::Replace))],
+                    (false, false) => vec![Choice::new("Open and Lose Them", lossy, open(OpenHow::Replace))],
                 };
                 choices.push(Choice::new("Add Its Objects to This Scene", None, open(OpenHow::Add)));
-                choices.push(Choice::cancel());
+                choices.push(cancel);
                 choices
             }
             Question::Recover { stopped, earlier, .. } => {
@@ -147,9 +227,17 @@ impl Question {
         }
     }
 
-    /// What Enter does: the first answer.
+    /// Which answer Enter gives: the first, or Cancel (the last) where the
+    /// first would give up work that is in no file.
+    fn enter(&self, choices: usize) -> usize {
+        if self.names_lost_work() { choices.saturating_sub(1) } else { 0 }
+    }
+
+    /// What Enter does: `None` where it is Cancel.
     pub fn default_action(&self) -> Option<Action> {
-        self.choices().into_iter().next().and_then(|choice| choice.action)
+        let choices = self.choices();
+        let enter = self.enter(choices.len());
+        choices.into_iter().nth(enter).and_then(|choice| choice.action)
     }
 
     /// Draws the question over everything else. Returns `None` while it
@@ -167,14 +255,13 @@ impl Question {
             ui.set_width(320.0);
             ui.spacing_mut().item_spacing = vec2(8.0, 12.0);
             ui.add(egui::Label::new(egui::RichText::new(text).font(theme::font(13.0)).color(theme::TEXT)).wrap());
-            let last = choices.len() - 1;
+            let (last, enter) = (choices.len() - 1, self.enter(choices.len()));
             let button = |ui: &mut egui::Ui, width: f32, index: usize| {
-                let badge = if index == 0 {
-                    "Enter"
-                } else if index == last {
-                    "Esc"
-                } else {
-                    ""
+                let badge = match (index == enter, index == last) {
+                    (true, true) => "Enter / Esc",
+                    (true, false) => "Enter",
+                    (false, true) => "Esc",
+                    (false, false) => "",
                 };
                 let style = ButtonStyle { badge, active: choices[index].tint, ..Default::default() };
                 theme::button(ui, width, choices[index].label, style).clicked()
@@ -221,6 +308,106 @@ mod tests {
             stopped,
             earlier: earlier.map(str::to_owned),
         }
+    }
+
+    fn exit(unsaved: bool, lost: &[&str]) -> Question {
+        Question::Exit { unsaved, lost: lost.iter().map(|&what| what.to_owned()).collect() }
+    }
+
+    fn open(unsaved: bool, lost: &[&str]) -> Question {
+        let lost = lost.iter().map(|&what| what.to_owned()).collect();
+        Question::Open { path: PathBuf::from("folder/dragon head.sclp"), unsaved, lost }
+    }
+
+    const TUBES: &str = "3 unmerged tubes (Merge or Keep Separate first)";
+    const RIG: &str = "an SSphere rig of 12 spheres (Make Skin first)";
+    const KEYS: &str = "4 planned keys (Build Keys first)";
+
+    /// Whether Enter, pressed on this question, changes anything.
+    fn enter_is_cancel(question: &Question) -> bool {
+        question.default_action().is_none()
+    }
+
+    #[test]
+    fn closing_over_unsaved_changes_alone_asks_as_it_always_did_under_the_apps_name() {
+        let question = exit(true, &[]);
+        assert_eq!(labels(&question), ["Save and Exit", "Exit Without Saving", "Cancel"]);
+        assert_eq!(question.default_action(), Some(Action::Quit { save: true }), "Enter saves and exits");
+        let file = PathBuf::from("folder/dragon head.sclp");
+        let named = "Close GolemSculpt? \"dragon head.sclp\" has changes that have not been saved.";
+        assert_eq!(exit_words(Some(&file), true, &[]), named);
+        assert_eq!(exit_words(None, true, &[]), "Close GolemSculpt? This scene has not been saved.");
+    }
+
+    #[test]
+    fn closing_over_work_that_is_in_no_file_names_it_and_enter_does_not_give_it_up() {
+        // The scene is saved: there is nothing to save, only something to lose.
+        let question = exit(false, &[RIG, TUBES]);
+        assert_eq!(labels(&question), ["Exit and Lose Them", "Cancel"]);
+        assert!(enter_is_cancel(&question), "Enter is Cancel");
+        let text = exit_words(None, false, &[RIG.to_owned(), TUBES.to_owned()]);
+        assert_eq!(
+            text,
+            "Close GolemSculpt? These are not kept in a file and will be lost: an SSphere rig of 12 spheres \
+             (Make Skin first) and 3 unmerged tubes (Merge or Keep Separate first)."
+        );
+        assert!(!text.contains("not been saved"), "the scene is saved, and the question does not say otherwise");
+    }
+
+    #[test]
+    fn with_both_the_question_says_saving_does_not_keep_the_scaffolds() {
+        let question = exit(true, &[TUBES]);
+        assert_eq!(labels(&question), ["Save the Scene and Exit", "Exit Without Saving", "Cancel"]);
+        assert!(enter_is_cancel(&question), "Save and Exit would still lose the tubes: Enter is Cancel");
+        let saves = question.choices().into_iter().next().unwrap();
+        assert!(saves.tint.is_none(), "saving is not lit as the safe answer when it does not save everything");
+        assert_eq!(question.choices().pop().unwrap().tint, Some(theme::ACCENT), "Cancel is");
+        let file = PathBuf::from("dragon head.sclp");
+        let text = exit_words(Some(&file), true, &[TUBES.to_owned()]);
+        assert!(text.starts_with("Close GolemSculpt? \"dragon head.sclp\" has changes that have not been saved."));
+        assert!(text.ends_with(
+            "Saving does not keep these, which will be lost either way: \
+             3 unmerged tubes (Merge or Keep Separate first)."
+        ));
+    }
+
+    #[test]
+    fn opening_over_work_that_is_in_no_file_names_it_and_says_adding_keeps_it() {
+        let question = open(false, &[TUBES, KEYS]);
+        assert_eq!(labels(&question), ["Open and Lose Them", "Add Its Objects to This Scene", "Cancel"]);
+        assert!(enter_is_cancel(&question));
+        let path = PathBuf::from("folder/dragon head.sclp");
+        let text = open_words(&path, false, &[TUBES.to_owned(), KEYS.to_owned()]);
+        assert!(text.starts_with("Open \"dragon head.sclp\"? Opening it in place of the scene you have loses these"));
+        assert!(text.contains("3 unmerged tubes (Merge or Keep Separate first) and 4 planned keys (Build Keys first)."));
+        assert!(text.ends_with("Adding its objects to this scene keeps them."));
+
+        let both = open(true, &[TUBES]);
+        let answers = ["Save the Scene, Then Open", "Open Without Saving", "Add Its Objects to This Scene", "Cancel"];
+        assert_eq!(labels(&both), answers);
+        assert!(enter_is_cancel(&both));
+        let text = open_words(&path, true, &[TUBES.to_owned()]);
+        assert!(text.contains("changes that are not saved") && text.contains("Saving does not keep these"));
+    }
+
+    #[test]
+    fn opening_with_nothing_of_that_kind_asks_as_it_always_did() {
+        let clean = open(false, &[]);
+        assert_eq!(labels(&clean), ["Open", "Add Its Objects to This Scene", "Cancel"]);
+        assert!(matches!(clean.default_action(), Some(Action::OpenAs(_, OpenHow::Replace))));
+        let unsaved = open(true, &[]);
+        let answers = ["Save, Then Open", "Open Without Saving", "Add Its Objects to This Scene", "Cancel"];
+        assert_eq!(labels(&unsaved), answers);
+        assert!(matches!(unsaved.default_action(), Some(Action::OpenAs(_, OpenHow::SaveThenReplace))));
+    }
+
+    #[test]
+    fn a_list_reads_as_a_sentence_does() {
+        let of = |items: &[&str]| listed(&items.iter().map(|&item| item.to_owned()).collect::<Vec<_>>());
+        assert_eq!(of(&[]), "");
+        assert_eq!(of(&["one"]), "one");
+        assert_eq!(of(&["one", "two"]), "one and two");
+        assert_eq!(of(&["one", "two", "three"]), "one, two and three");
     }
 
     #[test]

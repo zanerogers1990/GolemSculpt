@@ -133,6 +133,17 @@ impl TubeTool {
         self.tubes.iter().filter(|t| t.state.anchor.is_some()).count()
     }
 
+    /// Live tubes that `loss` would cost. Closing the app costs them all. A
+    /// scene opened in place of this one costs the tubes drawn on an object:
+    /// an object that is gone takes its tubes with it (`refresh`). A tube
+    /// drawn on nothing stands in the world and is still there afterwards.
+    pub fn unmerged(&self, loss: sculpt_toolkit::Loss) -> usize {
+        match loss {
+            sculpt_toolkit::Loss::Closing => self.tube_count(),
+            sculpt_toolkit::Loss::SceneReplaced => self.mergeable_count(),
+        }
+    }
+
     pub fn point_count(&self, tube: usize) -> usize {
         self.tubes.get(tube).map_or(0, |t| t.state.points.len())
     }

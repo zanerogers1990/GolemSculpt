@@ -15,7 +15,7 @@ use std::time::Duration;
 use glam::{Quat, Vec3};
 use sculpt_geom::{Aabb, LengthUnit, units};
 use sculpt_toolkit::{
-    Button, Command, Ctx, Draw, Event, Info, Job, Key, MeshData, NewObject, ObjectId, Placement, Preview, Tool,
+    Button, Command, Ctx, Draw, Event, Info, Job, Key, Loss, MeshData, NewObject, ObjectId, Placement, Preview, Tool,
 };
 
 use crate::builder::{Built, NEW_VERTEX};
@@ -47,6 +47,12 @@ pub struct Keys {
     pub(crate) pair: Option<Pair>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+    /// How many edits by hand stand between the joints as the tool first laid
+    /// them out for this pair and the joints as they are: up with every edit
+    /// and every redo, down with every undo. Unlike `undo` it outlives a
+    /// build, so joints that Z hands back are still known to have been worked
+    /// on. Above zero, the joints are work that closing the app would lose.
+    by_hand: usize,
     pub(crate) hover: Option<Hit>,
     pub(crate) drag: Option<Dragging>,
     /// The joints as they were when the key in hand was taken hold of, until
@@ -75,6 +81,7 @@ impl Default for Keys {
             pair: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            by_hand: 0,
             hover: None,
             drag: None,
             held: None,
@@ -118,6 +125,15 @@ impl Keys {
         &self.settings
     }
 
+    /// The planned joints that are the user's own work and not yet built:
+    /// how many keys they would make. None for joints as the tool laid them
+    /// out by itself (bringing the tool up plans them: nothing was done), and
+    /// none once they are built into the pieces.
+    pub fn unbuilt_by_hand(&self) -> usize {
+        let planned = self.pair.as_ref().filter(|pair| pair.showing == Showing::Plain);
+        planned.filter(|_| self.by_hand > 0).map_or(0, |pair| pair.plan.key_count())
+    }
+
     /// The pair, while its joints can be edited: the scene shows the halves
     /// they were planned on, and no build is running.
     pub(crate) fn editable(&self) -> Option<&Pair> {
@@ -140,6 +156,7 @@ impl Keys {
         self.pair = None;
         self.undo.clear();
         self.redo.clear();
+        self.by_hand = 0;
         self.hover = None;
         self.drag = None;
         self.held = None;
@@ -359,6 +376,7 @@ impl Keys {
 
     pub(crate) fn push_snapshot(&mut self, snapshot: Snapshot) {
         self.undo.push(snapshot);
+        self.by_hand += 1;
         if self.undo.len() > HISTORY {
             self.undo.remove(0);
         }
@@ -368,7 +386,9 @@ impl Keys {
     /// Takes the last step back off the history: for a gesture that is being
     /// abandoned.
     pub(crate) fn pop_edit(&mut self) -> Option<Snapshot> {
-        self.undo.pop()
+        let popped = self.undo.pop();
+        self.by_hand = self.by_hand.saturating_sub(popped.is_some() as usize);
+        popped
     }
 
     /// Z or Shift+Z on the joints. False when there is nothing to step, so
@@ -385,6 +405,7 @@ impl Keys {
         let (Some(snapshot), Some(pair)) = (from.pop(), self.pair.as_mut()) else { return false };
         to.push(pair.snapshot());
         pair.restore(snapshot, &settings);
+        self.by_hand = if redo { self.by_hand + 1 } else { self.by_hand.saturating_sub(1) };
         self.pegs_stale = true;
         true
     }
@@ -607,6 +628,17 @@ impl Tool for Keys {
 
     fn can_undo(&self, redo: bool) -> bool {
         self.editable().is_some() && !(if redo { &self.redo } else { &self.undo }).is_empty()
+    }
+
+    /// Joints placed or changed by hand and not yet built are in no file. A
+    /// new scene costs them as closing does: they stand on the two pieces,
+    /// and go when the pieces do (`watch`).
+    fn scaffold_at_risk(&self, _loss: Loss) -> Option<String> {
+        match self.unbuilt_by_hand() {
+            0 => None,
+            1 => Some("1 planned key (Build Keys first)".to_owned()),
+            count => Some(format!("{count} planned keys (Build Keys first)")),
+        }
     }
 
     /// Splits the selected object in two and brings the tool up on the

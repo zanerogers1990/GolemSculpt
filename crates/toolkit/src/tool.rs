@@ -135,6 +135,18 @@ impl GizmoTarget {
     }
 }
 
+/// What is about to happen to the work a tool holds outside the scene's file
+/// (see [`Tool::scaffold_at_risk`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Loss {
+    /// The app is closing. Everything that is in no file goes with it.
+    Closing,
+    /// Another scene is about to take this one's place (Open). What stands on
+    /// this scene's objects goes with them; what stands by itself (a ruler in
+    /// the world, a profile beside the model) is still there afterwards.
+    SceneReplaced,
+}
+
 /// One tile of the hold-Space wheel while the tool is up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RadialItem {
@@ -202,6 +214,22 @@ pub trait Tool {
     /// as [`Event::Gizmo`] with the target's new placement, from `Begin` to
     /// `End`. The gizmo is not drawn in the hide-the-panels view.
     fn gizmo(&self) -> Option<GizmoTarget> {
+        None
+    }
+
+    /// Work the user has put into the tool that is in no file and that `loss`
+    /// would cost them, in words a question can show: a short noun phrase with
+    /// a count where there is one, and in brackets what keeps it ("3 unmerged
+    /// tubes (Merge or Keep Separate first)"). The app asks every tool before
+    /// it closes and before a file is opened in place of the scene, and puts
+    /// the answers in the question it asks the user.
+    ///
+    /// `None`, the default, is right for most tools. Answer only for work it
+    /// would hurt to lose: not for what the tool laid out by itself and the
+    /// user never touched, not for what a moment brings back (a ruler), and
+    /// not once the work has been made part of the scene. Answer from the
+    /// tool's state as it is; this is asked with the tool up or put away.
+    fn scaffold_at_risk(&self, _loss: Loss) -> Option<String> {
         None
     }
 

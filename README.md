@@ -198,7 +198,9 @@ What an object starts with, as in the Unity app:
 Changing a symmetry is not an undo step, and no undo puts an older setting
 back, as in the Unity app: Z after ticking an axis steps back the last change
 to the model, and an object that Z brings back has the symmetry it was left
-with. Each object's symmetry is saved with it in the `.sclp` file.
+with. Each object's symmetry is saved with it in the `.sclp` file, so a scene
+whose symmetry has been changed has something to save: closing asks first
+(see Files), until it is saved or the setting is put back as it was.
 
 **World, exactly.** A World symmetry is worked out afresh from where the
 selected object stands each time a stroke begins, so moving or turning the
@@ -335,7 +337,12 @@ the solid preview, and when the tool is put away.
 Dragging on the background orbits, as everywhere else. The spheres mirror
 across X by default: one placed on the red plane is shared by both sides, one
 beside it gets a twin. They are a scaffold rather than an object, so they are
-not written to `.sclp` files: make the skin before closing the app.
+not written to `.sclp` files: make the skin before closing the app. The app
+asks before it closes over spheres that would be lost (two or more, not yet
+made into a skin, or changed since the skin was made), saved scene or not; it
+does not ask once Make Skin has used them as they stand. Opening another
+sculpt leaves the spheres standing where they are, let go of the object they
+were attached to.
 
 The spheres can be attached to an object (the **Attach** card). Attached,
 they mirror across that object's own plane and go with it when it is moved,
@@ -364,7 +371,9 @@ lengths: one unit is 10 mm, so the starting sphere is a 10 mm ball.
 | Esc | Cancel, then deselect, then put the tool away |
 
 Dragging on the background orbits. Rulers are a scaffold: not saved, and not
-on the undo history. The **Measure & Size** card in the Scene panel is there in
+on the undo history. Closing the app does not ask about them: a ruler is a
+reading, and one drag brings it back. Opening another sculpt leaves them where
+they are. The **Measure & Size** card in the Scene panel is there in
 every tool: it shows the selected object's real width, height and depth, and
 typing a size into one ("50", "2in", "1 1/4in") resizes the object as one undo
 step, evenly or along that axis alone.
@@ -464,7 +473,10 @@ alone, which Z reaches after the array's own edits.
 
 **Arrays in files.** An array is saved in the `.sclp` file with its object, so
 closing the app does not lose it: save, close, open, and it is there, live, on
-the same object, with its settings, its path, its pose and its mirror. The file
+the same object, with its settings, its path, its pose and its mirror. Making
+an array, or changing its count, its sizes, its ticks or its path, counts as a
+change to save although it is the Array tool's own step and not the scene's:
+closing asks first, and a recovery copy is kept of it (see Files). The file
 keeps what makes the copies (the kind, the count, the sizes, the ticks, the
 axis and sweep, and the path's points as offsets from the object), as the
 Unity app's did. The pose needs nothing of its own: it is the object's saved
@@ -517,7 +529,9 @@ closed loop, cap open ends, even triangles, **Radial Symmetry on Create**, and
 the Density, Radius, Height and Scale sliders; the preview is drawn at up to
 256 around and Create always uses the full Density. Dragging on the
 background orbits. The profile is a scaffold: not saved, with its own Z while
-the tool is up.
+the tool is up. The app asks before it closes over an outline you have shaped
+and not yet created (a preset as it was loaded is nothing to lose); opening
+another sculpt leaves the profile as it is.
 
 **Radial Symmetry on Create** (off to start with) gives the new object radial
 symmetry of its own, round the axis it was turned about (its own Y, which runs
@@ -598,7 +612,10 @@ tube there; here that is Ctrl + drag). Live tubes are a scaffold: not saved in
 `.sclp` files, and drawn only while the tool is up. Put it away and they wait,
 out of sight, until it is brought back (the Unity app hid them too: to see a
 tube among the rest of the model while you sculpt, merge it or keep it
-separate). While the tool is up Z steps the
+separate). The app asks before it closes over live tubes, saved scene or not,
+and before a sculpt is opened in place of the scene: a tube stands on the
+object it was drawn on, and goes when that object does (adding a sculpt's
+objects to the scene keeps them). While the tool is up Z steps the
 tubes' own edits first (a point moved, a slider changed), then the scene's.
 Merge and Keep Separate are steps of the scene's history: Z right after one
 gives the tubes back live, with the tool brought up if it was put away, and
@@ -699,7 +716,10 @@ gets the pegs, and under **Fit** the clearance, extra socket depth, chamfers,
 draft and minimum wall, all in millimetres. **Build Keys** changes both pieces
 in one undo step, in the background on a large model. The planned joints are a
 scaffold: not saved, kept when the tool is put away, and handed back when the
-build is undone, so Z then J is how built keys are changed. The pieces must
+build is undone, so Z then J is how built keys are changed. Once a joint has
+been placed, moved, turned or removed by hand the app asks before it closes,
+or opens a sculpt in place of the scene, over joints that are not built yet;
+joints the tool planned by itself and nobody touched are nothing to lose. The pieces must
 still be touching when the tool first comes up, since that is how it finds the
 pair; after that they can be moved apart and the joints stay on them.
 
@@ -722,10 +742,33 @@ pair; after that they can be moved apart and the joints stay on them.
   its objects added to it. Either is one undo step (undoing an Open brings back
   the scene as it was, live arrays included; see Array). If the scene has changes
   that are not saved it says so, and offers to save first. So does closing the
-  app (the window's close button, Alt + F4 or Ctrl + Q); with nothing unsaved
-  it just closes. "Unsaved" means something was sculpted, added, moved or
-  undone since the last save or open; changing only the look or the view does
-  not count.
+  app (the window's close button, Alt + F4 or Ctrl + Q); with nothing to lose
+  it just closes. "Unsaved" means the scene is not what its file holds:
+  something was sculpted, added, moved or undone since the last save or open,
+  or something was changed that is saved without being an undo step: an
+  object's symmetry (the Symmetry card, the X key), what the hide keys and
+  Local View show (H, Shift + H, Alt + H, /), or a live array (its count,
+  sizes, ticks, path). Those last are unsaved only while they differ from the
+  file: hide an object and show it again, or leave Local View, and there is
+  nothing to save. Changing only the look, the view or which object is
+  selected does not count.
+- **Work that is in no file is named before it is lost.** SSpheres, unmerged
+  tubes, planned keys and a lathe outline are scaffolds: a `.sclp` does not
+  hold them, so saving does not keep them. Closing the app with any of them
+  in hand asks first, even when the scene itself is saved, and says what
+  would go and what keeps it: "These are not kept in a file and will be lost:
+  an SSphere rig of 12 spheres (Make Skin first) and 3 unmerged tubes (Merge
+  or Keep Separate first)." If the scene has unsaved changes as well, the one
+  question says both, and that saving will not keep the scaffolds. In these
+  questions Enter is Cancel, as Esc is, so nothing is given up by a key
+  pressed in passing. Open asks the same way about what replacing the scene
+  would cost: tubes and planned keys stand on the scene's objects and go with
+  them, and "Add Its Objects to This Scene" keeps them. (SSpheres, a lathe
+  outline and rulers stand by themselves and are still there after an Open,
+  so Open does not name them.) Only work is named: not a single sphere, not a
+  preset or joints the tool laid out by itself, not spheres already made into
+  a skin, and never rulers, which a drag brings back. Import adds to the
+  scene, loses nothing and asks nothing.
 - **Undo of an Open brings the file name back too.** The scene from before
   returns with the file it had (the File card shows its name again, or
   "Unsaved" if it never had one), so Save writes it where it always went, or
@@ -819,8 +862,12 @@ pair; after that they can be moved apart and the joints stay on them.
   the run that wrote it is no longer running, so a second copy of the app
   open at the same time does not offer the first one's work. What is lost in
   the worst case (the power going, the program being killed) is the work
-  since the last copy, three minutes at most. SSpheres, unmerged tubes,
-  rulers and planned keys are not in a copy, as they are not in a save.
+  since the last copy, three minutes at most. A copy holds what a save
+  holds: a change that is saved without being an undo step (a symmetry, the
+  hide keys, an array) is owed a copy like any other and comes back with it.
+  SSpheres, unmerged tubes, rulers, planned keys and a lathe outline are not
+  in a copy, as they are not in a save: a crash loses them, and the restored
+  scene comes back without them.
 - **What went wrong is written down.** `%APPDATA%\Sculpt\log.txt` gathers the
   app's warnings and errors and, for a fault, what it was and where in the
   program; it starts again when it reaches a megabyte.
@@ -925,7 +972,10 @@ The **Objects** card at the top of the Scene panel is the scene graph.
   selected one by numbers, and the Transform gizmo by hand.
 - Every one of these is an undo step, a Join or a boolean included (one
   step brings the separate objects back, shown again if they were hidden). The hide keys and Local View are not, as in the
-  Unity app: undo steps past them and leaves what they hid hidden.
+  Unity app: undo steps past them and leaves what they hid hidden. What they hide
+  is saved with the scene all the same (a sculpt saved in Local View opens with
+  the rest hidden), so while it differs from the file the scene counts as
+  unsaved (see Files).
 
 ## Hidden parts
 
@@ -1043,9 +1093,11 @@ Ported from the Unity app, each described in its own section above:
 A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
 each start with a clear mask and everything showing.
 
-SSpheres, unmerged tubes, rulers and planned keys are scaffolds: they
-are not kept in `.sclp` files, so make the skin or merge the
-tube before closing the app.
+SSpheres, unmerged tubes, rulers, planned keys and the lathe's outline are
+scaffolds: they are not kept in `.sclp` files or in recovery copies, so make
+the skin, merge the tube, build the keys or create the mesh before closing the
+app. The app asks before it closes over any of them but rulers, and before an
+Open that would take the tubes or the planned keys with the scene (see Files).
 
 Left out on purpose: the Unity app's mold maker and hard-surface tool.
 
@@ -1083,7 +1135,11 @@ sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a n
 sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 frames (SCULPT_DEMO_CAMERA=close closes the app instead) and checks nothing is left
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
-sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-exit | ask-open | ask-open-clean | play
+sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-open-clean | play
+sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-exit   # the question the close button would ask of the scene the other options left: here unsaved strokes and a live tube; ask-open is the one choosing a file would ask
+sculpt.exe --screenshot out.png --demo-spheres attached --demo-tool tube --demo-files ask-exit:saved   # the same with the scene taken for saved: only what is in no file is left to ask about
+sculpt.exe --screenshot out.png --demo-files ask-exit:mirror   # a change that is saved without an undo step, made first: mirror (the X key) | hide (H) | local (/)
+sculpt.exe --screenshot out.png --demo-files lost   # what closing and opening would lose, worked through the keys and every tool; prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files open-undo   # Open, Undo, Redo and Save in every order, looking at what is in the files after each; prints a line per check (name a .sclp or .sculpt to start from that file; open-undo:opened and open-undo:undone stop after an Open, and after its Undo, for a picture of the File card)
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
@@ -1106,7 +1162,11 @@ frame: `stroke@30`, `scene@40` (prints a fingerprint of the scene),
 `save@45` (to `saved by the check.sclp` in the settings folder), `open@46`
 (opens `to open.sclp` from that folder in place of the scene), `undo@47`,
 `redo@48`, `file@49` (prints the name of the scene's file and whether
-anything is unsaved), `quit@50` (a clean exit), `kill@50` (ends the program on the
+anything is unsaved), `mirror@50`, `hide@50`, `show@50` and `local@50` (the
+X, H, Alt + H and / keys: changes that are saved without an undo step),
+`kept@50` (prints a fingerprint of what the file would keep of the objects
+besides their meshes: the same after a restore as before the crash),
+`close@50` (prints what the close button would ask), `quit@50` (a clean exit), `kill@50` (ends the program on the
 spot), `panic@50`, `stroke-panic@50` (a panic half way through a stroke),
 `job-panic@50` (a panic in a background job, which must come back as an
 error and leave the app running), `graphics-error@50` and `device-lost@50`.
@@ -1117,6 +1177,8 @@ export SCULPT_SETTINGS_DIR=D:/some/empty/folder   # every line below needs it
 SCULPT_TEST_RECOVERY=every=0.3,stroke@20,scene@200,stroke@205,scene@210,panic@211 sculpt.exe --size 1600x960 --demo   # two fingerprints, then "stopped: Kept"; log.txt and recovery/ appear in the folder
 SCULPT_TEST_RECOVERY=on sculpt.exe --size 1600x960 --screenshot out.png                     # the question about the copy
 SCULPT_TEST_RECOVERY=answer=restore,scene@5,quit@8 sculpt.exe --size 1600x960               # prints the second fingerprint again; recovery/ is then empty
+SCULPT_TEST_RECOVERY=every=0.3,mirror@20,kept@26,kill@200 sculpt.exe --size 1600x960        # a change that is no undo step still gets a copy ("copy copy-0001.sclp ...")
+SCULPT_TEST_RECOVERY=answer=restore,kept@5,quit@8 sculpt.exe --size 1600x960                # and comes back with it: the same "kept" line
 cargo test --release timing_of_a_recovery_copy -- --ignored --nocapture                     # what a copy costs at 1M / 4M / 12M triangles
 ```
 

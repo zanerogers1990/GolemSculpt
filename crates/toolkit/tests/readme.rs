@@ -154,3 +154,18 @@ fn the_readme_hooks_keep_a_count_for_an_object_through_a_file_and_clamp_what_the
     fresh.load_objects(vec![(opened[0], Saved::fields([("count", 1.0e9.into())]))], Arrival::Added);
     assert_eq!(fresh.counts.get(&opened[0]), Some(&100), "one that fits is brought into range");
 }
+
+/// `Tool::scaffold_at_risk` is optional: a tool that does not write it holds nothing the app
+/// should ask about before closing or opening.
+#[test]
+fn a_tool_that_says_nothing_of_scaffolds_has_none_at_risk() {
+    use sculpt_toolkit::Loss;
+    let mut bench = Bench::new();
+    bench.add("Cube", cube(0.5));
+    let (mut dropper, counter) = (Dropper::default(), Counter::default());
+    bench.enter(&mut dropper);
+    for loss in [Loss::Closing, Loss::SceneReplaced] {
+        assert_eq!(dropper.scaffold_at_risk(loss), None);
+        assert_eq!(counter.scaffold_at_risk(loss), None);
+    }
+}

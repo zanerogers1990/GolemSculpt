@@ -28,7 +28,7 @@ pub use scene::{
     Baked, Command, Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Receipt,
     Scene, Symmetry,
 };
-pub use tool::{Button, Event, GizmoPhase, GizmoTarget, Info, Key, Mods, RadialItem, Tool};
+pub use tool::{Button, Event, GizmoPhase, GizmoTarget, Info, Key, Loss, Mods, RadialItem, Tool};
 pub use view::{Ray, View};
 
 /// An object's live mirror copies, as `ObjectInfo::mirror` and
