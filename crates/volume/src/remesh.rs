@@ -13,20 +13,12 @@ use glam::Vec3;
 use rayon::prelude::*;
 use sculpt_geom::TriMesh;
 
+use crate::budget::{self, Job};
+// The limits are kept in one place; these names are where callers have always found them.
+pub use crate::budget::{MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION};
 use crate::extract::{self, ExtractOptions, Stats, Surface};
 use crate::grid::Grid;
 use crate::scan::Scan;
-
-/// Fewest and most cells along the model's longest side. Requests outside
-/// the range are brought into it rather than refused.
-pub const MIN_RESOLUTION: u32 = 4;
-pub const MAX_RESOLUTION: u32 = 4096;
-
-/// Most triangles a remesh makes unless told otherwise. This, not the
-/// resolution, is the real ceiling: resolution counts cells along the longest
-/// side only, so one number gives wildly different triangle counts by shape
-/// (a slender worm came out at 681k where a compact model reached 10M).
-pub const MAX_TRIANGLES: usize = 40_000_000;
 
 /// Output triangles per unit of source area, in cells. Surface Nets theory
 /// gives twice the mean of |nx| + |ny| + |nz| (1.5 over a sphere); 2.8 was
@@ -141,6 +133,70 @@ pub fn remesh(mesh: &TriMesh, resolution: u32, mirror: [bool; 3]) -> Result<TriM
     remesh_with(&mesh.positions, &mesh.indices, &settings).map(|r| r.mesh)
 }
 
+/// What a model is told when it lies wholly behind one of its mirror planes.
+/// A mirrored rebuild keeps the half on the positive side of each plane and
+/// reflects it (see [`RemeshSettings::mirror`]): of this model, nothing.
+const FAR_SIDE: &str = "The model lies wholly on the far side of its mirror plane, so its mirror image is empty. \
+                        Turn the mirror off for this, or move the model across the plane.";
+
+/// Whether everything up to `highest` (the top corner of some bounds) lies
+/// behind one of the `mirror` planes, where a mirrored rebuild keeps nothing.
+/// On the plane counts as behind it: there is no thickness there to keep.
+pub(crate) fn behind_mirror(highest: Vec3, mirror: [bool; 3]) -> bool {
+    (0..3).any(|axis| mirror[axis] && highest[axis] <= 0.0)
+}
+
+/// Refuses a model whose bounds reach no higher than `highest` if a rebuild
+/// mirrored across `mirror` would leave nothing of it, in the words
+/// [`remesh_with`] uses.
+///
+/// This is asked before anything about size is. Too many triangles and too
+/// much memory are both answered with a lower resolution to try, and for
+/// this model there is none: it was sent from 1024 to 740, and at 740 told
+/// that it lay on the far side of its mirror plane. A caller with a size
+/// limit of its own to apply first asks this before that.
+pub fn check_mirror_side(highest: Vec3, mirror: [bool; 3]) -> Result<(), String> {
+    if behind_mirror(highest, mirror) { Err(FAR_SIDE.into()) } else { Ok(()) }
+}
+
+/// What a remesh works on, once everything that can be asked beforehand has
+/// been: its lattice, and the cell and resolution that lattice is of.
+#[derive(Debug)]
+struct Admitted {
+    grid: Grid,
+    cell: f32,
+    resolution: u32,
+}
+
+/// Everything asked of a remesh before the model is read: whether there is
+/// a model, and whether what rebuilding it would take can be afforded.
+fn admit(positions: &[Vec3], indices: &[u32], settings: &RemeshSettings) -> Result<Admitted, String> {
+    let bounds = crate::check_mesh(positions, indices)?;
+    let extent = bounds.size().max_element();
+    if !(extent > 0.0) {
+        return Err("The model has no size.".into());
+    }
+    check_mirror_side(bounds.max, settings.mirror)?;
+    let area = surface_area(positions, indices);
+    let (resolution, _) = budgeted_resolution(area, extent as f64, settings.resolution, settings.max_triangles);
+    // Before anything is allocated: what the lattice and the scan will take.
+    let job_at = |resolution: u32| {
+        let cell = extent / resolution as f32;
+        let crossings = budget::crossings(positions, indices, &bounds, settings.mirror, cell);
+        Job { bounds, cell, mirror: settings.mirror, solids: 1, crossings }
+    };
+    let grid = budget::plan(resolution, job_at).map_err(|refused| refused.message(&budget::MODEL))?;
+    Ok(Admitted { grid, cell: extent / resolution as f32, resolution })
+}
+
+/// Whether [`remesh_with`] would set to work on this, or refuse it for its
+/// place or its size, and in what words. Nothing is read onto a lattice and
+/// nothing allocated: this is for a caller with a refusal of its own to
+/// word, which wants to offer a resolution that will not be refused in turn.
+pub fn admits(positions: &[Vec3], indices: &[u32], settings: &RemeshSettings) -> Result<(), String> {
+    admit(positions, indices, settings).map(|_| ())
+}
+
 /// [`remesh()`] from plain arrays, with every setting and the full result.
 ///
 /// The triangles need not be one clean shell. Closed shells that overlap
@@ -148,26 +204,13 @@ pub fn remesh(mesh: &TriMesh, resolution: u32, mirror: [bool; 3]) -> Result<TriM
 /// passes through itself is fused, and holes are capped, each flat across its
 /// own rim, whether three missing triangles or the open base of a bust.
 pub fn remesh_with(positions: &[Vec3], indices: &[u32], settings: &RemeshSettings) -> Result<Remeshed, String> {
-    let bounds = crate::check_mesh(positions, indices)?;
-    let extent = bounds.size().max_element();
-    if !(extent > 0.0) {
-        return Err("The model has no size.".into());
-    }
-    let area = surface_area(positions, indices);
-    let (resolution, _) = budgeted_resolution(area, extent as f64, settings.resolution, settings.max_triangles);
-    let cell = extent / resolution as f32;
-    let grid = Grid::covering(&bounds, cell)?.mirrored(settings.mirror);
+    let Admitted { grid, cell, resolution } = admit(positions, indices, settings)?;
     let scan = Scan::new(positions, indices, &grid)?;
     // The estimate can be low for a crumpled surface: allow half as much again
     // before refusing outright.
     let options = ExtractOptions { mirror: settings.mirror, max_vertices: settings.max_triangles / 4 * 3 };
     let surface = extract::extract(&scan, &grid, &options).map_err(|error| {
-        let behind = (0..3).any(|a| settings.mirror[a] && bounds.max[a] <= 0.0);
-        if behind && !scan.encloses_nothing() {
-            "The model lies wholly on the far side of its mirror plane, so its mirror image is empty. \
-             Turn the mirror off for this, or move the model across the plane."
-                .to_string()
-        } else if scan.open_fraction() > 0.5 {
+        if scan.open_fraction() > 0.5 {
             "The model is not a closed surface, so it has no inside to rebuild. Close its holes first.".to_string()
         } else {
             error
@@ -448,7 +491,7 @@ mod tests {
         let behind = icosphere(4, 0.3, Vec3::new(-1.0, 0.1, 0.0));
         let settings = settings(48, [true, false, false]);
         let error = remesh_with(&behind.positions, &behind.indices, &settings).unwrap_err();
-        assert!(error.contains("far side of its mirror plane"), "{error}");
+        assert_eq!(error, FAR_SIDE);
 
         let mut lopsided = icosphere(4, 0.5, Vec3::new(0.11, 0.03, 0.0));
         lopsided.append(&icosphere(3, 0.2, Vec3::new(-0.45, 0.2, 0.1)));
@@ -744,6 +787,101 @@ mod tests {
         let sheet = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X + Vec3::Y];
         let error = try_with(&sheet, &[0, 1, 2, 2, 1, 3]).unwrap_err();
         assert!(error.contains("closed"), "{error}");
+    }
+
+    /// A small model a long way off two of its mirror planes, at the highest
+    /// resolution the app's slider has. The lattice has to reach from the
+    /// model to its mirror images: 53,254 samples a side at 25 model-lengths
+    /// off, whose lines along z alone were an 11.3 GB table, asked for
+    /// without a word. Now refused from the numbers, saying what to do. (At
+    /// 40 lengths off the old code refused too, the lattice being longer than
+    /// a lattice can be, but only with "too fine for this model".)
+    #[test]
+    fn a_model_far_from_two_mirror_planes_is_refused_with_what_to_do_about_it() {
+        for (off, said) in [(40.0, "40"), (25.0, "25")] {
+            let middle = Vec3::new(off, off, 0.0);
+            let rivet = box_mesh(middle - 0.5, middle + 0.5);
+            let error = remesh_with(&rivet.positions, &rivet.indices, &settings(1024, [true, true, false])).unwrap_err();
+            let start = format!("The model is about {said} times its own size away from its X and Y mirror planes. ");
+            assert!(error.starts_with(&start), "{error}");
+            assert!(error.contains(" Turn the X and Y mirrors off for this, or lower the resolution to "), "{error}");
+        }
+    }
+
+    /// A model wholly on the far side of a mirror plane has no resolution at
+    /// which it can be rebuilt mirrored, so it is never offered one: a cube
+    /// forty lengths off on the negative side at 1024 used to be told to
+    /// "lower the resolution to 740 or less", and at 740 that it lay on the
+    /// far side of its mirror plane. It is told that at once, at any
+    /// resolution, and nothing is read or allocated first.
+    #[test]
+    fn a_model_on_the_far_side_of_its_mirror_plane_is_never_offered_a_resolution() {
+        let far = box_mesh(Vec3::new(-40.5, -0.5, -0.5), Vec3::new(-39.5, 0.5, 0.5));
+        // Touching the plane from behind is behind it: nothing of the model is on the side that is kept.
+        let touching = box_mesh(Vec3::new(-1.0, -0.5, -0.5), Vec3::new(0.0, 0.5, 0.5));
+        for (model, mirror) in [(&far, [true, false, false]), (&far, [true, true, false]), (&touching, [true; 3])] {
+            for resolution in [MAX_RESOLUTION, 1024, 740, 64, MIN_RESOLUTION] {
+                let error = admit(&model.positions, &model.indices, &settings(resolution, mirror)).unwrap_err();
+                assert_eq!(error, FAR_SIDE, "at {resolution}, mirrored {mirror:?}");
+            }
+        }
+        let error = remesh_with(&far.positions, &far.indices, &settings(740, [true, false, false])).unwrap_err();
+        assert_eq!(error, FAR_SIDE);
+        // On the side that is kept, as far off, it is the distance that is spoken of, with a resolution.
+        let near = box_mesh(Vec3::new(39.5, -0.5, -0.5), Vec3::new(40.5, 0.5, 0.5));
+        let error = admit(&near.positions, &near.indices, &settings(1024, [true, false, false])).unwrap_err();
+        assert!(error.contains("or lower the resolution to "), "{error}");
+        // And behind a plane that is not a mirror, there is nothing to say.
+        assert!(admit(&far.positions, &far.indices, &settings(64, [false, true, true])).is_ok());
+    }
+
+    /// The resolution a refusal offers is one the same asking then lets
+    /// through: models off one, two and three mirror planes, near and far,
+    /// over the resolutions there are.
+    #[test]
+    fn the_resolution_a_refusal_offers_is_then_admitted() {
+        let mut offers = 0;
+        for off in [3.0, 10.0, 25.0, 40.0, 55.0] {
+            for mirror in [[true, false, false], [true, true, false], [true; 3]] {
+                let middle = Vec3::new(off, off * 0.7, off * 0.4);
+                let rivet = box_mesh(middle - Vec3::new(0.5, 0.3, 0.2), middle + Vec3::new(0.5, 0.3, 0.2));
+                for resolution in [MAX_RESOLUTION, 3000, 2048, 1024, 740, 512, 100, 17] {
+                    let asked = |resolution: u32| admit(&rivet.positions, &rivet.indices, &settings(resolution, mirror));
+                    let Err(error) = asked(resolution) else { continue };
+                    let Some(offered) = crate::testing::offered_resolution(&error) else { continue };
+                    offers += 1;
+                    assert!(offered < resolution, "{error}");
+                    let again = asked(offered);
+                    let again = again.unwrap_or_else(|second| panic!("{off}, {mirror:?}: {error:?}, and then {second:?}"));
+                    assert_eq!(again.resolution, offered);
+                }
+            }
+        }
+        assert!(offers > 20, "only {offers} refusals offered a resolution");
+    }
+
+    /// Off-centre is not refused for its own sake: ten lengths from one
+    /// plane is a long thin lattice and nothing more.
+    #[test]
+    fn a_model_some_way_off_one_mirror_plane_is_still_rebuilt_with_its_twin() {
+        let aside = icosphere(4, 0.5, Vec3::new(10.0, 0.2, -0.1));
+        let out = rebuilt(&aside, 64, [true, false, false]);
+        assert_closed(&out.mesh, "sphere ten lengths off its plane");
+        assert_eq!(shells(&out.mesh), 2);
+        assert!((out.mesh.signed_volume() / (2.0 * sphere_volume(0.5)) - 1.0).abs() < 0.01);
+    }
+
+    /// The app's highest setting on a model that sits on its mirror planes,
+    /// start to finish: twelve million triangles. Slow for every run of the
+    /// tests, so run by name; `budget`'s own tests check the sums for this
+    /// and for the kernel's highest resolution.
+    #[test]
+    #[ignore = "seconds: cargo test -p sculpt-volume the_apps_highest_resolution -- --ignored"]
+    fn the_apps_highest_resolution_is_still_accepted() {
+        let cube = box_mesh(Vec3::splat(-0.5), Vec3::splat(0.5));
+        let out = remesh_with(&cube.positions, &cube.indices, &settings(1024, [true; 3])).unwrap();
+        assert_eq!(out.resolution, 1024);
+        assert!(out.mesh.triangle_count() > 12_000_000, "{} triangles", out.mesh.triangle_count());
     }
 
     #[test]

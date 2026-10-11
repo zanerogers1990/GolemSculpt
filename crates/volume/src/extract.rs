@@ -720,7 +720,11 @@ fn extract_as_is<S: CellSource>(source: &S, grid: &Grid, options: &ExtractOption
     if grid.n.iter().any(|&n| n < 2) {
         return Err("The grid is too small to hold a surface.".into());
     }
-    if grid.n.iter().any(|&n| n > crate::grid::MAX_SAMPLES) {
+    // Cells are numbered in 16 bits a side, and a table is kept with an
+    // entry for every row of them (`budget` asks about both beforehand, for
+    // those who go through it).
+    let rows_too_many = crate::budget::row_table_bytes(grid) > crate::budget::MAX_BYTES;
+    if grid.n.iter().any(|&n| n > crate::grid::MAX_SAMPLES) || rows_too_many {
         return Err("That resolution is too fine for this model. Try a lower one.".into());
     }
     let cells = find_cells(source, grid);

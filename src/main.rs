@@ -176,6 +176,8 @@ fn window_options(args: &[String]) -> app::Args {
             "--demo-pose" => opts.demo_pose = it.next().cloned(),
             // Saving, opening and the questions about unsaved work: recent | ask-exit | ask-open | ask-open-clean | play | open-undo
             "--demo-files" => opts.demo_files = it.next().cloned(),
+            // A picture imported as a matcap and shaded with, without the file box: any size.
+            "--demo-matcap" => opts.demo_matcap = it.next().map(PathBuf::from),
             // The printing check on a damaged object: check | closed | export | remesh | quads | damaged | play
             "--demo-print" => opts.demo_print = it.next().cloned(),
             "--flat" => opts.flat = true,

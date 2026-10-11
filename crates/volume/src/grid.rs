@@ -49,6 +49,18 @@ impl Grid {
     }
 
     pub fn covering_padded(bounds: &Aabb, cell: f32, pad: i64) -> Result<Grid, String> {
+        let reach = Grid::reach(bounds, cell, pad)?;
+        if reach.iter().any(|&(_, count)| count > MAX_SAMPLES as i64) {
+            return Err("That resolution is too fine for this model. Try a lower one.".into());
+        }
+        Ok(Grid { cell, lo: reach.map(|(first, _)| first as i32), n: reach.map(|(_, count)| count as usize) })
+    }
+
+    /// The lattice index of the first sample and the number of samples that
+    /// cover `bounds` on each axis, with nothing yet said about whether that
+    /// many can be afforded: [`crate::budget`] asks before a lattice is made,
+    /// and has to be able to hear an answer far too large to make.
+    pub(crate) fn reach(bounds: &Aabb, cell: f32, pad: i64) -> Result<[(i64, i64); 3], String> {
         if bounds.is_empty() || !bounds.min.is_finite() || !bounds.max.is_finite() {
             return Err("The model has no size.".into());
         }
@@ -56,8 +68,7 @@ impl Grid {
             return Err("The cell size must be more than zero.".into());
         }
         let h = cell as f64;
-        let mut lo = [0i32; 3];
-        let mut n = [0usize; 3];
+        let mut reach = [(0i64, 0i64); 3];
         for a in 0..3 {
             let first = (bounds.min[a] as f64 / h - 0.5).floor() - pad as f64;
             let last = (bounds.max[a] as f64 / h - 0.5).ceil() + pad as f64;
@@ -66,26 +77,25 @@ impl Grid {
                             Centre it or lower the resolution."
                     .into());
             }
-            let count = (last - first) as usize + 1;
-            if count > MAX_SAMPLES {
-                return Err("That resolution is too fine for this model. Try a lower one.".into());
-            }
-            lo[a] = first as i32;
-            n[a] = count;
+            reach[a] = (first as i64, (last - first) as i64 + 1);
         }
-        Ok(Grid { cell, lo, n })
+        Ok(reach)
+    }
+
+    /// One axis of a lattice, widened until it is its own mirror image across
+    /// the coordinate plane: samples `first..-1` lie below the plane and `0..`
+    /// above it.
+    pub(crate) fn mirrored_reach((first, count): (i64, i64)) -> (i64, i64) {
+        let half = (-first).max(first + count).max(1);
+        (-half, 2 * half)
     }
 
     /// Widened along the chosen axes until the lattice is its own mirror image
     /// across those coordinate planes.
     pub fn mirrored(mut self, axes: [bool; 3]) -> Grid {
-        for a in 0..3 {
-            if axes[a] {
-                // Samples lo..-1 lie below the plane and 0.. above it.
-                let half = (-(self.lo[a] as i64)).max(self.lo[a] as i64 + self.n[a] as i64).max(1);
-                self.lo[a] = -half as i32;
-                self.n[a] = 2 * half as usize;
-            }
+        for a in (0..3).filter(|&a| axes[a]) {
+            let (first, count) = Grid::mirrored_reach((self.lo[a] as i64, self.n[a] as i64));
+            (self.lo[a], self.n[a]) = (first as i32, count as usize);
         }
         self
     }

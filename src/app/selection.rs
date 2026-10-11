@@ -82,7 +82,9 @@ pub(super) fn boolean(
         }
     }
     let solids: Vec<&TriMesh> = cutters.iter().collect();
-    let built = sculpt_volume::boolean_with(&target, &solids, op, settings).map_err(|e| format!("Nothing changed. {e}"))?;
+    // What the engine calls the first object is the one being kept, which has a name.
+    let built = sculpt_volume::boolean_with(&target, &solids, op, settings)
+        .map_err(|e| format!("Nothing changed. {}", remesh::named(e, &scene.active().name)))?;
     let notes = Notes::of(&built);
     let mesh = Mesh::new(built.mesh.positions, built.mesh.indices, None);
     let triangles = mesh.triangle_count();
@@ -207,7 +209,9 @@ impl Running {
         // A plain join keeps every hole its parts had; a remesh closes them.
         let remeshed = rebuild.is_some() && remesh_failed.is_none();
         text += &match (rebuild, remesh_failed) {
-            (_, Some(why)) => format!(" The remesh did not run ({why}), so the parts are as they were."),
+            (_, Some(why)) => {
+                format!(" The remesh did not run ({}), so the parts are as they were.", remesh::named(why, name))
+            }
             (Some(_), None) => format!(" It was remeshed into one surface.{}", notes.after_remesh()),
             (None, None) => String::new(),
         };
@@ -402,7 +406,9 @@ impl Running {
     /// variable `SCULPT_DEMO_SELECT` asks for more: `ask` also presses Delete,
     /// to show the question that asks, `local` turns Local View on for the
     /// three, `subtract`, `union` and `intersect` show that boolean of the
-    /// cube and the sphere, and `play` runs `selection_play` first.
+    /// cube and the sphere, `apart`, `aside` and `behind` ask for a union and
+    /// a remesh that will not be started (`demo_too_big`), and `play` runs
+    /// `selection_play` first.
     pub(super) fn demo_select(&mut self) {
         let extra = std::env::var("SCULPT_DEMO_SELECT").unwrap_or_default();
         if extra == "play" {
@@ -426,7 +432,39 @@ impl Running {
             "subtract" => self.demo_boolean(BooleanOp::Subtract),
             "union" => self.demo_boolean(BooleanOp::Union),
             "intersect" => self.demo_boolean(BooleanOp::Intersect),
+            "apart" | "aside" | "behind" => self.demo_too_big(&extra),
             _ => {}
+        }
+    }
+
+    /// A job the engine will not start, at the highest resolution the sliders
+    /// have, to see what the status line says of it. `apart`: the demo
+    /// scene's cube united with its sphere sixty cube-lengths away on two
+    /// axes. `aside`: the cube's own mesh moved forty lengths off its X
+    /// mirror plane (as a piece split off a figure lies off the figure's),
+    /// and remeshed there with Mirror X on. `behind`: the same on the other
+    /// side of the plane, where a mirrored rebuild would keep nothing.
+    fn demo_too_big(&mut self, what: &str) {
+        let apart = what == "apart";
+        let named = |app: &Running, name: &str| app.doc.scene.objects.iter().find(|o| o.name == name).map(|o| o.id);
+        let (Some(cube), Some(ball)) = (named(self, "Cube"), named(self, "Sphere (1)")) else { return };
+        self.act(Action::SelectObject(cube));
+        let across = self.doc.mesh.bounds().size().max_element();
+        if apart {
+            let far = self.doc.scene.active().position + Vec3::new(60.0, 60.0, 0.0) * across;
+            if let Some(o) = self.doc.scene.get_mut(ball) {
+                o.position = far;
+            }
+            self.act(Action::SelectAlso(ball));
+            self.act(Action::Boolean { op: BooleanOp::Union, resolution: 1024, delete: false });
+        } else {
+            let side = if what == "behind" { -1.0 } else { 1.0 };
+            let aside = |p: &Vec3| *p + Vec3::X * 40.0 * across * side;
+            let positions = self.doc.mesh.positions.iter().map(aside).collect();
+            self.replace_mesh(Mesh::new(positions, self.doc.mesh.indices.clone(), None), true);
+            self.doc.edit_symmetry(|symmetry| symmetry.mirror = [true, false, false]);
+            self.doc.opts.remesh_resolution = 1024.0;
+            self.act(Action::Remesh);
         }
     }
 
@@ -858,6 +896,43 @@ mod tests {
         let alone = boolean(&mut scene, &mut mesh, &mut history, BooleanOp::Subtract, &settings, Others::Hidden);
         assert_eq!(alone.unwrap_err(), "Select the target first, then Ctrl + click the other object.");
         assert_eq!(history.steps(), (1, 0));
+    }
+
+    /// Jobs the engine will not start for the memory they would take, at the
+    /// highest setting the Voxel Resolution slider has: nothing is changed,
+    /// nothing goes on the undo history, and the line says what to do.
+    #[test]
+    fn a_boolean_too_big_to_start_changes_nothing_and_says_what_to_do() {
+        let highest = BooleanSettings::new(1024);
+        // United with a cube 60 lengths away along two axes: the grid would have to cover all between.
+        let (mut scene, mut mesh, _, _) = pair(Vec3::new(60.0, 60.0, 0.0));
+        let mut history = History::default();
+        let (uid, before) = (mesh.uid, scene.state());
+        let refused = boolean(&mut scene, &mut mesh, &mut history, BooleanOp::Union, &highest, Others::Hidden);
+        let said = refused.unwrap_err();
+        let start = "Nothing changed. The objects are too far apart to unite at this resolution: the grid has to \
+                     reach across all of them. Move them closer together, or lower the resolution to ";
+        assert!(said.starts_with(start) && said.ends_with(" or less."), "{said}");
+        assert_eq!((mesh.uid, scene.state()), (uid, before));
+        assert!(!history.can_undo());
+
+        // Cut mirrored, with the kept object's own mesh 40 lengths from its mirror plane: it is named.
+        let (mut scene, mut mesh, _, _) = pair(Vec3::new(40.4, 0.3, 0.2));
+        mesh.positions.iter_mut().for_each(|p| p.x += 40.0);
+        let (uid, before) = (mesh.uid, scene.state());
+        let mirrored = BooleanSettings { mirror: [true, false, false], ..highest };
+        for op in [BooleanOp::Subtract, BooleanOp::Intersect] {
+            let said = boolean(&mut scene, &mut mesh, &mut history, op, &mirrored, Others::Hidden).unwrap_err();
+            let start = "Nothing changed. \"Cube\" is about 40 times its own size away from its X mirror plane. ";
+            assert!(said.starts_with(start), "{op:?}: {said}");
+            assert!(said.contains(" Turn the X mirror off for this, or lower the resolution to "), "{op:?}: {said}");
+            assert_eq!((mesh.uid, scene.state()), (uid, before.clone()));
+            assert!(!history.can_undo());
+        }
+        // With the mirror off the same cut is an ordinary one.
+        let plain = BooleanSettings::new(RESOLUTION);
+        boolean(&mut scene, &mut mesh, &mut history, BooleanOp::Subtract, &plain, Others::Hidden).unwrap();
+        assert!((volume(&mesh) - (1.0 - 0.6 * 0.7 * 0.8)).abs() < TOLERANCE, "volume {}", volume(&mesh));
     }
 
     #[test]

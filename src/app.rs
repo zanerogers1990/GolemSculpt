@@ -121,6 +121,9 @@ pub struct Args {
     pub loop_cancel: Option<u32>,
     /// Record a timelapse of a few scripted strokes to this file, then close.
     pub demo_timelapse: Option<PathBuf>,
+    /// Import this picture as a matcap and shade with it, by the routine
+    /// under Import Matcap (for visual checks; no file box is opened).
+    pub demo_matcap: Option<PathBuf>,
     /// Save and open scripted scenes, or put up a question about unsaved
     /// work (for visual checks; see app/files.rs).
     pub demo_files: Option<String>,
@@ -545,6 +548,9 @@ impl Running {
             if let Some(path) = crate::look::apply_spec(&mut running.doc.opts, &spec, size) {
                 running.load_hdri(path);
             }
+        }
+        if let Some(picture) = running.args.demo_matcap.clone() {
+            running.import_matcap(&picture);
         }
         if let Some(what) = running.args.demo_files.clone() {
             running.files_demo(&what);
@@ -1155,7 +1161,10 @@ impl Running {
                         let text = format!("Remeshed to {tris} triangles in {ms:.0} ms.{}", notes.after_remesh());
                         self.status_checked(text, Cure::OtherResolution);
                     }
-                    Err(e) => self.status(e, false),
+                    Err(e) => {
+                        let name = self.doc.scene.active().name.clone();
+                        self.status(remesh::named(e, &name), false);
+                    }
                 }
             }
             Action::QuadRemesh => {
@@ -1212,13 +1221,7 @@ impl Running {
                     .add_filter("Matcap pictures", &["png", "jpg", "jpeg"])
                     .pick_file();
                 if let Some(path) = picked {
-                    match self.ui.assets.import_matcap(&self.egui_ctx, &path, &mut self.doc.opts.matcap) {
-                        Ok(message) => {
-                            self.act(Action::Matcap(self.doc.opts.matcap));
-                            self.status(message, true);
-                        }
-                        Err(e) => self.status(e, false),
-                    }
+                    self.import_matcap(&path);
                 }
             }
             Action::RescanMatcaps => {
@@ -1299,6 +1302,27 @@ impl Running {
 
     /// Rebuilds the per-frame view from the camera (and measures the distance
     /// to the nearest visible surface, which zoom and the near plane use).
+    /// Import Matcap, once a picture has been picked: copies it into the
+    /// matcap folder, shades with it, and says so. A picture larger than the
+    /// graphics device takes is shown smaller (`render::mips::fitted`), and
+    /// the line says that too.
+    fn import_matcap(&mut self, path: &std::path::Path) {
+        match self.ui.assets.import_matcap(&self.egui_ctx, path, &mut self.doc.opts.matcap) {
+            Ok(mut message) => {
+                self.act(Action::Matcap(self.doc.opts.matcap));
+                if let Ok((width, height)) = image::image_dimensions(path) {
+                    let (w, h) = self.gpu.fitted_size(width, height);
+                    if (w, h) != (width, height) {
+                        let shown = format!("larger than this graphics card takes, so it is shown at {w} x {h}");
+                        message += &format!(". It is {width} x {height}, {shown}.");
+                    }
+                }
+                self.status(message, true);
+            }
+            Err(e) => self.status(e, false),
+        }
+    }
+
     /// Loads `path` as the environment picture and switches HDRI lighting
     /// on. A file that cannot be read leaves the previous picture in place.
     fn load_hdri(&mut self, path: PathBuf) {

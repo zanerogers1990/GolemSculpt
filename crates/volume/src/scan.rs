@@ -47,6 +47,7 @@
 use glam::{DVec2, DVec3, Vec3};
 use rayon::prelude::*;
 
+use crate::budget;
 use crate::extract::{CellSource, Hermite, hermite_from_edges, values_from_edges};
 use crate::grid::{Grid, MAX_SAMPLES, lattice_index};
 use crate::parallel;
@@ -328,6 +329,38 @@ const WIDE_ROW: usize = 8;
 /// single core.
 const SHARED_OUT: usize = 1 << 15;
 
+/// The crossings one piece of work found along one axis, in pieces: the run
+/// of small triangles under way, and before it whatever is finished, each
+/// piece no larger than what it holds.
+///
+/// Pieces rather than one vector because all of them are joined into one
+/// array afterwards (`Scan::passes`), and until then every spare byte in
+/// them is held as well as that array's. A vector grown by pushing has up to
+/// as much room spare as it has in use, and copying finished pieces into it
+/// holds them twice over while it grows.
+#[derive(Default)]
+struct Found {
+    done: Vec<Vec<Crossing>>,
+    run: Vec<Crossing>,
+}
+
+impl Found {
+    /// Puts a finished piece by, with no room to spare.
+    fn keep(&mut self, mut piece: Vec<Crossing>) {
+        if !piece.is_empty() {
+            piece.shrink_to_fit();
+            self.done.push(piece);
+        }
+    }
+
+    /// Everything found, in the order it was found.
+    fn into_pieces(mut self) -> Vec<Vec<Crossing>> {
+        let run = std::mem::take(&mut self.run);
+        self.keep(run);
+        self.done
+    }
+}
+
 /// Adds the crossings of one triangle with the lattice lines along `axis`,
 /// given the samples its bounds take in on the other two axes. `normal` is
 /// the triangle's packed normal, worked out the first time any axis needs it.
@@ -338,7 +371,7 @@ fn rasterize(
     axis: usize,
     [(u0, u1), (v0, v1)]: [(usize, usize); 2],
     normal: &mut Option<u32>,
-    out: &mut Vec<Crossing>,
+    out: &mut Found,
 ) {
     let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
     let q = p.map(|p| DVec2::new(p[u] as f64, p[v] as f64));
@@ -379,21 +412,23 @@ fn rasterize(
                 }
             };
             if (vb - va) * (ub - ua) < SHARED_OUT {
-                (va..vb).for_each(|iv| row(iv, out));
+                (va..vb).for_each(|iv| row(iv, &mut out.run));
             } else {
                 let rows = (va..vb).into_par_iter().fold(Vec::new, |mut part, iv| {
                     row(iv, &mut part);
                     part
                 });
-                rows.collect::<Vec<_>>().iter().for_each(|part| out.extend_from_slice(part));
+                // Kept as they come, after what the run holds so far: the order found in is the order kept.
+                let run = std::mem::take(&mut out.run);
+                out.keep(run);
+                rows.collect::<Vec<_>>().into_iter().for_each(|part| out.keep(part));
             }
         }
     }
 }
 
 /// Sorts one axis's crossings into lines and works out the winding along each.
-fn build_pass(parts: Vec<Vec<Crossing>>, lines: usize) -> Result<Pass, String> {
-    let mut all = parallel::concat(parts);
+fn build_pass(mut all: Vec<Crossing>, lines: usize) -> Result<Pass, String> {
     if all.len() >= u32::MAX as usize {
         return Err("That resolution is too fine for this model. Try a lower one.".into());
     }
@@ -531,35 +566,41 @@ impl Scan {
     /// [`Self::new`], with the capping of holes optional: without it, the
     /// vote between the axes is all that stands between a hole and a streak.
     pub(crate) fn build(positions: &[Vec3], indices: &[u32], grid: &Grid, cap_holes: bool) -> Result<Scan, String> {
-        let mut pass = Scan::passes(positions, indices, grid)?;
-        let occupied = pass.iter().map(|p| p.occupied).sum();
-        let open = pass.iter().map(|p| p.open).sum();
-        let was_holed = holed(grid, &pass);
-        let mut capped = false;
-        if was_holed && cap_holes {
-            if let Some((positions, indices)) = cap::capped(positions, indices) {
-                pass = Scan::passes(&positions, &indices, grid)?;
-                capped = true;
+        let as_given = Scan::passes(positions, indices, grid)?;
+        let occupied = as_given.iter().map(|p| p.occupied).sum();
+        let open = as_given.iter().map(|p| p.open).sum();
+        let was_holed = holed(grid, &as_given);
+        let with_caps = if was_holed && cap_holes { cap::capped(positions, indices) } else { None };
+        let capped = with_caps.is_some();
+        let pass = match with_caps {
+            Some((positions, indices)) => {
+                // Let go of before the second reading, not after: the two would be held at once.
+                drop(as_given);
+                Scan::passes(&positions, &indices, grid)?
             }
-        }
+            None => as_given,
+        };
         let voted = (was_holed && holed(grid, &pass)).then(|| vote::Voted::new(grid, &pass));
         Ok(Scan { grid: *grid, pass, voted, holed: was_holed, capped, occupied, open })
     }
 
     /// The crossings of the triangles with the lattice lines of each axis.
     fn passes(positions: &[Vec3], indices: &[u32], grid: &Grid) -> Result<[Pass; 3], String> {
-        // Lines are numbered in 32 bits, and cells later in 16 a side.
-        if grid.n.iter().any(|&n| n > MAX_SAMPLES) {
+        // Lines are numbered in 32 bits, and cells later in 16 a side. And
+        // a table is kept with an entry for every line: `budget` has asked
+        // about that already for a remesh or a boolean, in better words than
+        // these; this is for whoever comes straight here.
+        if grid.n.iter().any(|&n| n > MAX_SAMPLES) || budget::scan_table_bytes(grid) > budget::MAX_BYTES {
             return Err("That resolution is too fine for this model. Try a lower one.".into());
         }
         // One walk over the triangles for all three axes: the corners are
         // fetched once, and fetching them is most of the cost on a mesh too
         // large for the cache.
         let inverse = 1.0 / grid.cell as f64;
-        let chunks: Vec<[Vec<Crossing>; 3]> = indices
+        let chunks: Vec<[Vec<Vec<Crossing>>; 3]> = indices
             .par_chunks(3 * CHUNK)
             .map(|tris| {
-                let mut out: [Vec<Crossing>; 3] = Default::default();
+                let mut out: [Found; 3] = Default::default();
                 for tri in tris.chunks_exact(3) {
                     let p = [positions[tri[0] as usize], positions[tri[1] as usize], positions[tri[2] as usize]];
                     let (low, high) = (p[0].min(p[1]).min(p[2]), p[0].max(p[1]).max(p[2]));
@@ -579,16 +620,18 @@ impl Scan {
                         }
                     }
                 }
-                out
+                out.map(Found::into_pieces)
             })
             .collect();
         let mut parts: [Vec<Vec<Crossing>>; 3] = Default::default();
         for chunk in chunks {
-            for (axis, part) in chunk.into_iter().enumerate() {
-                parts[axis].push(part);
+            for (axis, pieces) in chunk.into_iter().enumerate() {
+                parts[axis].extend(pieces);
             }
         }
-        let [x, y, z] = parts;
+        // Joined an axis at a time, each axis's pieces let go of before the
+        // next is joined: all three at once would hold every crossing twice.
+        let [x, y, z] = parts.map(parallel::concat);
         let lines = |axis: usize| grid.n[(axis + 1) % 3] * grid.n[(axis + 2) % 3];
         let (x, (y, z)) = rayon::join(
             || build_pass(x, lines(0)),

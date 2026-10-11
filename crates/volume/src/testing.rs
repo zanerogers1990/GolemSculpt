@@ -30,6 +30,13 @@ impl Rng {
     }
 }
 
+/// The resolution a refusal offers ("lower the resolution to 740 or less",
+/// "Try 1217 or lower"), if it offers one.
+pub fn offered_resolution(refusal: &str) -> Option<u32> {
+    let after = ["lower the resolution to ", "Try "].iter().find_map(|lead| refusal.split(lead).nth(1))?;
+    after.split(' ').next()?.parse().ok()
+}
+
 /// A subdivided icosahedron: even triangles, none degenerate, and (about its
 /// own centre) an exact mirror image of itself across all three coordinate
 /// planes. `20 * 4^subdivisions` triangles.
@@ -284,6 +291,14 @@ mod tests {
             assert!(all.contains(&bits(Vec3::new(-p.x, p.y, p.z))));
             assert!(all.contains(&bits(Vec3::new(p.x, -p.y, p.z))));
         }
+    }
+
+    #[test]
+    fn the_resolution_offered_is_read_out_of_a_refusal() {
+        assert_eq!(offered_resolution("Turn the X mirror off, or lower the resolution to 740 or less."), Some(740));
+        assert_eq!(offered_resolution("That needs too much memory for these objects. Try 1217 or lower."), Some(1217));
+        assert_eq!(offered_resolution("Rebuilding this model needs too much memory at any resolution."), None);
+        assert_eq!(offered_resolution("Try a lower one."), None);
     }
 
     #[test]

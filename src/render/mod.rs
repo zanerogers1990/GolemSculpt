@@ -134,6 +134,12 @@ impl Gpu {
     pub fn max_texture_side(&self) -> usize {
         self.device.limits().max_texture_dimension_2d as usize
     }
+
+    /// The size a picture is given as a texture on this device: its own, or
+    /// halved until the device takes it (see `mips::fitted`).
+    pub fn fitted_size(&self, width: u32, height: u32) -> (u32, u32) {
+        mips::fitted_size(width, height, self.device.limits().max_texture_dimension_2d)
+    }
 }
 
 /// A graphics error in words for the user: which of the three kinds it is.
@@ -337,6 +343,10 @@ pub(crate) fn target_texture(
 }
 
 fn matcap_texture(device: &wgpu::Device, queue: &wgpu::Queue, image: &image::RgbaImage) -> wgpu::TextureView {
+    // No larger than this device takes: a texture over its limit is refused
+    // with an error that stops the app, and a picture halved to fit shades
+    // the same. The limit is the device's own, as an HDRI is fitted to.
+    let image = &*mips::fitted(image, device.limits().max_texture_dimension_2d);
     let size = wgpu::Extent3d { width: image.width(), height: image.height(), depth_or_array_layers: 1 };
     // With every half size below it, so fine detail seen from a distance
     // reads an average of the matcap instead of sparkling (see mips.rs).

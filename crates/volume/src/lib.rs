@@ -15,7 +15,8 @@
 //!   - [`bvh`] answers nearest-point and inside/outside questions about a
 //!     fixed mesh, from any number of threads at once.
 //!
-//! All of it shares one lattice layout ([`grid`]), chosen so that a model can
+//! All of it shares one set of limits ([`budget`]), asked before anything is
+//! allocated, and one lattice layout ([`grid`]), chosen so that a model can
 //! be rebuilt exactly symmetric. Wherever a mirror axis is asked for, the
 //! result is exactly symmetric across that coordinate plane whatever went in:
 //! it is built from the half on the positive side of the plane and that
@@ -24,6 +25,7 @@
 //! Triangles are counter-clockwise seen from outside, in and out.
 
 pub mod boolean;
+pub mod budget;
 pub mod bvh;
 pub mod extract;
 pub mod grid;

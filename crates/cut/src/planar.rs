@@ -36,6 +36,48 @@ const EAR_TEST_BUDGET: usize = 40_000_000;
 /// What a caller is told when a region will not triangulate.
 pub const CANNOT_TRIANGULATE: &str = "the outline crosses itself or one of its holes";
 
+/// Most pairs of points (one on the outline, one on a hole) the last-resort
+/// search for a bridge will list: twelve bytes each, so 48 MB, and as much
+/// again to sort them.
+///
+/// The search is only reached when no point of a hole can be joined to the
+/// outline point nearest it, which on a sound region is next to never: it is
+/// what a hole lying outside its outline, or tangled with it, comes to, and
+/// now and then a hole beside a slit, whose nearest outline points are all
+/// across it. Listing every pair for the two rims of a cut through a dense
+/// model, 100,000 points each, asked for 120 GB. Within the limit are a hole
+/// of 64 points in an outline of 62,000 (a key's footing in a large cut
+/// face) and two rims of 2,000 points each.
+///
+/// Past the limit the search is not given up: it goes on a hole point at a
+/// time instead, which needs no list (`bridge_from_each_hole_point`).
+pub const MAX_BRIDGE_PAIRS: usize = 4_000_000;
+
+/// How much work the search for a bridge past [`MAX_BRIDGE_PAIRS`] may do
+/// before it is given up, counted in outline and hole edges looked at: a
+/// pair turned down by the corners at its two ends counts one, a pair that
+/// has to be held against every edge counts them all.
+///
+/// A sound region needs a sliver of it. The limit is for the hole that
+/// cannot be joined, where every pair fails and there are ten thousand
+/// million of them between two rims of 100,000: a few seconds' work shared
+/// between the threads, where trying them all would be hours.
+const BRIDGE_SEARCH_WORK: u64 = 1 << 34;
+
+/// The share of [`BRIDGE_SEARCH_WORK`] one hole point may use before the
+/// search moves on to the next: one in this many.
+const BRIDGE_POINT_SHARE: u64 = 32;
+
+/// Hole points searched at once, each on a thread of its own.
+const BRIDGE_POINTS_AT_ONCE: usize = 64;
+
+/// What a caller is told when a hole would not join to its outline, the two
+/// are too large for [`MAX_BRIDGE_PAIRS`], and the search that takes its
+/// place ran out of [`BRIDGE_SEARCH_WORK`] before it had tried every pair.
+/// The region is then not triangulated, as for [`CANNOT_TRIANGULATE`].
+pub const TOO_LARGE_TO_BRIDGE: &str =
+    "a hole in the cut face would not join to its outline, and the two have too many points to try every pair";
+
 /// Triangulates the region inside `outer` and outside every loop in `holes`,
 /// all given as indices into `points`. Loops may run either way round. The
 /// triangles (three indices each) are counter-clockwise in the chart.
@@ -57,7 +99,23 @@ pub fn triangulate_lenient(points: &[Vec2], outer: &[u32], holes: &[Vec<u32>]) -
     triangulate_with(points, outer, holes, false)
 }
 
+/// `triangulate` if that works and `triangulate_lenient` if it does not, with
+/// the same result as asking for each in turn. The holes are joined to the
+/// outline once for both: a hole that cannot be joined cannot be joined the
+/// second time either, and looking twice was half of what such a region
+/// cost.
+pub fn triangulate_somehow(points: &[Vec2], outer: &[u32], holes: &[Vec<u32>]) -> Result<Vec<u32>, String> {
+    let ring = joined(points, outer, holes)?;
+    clipped(points, &ring, true).or_else(|_| clipped(points, &ring, false))
+}
+
 fn triangulate_with(points: &[Vec2], outer: &[u32], holes: &[Vec<u32>], strict: bool) -> Result<Vec<u32>, String> {
+    clipped(points, &joined(points, outer, holes)?, strict)
+}
+
+/// The outline with every hole joined into it by a bridge: one loop, counter
+/// clockwise, that an ear clipper can eat.
+fn joined(points: &[Vec2], outer: &[u32], holes: &[Vec<u32>]) -> Result<Vec<u32>, String> {
     let fail = || CANNOT_TRIANGULATE.to_string();
     if outer.len() < 3 {
         return Err(fail());
@@ -79,14 +137,18 @@ fn triangulate_with(points: &[Vec2], outer: &[u32], holes: &[Vec<u32>], strict: 
     let max_x = |hole: &Vec<u32>| hole.iter().map(|&i| points[i as usize].x).fold(f32::MIN, f32::max);
     pending.sort_by(|a, b| max_x(b).total_cmp(&max_x(a)));
     for i in 0..pending.len() {
-        if !bridge(points, &mut ring, &pending[i], &pending[i + 1..]) {
-            return Err(fail());
-        }
+        bridge(points, &mut ring, &pending[i], &pending[i + 1..])?;
     }
+    Ok(ring)
+}
 
+/// The triangles of a loop `joined` made. Strictly, or (when the loop
+/// touches or crosses itself) with whatever cannot be clipped closed by a
+/// fan: see `triangulate_lenient`.
+fn clipped(points: &[Vec2], ring: &[u32], strict: bool) -> Result<Vec<u32>, String> {
     let mut triangles = Vec::with_capacity(ring.len());
-    if !ear_clip(points, &ring, 1.0, EAR_TEST_BUDGET, strict, &mut triangles) && strict {
-        return Err(fail());
+    if !ear_clip(points, ring, 1.0, EAR_TEST_BUDGET, strict, &mut triangles) && strict {
+        return Err(CANNOT_TRIANGULATE.to_string());
     }
     Ok(triangles.into_flattened())
 }
@@ -166,25 +228,123 @@ pub fn improve_on_surface(
 /// The Unity version sorted every ring-hole vertex pair by distance, which for
 /// a cut through a dense model is tens of millions of pairs to sort for a
 /// bridge that is almost always the very first one tried. Here each hole
-/// vertex first offers only its own nearest ring vertex; the full list is
-/// built only if none of those will do.
-fn bridge(points: &[Vec2], ring: &mut Vec<u32>, hole: &[u32], pending: &[Vec<u32>]) -> bool {
+/// vertex first offers only its own nearest ring vertex. If none of those
+/// will do, every pair is listed nearest first, when there are few enough to
+/// list ([`MAX_BRIDGE_PAIRS`]); and when there are not, each hole vertex in
+/// turn is tried against the whole ring, nearest first, which finds a bridge
+/// wherever there is one without listing anything, though not always the
+/// shortest of them.
+///
+/// Every search here is shared between threads and takes the first pair
+/// that will do in the order a single thread would have come to them, so the
+/// answer never depends on how the work fell out.
+///
+/// Fails, with the reason, when no pair will do, or when the search was given
+/// up for the work it was taking ([`TOO_LARGE_TO_BRIDGE`]).
+fn bridge(points: &[Vec2], ring: &mut Vec<u32>, hole: &[u32], pending: &[Vec<u32>]) -> Result<(), String> {
     let (n, m) = (ring.len(), hole.len());
-    let at = |i: u32| points[i as usize];
-    let try_pair = |ring: &[u32], i: usize, j: usize| -> bool {
-        let (pi, qj) = (ring[i], hole[j]);
-        let (p, q) = (at(pi), at(qj));
-        pi != qj
-            && p != q
-            && in_cone(at(ring[(i + n - 1) % n]), p, at(ring[(i + 1) % n]), q)
-            && in_cone(at(hole[(j + m - 1) % m]), q, at(hole[(j + 1) % m]), p)
-            && !crosses_loop(points, ring, p, q, pi, qj)
-            && !crosses_loop(points, hole, p, q, pi, qj)
-            && !pending.iter().any(|other| crosses_loop(points, other, p, q, pi, qj))
-    };
+    let pair = Pair { points, ring: ring.as_slice(), hole, pending };
 
     // Each hole vertex with the ring position nearest it, nearest pair first.
-    let mut nearest: Vec<(f32, u32, u32)> = (0..m)
+    let mut nearest = nearest_on_ring(points, ring, hole);
+    nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // An earlier bridge leaves its ring end in the ring twice, as one point
+    // with two different pairs of neighbours; either may serve. Ring positions
+    // in order of the point they hold find the copies without a walk round
+    // the ring for every hole vertex.
+    let mut by_point: Vec<u32> = (0..n as u32).collect();
+    by_point.sort_unstable_by_key(|&k| (ring[k as usize], k));
+    let copies = |i: u32| {
+        let point = ring[i as usize];
+        let from = by_point.partition_point(|&k| ring[k as usize] < point);
+        by_point[from..].iter().map(|&k| k as usize).take_while(move |&k| pair.ring[k] == point)
+    };
+    let mut found = nearest
+        .par_iter()
+        .find_map_first(|&(_, i, j)| copies(i).find(|&copy| pair.joins(copy, j as usize)).map(|copy| (copy, j as usize)));
+    if found.is_none() {
+        found = if n.checked_mul(m).is_some_and(|pairs| pairs <= MAX_BRIDGE_PAIRS) {
+            let mut all: Vec<(f32, u32, u32)> = (0..n * m)
+                .into_par_iter()
+                .map(|k| (pair.at_ring(k / m).distance_squared(pair.at_hole(k % m)), (k / m) as u32, (k % m) as u32))
+                .collect();
+            all.par_sort_by(|a, b| a.0.total_cmp(&b.0));
+            let first = all.par_iter().find_first(|&&(_, i, j)| pair.joins(i as usize, j as usize));
+            first.map(|&(_, i, j)| (i as usize, j as usize))
+        } else {
+            bridge_from_each_hole_point(&pair, &nearest)?
+        };
+    }
+    let Some((i, j)) = found else {
+        return Err(CANNOT_TRIANGULATE.to_string());
+    };
+
+    // The ring up to i, the hole from j all the way round and back to j, then
+    // i again and the rest of the ring.
+    let mut spliced = Vec::with_capacity(n + m + 2);
+    spliced.extend_from_slice(&ring[..=i]);
+    spliced.extend((0..=m).map(|k| hole[(j + k) % m]));
+    spliced.extend_from_slice(&ring[i..]);
+    *ring = spliced;
+    Ok(())
+}
+
+/// A ring, a hole to join into it, and the holes still waiting: what a
+/// bridge between a ring position and a hole position is judged against.
+#[derive(Clone, Copy)]
+struct Pair<'a> {
+    points: &'a [Vec2],
+    ring: &'a [u32],
+    hole: &'a [u32],
+    pending: &'a [Vec<u32>],
+}
+
+impl Pair<'_> {
+    fn at_ring(&self, i: usize) -> Vec2 {
+        self.points[self.ring[i] as usize]
+    }
+
+    fn at_hole(&self, j: usize) -> Vec2 {
+        self.points[self.hole[j] as usize]
+    }
+
+    /// Whether a bridge from ring position `i` to hole position `j` leaves
+    /// both of its ends into the region: a look at the two corners, no more.
+    fn leaves_into_the_region(&self, i: usize, j: usize) -> bool {
+        let (n, m) = (self.ring.len(), self.hole.len());
+        let (p, q) = (self.at_ring(i), self.at_hole(j));
+        self.ring[i] != self.hole[j]
+            && p != q
+            && in_cone(self.at_ring((i + n - 1) % n), p, self.at_ring((i + 1) % n), q)
+            && in_cone(self.at_hole((j + m - 1) % m), q, self.at_hole((j + 1) % m), p)
+    }
+
+    /// Whether that bridge crosses no edge of the ring, the hole or any hole
+    /// still waiting: a walk along all of them.
+    fn crosses_nothing(&self, i: usize, j: usize) -> bool {
+        let (pi, qj) = (self.ring[i], self.hole[j]);
+        let (p, q) = (self.at_ring(i), self.at_hole(j));
+        !crosses_loop(self.points, self.ring, p, q, pi, qj)
+            && !crosses_loop(self.points, self.hole, p, q, pi, qj)
+            && !self.pending.iter().any(|other| crosses_loop(self.points, other, p, q, pi, qj))
+    }
+
+    fn joins(&self, i: usize, j: usize) -> bool {
+        self.leaves_into_the_region(i, j) && self.crosses_nothing(i, j)
+    }
+
+    /// Edges a bridge has to be held against.
+    fn edges(&self) -> u64 {
+        (self.ring.len() + self.hole.len() + self.pending.iter().map(Vec::len).sum::<usize>()) as u64
+    }
+}
+
+/// For each point of `hole`, in order: how far (squared) the nearest point
+/// of `ring` is, its position in the ring, and the hole point's own
+/// position. Of several ring points equally near, the first in the ring.
+fn nearest_on_ring(points: &[Vec2], ring: &[u32], hole: &[u32]) -> Vec<(f32, u32, u32)> {
+    let at = |i: u32| points[i as usize];
+    (0..hole.len())
         .into_par_iter()
         .map(|j| {
             let q = at(hole[j]);
@@ -197,40 +357,61 @@ fn bridge(points: &[Vec2], ring: &mut Vec<u32>, hole: &[u32], pending: &[Vec<u32
             }
             (best, best_i as u32, j as u32)
         })
-        .collect();
-    nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut found = None;
-    'search: for &(_, i, j) in &nearest {
-        // An earlier bridge leaves its ring end in the ring twice, as one
-        // point with two different pairs of neighbours; either may serve.
-        let same_point = ring[i as usize];
-        for copy in (0..n).filter(|&k| ring[k] == same_point) {
-            if try_pair(ring, copy, j as usize) {
-                found = Some((copy, j as usize));
-                break 'search;
+        .collect()
+}
+
+/// The search for a bridge when there are too many pairs to list: each hole
+/// point in turn, nearest to the ring first, against every position of the
+/// ring in order of distance from it. Nothing is kept but one hole point's
+/// distances at a time.
+///
+/// `Ok(None)` when every pair was tried and none will do. `Err` when the
+/// work allowed ([`BRIDGE_SEARCH_WORK`]) ran out first.
+///
+/// The work is counted, not timed, and each hole point's search is given
+/// what it may spend before it starts, so that the answer is the same on
+/// any machine and however the threads share it out.
+fn bridge_from_each_hole_point(pair: &Pair, nearest: &[(f32, u32, u32)]) -> Result<Option<(usize, usize)>, String> {
+    let n = pair.ring.len();
+    let (edges, share) = (pair.edges(), BRIDGE_SEARCH_WORK / BRIDGE_POINT_SHARE);
+    // What one hole point found, what looking cost, and whether it looked at every position of the ring.
+    let search = |j: usize| -> (Option<usize>, u64, bool) {
+        let q = pair.at_hole(j);
+        let mut order: Vec<(f32, u32)> = (0..n).map(|i| (pair.at_ring(i).distance_squared(q), i as u32)).collect();
+        order.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        // Measuring and sorting them, near enough.
+        let mut spent = 8 * n as u64;
+        for &(_, i) in &order {
+            if !pair.leaves_into_the_region(i as usize, j) {
+                spent += 1;
+                continue;
+            }
+            if spent + edges > share {
+                return (None, spent, false);
+            }
+            spent += edges;
+            if pair.crosses_nothing(i as usize, j) {
+                return (Some(i as usize), spent, true);
             }
         }
-    }
-    if found.is_none() {
-        let mut all: Vec<(f32, u32, u32)> = (0..n * m)
-            .into_par_iter()
-            .map(|k| (at(ring[k / m]).distance_squared(at(hole[k % m])), (k / m) as u32, (k % m) as u32))
-            .collect();
-        all.par_sort_by(|a, b| a.0.total_cmp(&b.0));
-        found = all.iter().map(|&(_, i, j)| (i as usize, j as usize)).find(|&(i, j)| try_pair(ring, i, j));
-    }
-    let Some((i, j)) = found else {
-        return false;
+        (None, spent, true)
     };
 
-    // The ring up to i, the hole from j all the way round and back to j, then
-    // i again and the rest of the ring.
-    let mut spliced = Vec::with_capacity(n + m + 2);
-    spliced.extend_from_slice(&ring[..=i]);
-    spliced.extend((0..=m).map(|k| hole[(j + k) % m]));
-    spliced.extend_from_slice(&ring[i..]);
-    *ring = spliced;
-    true
+    let (mut left, mut every_pair_tried) = (BRIDGE_SEARCH_WORK, true);
+    for together in nearest.chunks(BRIDGE_POINTS_AT_ONCE) {
+        let searched: Vec<_> = together.par_iter().map(|&(_, _, j)| search(j as usize)).collect();
+        for (&(_, _, j), (found, spent, whole_ring)) in together.iter().zip(searched) {
+            if let Some(i) = found {
+                return Ok(Some((i, j as usize)));
+            }
+            every_pair_tried &= whole_ring;
+            if spent >= left {
+                return Err(TOO_LARGE_TO_BRIDGE.to_string());
+            }
+            left -= spent;
+        }
+    }
+    if every_pair_tried { Ok(None) } else { Err(TOO_LARGE_TO_BRIDGE.to_string()) }
 }
 
 /// Whether segment `pq` properly crosses any edge of `ring`, or runs through
@@ -427,6 +608,312 @@ mod tests {
         clear[4] = Vec2::new(5.0, 1.0);
         let strict = triangulate(&clear, &outer, std::slice::from_ref(&hole)).unwrap();
         assert_eq!(triangulate_lenient(&clear, &outer, std::slice::from_ref(&hole)).unwrap(), strict);
+    }
+
+    /// A hole that is not inside its outline at all, both of them dense: no
+    /// hole point can be joined to the outline point nearest it, so every
+    /// pair used to be listed and sorted, 4.4 million of them here (53 MB,
+    /// and as much again for the sort), and then tried one by one, to no end.
+    /// The two rims of a cut through a dense model are fifty times longer
+    /// each. Nothing is listed now, and every pair is still tried: the answer
+    /// is that there is no bridge, and it comes quickly.
+    #[test]
+    fn a_hole_that_will_not_bridge_is_found_out_without_listing_its_pairs() {
+        let mut points = Vec::new();
+        let outer = add_ring(&mut points, Vec2::ZERO, 50.0, 2100, false);
+        let outside = add_ring(&mut points, Vec2::new(200.0, 0.0), 30.0, 2100, true);
+        assert!(outer.len() * outside.len() > MAX_BRIDGE_PAIRS);
+        let started = std::time::Instant::now();
+        for lenient in [false, true] {
+            let tried = match lenient {
+                false => triangulate(&points, &outer, std::slice::from_ref(&outside)),
+                true => triangulate_lenient(&points, &outer, std::slice::from_ref(&outside)),
+            };
+            assert_eq!(tried.unwrap_err(), CANNOT_TRIANGULATE);
+        }
+        assert!(started.elapsed().as_secs_f32() < 4.0, "took {:?}", started.elapsed());
+
+        // The same mistake small enough to list is listed, and says the same.
+        let mut points = Vec::new();
+        let outer = add_ring(&mut points, Vec2::ZERO, 50.0, 300, false);
+        let outside = add_ring(&mut points, Vec2::new(200.0, 0.0), 30.0, 300, true);
+        assert_eq!(triangulate(&points, &outer, &[outside]).unwrap_err(), CANNOT_TRIANGULATE);
+    }
+
+    /// Past what can be tried in the work allowed, the search is given up
+    /// and says so: two rims of 100,000, of which one is not inside the
+    /// other, are ten thousand million pairs that all fail, and trying each
+    /// against 200,000 edges would be hours. It is the work that is counted,
+    /// so the answer does not depend on how fast the machine is.
+    #[test]
+    fn a_hole_that_will_not_bridge_is_given_up_when_trying_every_pair_would_take_too_long() {
+        let mut points = Vec::new();
+        let outer = add_ring(&mut points, Vec2::ZERO, 50.0, 100_000, false);
+        let outside = add_ring(&mut points, Vec2::new(200.0, 0.0), 30.0, 100_000, true);
+        let started = std::time::Instant::now();
+        assert_eq!(triangulate_somehow(&points, &outer, &[outside]).unwrap_err(), TOO_LARGE_TO_BRIDGE);
+        assert!(started.elapsed().as_secs_f32() < 20.0, "took {:?}", started.elapsed());
+    }
+
+    /// The limit is on listing pairs only. Rims far over it that bridge at
+    /// the first try are as welcome as ever, and so is a small hole in a
+    /// very long outline when the search is needed.
+    #[test]
+    fn the_limit_on_pairs_leaves_ordinary_regions_alone() {
+        let mut points = Vec::new();
+        let outer = add_ring(&mut points, Vec2::ZERO, 50.0, 6000, false);
+        let hole = add_ring(&mut points, Vec2::ZERO, 30.0, 6000, true);
+        assert!(outer.len() * hole.len() > 8 * MAX_BRIDGE_PAIRS);
+        let triangles = triangulate(&points, &outer, std::slice::from_ref(&hole)).unwrap();
+        assert_eq!(triangles.len() / 3, 12_000);
+
+        // A hole outside a long outline, few enough pairs to list: searched, and found wanting.
+        let mut points = Vec::new();
+        let outer = add_ring(&mut points, Vec2::ZERO, 50.0, 2000, false);
+        let outside = add_ring(&mut points, Vec2::new(200.0, 0.0), 1.0, 64, true);
+        assert!(outer.len() * outside.len() <= MAX_BRIDGE_PAIRS);
+        assert_eq!(triangulate(&points, &outer, &[outside]).unwrap_err(), CANNOT_TRIANGULATE);
+    }
+
+    /// A square with a slit let into it from the left, and a round hole just
+    /// under the slit. The slit's far wall has `wall` points along it and its
+    /// near wall none but its two ends, so the outline point nearest every
+    /// point of the hole is across the slit, where no bridge can go: the
+    /// first that can is found only after nearly every pair has been tried.
+    fn slit_and_hole(wall: u32, hole: u32) -> (Vec<Vec2>, Vec<u32>, Vec<u32>) {
+        let mut points = vec![Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 100.0), Vec2::new(0.0, 100.0)];
+        points.extend((0..wall).map(|i| Vec2::new(90.0 * i as f32 / (wall - 1) as f32, 50.1)));
+        points.extend([Vec2::new(90.0, 50.0), Vec2::new(0.0, 50.0)]);
+        let outer: Vec<u32> = (0..points.len() as u32).collect();
+        let ring = add_ring(&mut points, Vec2::new(45.0, 46.0), 3.0, hole, true);
+        (points, outer, ring)
+    }
+
+    fn slit_area(points: &[Vec2], outer: &[u32], hole: &[u32]) -> f64 {
+        loop_area(points, outer) - loop_area(points, hole)
+    }
+
+    /// The search of last resort is not given up for size. With 4,000,000
+    /// pairs as the most it would list, a hole of 2000 points beside a slit
+    /// in an outline of 1997 was triangulated and one in an outline of 2007
+    /// refused as having "too many points to try every pair". Both are
+    /// triangulated, and so is one fifty times the limit.
+    #[test]
+    fn a_hole_whose_nearest_outline_points_are_all_across_a_slit_is_bridged_at_any_size() {
+        for (wall, hole) in [(1991, 2000), (2001, 2000), (2600, 2600)] {
+            let (points, outer, ring) = slit_and_hole(wall, hole);
+            let pairs = outer.len() * ring.len();
+            let triangles = triangulate(&points, &outer, std::slice::from_ref(&ring))
+                .unwrap_or_else(|error| panic!("{} x {} ({pairs} pairs): {error}", outer.len(), ring.len()));
+            assert_eq!(triangles.len() / 3, outer.len() + ring.len());
+            let area = slit_area(&points, &outer, &ring);
+            assert_tiles(&points, &triples(&triangles), 1.0, area, &rim_of(&[&outer, &ring]));
+        }
+        let (_, outer, ring) = slit_and_hole(2001, 2000);
+        assert!(outer.len() * ring.len() > MAX_BRIDGE_PAIRS, "the second case is meant to be over the limit");
+
+        // Fifty times the limit: the hole is joined to the outline, by a bridge that crosses nothing. (The ear
+        // clipper has a limit of its own on a loop this long, which is not what this is about.)
+        let (points, outer, hole) = slit_and_hole(20_000, 10_000);
+        // As `joined` takes it: clockwise, which `add_ring` was asked for.
+        let clockwise = hole.clone();
+        assert!(signed_area_of(&points, &clockwise) < 0.0);
+        let ring = joined(&points, &outer, std::slice::from_ref(&hole)).unwrap();
+        assert_eq!(ring.len(), outer.len() + hole.len() + 2);
+        let leaves_the_outline = |i: &usize| ring[i + 1] != outer[(i + 1) % outer.len()];
+        let from = (0..outer.len()).find(leaves_the_outline).expect("the hole is in the ring");
+        let pair = Pair { points: &points, ring: &outer, hole: &clockwise, pending: &[] };
+        let to = clockwise.iter().position(|&q| q == ring[from + 1]).expect("the bridge ends on the hole");
+        assert!(pair.joins(from, to), "the bridge from {from} to {to} is not one");
+    }
+
+    /// The bridge search as it was first written, one pair at a time on one
+    /// thread, with every pair listed whatever that takes: what `bridge`
+    /// has to agree with wherever the two can be compared.
+    fn bridge_plainly(points: &[Vec2], ring: &[u32], hole: &[u32], pending: &[Vec<u32>]) -> Option<Vec<u32>> {
+        let (n, m) = (ring.len(), hole.len());
+        let at = |i: u32| points[i as usize];
+        let try_pair = |i: usize, j: usize| -> bool {
+            let (pi, qj) = (ring[i], hole[j]);
+            let (p, q) = (at(pi), at(qj));
+            pi != qj
+                && p != q
+                && in_cone(at(ring[(i + n - 1) % n]), p, at(ring[(i + 1) % n]), q)
+                && in_cone(at(hole[(j + m - 1) % m]), q, at(hole[(j + 1) % m]), p)
+                && !crosses_loop(points, ring, p, q, pi, qj)
+                && !crosses_loop(points, hole, p, q, pi, qj)
+                && !pending.iter().any(|other| crosses_loop(points, other, p, q, pi, qj))
+        };
+        let mut nearest: Vec<(f32, usize, usize)> = Vec::new();
+        for j in 0..m {
+            let (mut best, mut best_i) = (f32::MAX, 0);
+            for (i, &r) in ring.iter().enumerate() {
+                let d = at(r).distance_squared(at(hole[j]));
+                if d < best {
+                    (best, best_i) = (d, i);
+                }
+            }
+            nearest.push((best, best_i, j));
+        }
+        nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut found = None;
+        'search: for &(_, i, j) in &nearest {
+            for copy in (0..n).filter(|&k| ring[k] == ring[i]) {
+                if try_pair(copy, j) {
+                    found = Some((copy, j));
+                    break 'search;
+                }
+            }
+        }
+        if found.is_none() {
+            let mut all: Vec<(f32, usize, usize)> =
+                (0..n * m).map(|k| (at(ring[k / m]).distance_squared(at(hole[k % m])), k / m, k % m)).collect();
+            all.sort_by(|a, b| a.0.total_cmp(&b.0));
+            found = all.iter().map(|&(_, i, j)| (i, j)).find(|&(i, j)| try_pair(i, j));
+        }
+        let (i, j) = found?;
+        let mut spliced = ring[..=i].to_vec();
+        spliced.extend((0..=m).map(|k| hole[(j + k) % m]));
+        spliced.extend_from_slice(&ring[i..]);
+        Some(spliced)
+    }
+
+    /// Regions to bridge, each as its points, its outline and its holes (the
+    /// holes clockwise, rightmost first, as `triangulate_with` hands them
+    /// on): the shapes of the other tests, the slit under the limit on
+    /// listed pairs, holes that cannot be joined, and scatterings of holes
+    /// in a wavy outline with points that coincide to a bit.
+    fn regions_to_bridge() -> Vec<(Vec<Vec2>, Vec<u32>, Vec<Vec<u32>>)> {
+        let mut regions = Vec::new();
+        let mut annulus = Vec::new();
+        let outer = add_ring(&mut annulus, Vec2::new(5.0, 5.0), 4.0, 40, false);
+        let hole = add_ring(&mut annulus, Vec2::new(5.5, 4.8), 2.0, 24, true);
+        regions.push((annulus, outer, vec![hole]));
+        for (wall, hole) in [(40, 30), (500, 700), (1900, 2000)] {
+            let (points, outer, ring) = slit_and_hole(wall, hole);
+            regions.push((points, outer, vec![ring]));
+        }
+        for (centre, radius) in [(Vec2::new(200.0, 0.0), 30.0), (Vec2::new(50.0, 0.0), 10.0), (Vec2::ZERO, 60.0)] {
+            let mut points = Vec::new();
+            let outer = add_ring(&mut points, Vec2::ZERO, 50.0, 300, false);
+            let hole = add_ring(&mut points, centre, radius, 200, true);
+            regions.push((points, outer, vec![hole]));
+        }
+        let mut rng = crate::testing::Rng::new(11);
+        for sides in [7, 60, 400] {
+            let mut points: Vec<Vec2> = (0..sides)
+                .map(|i| {
+                    let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+                    Vec2::new(a.cos(), a.sin()) * (40.0 + 6.0 * (a * 5.0).sin())
+                })
+                .collect();
+            let outer: Vec<u32> = (0..sides).collect();
+            let mut holes = Vec::new();
+            for (k, x) in [-24.0f32, -8.0, 8.0, 24.0].into_iter().enumerate() {
+                let centre = Vec2::new(x, rng.range(-10.0, 10.0));
+                // Whole numbers of sides and round radii, so that some distances come out exactly equal.
+                holes.push(add_ring(&mut points, centre, 4.0 + k as f32, 8 << k, true));
+            }
+            holes.sort_by(|a, b| {
+                let max_x = |hole: &Vec<u32>| hole.iter().map(|&i| points[i as usize].x).fold(f32::MIN, f32::max);
+                max_x(b).total_cmp(&max_x(a))
+            });
+            regions.push((points, outer, holes));
+        }
+        regions
+    }
+
+    /// Whatever is done to make the search quicker or smaller, it joins
+    /// each hole to the outline where the plain search does, to the index.
+    #[test]
+    fn every_bridge_is_the_one_the_plain_search_finds() {
+        let (mut bridged, mut refused) = (0, 0);
+        for (points, outer, holes) in regions_to_bridge() {
+            let (mut ring, mut plain) = (outer.clone(), outer.clone());
+            for (h, hole) in holes.iter().enumerate() {
+                assert!(ring.len() * hole.len() <= MAX_BRIDGE_PAIRS, "this is for regions within the limit");
+                let expected = bridge_plainly(&points, &plain, hole, &holes[h + 1..]);
+                let got = bridge(&points, &mut ring, hole, &holes[h + 1..]);
+                match expected {
+                    Some(spliced) => {
+                        assert_eq!(got, Ok(()), "{} points, hole {h}", points.len());
+                        assert!(ring == spliced, "{} points, hole {h}: joined somewhere else", points.len());
+                        plain = spliced;
+                        bridged += 1;
+                    }
+                    None => {
+                        assert_eq!(got, Err(CANNOT_TRIANGULATE.to_string()), "{} points, hole {h}", points.len());
+                        refused += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(bridged >= 15 && refused >= 2, "{bridged} bridged, {refused} refused");
+    }
+
+    /// Clean if it can be, lenient if not, and the same either way as asking
+    /// for each in turn; the holes are joined to the outline once for both.
+    #[test]
+    fn somehow_is_strict_then_lenient_with_the_holes_joined_once() {
+        let in_turn = |points: &[Vec2], outer: &[u32], holes: &[Vec<u32>]| {
+            triangulate(points, outer, holes).or_else(|_| triangulate_lenient(points, outer, holes))
+        };
+        // A clean region; one whose hole touches its outline, which only the lenient way closes; one that
+        // cannot be joined at all.
+        let (points, outer, ring) = slit_and_hole(60, 40);
+        let clean = triangulate_somehow(&points, &outer, std::slice::from_ref(&ring)).unwrap();
+        assert_eq!(clean, triangulate(&points, &outer, std::slice::from_ref(&ring)).unwrap());
+        let touching = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+            Vec2::new(5.0, 0.0),
+            Vec2::new(7.0, 4.0),
+            Vec2::new(3.0, 4.0),
+        ];
+        let (square, corner) = (vec![0, 1, 2, 3], vec![vec![4, 5, 6]]);
+        assert!(triangulate(&touching, &square, &corner).is_err());
+        let lenient = triangulate_somehow(&touching, &square, &corner).unwrap();
+        assert_eq!(lenient, triangulate_lenient(&touching, &square, &corner).unwrap());
+        assert_eq!(Ok(lenient), in_turn(&touching, &square, &corner));
+        let mut apart = Vec::new();
+        let outer = add_ring(&mut apart, Vec2::ZERO, 50.0, 300, false);
+        let outside = vec![add_ring(&mut apart, Vec2::new(200.0, 0.0), 30.0, 300, true)];
+        assert_eq!(triangulate_somehow(&apart, &outer, &outside), in_turn(&apart, &outer, &outside));
+        assert_eq!(triangulate_somehow(&apart, &outer, &outside).unwrap_err(), CANNOT_TRIANGULATE);
+    }
+
+    /// What a hole that cannot be joined costs before it is given up, at the
+    /// size of the two rims of a cut through a dense model, asked for the way
+    /// a cap asks. `cargo test -p sculpt-cut --release doomed -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_of_a_doomed_bridge_between_two_long_rims() {
+        for sides in [2100, 20_000, 100_000] {
+            let mut points = Vec::new();
+            let outer = add_ring(&mut points, Vec2::ZERO, 50.0, sides, false);
+            let outside = vec![add_ring(&mut points, Vec2::new(200.0, 0.0), 30.0, sides, true)];
+            let started = std::time::Instant::now();
+            let error = triangulate_somehow(&points, &outer, &outside).unwrap_err();
+            println!("two rims of {sides}: {:.2} s to \"{error}\"", started.elapsed().as_secs_f32());
+        }
+    }
+
+    /// What joining two sound rims costs, at the size of a cut through a
+    /// dense tube. `cargo test -p sculpt-cut --release sound_bridge -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_of_a_sound_bridge_between_two_long_rims() {
+        for sides in [4000, 20_000, 100_000] {
+            let mut points = Vec::new();
+            let mut ring = add_ring(&mut points, Vec2::ZERO, 50.0, sides, false);
+            let hole = add_ring(&mut points, Vec2::ZERO, 30.0, sides, true);
+            let started = std::time::Instant::now();
+            bridge(&points, &mut ring, &hole, &[]).unwrap();
+            println!("two rims of {sides}: joined in {:.3} s", started.elapsed().as_secs_f32());
+        }
     }
 
     #[test]

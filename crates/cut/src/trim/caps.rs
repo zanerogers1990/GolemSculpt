@@ -643,7 +643,7 @@ struct Nesting {
 /// alternative, which is to close the outline and each hole separately and
 /// leave them lying on top of one another.
 fn triangulate_somehow(points: &[Vec2], outer: &[u32], holes: &[Vec<u32>]) -> Result<Vec<u32>, String> {
-    planar::triangulate(points, outer, holes).or_else(|_| planar::triangulate_lenient(points, outer, holes))
+    planar::triangulate_somehow(points, outer, holes)
 }
 
 /// How many interior vertices the face inside a rim of `rim` vertices may add.

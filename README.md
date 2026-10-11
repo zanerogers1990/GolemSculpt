@@ -222,6 +222,26 @@ stretched object must be (the Unity app's limit too). A **Remesh**, a
 mirror planes of a Local symmetry only: the world's planes cut an object
 anywhere.
 
+**Far from its own mirror plane.** A mirrored rebuild works on a grid that
+reaches from the model to its mirror image. That is nothing for a model that
+sits on its plane or beside it, and enormous for one a long way off: a piece
+split off a figure keeps the figure's centre and its Mirror X, so a rivet
+from the figure's hand is many times its own size from that plane. Such a
+rebuild is not attempted (two planes at once used to ask for more than
+10 GB). The status line names the object, says how far off it is, and what to
+do: "Turn the X mirror off for this, or lower the resolution to 740 or
+less." Either works, and the number offered is one that is then accepted;
+nothing is changed until one is done. (There is no command yet that moves an
+object's centre onto its mesh, which would be the third way.)
+
+A mirrored rebuild keeps the half of the model on the positive side of each
+mirror plane and reflects it. A piece that lies wholly on the other side (the
+rivet from the figure's other hand) has no such half, at any resolution, so
+it is never told to lower the resolution: the line says it "lies wholly on
+the far side of its mirror plane, so its mirror image is empty. Turn the
+mirror off for this, or move the model across the plane." The booleans say
+the same of the object that is kept.
+
 ## Dynamic topology
 
 **Dynamic Topology**, in the Remesh card of the Sculpt panel, adds triangles
@@ -672,6 +692,24 @@ one undo step, and a mask
 is carried across a cut. On a large model a cut runs in the background: its
 progress shows at the bottom of the viewport, with a Cancel button.
 
+A cut through a hollow part leaves a face with a hole in it, and the hole's
+rim has to be joined to the outline before the face can be filled. Now and
+then no join is found the quick way (the two rims touch or cross, where the
+cut ran along the wall, or the hole lies beside a slit and the outline
+nearest it is all across the slit). The app then tries every pairing of a
+point on one rim with a point on the other. While there are few enough to
+list (4 million pairs: two rims of 2,000 points each) they are tried shortest
+first; for the rims of a dense model that list ran to tens of gigabytes, so
+past that each point of the hole is tried against the whole outline in turn,
+which needs no list and still finds a join wherever there is one. Only a
+search that has gone on for a second or two with nothing found is given up.
+Whenever no join is found, each rim is closed on its own and the line ends "1 cut edge could
+not be closed cleanly": the model is closed there, but one cap lies over
+another rather than round it, and a Remesh makes one clean solid of it. Keys
+fill the ring of cut face round a key the same way; where that cannot be
+done the line says "1 could not be built: could not fill the cut face round
+this key", and the other keys are built.
+
 Every place the selected object is drawn counts, as in the Unity app: a shape
 drawn over one of its **live mirror copies** (see Objects), over a copy of its
 **Array**, or over an instance of it, or over a mirror copy of an instance,
@@ -951,7 +989,12 @@ numbers are the Unity app's, so the same settings give the same picture.
   cracks, neon, veins and so on) over any of them, matcaps included.
   **Import Matcap...** adds a matcap picture of your own (.png or .jpg; it is
   copied into `assets/matcaps/Imported`), and **Rescan Folder** finds pictures
-  you have put in `assets/matcaps` by hand.
+  you have put in `assets/matcaps` by hand. A picture longer on a side than
+  the graphics card takes as a texture (8192 pixels, as the app sets the card
+  up) is halved until it fits, the way an HDRI is, and the line says so:
+  "It is 9000 x 9000, larger than this graphics card takes, so it is shown
+  at 4500 x 4500." The file in the folder is left as it was. (Such a picture
+  used to stop the app.)
 - **Lighting**: eight presets (Studio, Soft Clay, High Key, Vibrant,
   Cinematic, Golden Hour, Moody, Dramatic) as a 3-point or 5-point rig, with
   Brightness, Rotation, Follow Camera and Shadows. **Load...** lights the
@@ -993,6 +1036,32 @@ The **Objects** card at the top of the Scene panel is the scene graph.
   **Delete the others instead of hiding** is ticked. The result is
   rebuilt at **Voxel Resolution**, counted along the kept object's longest
   side, and starts with a clear mask.
+- **How big a rebuild may be.** Remesh, Join with remesh, the booleans and a
+  tube merge answer to one set of limits (`crates/volume/src/budget.rs`): 80
+  million triangles (the booleans used to stop at 40 million; they now go
+  as far as Remesh always has), and 4 GB of working memory for the grid and
+  the surface read onto it, reckoned as the most the job holds at any one
+  moment (the first count was of what it kept, and a job could hold two or
+  three times that while it ran). What would go over is refused before it
+  starts: nothing is changed, nothing goes on the undo history, and the
+  status line says what to do, with a number where a number helps. A number
+  offered is one that is then accepted: it is found by asking the same
+  question again. (A Join whose remesh is refused is still joined, plainly,
+  and says why the remesh did not run.) "That resolution would make
+  more than 80 million triangles. Try 900 or lower." "The objects are too
+  far apart to unite at this resolution: the grid has to reach across all of
+  them. Move them closer together, or lower the resolution to 362 or less."
+  (A union's grid covers every object and the space between, at a voxel size
+  set by the kept one; Subtract and Intersect only ever need the kept
+  object's own space.) "That resolution needs too much memory for these
+  objects. Try 1217 or lower." A union with something hundreds of times the
+  size of the kept object has no resolution that works, and says so:
+  "Uniting these objects would make too many triangles at any resolution."
+  For an object far from its own mirror plane, or on the far side of it,
+  see Symmetry. At the sliders' highest setting (1024) a model that sits on
+  its mirror planes is never refused for memory: everything the triangle
+  limit allows there comes to under the 4 GB, and an ordinary model to a
+  small part of it.
 - **Reset Shape** puts the selected object back to the shape it had before
   sculpting: as it was made, loaded or last remeshed.
 - The eye shows or hides an object, the bin deletes it. Hiding the object
@@ -1192,8 +1261,9 @@ sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmet
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
-sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more)
+sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more; apart | aside | behind ask for a union and mirrored remeshes that are not started, to see what the status line says)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
+sculpt.exe --screenshot out.png --demo --demo-matcap big.png   # a picture imported as a matcap by the routine under Import Matcap, with no file box: any size (it is copied into assets/matcaps/Imported)
 sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play | gizmo | gizmo-held | gizmo-play
 sculpt.exe --screenshot out.png --demo-mirror  # the sphere off centre, its live mirror on, strokes laid on the copy (SCULPT_DEMO_MIRROR=xz | gizmo | validate | front | back | play)
 sculpt.exe --screenshot out.png --demo-pose bend     # a figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play (bend:close moves the camera in; :soft and :offset change those settings)

@@ -3,8 +3,38 @@
 //! matcaps have them; without them a matcap seen through fine detail at a
 //! distance sparkles as the view moves, because neighbouring pixels land on
 //! unrelated parts of it.
+//!
+//! The same halving brings a picture too large for the graphics device down
+//! to one it will take.
+
+use std::borrow::Cow;
 
 use image::{Rgba, RgbaImage};
+
+/// The size a picture comes to when it is halved until neither side is
+/// longer than `limit`: what [`fitted`] returns. Halving, as an HDRI is
+/// brought down, because each step is an exact average of four pixels and
+/// the shape is kept (to the pixel, where a side is odd). A side never goes
+/// below one pixel.
+pub fn fitted_size(width: u32, height: u32, limit: u32) -> (u32, u32) {
+    let (mut width, mut height) = (width.max(1), height.max(1));
+    while width.max(height) > limit.max(1) {
+        (width, height) = ((width / 2).max(1), (height / 2).max(1));
+    }
+    (width, height)
+}
+
+/// `image` as the graphics device can take it: as it is when no side is
+/// longer than `limit` (the device's own figure for the longest side of a
+/// texture), else halved until none is. Asking the device for a larger
+/// texture than it allows is an error that stops the app.
+pub fn fitted(image: &RgbaImage, limit: u32) -> Cow<'_, RgbaImage> {
+    let mut fitted = Cow::Borrowed(image);
+    while fitted.width().max(fitted.height()) > limit.max(1) {
+        fitted = Cow::Owned(half(&fitted));
+    }
+    fitted
+}
 
 /// Every size below `image`, halving down to a single pixel.
 pub fn below(image: &RgbaImage) -> Vec<RgbaImage> {
@@ -61,6 +91,60 @@ mod tests {
             assert!(level.pixels().all(|p| *p == Rgba([200, 120, 40, 255])));
         }
         assert!(below(&RgbaImage::new(1, 1)).is_empty());
+    }
+
+    /// At the limit, one over it, far over it, and a picture one pixel wide.
+    #[test]
+    fn a_picture_is_halved_until_the_device_can_take_it() {
+        const LIMIT: u32 = 8192;
+        let cases = [
+            ((512, 512), (512, 512)),
+            ((8192, 8192), (8192, 8192)),
+            ((8193, 8192), (4096, 4096)),
+            ((8192, 8193), (4096, 4096)),
+            ((16384, 16384), (8192, 8192)),
+            ((16385, 9000), (8192, 4500)),
+            ((1_000_000, 3), (7812, 1)),
+            ((1, 20_000), (1, 5000)),
+            ((1, 8192), (1, 8192)),
+            ((1, 1), (1, 1)),
+            ((0, 0), (1, 1)),
+        ];
+        for ((width, height), fits) in cases {
+            assert_eq!(fitted_size(width, height, LIMIT), fits, "{width} x {height}");
+            let (w, h) = fitted_size(width, height, LIMIT);
+            assert!(w <= LIMIT && h <= LIMIT && w >= 1 && h >= 1);
+        }
+        // Whatever the device says, down to nothing at all, there is an answer.
+        assert_eq!(fitted_size(40, 24, 10), (10, 6));
+        assert_eq!(fitted_size(40, 24, 1), (1, 1));
+        assert_eq!(fitted_size(40, 24, 0), (1, 1));
+        assert_eq!(fitted_size(u32::MAX, u32::MAX, LIMIT), (8191, 8191));
+    }
+
+    /// The picture itself comes out the size worked out for it, by the same
+    /// averaging the smaller copies are made with, and untouched when it fits.
+    #[test]
+    fn a_picture_too_large_is_brought_down_and_one_that_fits_is_left_alone() {
+        let mut wide = RgbaImage::from_pixel(70, 9, Rgba([200, 120, 40, 255]));
+        // Black beside white, in the corner: half the light where they are averaged.
+        wide.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
+        wide.put_pixel(1, 0, Rgba([255, 255, 255, 255]));
+        wide.put_pixel(0, 1, Rgba([0, 0, 0, 255]));
+        wide.put_pixel(1, 1, Rgba([255, 255, 255, 255]));
+        for limit in [70, 69, 35, 34, 16, 2, 1, 0] {
+            let small = fitted(&wide, limit);
+            assert_eq!(small.dimensions(), fitted_size(70, 9, limit), "limit {limit}");
+            assert!(small.width().max(small.height()) <= limit.max(1));
+            assert_eq!(matches!(small, Cow::Borrowed(_)), limit >= 70, "limit {limit}");
+        }
+        let halved = fitted(&wide, 64);
+        assert_eq!(halved.dimensions(), (35, 4));
+        assert_eq!(*halved.get_pixel(0, 0), Rgba([188, 188, 188, 255]));
+        assert_eq!(*halved.get_pixel(20, 2), Rgba([200, 120, 40, 255]));
+        // One pixel wide stays one pixel wide.
+        let tall = RgbaImage::from_pixel(1, 300, Rgba([9, 9, 9, 255]));
+        assert_eq!(fitted(&tall, 100).dimensions(), (1, 75));
     }
 
     #[test]

@@ -24,9 +24,10 @@
 use glam::Vec3;
 use sculpt_geom::{Aabb, TriMesh};
 
+use crate::budget::{self, Job, MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION, Refusal, Refused};
 use crate::extract::{self, CellSource, ExtractOptions, Hermite, hermite_from_edges, values_from_edges};
 use crate::grid::Grid;
-use crate::remesh::{MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION, Remeshed, Sources, surface_area};
+use crate::remesh::{Remeshed, Sources, budgeted_resolution, surface_area};
 use crate::scan::{Scan, facing_out, unpack_direction};
 
 /// Which way two solids are combined.
@@ -163,20 +164,44 @@ impl CellSource for Combined {
     }
 }
 
+/// What a union is told when its objects stand too far apart: the lattice
+/// has to cover them all and everything between, at a cell size set by the
+/// first object alone.
+fn too_far_apart(refused: &Refused) -> String {
+    let lower = refused.fits.map_or(String::new(), |fits| format!(", or lower the resolution to {fits} or less"));
+    match refused.why {
+        // Mirrored, the lattice reaches to the far object's mirror image as well.
+        Refusal::OffCentre { axes, .. } => format!(
+            "The objects are too far apart to unite mirrored at this resolution: the grid has to reach across all \
+             of them and their mirror images. Move them closer together, or turn the {} off for this{lower}.",
+            budget::mirrors_named(axes)
+        ),
+        _ => format!(
+            "The objects are too far apart to unite at this resolution: the grid has to reach across all of them. \
+             Move them closer together{lower}."
+        ),
+    }
+}
+
 /// Combines two solids at `resolution` cells along the first one's longest
 /// side.
 pub fn boolean(a: &TriMesh, b: &TriMesh, op: BooleanOp, resolution: u32) -> Result<TriMesh, String> {
     boolean_with(a, &[b], op, &BooleanSettings::new(resolution)).map(|r| r.mesh)
 }
 
-/// Combines `target` with every one of `others`, with every setting and the
-/// full result. All meshes must be in the same space.
-pub fn boolean_with(
-    target: &TriMesh,
-    others: &[&TriMesh],
-    op: BooleanOp,
-    settings: &BooleanSettings,
-) -> Result<Remeshed, String> {
+/// What a boolean works on, once everything that can be asked beforehand
+/// has been: its lattice, and the cell and resolution that lattice is of.
+#[derive(Debug)]
+struct Admitted {
+    grid: Grid,
+    cell: f32,
+    resolution: u32,
+}
+
+/// Everything asked of a boolean before any of it is read: whether there is
+/// anything to do, and whether what it would take can be afforded. Nothing
+/// is allocated here beyond a list of bounds.
+fn admit(target: &TriMesh, others: &[&TriMesh], op: BooleanOp, settings: &BooleanSettings) -> Result<Admitted, String> {
     let target_bounds =
         crate::check_mesh(&target.positions, &target.indices).map_err(|e| format!("The first object: {e}"))?;
     if others.is_empty() {
@@ -209,6 +234,20 @@ pub fn boolean_with(
         .into());
     }
 
+    // Asked before anything about size is: for objects wholly behind a
+    // mirror plane no resolution works, and a lower one must not be offered.
+    // What a subtract or an intersect leaves lies within the first object;
+    // a union reaches as far as any of them.
+    if crate::remesh::behind_mirror(bounds.max, settings.mirror) {
+        return Err(match op {
+            BooleanOp::Union => "The objects all lie on the far side of the mirror plane, so the mirror image of \
+                                 their union is empty. Turn the mirror off for this, or move them across the plane.",
+            _ => "The first object lies wholly on the far side of its mirror plane, so its mirror image is empty. \
+                  Turn the mirror off for this, or move it across the plane.",
+        }
+        .into());
+    }
+
     let extent = target_bounds.size().max_element();
     if !(extent > 0.0) {
         return Err("The first object has no size.".into());
@@ -222,24 +261,77 @@ pub fn boolean_with(
         // What the given cell size comes to, for the report.
         resolution = (extent / cell + 0.5) as u32;
     }
+
+    let solids = || std::iter::once(target).chain(others.iter().copied());
     // Every piece of a union's surface is a piece of one of the solids', so
     // its size can be known before any work is done, and a resolution that
-    // would fit suggested. (The other two are bounded by the target's lattice
-    // whatever the cutter's size, and are stopped during extraction instead.)
-    if op == BooleanOp::Union {
-        let solids = std::iter::once(target).chain(others.iter().copied());
-        let area: f64 = solids.map(|m| surface_area(&m.positions, &m.indices)).sum();
-        let expected = 3.0 * area / (cell as f64 * cell as f64);
-        if expected > 2.0 * settings.max_triangles as f64 {
-            let fits = (extent as f64 / cell as f64 * (settings.max_triangles as f64 / expected).sqrt()) as u32;
-            return Err(format!(
-                "That resolution would make too many triangles. Try {} or lower.",
-                fits.clamp(MIN_RESOLUTION, MAX_RESOLUTION)
-            ));
-        }
-    }
+    // would fit suggested. (How much of a target the other two leave cannot
+    // be known without looking, so their triangles are counted during
+    // extraction instead; what is known beforehand is how much there is to
+    // look at, which the memory asked about below puts a limit on.)
+    let union_area: Option<f64> =
+        (op == BooleanOp::Union).then(|| solids().map(|m| surface_area(&m.positions, &m.indices)).sum());
+    let triangles = |cell: f32| union_area.map_or(0.0, |area| 3.0 * area / (cell as f64 * cell as f64));
+    // What the lattice and the scans will take, before anything is allocated.
+    let job_at = |cell: f32| {
+        let read = |m: &TriMesh| budget::crossings(&m.positions, &m.indices, &bounds, settings.mirror, cell);
+        Job { bounds, cell, mirror: settings.mirror, solids: others.len() + 1, crossings: solids().map(read).sum() }
+    };
+    // The highest resolution up to `at_most` at which all of that is let
+    // through, for offering: one the same asking then passes. The triangles
+    // of a union are held to the budget itself there, not to the twice of
+    // it that is let through, as a resolution offered for them always was.
+    let offer = |at_most: u32| {
+        budget::highest_passing(at_most, |lower| {
+            let cell = extent / lower as f32;
+            triangles(cell) <= settings.max_triangles as f64 && job_at(cell).check().is_ok()
+        })
+    };
 
-    let grid = Grid::covering(&bounds, cell)?.mirrored(settings.mirror);
+    // A refusal for memory, in words. Affordable round the first object
+    // alone? Then it is the distance to the others that is not. Otherwise
+    // it is the first object's own place or size that is spoken of.
+    let too_much = |job: &Job, refused: Refused| match (Job { bounds: target_bounds, ..*job }).check() {
+        Ok(_) => too_far_apart(&refused),
+        Err(why) => Refused { why, ..refused }.message(&budget::FIRST_OBJECT),
+    };
+
+    let expected = triangles(cell);
+    if expected > 2.0 * settings.max_triangles as f64 {
+        let within = (extent as f64 / cell as f64 * (settings.max_triangles as f64 / expected).sqrt()) as u32;
+        if let Some(fits) = offer(within.clamp(MIN_RESOLUTION, MAX_RESOLUTION)) {
+            return Err(format!("That resolution would make too many triangles. Try {fits} or lower."));
+        }
+        // Nothing to offer. At the lowest resolution there is, is it still the triangles, or the memory?
+        let lowest = job_at(extent / MIN_RESOLUTION as f32);
+        return Err(match lowest.check() {
+            Err(why) if triangles(lowest.cell) <= settings.max_triangles as f64 => {
+                too_much(&lowest, Refused { why, fits: None })
+            }
+            _ => "Uniting these objects would make too many triangles at any resolution.".into(),
+        });
+    }
+    let job = job_at(cell);
+    let grid = job.check().map_err(|why| {
+        // A resolution worth offering is lower than this one, and also leaves
+        // the first object within the triangle budget.
+        let area = surface_area(&target.positions, &target.indices);
+        let lower = resolution.saturating_sub(1);
+        let within = budgeted_resolution(area, extent as f64, lower, settings.max_triangles).0;
+        too_much(&job, Refused { why, fits: if lower >= MIN_RESOLUTION { offer(within) } else { None } })
+    })?;
+    Ok(Admitted { grid, cell, resolution })
+}
+
+/// Combines `target` with every one of `others`, with every setting and the
+/// full result. All meshes must be in the same space.
+pub fn boolean_with(
+    target: &TriMesh,
+    others: &[&TriMesh],
+    op: BooleanOp,
+    settings: &BooleanSettings,
+) -> Result<Remeshed, String> {
+    let Admitted { grid, cell, resolution } = admit(target, others, op, settings)?;
     let mut scans = Vec::with_capacity(others.len() + 1);
     for (index, mesh) in std::iter::once(target).chain(others.iter().copied()).enumerate() {
         let scan = Scan::new(&mesh.positions, &mesh.indices, &grid)?;
@@ -300,6 +392,172 @@ mod tests {
             let out = boolean_with(target, &[cutter], BooleanOp::Union, &BooleanSettings::new(48)).unwrap();
             assert_eq!(out.sources, Sources { capped, voted: 0 });
             assert_closed(&out.mesh, "a union of capped solids");
+        }
+    }
+
+    fn unit_cube(middle: Vec3) -> TriMesh {
+        box_mesh(middle - 0.5, middle + 0.5)
+    }
+
+    /// Two cubes to unite, far apart on two axes, at the highest resolution
+    /// the app's slider has. The lattice has to cover both and everything
+    /// between: at 40 lengths apart, 41,990 x 41,990 lines along z for each
+    /// of the two, 14 GB of tables that used to be asked for. (At 60 the old
+    /// code refused, the lattice being longer than one can be, but only with
+    /// "too fine for this model".)
+    #[test]
+    fn objects_too_far_apart_to_unite_are_refused_with_what_to_do_about_it() {
+        let settings = BooleanSettings::new(1024);
+        for apart in [60.0, 40.0] {
+            let (near, far) = (unit_cube(Vec3::ZERO), unit_cube(Vec3::new(apart, apart, 0.0)));
+            let error = boolean_with(&near, &[&far], BooleanOp::Union, &settings).unwrap_err();
+            let start = "The objects are too far apart to unite at this resolution: the grid has to reach across all \
+                         of them. Move them closer together, or lower the resolution to ";
+            assert!(error.starts_with(start) && error.ends_with(" or less."), "{error}");
+        }
+        // Far apart along one line is a long thin lattice, and still united.
+        let (near, far) = (unit_cube(Vec3::ZERO), unit_cube(Vec3::new(20.0, 0.0, 0.0)));
+        let out = boolean_with(&near, &[&far], BooleanOp::Union, &BooleanSettings::new(32)).unwrap();
+        assert_eq!(shells(&out.mesh), 2);
+    }
+
+    /// The first object far to one side of a mirror plane the result is to
+    /// be symmetric across, cut or intersected: the same lattice a mirrored
+    /// remesh of it would need, refused the same way.
+    #[test]
+    fn a_first_object_far_from_its_mirror_plane_is_refused_with_what_to_do_about_it() {
+        let (target, cutter) = (unit_cube(Vec3::new(40.0, 0.0, 0.0)), unit_cube(Vec3::new(40.4, 0.3, 0.2)));
+        let settings = BooleanSettings { mirror: [true, false, false], ..BooleanSettings::new(1024) };
+        for op in [BooleanOp::Subtract, BooleanOp::Intersect, BooleanOp::Union] {
+            let error = boolean_with(&target, &[&cutter], op, &settings).unwrap_err();
+            let start = "The first object is about 40 times its own size away from its X mirror plane. ";
+            assert!(error.starts_with(start), "{op:?}: {error}");
+            assert!(error.contains(" Turn the X mirror off for this, or lower the resolution to "), "{op:?}: {error}");
+        }
+        // United mirrored with something far away, it is the distance that is said.
+        let (near, far) = (unit_cube(Vec3::ZERO), unit_cube(Vec3::new(40.0, 0.0, 0.0)));
+        let error = boolean_with(&near, &[&far], BooleanOp::Union, &settings).unwrap_err();
+        let start = "The objects are too far apart to unite mirrored at this resolution: the grid has to reach across \
+                     all of them and their mirror images. Move them closer together, or turn the X mirror off for \
+                     this, or lower the resolution to ";
+        assert!(error.starts_with(start), "{error}");
+    }
+
+    /// A subtract or an intersect reads the whole of the first object before
+    /// it can know how little of it is left, and nothing used to ask how much
+    /// that was. Three cubes in one place at the highest resolution there is
+    /// cross the lattice 300 million times: 4.8 GB of crossings, read in full
+    /// before extraction said there were too many triangles. Now refused
+    /// before the scan, with a resolution at which the object fits.
+    #[test]
+    fn a_first_object_too_large_to_read_is_refused_before_it_is_scanned() {
+        let mut target = unit_cube(Vec3::ZERO);
+        for _ in 0..2 {
+            target.append(&unit_cube(Vec3::ZERO));
+        }
+        let cutter = unit_cube(Vec3::splat(0.5));
+        for op in [BooleanOp::Subtract, BooleanOp::Intersect] {
+            let error = boolean_with(&target, &[&cutter], op, &BooleanSettings::new(4096)).unwrap_err();
+            // Low enough for the triangles as well as for the memory.
+            assert_eq!(error, "That resolution needs too much memory for these objects. Try 1217 or lower.", "{op:?}");
+        }
+    }
+
+    /// Objects wholly behind a mirror plane the result is to be symmetric
+    /// across leave nothing at any resolution, and are told so before they
+    /// are offered one. Forty lengths off at 1024 the first object used to be
+    /// told to lower the resolution, and at the resolution offered that "the
+    /// cutter removed the whole object", which it had not.
+    #[test]
+    fn objects_on_the_far_side_of_the_mirror_plane_are_never_offered_a_resolution() {
+        let (target, cutter) = (unit_cube(Vec3::new(-40.0, 0.0, 0.0)), unit_cube(Vec3::new(-40.4, 0.3, 0.2)));
+        for resolution in [MAX_RESOLUTION, 1024, 64, MIN_RESOLUTION] {
+            let settings = BooleanSettings { mirror: [true, false, false], ..BooleanSettings::new(resolution) };
+            for op in [BooleanOp::Subtract, BooleanOp::Intersect, BooleanOp::Union] {
+                let error = admit(&target, &[&cutter], op, &settings).unwrap_err();
+                let start = match op {
+                    BooleanOp::Union => "The objects all lie on the far side of the mirror plane, ",
+                    _ => "The first object lies wholly on the far side of its mirror plane, ",
+                };
+                assert!(error.starts_with(start), "{op:?} at {resolution}: {error}");
+                assert!(!error.contains("resolution"), "{op:?} at {resolution}: {error}");
+            }
+        }
+        // Start to finish, at a resolution that was let through: not the cutter's doing.
+        let settings = BooleanSettings { mirror: [true, false, false], ..BooleanSettings::new(32) };
+        let error = boolean_with(&target, &[&cutter], BooleanOp::Subtract, &settings).unwrap_err();
+        assert!(error.contains("far side of its mirror plane"), "{error}");
+        // A union reaching across the plane has a half to keep, wherever the first object is.
+        let across = unit_cube(Vec3::new(0.2, 0.0, 0.0));
+        assert!(admit(&target, &[&across], BooleanOp::Union, &BooleanSettings { resolution: 8, ..settings }).is_ok());
+        // What is cut or kept is the first object's, so its place decides, not the cutter's.
+        let wide = box_mesh(Vec3::new(-41.0, -0.2, -0.2), Vec3::new(1.0, 0.2, 0.2));
+        let error = admit(&target, &[&wide], BooleanOp::Intersect, &settings).unwrap_err();
+        assert!(error.contains("far side of its mirror plane"), "{error}");
+    }
+
+    /// The resolution a refusal offers is one the same asking then lets
+    /// through. A cutter far larger than the lattice is read only where the
+    /// lattice is, so what it costs does not fall with the square of the
+    /// resolution as a surface inside the lattice does: reckoned as if it
+    /// did, 4096 was answered with "try 2019" and 2019 with "try 2017".
+    #[test]
+    fn the_resolution_a_refusal_offers_is_then_admitted() {
+        let target = unit_cube(Vec3::ZERO);
+        let huge = box_mesh(Vec3::splat(-500.0), Vec3::splat(500.0));
+        let (far, aside) = (unit_cube(Vec3::new(40.0, 40.0, 0.0)), unit_cube(Vec3::new(40.4, 0.3, 0.2)));
+        let mirrored = unit_cube(Vec3::new(40.0, 0.0, 0.0));
+        let mut heavy = unit_cube(Vec3::ZERO);
+        (0..2).for_each(|_| heavy.append(&unit_cube(Vec3::ZERO)));
+        let mut offers = 0;
+        let mut ask = |first: &TriMesh, others: &[&TriMesh], op: BooleanOp, mirror: [bool; 3]| {
+            for resolution in [MAX_RESOLUTION, 3500, 3000, 2500, 2048, 1500, 1024, 512, 100] {
+                let settings = BooleanSettings { mirror, ..BooleanSettings::new(resolution) };
+                let Err(error) = admit(first, others, op, &settings) else { continue };
+                let Some(offered) = crate::testing::offered_resolution(&error) else { continue };
+                offers += 1;
+                assert!(offered < resolution, "{error}");
+                let again = admit(first, others, op, &BooleanSettings { resolution: offered, ..settings });
+                let again = again.unwrap_or_else(|second| {
+                    panic!("{op:?} of {} at {resolution}: \"{error}\", and then \"{second}\"", others.len() + 1)
+                });
+                assert_eq!(again.resolution, offered);
+            }
+        };
+        for cutters in 1..MAX_SOLIDS {
+            for op in [BooleanOp::Subtract, BooleanOp::Intersect, BooleanOp::Union] {
+                ask(&target, &vec![&huge; cutters], op, [false; 3]);
+                ask(&heavy, &vec![&huge; cutters], op, [false; 3]);
+            }
+        }
+        for op in [BooleanOp::Subtract, BooleanOp::Intersect, BooleanOp::Union] {
+            ask(&mirrored, &[&aside], op, [true, false, false]);
+            ask(&heavy, &[&unit_cube(Vec3::splat(0.5))], op, [true; 3]);
+        }
+        ask(&target, &[&far], BooleanOp::Union, [false; 3]);
+        ask(&target, &[&far, &aside], BooleanOp::Union, [true, false, false]);
+        assert!(offers > 60, "only {offers} refusals offered a resolution");
+
+        // A union with something a thousand times the size of the first object, whose longest side the
+        // resolution counts along, is too many triangles at the lowest resolution there is. It used to be
+        // told to "try 4 or lower", at 4 as well.
+        for resolution in [MAX_RESOLUTION, 1024, 5, MIN_RESOLUTION] {
+            let error = admit(&target, &[&huge], BooleanOp::Union, &BooleanSettings::new(resolution)).unwrap_err();
+            assert_eq!(error, "Uniting these objects would make too many triangles at any resolution.", "{resolution}");
+        }
+    }
+
+    /// The app's highest setting, start to finish, on two spheres that sit
+    /// on the mirror plane. Slow for every run of the tests, so run by name.
+    #[test]
+    #[ignore = "seconds: cargo test -p sculpt-volume the_apps_highest_resolution -- --ignored"]
+    fn the_apps_highest_resolution_is_still_accepted() {
+        let (a, b) = (icosphere(5, 1.0, Vec3::new(0.0, -0.5, 0.0)), icosphere(5, 1.0, Vec3::new(0.0, 0.5, 0.0)));
+        let settings = BooleanSettings { mirror: [true, false, false], ..BooleanSettings::new(1024) };
+        for op in [BooleanOp::Union, BooleanOp::Subtract, BooleanOp::Intersect] {
+            let out = boolean_with(&a, &[&b], op, &settings).unwrap();
+            assert_eq!(out.resolution, 1024);
+            assert_closed(&out.mesh, &format!("{op:?} at 1024"));
         }
     }
 
