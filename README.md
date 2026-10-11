@@ -780,7 +780,11 @@ pair; after that they can be moved apart and the joints stay on them.
   it was left: the material and finish, lighting, HDRI, background and
   effects, the camera view, and whether the symmetry guides show. Reopening a
   file puts all of it back. (An HDRI is kept as the path of its picture, not
-  the picture.) A `.sclp` saved before symmetry belonged to objects holds one
+  the picture. The picture is only looked for on this computer's own drives:
+  a file that names one on a network share, or on a drive letter that stands
+  for a share, opens with the note "Saved HDRI not found", and Load HDRI
+  brings it back. A file from somebody else must not be able to make the
+  app sign in to a server of their choosing.) A `.sclp` saved before symmetry belonged to objects holds one
   setting for the whole scene: it opens with that setting given to every
   object in it, in each object's own space, which is how it was applied then.
 - **Saving and exporting never harm the file already there.** A save and an
@@ -800,6 +804,12 @@ pair; after that they can be moved apart and the joints stay on them.
   open it in the Unity app and save it again there if that app still can, or
   else to go back to an earlier save. An OBJ or STL with one just leaves out
   the triangles that touch it.
+  A `.sclp` damaged the other way, with a triangle that names a point the
+  file does not hold, is not turned away either: that triangle is left out,
+  everything else opens, and the status line says how many were left out and
+  that the model may have a hole there (Check for Printing finds it, a Remesh
+  closes it). Restoring a recovery copy says the same of points and
+  triangles as opening the file would.
 - A file the app is started with (named on its command line) that is missing
   or cannot be read says so in the status line, with the file's name, and the
   app starts with a new sphere.
@@ -845,10 +855,13 @@ pair; after that they can be moved apart and the joints stay on them.
   finish or press its Cancel. A 360 loop being recorded has the panels away
   and the keys to itself. A timelapse just keeps recording.
   **Recovery copies:** a new scene nothing has been done to is owed no copy.
-  Work put aside with "New Scene Without Saving" is kept in memory for Undo;
-  a copy of it already written stays in the recovery folder until the new
-  scene is saved, three newer copies have been written, or the app is closed
-  in the ordinary way. After a crash the app offers the newest copy, which
+  Work put aside with "New Scene Without Saving" is kept in memory for Undo,
+  and a recovery copy of it is written first if it has none yet, however
+  young the work is (the same for "Open Without Saving"). That copy stays in
+  the recovery folder until the new scene is saved, three newer copies have
+  been written, or the app is closed in the ordinary way; if the app crashes
+  before any of those, the next start offers the work that was put aside.
+  After a crash the app offers the newest copy, which
   is of the new scene once that has work in it. A new scene started over a
   scene that was restored after a crash and not yet saved leaves that
   crash's copies where they are: the restored scene is one Undo away with
@@ -947,7 +960,9 @@ pair; after that they can be moved apart and the joints stay on them.
   that are not saved, the app writes a recovery copy of it every three
   minutes, in a pause between strokes (about a tenth of a second for four to
   eight million triangles on a fast disk; a toast says "Recovery copy kept"
-  when it was long enough to feel). The copies are ordinary `.sclp` files in
+  when it was long enough to feel). It does not wait for the three minutes
+  when unsaved work is about to be put aside by "Open Without Saving" or
+  "New Scene Without Saving": the copy that is owed is written first. The copies are ordinary `.sclp` files in
   `%APPDATA%\Sculpt\recovery`, in a folder per run of the app; each is a new
   file, never written over another or over a file of yours, and the newest
   three are kept (each is the size of a save: about 200 MB for a scene of
@@ -1416,7 +1431,8 @@ place and nothing else has been done),
 and steps to take in a numbered frame: `stroke@30`, `scene@40` (prints a
 fingerprint of the scene),
 `save@45` (to `saved by the check.sclp` in the settings folder), `open@46`
-(opens `to open.sclp` from that folder in place of the scene), `undo@47`,
+(opens `to open.sclp` from that folder in place of the scene), `new@46`
+(New Scene, answered "New Scene Without Saving"), `undo@47`,
 `redo@48`, `file@49` (prints the name of the scene's file and whether
 anything is unsaved), `status@49` (prints the status line), `mirror@50`, `hide@50`, `show@50` and `local@50` (the
 X, H, Alt + H and / keys: changes that are saved without an undo step),
@@ -1436,6 +1452,7 @@ SCULPT_TEST_RECOVERY=answer=restore,scene@5,quit@8 sculpt.exe --size 1600x960   
 SCULPT_TEST_RECOVERY=answer=restore,undo@5,close@6,quit@8 sculpt.exe --size 1600x960        # Restore It, one Undo, close: "closes without asking", and the copies are still there
 SCULPT_TEST_RECOVERY=answer=restore,restore-fault,file@5,status@6,quit@8 sculpt.exe --size 1600x960 some.sclp   # a fault while restoring: "file: none, unsaved true", never some.sclp, and a status line that says what happened
 SCULPT_TEST_RECOVERY=answer=restore,scene@5,save@6,quit@8 sculpt.exe --size 1600x960        # saving the restored scene is what retires the copies: recovery/ is then empty
+SCULPT_TEST_RECOVERY=every=600,stroke@20,scene@30,new@40,scene@50,kill@60 sculpt.exe --size 1600x960 --demo   # work too young for a timed copy, then New Scene Without Saving: "copy copy-0001.sclp ..." is written first; answer=restore at the next start prints the first fingerprint again
 SCULPT_TEST_RECOVERY=every=0.3,mirror@20,kept@26,kill@200 sculpt.exe --size 1600x960        # a change that is no undo step still gets a copy ("copy copy-0001.sclp ...")
 SCULPT_TEST_RECOVERY=answer=restore,kept@5,quit@8 sculpt.exe --size 1600x960                # and comes back with it: the same "kept" line
 cargo test --release timing_of_a_recovery_copy -- --ignored --nocapture                     # what a copy costs at 1M / 4M / 12M triangles
@@ -1515,10 +1532,18 @@ connected at once:
   unsaved work and that the user is to be asked; then `save: true` saves to the
   scene's own `.sclp` first (never through a dialog: a scene with no file yet
   has to be saved with `save_file` first), and `discard: true` closes without
-  saving.
+  saving. Nor does it close over work that is in no file (SSpheres not yet
+  made into a skin, unmerged tubes, planned keys, a lathe outline: what the
+  close button's own question names). Saving does not keep that work, so
+  `save: true` is no answer to it: `quit` names the work and stays open, and
+  only `discard: true` closes over it.
 - `open_file` does not open a sculpt in place of a scene with unsaved work
   unless told `discard: true`, for the same reason: the interface asks, so
-  Claude is told to. Adding an `.obj` or `.stl` needs no such answer.
+  Claude is told to. The same goes for unmerged tubes and planned keys, which
+  stand on the scene's objects and would go with them: it names them and
+  opens nothing. Adding an `.obj` or `.stl` needs no such answer.
+- A sculpt saved through the bridge says what the Save button says,
+  including that damaged points were written mended, if any were.
 - `open_file`, `save_file` and `launch` take only full paths on this
   computer's own drives. A network share (`\\server\folder`, `//server/folder`,
   `\\?\UNC\...`), a drive letter that stands for one (`Z:\head.sclp`, with `Z:`
@@ -1537,9 +1562,8 @@ connected at once:
   is not tied to the Claude session and stays open when the session ends.)
 
 Left as they were: `save_file` replaces a file that is already there (a
-`.sclp` is written whole beside the old one and then swapped in; an export is
-written straight over it), and `delete_object`, like every other change, is
-one undo step.
+`.sclp` or an export is written whole beside the old one and then swapped
+in), and `delete_object`, like every other change, is one undo step.
 
 Matcap images in `assets/matcaps` keep their original credits files. Icons in
 `assets/icons` come from the Unity project's `Design/Icons`.

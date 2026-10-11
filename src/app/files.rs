@@ -64,6 +64,8 @@ pub(super) struct State {
     mended_on_save: usize,
     /// How many damaged points the file last put in place of the scene had, mended as it was read.
     repaired_on_open: usize,
+    /// How many triangles that file held that could not be used, and were left out.
+    left_out_on_open: usize,
 }
 
 impl State {
@@ -72,9 +74,24 @@ impl State {
         let kept = home.load();
         let next_check = Instant::now() + SETTINGS_CHECK;
         // `clean` is set once the scene the app starts with is in place (`mark_saved`).
-        let (quit, unasked) = (false, false);
-        State { home, kept, next_check, clean: None, quit, unasked, mended_on_save: 0, repaired_on_open: 0 }
+        let (quit, unasked, clean) = (false, false, None);
+        let (mended_on_save, repaired_on_open, left_out_on_open) = (0, 0, 0);
+        State { home, kept, next_check, clean, quit, unasked, mended_on_save, repaired_on_open, left_out_on_open }
     }
+}
+
+/// Whether the picture a saved look names is there to be loaded. The path
+/// comes out of the file being opened, which may be anybody's, and it is
+/// looked for whoever opens the file: the user, the Claude bridge's
+/// `open_file` and `launch`, a recovery copy being restored. Merely asking
+/// Windows whether `\\server\share\sky.hdr` is a file signs in to `server`,
+/// which is what the bridge's rule about paths exists to prevent
+/// (`bridge_guard::off_limits`). So a path that rule refuses is never asked
+/// about (`is_file` is the look at the disk, and is not called), and counts
+/// as a picture that is not there: the look is kept, with the note a missing
+/// picture gets, and Load HDRI brings the picture back.
+fn saved_picture_is_there(path: &Path, is_file: impl FnOnce(&Path) -> bool) -> bool {
+    crate::bridge_guard::off_limits(&path.to_string_lossy()).is_none() && is_file(path)
 }
 
 /// Whether a close is the user's own doing as far as the scene's work goes:
@@ -413,7 +430,7 @@ impl Running {
         match self.save_scene(&path) {
             Ok(()) => {
                 let size = std::fs::metadata(&path).map_or(String::new(), |m| format!(" ({:.1} MB)", m.len() as f64 / 1e6));
-                let note = io::note_saved(self.files.mended_on_save).map_or(String::new(), |note| format!(". {note}"));
+                let note = self.saved_note();
                 self.status(format!("Saved {}{size}{note}", path.display()), true);
                 self.toast("Saved");
                 self.doc.path = Some(path);
@@ -542,6 +559,8 @@ impl Running {
     /// Takes on a saved look. The HDRI picture itself is not in the file,
     /// only where it was: if it is still there it is loaded again, and if
     /// not the settings are kept with a note where the picture should be.
+    /// A place that is not on this computer's own drives is not looked at
+    /// at all ([`saved_picture_is_there`]).
     fn set_look(&mut self, mut look: Look) {
         let (wanted, path) = (look.hdri.enabled, look.hdri.path.clone());
         look.wood.axis = look.wood.axis.clamp(0, 2);
@@ -550,7 +569,7 @@ impl Running {
         look.hdri.status = "No HDRI loaded.".into();
         self.doc.opts.look = look;
         match path {
-            Some(path) if path.is_file() => self.load_hdri(path),
+            Some(path) if saved_picture_is_there(&path, Path::is_file) => self.load_hdri(path),
             Some(path) => {
                 // Not the picture the last scene was using: that would light
                 // this one wrongly while the note says its own is missing.
@@ -779,12 +798,31 @@ impl Running {
         };
         // A sculpt from the Unity app says so, and what it could not bring.
         let note = unity_import::status_note(&details, true).map_or(String::new(), |note| format!(". {note}"));
-        let repaired = io::note_opened(self.files.repaired_on_open);
-        let note = note + &repaired.map_or(String::new(), |note| format!(". {note}"));
+        let note = note + &self.opened_note();
         self.status(format!("Opened {} ({}){note}", path.display(), how_many(count)), true);
         // Its picture is the one from its last save; one is only taken now
         // if it has none.
         self.note_recent(&path, false);
+    }
+
+    /// What there is to say about damage found in the file that was last
+    /// put in place of the scene (an Open, a restored recovery copy): the
+    /// points that were mended and the triangles that were left out. `None`
+    /// for a sound file.
+    pub(super) fn opened_damage(&self) -> Option<String> {
+        io::notes_opened(self.files.repaired_on_open, self.files.left_out_on_open)
+    }
+
+    /// [`Running::opened_damage`] as a sentence to follow what a status line
+    /// says; empty for a sound file.
+    fn opened_note(&self) -> String {
+        self.opened_damage().map_or(String::new(), |note| format!(". {note}"))
+    }
+
+    /// What there is to add to a status line about the last save: that
+    /// damaged points were written mended. Empty when none were.
+    pub(super) fn saved_note(&self) -> String {
+        io::note_saved(self.files.mended_on_save).map_or(String::new(), |note| format!(". {note}"))
     }
 
     /// Opens `path` and puts its scene in place of the one that is open: the
@@ -805,11 +843,15 @@ impl Running {
     /// nowhere, so each treats the scene it replaces alike: the step keeps
     /// that scene's file, whether it was saved and which recovery copy it was
     /// restored from, and Undo gives them back (`file_undo.rs`); the tools
-    /// are told their objects went (`apply_details`). Gives back how many
-    /// objects came, and what else `saved` held.
+    /// are told their objects went (`apply_details`); and unsaved work in
+    /// that scene that is in no recovery copy yet gets one first
+    /// (`recovery_before_replacing`). Gives back how many objects came, and
+    /// what else `saved` held.
     pub(super) fn put_in_place(&mut self, saved: io::SavedScene, file: FileState) -> (usize, io::Details) {
+        // Unsaved work is about to be one Undo away and nowhere else.
+        self.recovery_before_replacing();
         let count = saved.objects.len();
-        self.files.repaired_on_open = saved.repaired;
+        (self.files.repaired_on_open, self.files.left_out_on_open) = (saved.repaired, saved.left_out);
         let before = self.history_mark();
         let before = self.file().state(before);
         let mut details = io::Details::default();
@@ -841,7 +883,8 @@ impl Running {
         };
         let count = saved.objects.len();
         let note = unity_import::status_note(&saved.details, false).map_or(String::new(), |note| format!(". {note}"));
-        let note = note + &io::note_opened(saved.repaired).map_or(String::new(), |note| format!(". {note}"));
+        let damage = io::notes_opened(saved.repaired, saved.left_out);
+        let note = note + &damage.map_or(String::new(), |note| format!(". {note}"));
         let (details, mut rows) = (saved.details.clone(), Vec::new());
         self.edit_scene(|scene, slot| {
             rows = append(scene, slot, saved);
@@ -897,9 +940,10 @@ impl Running {
     /// that a file keeps and no undo step records: `mirror`, `hide` or
     /// `local` (`Running::kept_change`); `ask-exit:saved` takes the scene as
     /// the other options left it for saved, so that only what is in no file
-    /// is left to ask about. Everything it writes goes under the temp folder.
+    /// is left to ask about. Everything it writes goes in a scratch folder
+    /// of the run's own (`prefs::scratch`).
     pub(super) fn files_demo(&mut self, what: &str) {
-        let folder = std::env::temp_dir().join("sculpt_files_demo");
+        let folder = prefs::scratch("sculpt_files_demo");
         let _ = std::fs::remove_dir_all(&folder);
         if let Err(e) = std::fs::create_dir_all(&folder) {
             log::error!("{e}");
@@ -1141,6 +1185,40 @@ impl Running {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `.sclp` may name its HDRI on a network share, and whoever opens the
+    /// file (the Claude bridge among them) must not be made to reach out to it.
+    #[test]
+    fn a_saved_hdri_on_a_network_share_is_not_looked_for() {
+        let looked = std::cell::Cell::new(0);
+        let there = |_: &Path| {
+            looked.set(looked.get() + 1);
+            true
+        };
+        let network = [
+            r"\\server\share\sky.hdr",
+            "//server/share/sky.hdr",
+            r"\\?\UNC\server\share\sky.hdr",
+            r"\\?\C:\Pictures\sky.hdr",
+            r"\\.\COM1",
+            r"C:\Pictures\NUL.hdr",
+            r"C:\Pictures\sky.hdr:hidden",
+        ];
+        for path in network {
+            assert!(!saved_picture_is_there(Path::new(path), there), "{path} counts as not there");
+        }
+        assert_eq!(looked.get(), 0, "and the disk, or the network, was never asked about any of them");
+        // A picture on one of this computer's own drives is looked for as before.
+        assert!(saved_picture_is_there(Path::new(r"C:\Pictures\sky.hdr"), there));
+        assert!(!saved_picture_is_there(Path::new(r"C:\Pictures\gone.hdr"), |_| false), "and may be missing");
+        assert_eq!(looked.get(), 1);
+        // The real look at the disk, for a file that is there and one that is not.
+        let folder = std::env::temp_dir().join("sculpt_saved_picture");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("sky.hdr"), b"a picture").unwrap();
+        assert!(saved_picture_is_there(&folder.join("sky.hdr"), Path::is_file));
+        assert!(!saved_picture_is_there(&folder.join("no such.hdr"), Path::is_file));
+    }
 
     /// Where the Exit button meets the recovery copies: the app is told it
     /// may close in three ways, and only two of them are the user's word.

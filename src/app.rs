@@ -424,7 +424,7 @@ impl Running {
             if is_native(file) {
                 match io::load_scene(file) {
                     Ok(saved) => {
-                        let note = io::note_opened(saved.repaired);
+                        let note = io::notes_opened(saved.repaired, saved.left_out);
                         opened = Some(install(&mut scene, &mut mesh, saved));
                         path = Some(file.clone());
                         open_status = note.map(|note| (format!("Opened {}. {note}", file.display()), true));

@@ -710,7 +710,8 @@ fn convert(header: Header, raw: Vec<RawObject>) -> Imported {
     // part of opening a large scene, so they are built several at once.
     let meshes = raw.into_par_iter().map(RawObject::build).collect();
     Imported {
-        scene: SavedScene { meshes, objects: rows, active, details, repaired: 0 },
+        // Nothing is mended or left out here: a damaged Unity sculpt is refused (`read_object`).
+        scene: SavedScene { meshes, objects: rows, active, details, repaired: 0, left_out: 0 },
         extras: Extras {
             objects: extras,
             brush: header.brush,

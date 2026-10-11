@@ -152,6 +152,32 @@ pub fn note_opened(count: usize) -> Option<String> {
     })
 }
 
+/// What the status line says after a file was opened that held triangles
+/// which could not be used (`io::stray_triangles`), in plain words; `None`
+/// when it held none.
+pub fn note_left_out(count: usize) -> Option<String> {
+    (count > 0).then(|| {
+        let triangles = if count == 1 {
+            "1 damaged triangle in the file was".to_owned()
+        } else {
+            format!("{count} damaged triangles in the file were")
+        };
+        format!(
+            "{triangles} left out (the file named points for {} that it does not hold), so the model may have a \
+             hole there: Check for Printing looks for holes, and a Remesh (R) closes them.",
+            if count == 1 { "it" } else { "them" }
+        )
+    })
+}
+
+/// Everything there is to say about damage found as a file was opened: its
+/// points that were not numbers, and its triangles that could not be used.
+/// One piece for a status line; `None` for a file with neither.
+pub fn notes_opened(points: usize, triangles: usize) -> Option<String> {
+    let notes: Vec<String> = note_opened(points).into_iter().chain(note_left_out(triangles)).collect();
+    (!notes.is_empty()).then(|| notes.join(" "))
+}
+
 /// [`note_opened`] for a save, which repairs the copy it writes and not the model.
 pub fn note_saved(count: usize) -> Option<String> {
     (count > 0).then(|| {
@@ -263,5 +289,18 @@ mod tests {
         assert!(note_opened(0).is_none() && note_saved(0).is_none());
         assert!(note_opened(1).unwrap().contains("1 damaged point in the file"));
         assert!(note_opened(3).unwrap().contains("3 damaged points"));
+    }
+
+    #[test]
+    fn what_is_said_of_a_damaged_file_covers_its_points_and_its_triangles() {
+        assert_eq!(notes_opened(0, 0), None, "a sound file is opened without a word about damage");
+        let one = note_left_out(1).unwrap();
+        assert!(one.starts_with("1 damaged triangle in the file was left out"), "{one}");
+        assert!(one.contains("may have a hole") && one.contains("Check for Printing") && one.contains("Remesh (R)"));
+        assert!(note_left_out(4).unwrap().starts_with("4 damaged triangles in the file were left out"));
+        assert_eq!(notes_opened(2, 0), note_opened(2));
+        assert_eq!(notes_opened(0, 1), note_left_out(1));
+        let both = notes_opened(2, 3).unwrap();
+        assert!(both.starts_with("2 damaged points") && both.contains(". 3 damaged triangles"), "{both}");
     }
 }

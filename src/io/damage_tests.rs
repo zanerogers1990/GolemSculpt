@@ -335,3 +335,106 @@ fn the_normals_of_a_mended_export_point_the_way_the_surface_does() {
         assert!(n.dot(p.normalize()) > 0.9, "{n:?} at {p:?}");
     }
 }
+
+/// The four native layouts, each holding `mesh` with its numbers as they are.
+fn every_layout(mesh: &Mesh, name: &str) -> Vec<(String, PathBuf)> {
+    let mut files = Vec::new();
+    let mut put = |layout: &str, bytes: Vec<u8>| {
+        let path = temp(&format!("{name}_{layout}.sclp"));
+        std::fs::write(&path, bytes).unwrap();
+        files.push((layout.to_owned(), path));
+    };
+    let mut blocks = Vec::new();
+    write_scene_raw(&mut blocks, mesh, &Details::default().document(&[one_object("Ball")], 0)).unwrap();
+    put("blocks", blocks);
+    put("placed", fixed_layout_file(SCENE_MAGIC_PLACED, &[mesh], &["Ball"], false));
+    put("fixed", fixed_layout_file(SCENE_MAGIC_FIXED, &[mesh], &["Ball"], true));
+    // The one-mesh file, as `save_native` lays it out.
+    let mut one = NATIVE_MAGIC.to_vec();
+    one.extend_from_slice(&(mesh.positions.len() as u64).to_le_bytes());
+    one.extend_from_slice(&(mesh.indices.len() as u64).to_le_bytes());
+    one.extend_from_slice(bytemuck::cast_slice(&mesh.positions));
+    one.extend_from_slice(bytemuck::cast_slice(&mesh.indices));
+    one.extend_from_slice(bytemuck::cast_slice(&mesh.mask));
+    put("one_mesh", one);
+    files
+}
+
+/// What opening `path` comes to, with a fault while reading it told apart
+/// from a refusal: a damaged file must be refused, never bring the app down.
+fn opened(path: &Path) -> std::result::Result<Result<SavedScene>, String> {
+    let quiet = std::panic::catch_unwind(|| load_scene(path));
+    quiet.map_err(|fault| {
+        let said = fault.downcast_ref::<String>().cloned();
+        said.or_else(|| fault.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "a panic".to_owned())
+    })
+}
+
+/// A review point, read and not run: nothing holds a file's triangles to the
+/// points it has, so a damaged `.sclp` might bring the app down in an
+/// ordinary Open. It does not: such a triangle is left out as the mesh is
+/// built, in every layout. What was missing is that opening said nothing of
+/// it; now it is counted, for the status line to say (`notes_opened`).
+#[test]
+fn a_file_whose_triangles_name_points_it_does_not_hold_opens_without_them_and_says_so() {
+    let sound = ball();
+    let points = sound.positions.len() as u32;
+    for (what, wrong) in [("one_past_the_last", points), ("far_out", u32::MAX)] {
+        for at in [0, 7, sound.indices.len() - 1] {
+            let mut mesh = ball();
+            mesh.indices[at] = wrong;
+            for (layout, path) in every_layout(&mesh, &format!("index_{what}_{at}")) {
+                let case = format!("{layout}, {what} at corner {at}");
+                let came = opened(&path).unwrap_or_else(|fault| panic!("{case}: opening it panicked: {fault}"));
+                let back = came.unwrap_or_else(|e| panic!("{case}: all the rest of the work is refused with it: {e}"));
+                assert_eq!((back.left_out, back.repaired), (1, 0), "{case}: one triangle, and it is said");
+                let built = &back.meshes[0];
+                assert_eq!(built.triangle_count(), sound.triangle_count() - 1, "{case}: every other triangle is there");
+                assert!(built.indices.iter().all(|&corner| (corner as usize) < built.positions.len()), "{case}");
+                assert_whole(built);
+                let said = notes_opened(back.repaired, back.left_out).expect("there is something to say");
+                assert!(said.contains("1 damaged triangle in the file was left out"), "{case}: {said}");
+            }
+        }
+    }
+    // The same files with nothing wrong in them open whole, and nothing is said.
+    for (layout, path) in every_layout(&sound, "index_sound") {
+        let back = load_scene(&path).unwrap_or_else(|e| panic!("{layout}: a sound file was refused: {e}"));
+        assert_eq!(back.meshes[0].triangle_count(), sound.triangle_count(), "{layout}");
+        assert_eq!((back.left_out, notes_opened(back.repaired, back.left_out)), (0, None), "{layout}");
+    }
+}
+
+/// Triangles are three corners each. Corners left over at the end are part of
+/// a triangle that cannot be used, and are counted as one.
+#[test]
+fn a_file_with_part_of_a_triangle_opens_without_it_and_says_so() {
+    for dropped in [1, 2] {
+        let mut mesh = ball();
+        let whole = mesh.triangle_count() - 1;
+        mesh.indices.truncate(mesh.indices.len() - dropped);
+        for (layout, path) in every_layout(&mesh, &format!("part_triangle_{dropped}")) {
+            let case = format!("{layout}, {dropped} corners short");
+            let came = opened(&path).unwrap_or_else(|fault| panic!("{case}: opening it panicked: {fault}"));
+            let back = came.unwrap_or_else(|e| panic!("{case}: refused: {e}"));
+            assert_eq!((back.left_out, back.meshes[0].triangle_count()), (1, whole), "{case}");
+        }
+    }
+}
+
+/// Damage of both kinds in one file, in two of its meshes: each is counted,
+/// and the line that says so says both.
+#[test]
+fn damaged_points_and_damaged_triangles_in_one_file_are_both_counted() {
+    let (mut a, mut b) = (damaged_ball(), ball());
+    a.indices[3] = u32::MAX;
+    b.indices[0] = b.positions.len() as u32;
+    b.indices[9] = b.positions.len() as u32 + 5;
+    let path = temp("both_kinds.sclp");
+    std::fs::write(&path, fixed_layout_file(SCENE_MAGIC_FIXED, &[&a, &b], &["A", "B"], true)).unwrap();
+    let back = load_scene(&path).unwrap();
+    assert_eq!((back.repaired, back.left_out), (2, 3));
+    back.meshes.iter().for_each(assert_whole);
+    let said = notes_opened(back.repaired, back.left_out).unwrap();
+    assert!(said.starts_with("2 damaged points in the file") && said.contains("3 damaged triangles in the file were"));
+}

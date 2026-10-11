@@ -292,6 +292,13 @@ impl Running {
         self.stroke_check();
         println!("     {}", self.ui.status.0);
         say("a stroke that did open the surface is told so", self.says("That stroke opened the surface of", false));
+        // The same when it is losing the focus (Alt-Tab) that ends the stroke, and not the pen coming up.
+        self.status("", true);
+        self.print_watch.suppose_closed_before(&self.doc.mesh);
+        self.input.drag = super::Drag::Sculpt;
+        self.focus_lost();
+        println!("     {}", self.ui.status.0);
+        say("and so is one that losing the focus ended", self.says("That stroke opened the surface of", false));
         self.play_stroke_costs();
 
         // A remesh closes it, and says that it did.
@@ -416,9 +423,10 @@ fn say(what: &str, ok: bool) {
     println!("{} {what}", if ok { "ok  " } else { "FAIL" });
 }
 
-/// Where the scripted run writes its STL: never beside the user's own files.
+/// Where the scripted run writes its STL: never beside the user's own files
+/// (`prefs::scratch`).
 fn demo_folder() -> PathBuf {
-    let folder = std::env::temp_dir().join("sculpt_print_demo");
+    let folder = crate::prefs::scratch("sculpt_print_demo");
     let _ = std::fs::remove_dir_all(&folder);
     if let Err(e) = std::fs::create_dir_all(&folder) {
         log::error!("{e}");

@@ -77,6 +77,9 @@ impl Running {
         let keys = let_go(&mut self.input, &mut self.doc, &self.local);
         if stroke {
             self.stroke_ended = Some(std::time::Instant::now());
+            // As `finish_stroke` does: a stroke is held to leaving the
+            // surface no more open than it found it, however it ended.
+            self.stroke_check();
         }
         // The same releases the keyboard would have delivered.
         for code in keys {

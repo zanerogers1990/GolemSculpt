@@ -19,8 +19,10 @@
 //!
 //! What the bridge will not do behind the user's back: close the app, or
 //! open a scene in place of the one on screen, while there is unsaved work
-//! (`quit` and `open_file` say so and do nothing, unless told to `discard`),
-//! or touch a path that is not on this computer's own drives.
+//! or work that is in no file and would go with it (SSpheres, unmerged tubes
+//! and the like: `app/unsaved.rs`). `quit` and `open_file` say so, naming
+//! that work, and do nothing unless told to `discard`. Nor will it touch a
+//! path that is not on this computer's own drives.
 //!
 //! Screen positions are fractions of the window: (0, 0) is the top-left
 //! corner and (1, 1) the bottom-right, whatever size a screenshot was sent at.
@@ -32,6 +34,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use glam::{Vec2, Vec3};
+use sculpt_toolkit::Loss;
 use serde_json::{Value, json};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
@@ -43,6 +46,7 @@ use crate::mesh::bvh::Aabb;
 use crate::mesh::primitives::{self, Primitive};
 use crate::scene::Space;
 use crate::sculpt::{Brush, PointerSample, PoseMode, PoseSettings, Radial, RadialAxis};
+use crate::ui::question::listed;
 use crate::ui::theme;
 
 /// How long a connection waits for the main thread. A remesh of a heavy mesh
@@ -271,20 +275,43 @@ enum Leave {
     Stay(String),
 }
 
-/// Decides a `quit`. `mid_stroke` is whether a stroke or drag is under way
-/// in the app, and `file` is where Save would write the scene, if it has
-/// such a file. Work is never dropped on the quiet. A stroke under way is
-/// work that is in no undo step yet and that no flag speaks for, so the app
-/// stays open whatever the call says. With unsaved work it stays open unless
-/// the call says which is wanted, saving or discarding, and saying both is
-/// saying neither.
-fn leave(mid_stroke: bool, unsaved: bool, file: Option<&Path>, save: bool, discard: bool) -> Leave {
+/// What a `quit` is called with, and how things stand when it is.
+struct Leaving<'a> {
+    /// A stroke or drag is under way in the app.
+    mid_stroke: bool,
+    /// The scene differs from what its file holds.
+    unsaved: bool,
+    /// The work that is in no file and that closing would lose
+    /// (`Running::scaffolds_at_risk`), a phrase for each kind.
+    lost: &'a [String],
+    /// Where Save would write the scene, if it has such a file.
+    file: Option<&'a Path>,
+    save: bool,
+    discard: bool,
+}
+
+/// Decides a `quit`. Work is never dropped on the quiet. A stroke under way
+/// is work that is in no undo step yet and that no flag speaks for, so the
+/// app stays open whatever the call says. With unsaved work it stays open
+/// unless the call says which is wanted, saving or discarding, and saying
+/// both is saying neither. With work that is in no file (the interface's
+/// own question names it before closing) saving is no answer, since a save
+/// does not keep it: the app stays open and names that work, and closes
+/// only on `discard`.
+fn leave(call: Leaving) -> Leave {
     const ASK: &str = "The scene has unsaved work, so Sculpt was not closed. Ask the user what to do with it first.";
+    let Leaving { mid_stroke, unsaved, lost, file, save, discard } = call;
     if mid_stroke {
         return Leave::Stay(STROKE_UNDER_WAY.into());
     }
-    if !unsaved {
+    if !unsaved && lost.is_empty() {
         return Leave::Close;
+    }
+    if !lost.is_empty() {
+        return match (save, discard) {
+            (false, true) => Leave::Close,
+            _ => Leave::Stay(lost_by_closing(unsaved, lost, save && discard)),
+        };
     }
     match (save, discard, file) {
         (true, true, _) => Leave::Stay(format!("{ASK} Then call quit with save: true or with discard: true, not both.")),
@@ -306,14 +333,69 @@ fn leave(mid_stroke: bool, unsaved: bool, file: Option<&Path>, save: bool, disca
     }
 }
 
+/// What `quit` says instead of closing over work that is in no file: what
+/// that work is, that saving does not keep it, and what to call next. `both`
+/// is whether the call said `save` and `discard` at once.
+fn lost_by_closing(unsaved: bool, lost: &[String], both: bool) -> String {
+    let named = listed(lost);
+    let stays = format!(
+        "Closing Sculpt would lose work that is in no file, which saving does not keep: {named}. Sculpt was not \
+         closed. Ask the user what to do with it first: it can be finished in the app, as each says."
+    );
+    let then = match (unsaved, both) {
+        (_, true) => "Then call quit with discard: true alone to close and lose it, not with save as well.",
+        (false, false) => "If the user says it can go, call quit again with discard: true.",
+        (true, false) => {
+            "The scene has unsaved changes as well. To keep those, save the scene first (save_file with a path \
+             ending in .sclp). Then, if the user says the rest can go, call quit with discard: true."
+        }
+    };
+    format!("{stays} {then}")
+}
+
+/// What `open_file` says instead of opening a sculpt over work that is in no
+/// file and stands on the scene's objects.
+fn lost_by_opening(unsaved: bool, lost: &[String]) -> String {
+    let named = listed(lost);
+    let also =
+        if unsaved { " The scene has unsaved changes as well, which save_file with a .sclp path keeps." } else { "" };
+    format!(
+        "Opening this file would put the scene aside and lose work that is in no file, which saving does not \
+         keep: {named}. Nothing was opened. Ask the user what to do with it first: it can be finished in the app, \
+         as each says.{also} If the user says it can go, call open_file again with discard: true."
+    )
+}
+
 /// Decides an `open_file`: whether the file may be opened as things stand,
 /// or what to say instead. `takes_the_scene_s_place` is whether it is a
 /// sculpt, which is opened in place of the scene, and not a model, which is
-/// added to it. The interface asks before a sculpt puts unsaved work aside;
-/// here there is nobody to ask but Claude, which is told to ask the user and
-/// to say `discard` once the user has agreed.
-fn may_open(takes_the_scene_s_place: bool, unsaved: bool, discard: bool) -> Result<(), &'static str> {
-    if takes_the_scene_s_place && unsaved && !discard { Err(REPLACING_UNSAVED) } else { Ok(()) }
+/// added to it. `lost` is the work in no file that replacing the scene would
+/// cost (`Loss::SceneReplaced`). The interface asks before a sculpt puts
+/// unsaved work aside, or takes such work with the scene; here there is
+/// nobody to ask but Claude, which is told to ask the user and to say
+/// `discard` once the user has agreed.
+fn may_open(takes_the_scene_s_place: bool, unsaved: bool, lost: &[String], discard: bool) -> Result<(), String> {
+    if !takes_the_scene_s_place || discard {
+        return Ok(());
+    }
+    match (unsaved, lost.is_empty()) {
+        (false, true) => Ok(()),
+        (true, true) => Err(REPLACING_UNSAVED.into()),
+        (_, false) => Err(lost_by_opening(unsaved, lost)),
+    }
+}
+
+/// What `save_file` says of a sculpt it saved, and `quit` of the one it
+/// saved on the way out (`closing`). `note` is what the interface's own Save
+/// adds when damaged points were written mended (`Running::saved_note`):
+/// nothing, or a sentence that begins with its own full stop.
+fn saved_words(path: &Path, note: &str, closing: bool) -> String {
+    let saved = format!("Saved {}{note}", path.display());
+    if !closing {
+        return saved;
+    }
+    let stop = if note.is_empty() { "." } else { "" };
+    format!("{saved}{stop} Sculpt is closing.")
 }
 
 impl Running {
@@ -373,16 +455,21 @@ impl Running {
     /// `quit`: closes the app, unless that would lose work. `Ok` means the
     /// app is to close now. With unsaved work it closes only if told to
     /// `discard` it, or to `save` it first; saving goes to the scene's own
-    /// file and never puts up a dialog (nobody may be at the screen).
+    /// file and never puts up a dialog (nobody may be at the screen). With
+    /// work that is in no file it closes only if told to `discard`. These
+    /// are the two things the close button's own question is asked about
+    /// (`question_before_closing`).
     fn quit_for_claude(&mut self, args: &Value) -> Result<String, String> {
         // Save never writes over a sculpt from the Unity app (see `save_action`).
         let file = self.doc.path.clone().filter(|path| !crate::unity_import::is_unity(path));
         let (save, discard) = (flag(args, "save").unwrap_or(false), flag(args, "discard").unwrap_or(false));
-        match leave(self.mid_stroke(), self.unsaved(), file.as_deref(), save, discard) {
+        let lost = self.scaffolds_at_risk(Loss::Closing);
+        let (mid_stroke, unsaved) = (self.mid_stroke(), self.unsaved());
+        match leave(Leaving { mid_stroke, unsaved, lost: &lost, file: file.as_deref(), save, discard }) {
             Leave::Close => Ok("Sculpt is closing.".into()),
             Leave::SaveFirst(path) => {
                 self.save_scene(&path)?;
-                Ok(format!("Saved {}. Sculpt is closing.", path.display()))
+                Ok(saved_words(&path, &self.saved_note(), true))
             }
             Leave::Stay(why) => Err(why),
         }
@@ -885,7 +972,8 @@ impl Running {
             return Err(format!("There is no file at {}.", path.display()));
         }
         let native = is_native(&path);
-        may_open(native, self.unsaved(), flag(args, "discard").unwrap_or(false))?;
+        let lost = self.scaffolds_at_risk(Loss::SceneReplaced);
+        may_open(native, self.unsaved(), &lost, flag(args, "discard").unwrap_or(false))?;
         self.reported(|app| app.load(path, native))
     }
 
@@ -895,7 +983,8 @@ impl Running {
         match extension.as_str() {
             "sclp" => {
                 self.save_scene(&path)?;
-                let message = format!("Saved {}", path.display());
+                // As the interface's Save says it: with a word about points written mended, if any were.
+                let message = saved_words(&path, &self.saved_note(), false);
                 self.status(message.clone(), true);
                 self.doc.path = Some(path);
                 Ok(message)
@@ -945,9 +1034,74 @@ mod tests {
 
     const EITHER: [bool; 2] = [false, true];
 
-    /// `leave` with no stroke under way.
+    /// `leave` with no stroke under way and no work that is in no file.
     fn leave_idle(unsaved: bool, file: Option<&Path>, save: bool, discard: bool) -> Leave {
-        leave(false, unsaved, file, save, discard)
+        leave(Leaving { mid_stroke: false, unsaved, lost: &[], file, save, discard })
+    }
+
+    const TUBES: &str = "3 unmerged tubes (Merge or Keep Separate first)";
+    const RIG: &str = "an SSphere rig of 12 spheres (Make Skin first)";
+
+    fn lost() -> Vec<String> {
+        vec![RIG.to_owned(), TUBES.to_owned()]
+    }
+
+    /// The seam between the bridge and the closing question: `quit` went by
+    /// unsaved changes alone, so with the scene saved it closed over a rig
+    /// and three tubes that the close button would have asked about.
+    #[test]
+    fn quit_does_not_close_over_work_that_is_in_no_file_unless_told_to_discard_it() {
+        let lost = lost();
+        let file = Some(Path::new(FILE));
+        for unsaved in EITHER {
+            let decide = |save, discard| leave(Leaving { mid_stroke: false, unsaved, lost: &lost, file, save, discard });
+            // Not on a bare quit, and not on save: a save does not keep it.
+            for save in EITHER {
+                let Leave::Stay(why) = decide(save, false) else { panic!("unsaved {unsaved}, save {save}: it closed") };
+                let says = |words: &str| why.contains(words);
+                assert!(says(RIG) && says(TUBES), "it names what would be lost: {why}");
+                assert!(says("saving does not keep") && says("was not closed") && says("Ask the user"), "{why}");
+                assert!(says("discard: true"), "and says how to close all the same: {why}");
+                assert_eq!(says("save_file"), unsaved, "unsaved changes can still be saved first: {why}");
+            }
+            // Both at once is not an answer here either.
+            assert!(matches!(decide(true, true), Leave::Stay(_)));
+            // The user's word that it can go.
+            assert_eq!(decide(false, true), Leave::Close);
+        }
+        // A stroke under way still comes first.
+        let mid = leave(Leaving { mid_stroke: true, unsaved: false, lost: &lost, file, save: false, discard: true });
+        assert_eq!(mid, Leave::Stay(STROKE_UNDER_WAY.into()));
+    }
+
+    #[test]
+    fn a_sculpt_is_not_opened_over_work_that_is_in_no_file_unless_told_to_discard_it() {
+        let lost = vec![TUBES.to_owned()];
+        for unsaved in EITHER {
+            let why = may_open(true, unsaved, &lost, false).expect_err("it opened over three unmerged tubes");
+            let says = |words: &str| why.contains(words);
+            assert!(says(TUBES) && says("Nothing was opened") && says("Ask the user") && says("discard: true"), "{why}");
+            assert_eq!(says("unsaved changes"), unsaved, "{why}");
+            assert_eq!(may_open(true, unsaved, &lost, true), Ok(()), "the user's word that it can go");
+            // A model is added to the scene, which costs nothing that stands on it.
+            assert_eq!(may_open(false, unsaved, &lost, false), Ok(()));
+        }
+    }
+
+    /// The bridge's own replies to a save said nothing of points written
+    /// mended, which the interface's Save does say.
+    #[test]
+    fn a_save_through_the_bridge_says_what_the_interfaces_save_says() {
+        let path = Path::new(FILE);
+        assert_eq!(saved_words(path, "", false), format!("Saved {FILE}"));
+        assert_eq!(saved_words(path, "", true), format!("Saved {FILE}. Sculpt is closing."));
+        let note = io::note_saved(2).map(|note| format!(". {note}")).expect("two points were mended");
+        let said = saved_words(path, &note, false);
+        assert!(said.starts_with(&format!("Saved {FILE}. 2 points of the model have no position")), "{said}");
+        let said = saved_words(path, &note, true);
+        assert!(said.contains("2 points of the model have no position"), "{said}");
+        assert!(said.ends_with("unchanged. Sculpt is closing."), "{said}");
+        assert!(!said.contains(".."), "{said}");
     }
 
     #[test]
@@ -965,7 +1119,7 @@ mod tests {
         for unsaved in EITHER {
             for file in [None, Some(Path::new(FILE))] {
                 for (save, discard) in [(false, false), (true, false), (false, true), (true, true)] {
-                    let decided = leave(true, unsaved, file, save, discard);
+                    let decided = leave(Leaving { mid_stroke: true, unsaved, lost: &[], file, save, discard });
                     assert_eq!(decided, Leave::Stay(STROKE_UNDER_WAY.into()), "{unsaved} {file:?} {save} {discard}");
                 }
             }
@@ -1001,7 +1155,7 @@ mod tests {
         for sculpt in EITHER {
             for unsaved in EITHER {
                 for discard in EITHER {
-                    let decided = may_open(sculpt, unsaved, discard);
+                    let decided = may_open(sculpt, unsaved, &[], discard);
                     // Refused in one case of the eight: a sculpt, over unsaved work, with no word to discard it.
                     let refused = sculpt && unsaved && !discard;
                     assert_eq!(decided.is_err(), refused, "sculpt {sculpt}, unsaved {unsaved}, discard {discard}");
@@ -1009,10 +1163,10 @@ mod tests {
             }
         }
         // Spelt out, the cases that matter: work is kept, a model is always added, a saved scene always gives way.
-        assert_eq!(may_open(true, true, false), Err(REPLACING_UNSAVED));
-        assert_eq!(may_open(true, true, true), Ok(()));
-        assert_eq!(may_open(false, true, false), Ok(()));
-        assert_eq!(may_open(true, false, false), Ok(()));
+        assert_eq!(may_open(true, true, &[], false), Err(REPLACING_UNSAVED.to_owned()));
+        assert_eq!(may_open(true, true, &[], true), Ok(()));
+        assert_eq!(may_open(false, true, &[], false), Ok(()));
+        assert_eq!(may_open(true, false, &[], false), Ok(()));
         // And the refusal tells Claude what to do about it.
         let says = |words: &str| REPLACING_UNSAVED.contains(words);
         assert!(says("unsaved work") && says("Nothing was opened") && says("Ask the user") && says("discard: true"));

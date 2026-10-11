@@ -90,7 +90,7 @@ fn file_name(path: &std::path::Path) -> String {
 /// The things a question says would be lost, as they read in a sentence:
 /// "3 unmerged tubes (Merge or Keep Separate first) and an SSphere rig of 12
 /// spheres (Make Skin first)".
-fn listed(lost: &[String]) -> String {
+pub fn listed(lost: &[String]) -> String {
     match lost {
         [] => String::new(),
         [one] => one.clone(),

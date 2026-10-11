@@ -85,7 +85,7 @@ pub(super) fn fresh_document(triangles: f32, aspect: f32) -> io::SavedScene {
     };
     let mut details = io::Details::default();
     details.set(io::slot::CAMERA, &view);
-    io::SavedScene { meshes: vec![mesh], objects: vec![ball], active: 0, details, repaired: 0 }
+    io::SavedScene { meshes: vec![mesh], objects: vec![ball], active: 0, details, repaired: 0, left_out: 0 }
 }
 
 /// Why a new scene cannot be started just now, in words for the status line;

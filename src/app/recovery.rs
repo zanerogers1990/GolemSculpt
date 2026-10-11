@@ -183,6 +183,22 @@ pub(super) enum Restoring<'a> {
     Broke,
 }
 
+/// The status line after a copy was restored. `when` is when it was kept,
+/// `passed_over` how many newer copies could not be read, and `damage` what
+/// an Open would say of damage found in the file as it was read (points
+/// mended, triangles left out: `Running::opened_damage`), which a restored
+/// copy is owed as much as an opened file.
+fn restored_words(when: Option<&str>, objects: usize, passed_over: usize, damage: Option<&str>) -> String {
+    let when = when.map_or(String::new(), |when| format!(" kept {when}"));
+    let note = if passed_over > 0 { " A newer copy could not be read." } else { "" };
+    let objects = if objects == 1 { "1 object".to_owned() } else { format!("{objects} objects") };
+    let damage = damage.map_or(String::new(), |damage| format!(" {damage}"));
+    format!(
+        "Restored the copy{when} ({objects}).{note} It is not saved yet: \
+         Save (Ctrl + S) asks where to keep it, and the copy stays until it is saved.{damage}"
+    )
+}
+
 /// Puts the first of `copies` that can be read in place of the scene, by
 /// `put`. A copy that cannot be read is passed over for the one before it.
 /// After a fault part of the way through one, no other is tried: the scene
@@ -355,13 +371,7 @@ impl Running {
         match restore_first(&copies, |kept| self.restore(kept)) {
             Restoring::Done { kept, objects, passed_over } => {
                 let when = recovery::when_words(&kept.about.when, &io::time_stamp());
-                let when = when.map_or(String::new(), |when| format!(" kept {when}"));
-                let note = if passed_over > 0 { " A newer copy could not be read." } else { "" };
-                let objects = if objects == 1 { "1 object".to_owned() } else { format!("{objects} objects") };
-                let text = format!(
-                    "Restored the copy{when} ({objects}).{note} It is not saved yet: \
-                     Save (Ctrl + S) asks where to keep it, and the copy stays until it is saved."
-                );
+                let text = restored_words(when.as_deref(), objects, passed_over, self.opened_damage().as_deref());
                 self.status(text, passed_over == 0);
             }
             // Nothing was restored, so nothing is settled: the copies stay,
@@ -481,6 +491,34 @@ impl Running {
         match (self.recovery.schedule.wake(), look) {
             (Some(copy), Some(look)) => Some(copy.min(look)),
             (copy, look) => copy.or(look),
+        }
+    }
+
+    /// Another scene is about to take this one's place (an Open, a New
+    /// Scene, a restored copy). If this one holds unsaved work that is in no
+    /// copy yet, the copy it is owed is written now and not when three
+    /// minutes are up: once the scene is put aside its work is one Undo away
+    /// in memory and nowhere else, and the timed copy looks only at the
+    /// scene on screen, so nothing would write one until Undo came back to
+    /// it. Without this, "Open Without Saving" or "New Scene Without Saving"
+    /// over two minutes of strokes, then a crash, lost them although Undo
+    /// would have brought them back.
+    ///
+    /// It is a timed copy taken early, by the same routine, and nothing
+    /// more: this run's own, kept and removed by the same rule (the top of
+    /// `crate::recovery`), and not written at all where copies are not being
+    /// kept (a scripted run that is not a check of recovery) or where one
+    /// already holds the scene as it stands.
+    pub(super) fn recovery_before_replacing(&mut self) {
+        let mark = self.history_mark();
+        if !copy_owed(self.recovery.store.keeps(), self.unsaved_at(mark), self.recovery.held, mark) {
+            return;
+        }
+        self.recovery.schedule.restart();
+        if let Err(e) = self.keep_copy(false) {
+            // The scene is replaced all the same: the user has asked for
+            // that, and has been asked about the work. It is in the log.
+            log::warn!("no recovery copy was written of the scene that is being put aside: {e}");
         }
     }
 
@@ -654,6 +692,11 @@ impl Running {
                 }
                 None => println!("open: no settings folder to open from"),
             },
+            Step::NewScene => {
+                // "New Scene Without Saving", as the answer to the question runs it.
+                self.act(Action::NewSceneAs { save: false });
+                println!("new: {} (unsaved {})", self.ui.status.0, self.unsaved());
+            }
             Step::Undo | Step::Redo => {
                 self.act(if step == Step::Undo { Action::Undo } else { Action::Redo });
                 let (undo, redo) = self.doc.history.steps();
@@ -767,6 +810,8 @@ enum Step {
     /// Opens `to open.sclp` from the settings folder in place of the scene,
     /// as Open does when told not to save first.
     Open,
+    /// New Scene, answered "New Scene Without Saving" if it would ask.
+    NewScene,
     /// Undo, as the Z key.
     Undo,
     /// Redo.
@@ -804,7 +849,7 @@ enum Step {
 /// - `message`: the message the app closes with on a fault is put up, as it
 ///   is for a person, and the run waits for it to be closed;
 /// - `restore-fault`: a fault strikes while the copy is being restored;
-/// - `stroke@30`, `scene@40`, `save@45`, `open@46`, `undo@47`, `redo@48`,
+/// - `stroke@30`, `scene@40`, `save@45`, `open@46`, `new@46`, `undo@47`, `redo@48`,
 ///   `file@49`, `status@49`, `mirror@50`, `hide@50`, `show@50`, `local@50`, `kept@50`,
 ///   `close@50`, `panic@50`, `stroke-panic@50`, `job-panic@50`,
 ///   `graphics-error@50`, `device-lost@50`, `kill@50`, `quit@50`: does that
@@ -881,6 +926,7 @@ fn step_named(name: &str) -> Option<Step> {
         "job-panic" => Step::JobPanic,
         "save" => Step::Save,
         "open" => Step::Open,
+        "new" => Step::NewScene,
         "undo" => Step::Undo,
         "redo" => Step::Redo,
         "file" => Step::File,
@@ -968,6 +1014,30 @@ mod tests {
     fn a_script_can_open_a_file_and_step_through_undo() {
         let script = Script::parse("open@3,undo@4,file@5,redo@6");
         assert_eq!(script.steps, [(3, Step::Open), (4, Step::Undo), (5, Step::File), (6, Step::Redo)]);
+    }
+
+    #[test]
+    fn a_script_can_start_a_new_scene() {
+        let script = Script::parse("stroke@3,new@4,scene@5,kill@6");
+        assert_eq!(script.steps, [(3, Step::Stroke), (4, Step::NewScene), (5, Step::Scene), (6, Step::Kill)]);
+    }
+
+    /// A restored copy said nothing of damage found in it, which an Open of
+    /// the same file does say.
+    #[test]
+    fn restoring_a_copy_says_what_an_open_says_of_damage_found_in_it() {
+        let plain = restored_words(Some("today at 14:35"), 3, 0, None);
+        assert_eq!(
+            plain,
+            "Restored the copy kept today at 14:35 (3 objects). It is not saved yet: \
+             Save (Ctrl + S) asks where to keep it, and the copy stays until it is saved."
+        );
+        let damage = io::notes_opened(2, 1).expect("two points and a triangle");
+        let said = restored_words(None, 1, 1, Some(&damage));
+        assert!(said.starts_with("Restored the copy (1 object). A newer copy could not be read. It is not saved yet"));
+        assert!(said.contains("until it is saved. 2 damaged points in the file had no position"), "{said}");
+        assert!(said.ends_with("a Remesh (R) closes them."), "and the triangles that were left out: {said}");
+        assert!(!said.contains(".."), "{said}");
     }
 
     #[test]

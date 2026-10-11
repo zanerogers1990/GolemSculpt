@@ -117,6 +117,23 @@ impl Home {
     }
 }
 
+/// A folder for a scripted demo to write its files in, by `name`: under the
+/// folder `SCULPT_SETTINGS_DIR` names when the run was given one (in its
+/// `scratch` folder), and under the system's temp folder when it was not.
+/// Never the user's own settings folder, and never beside their files.
+pub fn scratch(name: &str) -> PathBuf {
+    let given = std::env::var_os("SCULPT_SETTINGS_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from);
+    scratch_in(given.as_deref(), &std::env::temp_dir(), name)
+}
+
+/// [`scratch`], with the folder the run was given and the temp folder passed in.
+fn scratch_in(given: Option<&Path>, temp: &Path, name: &str) -> PathBuf {
+    match given {
+        Some(settings) => settings.join("scratch").join(name),
+        None => temp.join(name),
+    }
+}
+
 /// Whether this run was started with any `--option`: a scripted one, which
 /// keeps out of the user's own folder (see the top of this file).
 pub fn scripted() -> bool {
@@ -491,6 +508,13 @@ mod tests {
         let dir = std::env::temp_dir().join("sculpt_prefs_tests").join(name);
         let _ = std::fs::remove_dir_all(&dir);
         (Home::at(&dir), dir)
+    }
+
+    #[test]
+    fn a_scripted_demo_writes_under_the_settings_folder_it_was_given_or_else_the_temp_folder() {
+        let (given, temp) = (Path::new("D:/build/settings"), Path::new("C:/Temp"));
+        assert_eq!(scratch_in(Some(given), temp, "sculpt_files_demo"), given.join("scratch").join("sculpt_files_demo"));
+        assert_eq!(scratch_in(None, temp, "sculpt_files_demo"), temp.join("sculpt_files_demo"));
     }
 
     #[test]

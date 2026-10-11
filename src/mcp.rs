@@ -59,7 +59,8 @@ Call launch first if a tool says the app is not running. Look with screenshot an
 acting. Screen positions are fractions of the window: [0, 0] is the top-left corner and [1, 1] the \
 bottom-right. Everything that changes the model is one undo step in the app, and the user may be \
 working in the same window, so do not undo more than you did yourself. quit and open_file do nothing \
-while the scene has unsaved work unless told to discard it: ask the user before you tell them to.";
+while the scene has unsaved work, or work that is in no file and would be lost (they name it), unless told \
+to discard it: ask the user before you tell them to.";
 
 /// The bridge's port. Both sides read it here.
 pub fn port() -> u16 {
@@ -461,14 +462,18 @@ fn tools() -> Value {
             "quit",
             "Close the Sculpt app. Needed before rebuilding it, since Windows will not replace a running program. \
              If the scene has unsaved work the app stays open and says so: ask the user what to do with the work, \
-             never decide for them. Then call quit again with save: true or with discard: true.",
+             never decide for them. Then call quit again with save: true or with discard: true. It also stays open \
+             over work that is in no file and that saving does not keep (SSpheres not yet made into a skin, \
+             unmerged tubes, planned keys, a lathe outline): the answer names it, and only discard: true closes \
+             over it.",
             json!({
                 "save": boolean(
                     "Save the scene to its own .sclp file first, then close. A scene that has never been saved has \
                      no such file: use save_file with a path, then quit.",
                 ),
                 "discard": boolean(
-                    "Close without saving; the unsaved work is lost for good. Only when the user has said so.",
+                    "Close without saving; the unsaved work, and any work that is in no file, is lost for good. \
+                     Only when the user has said so.",
                 ),
             }),
             &[],
@@ -623,13 +628,14 @@ fn tools() -> Value {
         tool(
             "open_file",
             "Open a .sclp file (or a .sculpt from the Unity app) in place of the scene, or add an .obj or .stl model \
-             to it as a new object. A sculpt is not opened over a scene with unsaved work: the answer says so, and \
-             the user is to be asked what to do with the work first.",
+             to it as a new object. A sculpt is not opened over a scene with unsaved work, or with work on its \
+             objects that is in no file (unmerged tubes, planned keys): the answer says so and names it, and the \
+             user is to be asked what to do with the work first.",
             json!({
                 "path": string("Full path of the file, on this computer's own drives."),
                 "discard": boolean(
-                    "Open a sculpt even though the scene has unsaved work, which is then put aside. Only when the \
-                     user has said so.",
+                    "Open a sculpt even though the scene has unsaved work, which is then put aside, or work that \
+                     is in no file, which is lost. Only when the user has said so.",
                 ),
             }),
             &["path"],
@@ -795,6 +801,12 @@ mod tests {
         assert_eq!(quit["inputSchema"]["properties"]["save"]["type"], "boolean");
         let open = tool("open_file");
         assert!(open["description"].as_str().unwrap().contains("unsaved work"));
+        // And of the work that is in no file, which neither tool may drop on the quiet.
+        for tool in [&quit, &open] {
+            let said = tool["description"].as_str().unwrap();
+            assert!(said.contains("in no file") && said.contains("unmerged tubes"), "{said}");
+        }
+        assert!(INSTRUCTIONS.contains("in no file"));
         assert_eq!(open["inputSchema"]["properties"]["discard"]["type"], "boolean");
         assert!(INSTRUCTIONS.contains("ask the user"));
     }

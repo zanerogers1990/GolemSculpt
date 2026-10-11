@@ -420,7 +420,7 @@ impl Running {
         self.set_tool(Tool::Sculpt);
 
         // Save and open: the live mirror is in the file.
-        let folder = std::env::temp_dir().join("sculpt_mirror_demo");
+        let folder = crate::prefs::scratch("sculpt_mirror_demo");
         let _ = std::fs::remove_dir_all(&folder);
         if std::fs::create_dir_all(&folder).is_err() {
             return say("a folder to write a file in", false);

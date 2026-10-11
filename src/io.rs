@@ -49,7 +49,7 @@ mod repair;
 #[cfg(test)]
 mod damage_tests;
 
-pub use repair::{note_opened, note_saved};
+pub use repair::{note_saved, notes_opened};
 
 /// A model as read from a file, already in the app's axes and units.
 pub struct RawMesh {
@@ -913,6 +913,22 @@ pub struct SavedScene {
     /// How many points the file held that were not numbers, and were put
     /// back in order as it was read (see `repair.rs`).
     pub repaired: usize,
+    /// How many triangles the file held that could not be used, and were
+    /// left out as its meshes were built (see [`stray_triangles`]).
+    pub left_out: usize,
+}
+
+/// How many triangles of a mesh read from a file cannot be used: each one
+/// with a corner that names a point the mesh does not have, and the corners
+/// left over at the end when their number is not a multiple of three. A file
+/// the app wrote has none; one that was damaged on disk may. `Mesh::new`
+/// leaves such triangles out as it builds (nothing downstream ever sees a
+/// corner out of range), so a damaged file still opens with everything else
+/// it holds; this is the count, so that opening can say what happened.
+fn stray_triangles(indices: &[u32], points: usize) -> usize {
+    let stray = |t: &[u32]| t.iter().any(|&corner| corner as usize >= points);
+    let whole = indices.par_chunks_exact(3).with_min_len(1 << 14).filter(|t| stray(t)).count();
+    whole + (indices.len() % 3 != 0) as usize
 }
 
 // ---- the one-mesh file from before scenes existed
@@ -937,11 +953,12 @@ pub fn save_native(mesh: &Mesh, path: &Path) -> Result<()> {
 
 #[allow(dead_code)] // `load_fixed` is the way in; this is the one-mesh file on its own
 pub fn load_native(path: &Path) -> Result<Mesh> {
-    load_native_counted(path).map(|(mesh, _)| mesh)
+    load_native_counted(path).map(|(mesh, ..)| mesh)
 }
 
-/// [`load_native`], also saying how many damaged points it put in order.
-fn load_native_counted(path: &Path) -> Result<(Mesh, usize)> {
+/// [`load_native`], also saying how many damaged points it put in order
+/// and how many triangles it had to leave out.
+fn load_native_counted(path: &Path) -> Result<(Mesh, usize, usize)> {
     let bad = || format!("{} is not a sculpt file", path.display());
     let bytes = std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
     if bytes.len() < 24 || &bytes[..8] != NATIVE_MAGIC {
@@ -970,7 +987,8 @@ fn load_native_counted(path: &Path) -> Result<(Mesh, usize)> {
         .collect();
     let mut mask = floats(at + indices * 4, verts);
     let repaired = repair::repair_points(&mut positions, &index_data, &mut mask);
-    Ok((Mesh::new(positions, index_data, Some(mask)), repaired))
+    let left_out = stray_triangles(&index_data, positions.len());
+    Ok((Mesh::new(positions, index_data, Some(mask)), repaired, left_out))
 }
 
 // ---- writing a scene
@@ -1071,16 +1089,19 @@ struct LoadedMesh {
 }
 
 impl LoadedMesh {
-    /// The mesh, and how many damaged points were put in order on the way:
-    /// a file is never refused for a point that is not a number.
-    fn build(mut self) -> (Mesh, usize) {
+    /// The mesh, how many damaged points were put in order on the way, and
+    /// how many triangles could not be used and were left out: a file is
+    /// never refused for a point that is not a number, or for a triangle
+    /// that names a point it does not hold.
+    fn build(mut self) -> (Mesh, usize, usize) {
         let mut no_mask = Vec::new();
         let repaired = repair::repair_points(
             &mut self.positions,
             &self.indices,
             self.mask.as_deref_mut().unwrap_or(&mut no_mask),
         );
-        (self.build_sound(), repaired)
+        let left_out = stray_triangles(&self.indices, self.positions.len());
+        (self.build_sound(), repaired, left_out)
     }
 
     fn build_sound(self) -> Mesh {
@@ -1138,10 +1159,11 @@ impl Loaded {
     /// Builds the meshes (their spatial index, adjacency and normals: the
     /// slow part of opening a large scene), several at once.
     fn into_scene(self) -> SavedScene {
-        let built: Vec<(Mesh, usize)> = self.meshes.into_par_iter().map(LoadedMesh::build).collect();
-        let repaired = built.iter().map(|(_, n)| n).sum();
-        let meshes = built.into_iter().map(|(mesh, _)| mesh).collect();
-        SavedScene { meshes, objects: self.objects, active: self.active, details: self.details, repaired }
+        let built: Vec<(Mesh, usize, usize)> = self.meshes.into_par_iter().map(LoadedMesh::build).collect();
+        let repaired = built.iter().map(|(_, points, _)| points).sum();
+        let left_out = built.iter().map(|(.., triangles)| triangles).sum();
+        let meshes = built.into_iter().map(|(mesh, ..)| mesh).collect();
+        SavedScene { meshes, objects: self.objects, active: self.active, details: self.details, repaired, left_out }
     }
 }
 
@@ -1327,9 +1349,9 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
         let name = path.file_stem().map_or("Sculpt".into(), |s| s.to_string_lossy().into_owned());
         let only =
             SavedObject { name, visible: true, mesh: 0, position: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE };
-        let (mesh, repaired) = load_native_counted(path)?;
+        let (mesh, repaired, left_out) = load_native_counted(path)?;
         let details = Details::default();
-        return Ok(SavedScene { meshes: vec![mesh], objects: vec![only], active: 0, details, repaired });
+        return Ok(SavedScene { meshes: vec![mesh], objects: vec![only], active: 0, details, repaired, left_out });
     }
     if bytes.len() < 20 || (&bytes[..8] != SCENE_MAGIC_FIXED && &bytes[..8] != SCENE_MAGIC_PLACED) {
         return Err(bad());
@@ -1351,7 +1373,7 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
     let (mesh_count, object_count, active) = (head[0] as usize, head[1] as usize, head[2] as usize);
     // Counts come from the file: never reserve by them, only read what is there.
     let mut meshes = Vec::new();
-    let mut repaired = 0;
+    let (mut repaired, mut left_out) = (0, 0);
     for _ in 0..mesh_count {
         let sizes = take(16)?;
         let verts = u64::from_le_bytes(sizes[..8].try_into().unwrap()) as usize;
@@ -1361,6 +1383,7 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
         let index_data = u32s(take(indices.checked_mul(4).ok_or_else(bad)?)?);
         let mut mask = f32s(take(verts.checked_mul(4).ok_or_else(bad)?)?);
         repaired += repair::repair_points(&mut positions, &index_data, &mut mask);
+        left_out += stray_triangles(&index_data, positions.len());
         meshes.push(Mesh::new(positions, index_data, Some(mask)));
     }
     let mut objects = Vec::new();
@@ -1386,7 +1409,7 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
     if objects.is_empty() || active >= objects.len() {
         return Err(bad());
     }
-    Ok(SavedScene { meshes, objects, active, details: Details::default(), repaired })
+    Ok(SavedScene { meshes, objects, active, details: Details::default(), repaired, left_out })
 }
 
 fn nothing_to_export(mesh: &Mesh) -> Result<()> {

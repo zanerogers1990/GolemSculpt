@@ -3,8 +3,9 @@
 //! window; `app/recovery.rs` is where it meets the running app.
 //!
 //! While the scene holds work that is in no file of the user's, the app
-//! writes a copy of it every few minutes, as an ordinary `.sclp`, under the
-//! settings folder:
+//! writes a copy of it every few minutes (and at once, if one is owed, when
+//! another scene is about to take its place: then the work is one Undo away
+//! and nowhere else), as an ordinary `.sclp`, under the settings folder:
 //!
 //! ```text
 //! %APPDATA%\Sculpt\recovery\<when the run started>-<its process number>\
