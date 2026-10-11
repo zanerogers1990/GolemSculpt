@@ -327,6 +327,34 @@ impl ArrayTool {
         self.say(cx, "Copies are back on the path.", true);
     }
 
+    // ---- the object's centre moved under the array ------------------------------
+
+    /// The app moved `object`'s centre onto its mesh (`Tool::origin_moved`):
+    /// its position went from `from` to `to` and its mesh the other way, so
+    /// the object did not move. The array is laid out from the object's
+    /// position, so its points take the opposite of the move: the path stays
+    /// where it is in the world, the object sits off the path's start by that
+    /// much more, and every copy is where it was (a copy sits off the path the
+    /// way the object does, in its own frame and size, and its mesh has gone
+    /// the other way by as much).
+    ///
+    /// It is the pair a pose makes, so it is kept as one: when the scene's Z
+    /// takes the object back, `notice_scene_steps` takes the points back.
+    pub(crate) fn origin_moved(&mut self, object: ObjectId, from: Placement, to: Placement) {
+        if !self.arrays.has(object) {
+            return;
+        }
+        self.cancel_gesture();
+        self.commit_edit();
+        let before = self.arrays.state(object);
+        let by = to.position - from.position;
+        let mut after = before.clone();
+        after.shift_object(by);
+        self.arrays.set(object, after.clone());
+        let scened = Scened::Placed { from, to, by };
+        self.history.push(Step { object, label: "Set Origin to Mesh", before, after, scene: Some(scened) });
+    }
+
     // ---- the mirror --------------------------------------------------------------
 
     /// The axes the selected object, and so its array, is mirrored across: X = 1,

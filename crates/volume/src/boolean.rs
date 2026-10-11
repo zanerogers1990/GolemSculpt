@@ -243,7 +243,8 @@ fn admit(target: &TriMesh, others: &[&TriMesh], op: BooleanOp, settings: &Boolea
             BooleanOp::Union => "The objects all lie on the far side of the mirror plane, so the mirror image of \
                                  their union is empty. Turn the mirror off for this, or move them across the plane.",
             _ => "The first object lies wholly on the far side of its mirror plane, so its mirror image is empty. \
-                  Turn the mirror off for this, or move it across the plane.",
+                  Turn the mirror off for this, move it across the plane, or move its centre onto it with Set Origin \
+                  to Mesh.",
         }
         .into());
     }
@@ -432,7 +433,8 @@ mod tests {
             let error = boolean_with(&target, &[&cutter], op, &settings).unwrap_err();
             let start = "The first object is about 40 times its own size away from its X mirror plane. ";
             assert!(error.starts_with(start), "{op:?}: {error}");
-            assert!(error.contains(" Turn the X mirror off for this, or lower the resolution to "), "{op:?}: {error}");
+            assert!(error.contains(" Turn the X mirror off for this, lower the resolution to "), "{op:?}: {error}");
+            assert!(error.ends_with(" or less, or move its centre onto it with Set Origin to Mesh."), "{op:?}: {error}");
         }
         // United mirrored with something far away, it is the distance that is said.
         let (near, far) = (unit_cube(Vec3::ZERO), unit_cube(Vec3::new(40.0, 0.0, 0.0)));

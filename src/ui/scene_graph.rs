@@ -558,6 +558,14 @@ fn selected(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: b
             actions.push(Action::ResetTransform);
         }
     });
+    // Greyed while the centre is in the middle of the mesh already.
+    ui.add_enabled_ui(doc.scene.origin_off_mesh(&doc.mesh).is_some(), |ui| {
+        let style = ButtonStyle { height: 26.0, ..Default::default() };
+        let help = "Moves the object's centre to the middle of its mesh without moving the object: nothing changes                     on screen. The centre is where the gizmo sits, what the object turns and resizes about, and                     where its own (Local) mirror planes and radial axis pass, so those come with it. For a piece                     cut off a model, which keeps the model's centre. Instances, live mirror copies and arrays                     stay where they are. Undo (Z) puts the centre back.";
+        if tip(theme::button(ui, ui.available_width(), "Set Origin to Mesh", style), tips, help).clicked() {
+            actions.push(Action::SetOriginToMesh);
+        }
+    });
     theme::hint(ui, "New shapes, clones and instances start at the same place as the original.");
 }
 

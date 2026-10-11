@@ -196,6 +196,7 @@ impl Running {
         opts.folded = [kept.left_panel_folded, kept.right_panel_folded];
         opts.remesh_resolution = kept.remesh_resolution();
         opts.quad_target = kept.quad_target();
+        opts.decimate_target = kept.decimate_target();
         opts.new_shape_tris = kept.starting_detail();
         self.doc.sculptor.dyntopo.enabled = kept.dynamic_topology;
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
@@ -225,6 +226,7 @@ impl Running {
             brush: BrushPrefs::of(&self.doc.sculptor.settings),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
+            decimate_target: opts.decimate_target,
             starting_detail: opts.new_shape_tris,
             dynamic_topology: self.doc.sculptor.dyntopo.enabled,
             dynamic_topology_detail: self.doc.sculptor.dyntopo.detail,

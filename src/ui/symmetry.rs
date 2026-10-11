@@ -9,10 +9,11 @@
 
 use egui::{Color32, vec2};
 use glam::Vec3;
+use sculpt_symmetry::Axis;
 
 use super::theme::{self, ACCENT, ButtonStyle};
 use super::tip;
-use crate::doc::Doc;
+use crate::doc::{Action, Doc};
 use crate::scene::Space;
 use crate::sculpt::{Radial, RadialAxis};
 
@@ -31,7 +32,7 @@ pub fn axis_color(axis: RadialAxis) -> Color32 {
     }
 }
 
-pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
+pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
     let tips = doc.opts.tooltips;
     let active = doc.scene.active();
     let before = doc.scene.symmetry(active.id);
@@ -59,6 +60,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
         radial(ui, &mut symmetry.radial, symmetry.space, tips, down_the_view);
         let guides = theme::checkbox(ui, &mut doc.opts.symmetry_guides, "Show Symmetry Guides", ACCENT);
         tip(guides, tips, "Draws the selected object's mirror planes and radial sectors on it.");
+        cut_and_mirror(ui, before.space, tips, actions);
     });
     if symmetry != before {
         doc.scene.set_symmetry(doc.scene.active_id(), symmetry);
@@ -161,6 +163,60 @@ fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, whose: &str, tips: bo
     });
 }
 
+/// Cut & Mirror: the plane to cut at, and a button for each side that can be
+/// the one kept. The repair for a model whose two sides no longer match.
+///
+/// The plane chosen is the card's own and no object's (the Unity app's
+/// Symmetry Plane): it starts at X and is not kept between runs.
+fn cut_and_mirror(ui: &mut egui::Ui, space: Space, tips: bool, actions: &mut Vec<Action>) {
+    theme::heading(ui, "Cut & Mirror");
+    theme::hint(ui, "Throws one side of the selected object away and rebuilds it as the mirror image of the other.");
+    let id = egui::Id::new("cut_and_mirror_axis");
+    let mut axis = ui.data(|d| d.get_temp::<usize>(id)).and_then(Axis::from_index).unwrap_or(Axis::X);
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 3, 6.0);
+        for choice in Axis::ALL {
+            let active = (axis == choice).then_some(theme::AXIS[choice.index()]);
+            let style = ButtonStyle { active, ..Default::default() };
+            let help = format!(
+                "Cut at the object's own {} plane: the one Mirror {} sculpts across in Local space.",
+                choice.name(),
+                choice.name()
+            );
+            if tip(theme::button(ui, w, choice.name(), style), tips, &help).clicked() {
+                axis = choice;
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id, axis.index()));
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 2, 6.0);
+        for from_positive in [true, false] {
+            let (kept, rebuilt) = cut_sides(axis, from_positive);
+            let help = format!(
+                "Keeps the {kept} side of the selected object and rebuilds its {rebuilt} side as the exact mirror \
+                 image of it, across the object's own {} plane. What was on the {rebuilt} side is thrown away. The \
+                 mask comes across; hidden parts are cut too and show again. One undo step (Z).",
+                axis.name()
+            );
+            let label = format!("{kept} to {rebuilt}");
+            if tip(theme::button(ui, w, &label, ButtonStyle::default()), tips, &help).clicked() {
+                actions.push(Action::CutAndMirror { axis, from_positive });
+            }
+        }
+    });
+    if space == Space::World {
+        theme::hint(ui, "This cuts at the object's own plane, not the world's.");
+    }
+}
+
+/// The side Cut & Mirror keeps and the side it rebuilds, as the buttons name
+/// them: "+X" and "-X".
+fn cut_sides(axis: Axis, from_positive: bool) -> (String, String) {
+    let (plus, minus) = (format!("+{}", axis.name()), format!("-{}", axis.name()));
+    if from_positive { (plus, minus) } else { (minus, plus) }
+}
+
 fn format_axis(axis: Vec3) -> String {
     // Three decimals at most, without trailing zeros.
     let part = |v: f32| ((v * 1000.0).round() / 1000.0 + 0.0).to_string();
@@ -192,6 +248,12 @@ mod tests {
         for bad in ["", "1, 2", "1, 2, 3, 4", "up", "0, 0, 0", "1, nan, 0", "1, inf, 0"] {
             assert_eq!(parse_axis(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_cut_and_mirror_buttons_name_the_side_kept_first() {
+        assert_eq!(cut_sides(Axis::X, true), ("+X".to_owned(), "-X".to_owned()));
+        assert_eq!(cut_sides(Axis::Z, false), ("-Z".to_owned(), "+Z".to_owned()));
     }
 
     #[test]

@@ -137,7 +137,8 @@ pub fn remesh(mesh: &TriMesh, resolution: u32, mirror: [bool; 3]) -> Result<TriM
 /// A mirrored rebuild keeps the half on the positive side of each plane and
 /// reflects it (see [`RemeshSettings::mirror`]): of this model, nothing.
 const FAR_SIDE: &str = "The model lies wholly on the far side of its mirror plane, so its mirror image is empty. \
-                        Turn the mirror off for this, or move the model across the plane.";
+                        Turn the mirror off for this, move the model across the plane, or move its centre onto it \
+                        with Set Origin to Mesh.";
 
 /// Whether everything up to `highest` (the top corner of some bounds) lies
 /// behind one of the `mirror` planes, where a mirrored rebuild keeps nothing.
@@ -804,7 +805,8 @@ mod tests {
             let error = remesh_with(&rivet.positions, &rivet.indices, &settings(1024, [true, true, false])).unwrap_err();
             let start = format!("The model is about {said} times its own size away from its X and Y mirror planes. ");
             assert!(error.starts_with(&start), "{error}");
-            assert!(error.contains(" Turn the X and Y mirrors off for this, or lower the resolution to "), "{error}");
+            assert!(error.contains(" Turn the X and Y mirrors off for this, lower the resolution to "), "{error}");
+            assert!(error.ends_with(" or less, or move its centre onto it with Set Origin to Mesh."), "{error}");
         }
     }
 
@@ -830,7 +832,7 @@ mod tests {
         // On the side that is kept, as far off, it is the distance that is spoken of, with a resolution.
         let near = box_mesh(Vec3::new(39.5, -0.5, -0.5), Vec3::new(40.5, 0.5, 0.5));
         let error = admit(&near.positions, &near.indices, &settings(1024, [true, false, false])).unwrap_err();
-        assert!(error.contains("or lower the resolution to "), "{error}");
+        assert!(error.contains(", lower the resolution to "), "{error}");
         // And behind a plane that is not a mirror, there is nothing to say.
         assert!(admit(&far.positions, &far.indices, &settings(64, [false, true, true])).is_ok());
     }

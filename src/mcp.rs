@@ -591,10 +591,12 @@ fn tools() -> Value {
                 "name": choice(
                     &[
                         "undo", "redo", "remesh", "mask_invert", "mask_clear", "mask_blur", "mask_sharpen",
-                        "mask_grow", "mask_shrink", "clone", "instance", "make_unique",
+                        "mask_grow", "mask_shrink", "clone", "instance", "make_unique", "set_origin_to_mesh",
                     ],
                     "remesh rebuilds the mesh from voxels, evening out the triangles. clone adds an independent \
-                     copy; instance adds a linked copy that shares the mesh; make_unique unlinks an instance.",
+                     copy; instance adds a linked copy that shares the mesh; make_unique unlinks an instance. \
+                     set_origin_to_mesh moves the object's centre (its pivot, and its own mirror planes) to the \
+                     middle of its mesh without moving the object.",
                 ),
                 "resolution": number("For remesh: voxels along the longest side, 4 to 1024. Default: the app's setting."),
             }),

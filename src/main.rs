@@ -7,6 +7,7 @@ mod bench_matched;
 mod bridge_guard;
 mod camera;
 mod capture;
+mod decimate;
 mod doc;
 mod gizmo;
 mod history;
@@ -203,6 +204,10 @@ fn window_options(args: &[String]) -> app::Args {
             "--test-keep-pointer" => opts.keep_pointer = true,
             "--remesh" => opts.remesh = it.next().and_then(|s| s.parse().ok()),
             "--quad-remesh" => opts.quad_remesh = it.next().and_then(|s| s.parse().ok()),
+            // Decimate to this many triangles after that, by the routine the Decimate button runs.
+            "--decimate" => opts.decimate = it.next().and_then(|s| s.parse().ok()),
+            // Work Decimate through its button, question, Cancel and Undo; prints a line per check.
+            "--demo-decimate" => opts.demo_decimate = true,
             other if !prefs::is_option(other) => opts.open = Some(PathBuf::from(other)),
             other => eprintln!("unknown option {other}"),
         }

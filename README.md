@@ -190,6 +190,34 @@ across Z keeps both, with nothing to re-tick on the way from one to the other.
   as a tick that did not work. (The Unity app drew every object's planes at
   once; here only the selected object's guides are drawn.)
 
+**Cut & Mirror**, at the foot of the Symmetry card, is the repair for a model
+whose two sides no longer match: one sculpted with the mirror off, joined
+from odd parts, or imported lopsided. Pick the plane (**X**, **Y** or **Z**),
+then press **+X to -X** or **-X to +X**. The side named first is kept, the
+other is thrown away, and the model is rebuilt as the kept side and its exact
+mirror image, the two joined along one row of points on the plane.
+
+- The plane is the object's own, through its own centre along its own axes:
+  the one a Local mirror sculpts across. That is so whatever Symmetry space
+  is chosen, as in the Unity app, and with World chosen a line under the
+  buttons says so.
+- The kept side is left as it was, triangle for triangle, up to the plane;
+  only the triangles the plane runs through are cut. (A mirrored Remesh also
+  makes a model symmetric, by rebuilding all of it.)
+- The mask comes across, mirrored with the surface. Hidden parts are cut
+  with the rest and everything shows again afterwards, and a quad-remeshed
+  object comes out as triangles, as after anything that rebuilds a mesh.
+  Instances share the mesh, so they all change together.
+- It is one undo step: Z brings the whole model back, with its mask, its
+  hidden parts and its quads.
+- The status line says what was kept and what was replaced ("Cut & mirrored
+  +X onto -X: kept 3461 triangles, replaced 2347, now 3478 vertices."),
+  because the replaced side is gone for good once the step leaves undo. It
+  goes on to say if the result is not a closed surface: a model that had
+  holes still has them. With nothing of the model on the side to keep,
+  nothing is changed, and the line says "Nothing on the +X side to mirror".
+- It does not tick a mirror axis: do that to go on sculpting both sides.
+
 What an object starts with, as in the Unity app:
 
 - A new shape, an imported model, an SSphere skin, a mask extract and a
@@ -234,18 +262,30 @@ split off a figure keeps the figure's centre and its Mirror X, so a rivet
 from the figure's hand is many times its own size from that plane. Such a
 rebuild is not attempted (two planes at once used to ask for more than
 10 GB). The status line names the object, says how far off it is, and what to
-do: "Turn the X mirror off for this, or lower the resolution to 740 or
-less." Either works, and the number offered is one that is then accepted;
-nothing is changed until one is done. (There is no command yet that moves an
-object's centre onto its mesh, which would be the third way.)
+do: "Turn the X mirror off for this, lower the resolution to 740 or less, or
+move its centre onto it with Set Origin to Mesh." Any of the three works, and
+the number offered is one that is then accepted; nothing is changed until one
+is done. They are not the same thing, though:
+
+- Turning the mirror off rebuilds the piece as it is.
+- A lower resolution rebuilds it mirrored across the figure's plane, far
+  away, which leaves the piece itself as it is and coarser.
+- **Set Origin to Mesh** (Objects card, see Objects) puts the piece's centre
+  in the middle of the piece without moving it. Its own mirror plane then
+  runs through its own middle, so the same rebuild runs at any resolution
+  the piece alone could be rebuilt at (the 128 the app starts with, say),
+  and makes the piece symmetric about its own middle: right for a rivet, a
+  button or a horn that should be its own mirror image, and not what is
+  wanted for a piece that was only ever one half of a pair.
 
 A mirrored rebuild keeps the half of the model on the positive side of each
 mirror plane and reflects it. A piece that lies wholly on the other side (the
 rivet from the figure's other hand) has no such half, at any resolution, so
 it is never told to lower the resolution: the line says it "lies wholly on
 the far side of its mirror plane, so its mirror image is empty. Turn the
-mirror off for this, or move the model across the plane." The booleans say
-the same of the object that is kept.
+mirror off for this, move the model across the plane, or move its centre
+onto it with Set Origin to Mesh." The booleans say the same of the object
+that is kept.
 
 ## Dynamic topology
 
@@ -277,6 +317,73 @@ else. It starts off, and the app remembers how you left it.
   shows triangles, and OBJ export writes triangles.
 - **Reset Shape** still goes back to the shape before sculpting, with the
   added triangles lying on it.
+
+## Decimate
+
+**Decimate**, at the foot of the Remesh card, takes triangles off the selected
+object and keeps its shape. It is for a model that has to fit a triangle
+budget, a game asset above all: a finished sculpt runs to millions of
+triangles, and an engine usually allows one model somewhere between 200k and
+500k.
+
+- **Target Triangles** is the count to come down to, from 1k to 4M. It starts
+  at 200k, and the app remembers it. The figure in brackets is what share
+  that is of the triangles the object has now, and **75%**, **50%**, **25%**
+  and **10%** set the target to that share. The button is grey while the
+  object is at or under the target.
+- **Where the triangles come from.** Flat and gently curved surface gives its
+  triangles up first; ridges, creases and fine detail keep theirs longest.
+  (It is quadric edge collapse, Garland and Heckbert's method: an edge is
+  folded to the one point that stays closest to the surface it replaces, and
+  the cheapest edge of the whole model goes first.) What is left is uneven on
+  purpose: big triangles where little happens, small ones where the form
+  turns. A Remesh does the opposite, even triangles everywhere, so decimate
+  last, when the sculpting is done: brushes work poorly on big triangles.
+- **A closed model stays closed.** No fold is made that would tear the
+  surface, pinch it or turn a triangle over: a hole stays one hole with its
+  rim where it was, and a gap that goes right through (under an arm) stays
+  open. The status line says how it was and how it is, by the same count of
+  open edges Check for Printing makes: "Decimated "Sphere" from 202,800 to
+  50,700 triangles in 253 ms. It was a closed surface and still is. Undo (Z)
+  brings the triangles back." For a model that had holes it says that it was
+  not closed before and is not now, in red, with what closes it.
+- **The count is a target.** When no fold is left that keeps the surface
+  whole, it stops above the count and says so ("4 were asked for: any fewer
+  would tear or fold the surface"). That only happens far below any budget.
+- **The mask protects**, as it does from brushes. Fully masked surface keeps
+  every point and every triangle exactly as it was: mask a face, decimate,
+  and the face keeps its detail while the rest of the figure pays for it.
+  The soft edge of a mask is decimated like the rest, and the mask is
+  carried across it. If the masked part alone has more triangles than the
+  target, it stops there and the line says why.
+- **Hidden parts are decimated with the rest, and stay hidden.** The budget
+  is the whole model's, as is the file an export writes.
+- **Symmetry is not kept exactly, so it asks first.** The two sides of a
+  mirror (or the repeats of a radial symmetry) are thinned each in its own
+  order, so afterwards the model is symmetric to the eye and its points no
+  longer pair up across the plane. Brushes still mirror. When the object has
+  a Local mirror or radial symmetry on, a question says this and offers
+  **Decimate Anyway** (Enter) or **Cancel** (Esc); for a mirror it also says
+  what puts it right afterwards: Cut & Mirror (see Symmetry) keeps one side
+  and mirrors it, at about the same count. A World symmetry is not asked
+  about: the world's planes cut the mesh anywhere, and it was never exact.
+  The other way would have been to refuse until the symmetry is turned off.
+  That was not done because the way past a refusal (untick the mirror,
+  decimate, tick it again) gives exactly the same model in more steps; the
+  only thing to decide is whether exact symmetry matters for this model, so
+  that is the question.
+- **It works in the background.** Its progress and a **Cancel** button show
+  at the bottom of the view, and the view can be turned meanwhile. Cancel
+  leaves the model as it was. If the model is changed before it finishes (a
+  stroke, an undo, a remesh), the result is of a model that is no longer
+  there and is not used; the line says so, and Decimate is one press away.
+  One at a time, and not while a merge or a cut is still working.
+- **One undo step**: Z brings every triangle back (the mesh from before is
+  kept whole, and counts towards undo's memory). Instances share the mesh,
+  so they all change. A quad-remeshed object comes out as triangles, and
+  Reset Shape goes back no further than the decimated shape.
+- **How long.** Measured on this machine, the new sculpt mesh included:
+  200k to 100k triangles in 0.17 s, 1M to 500k in 1.3 s, 1M to 200k in 2.3 s.
 
 ## Transform gizmo
 
@@ -477,6 +584,8 @@ same way in place, each in its own frame on the path. Moving it moves the
 object off the path's start and leaves the path where it is in the world, so
 every copy moves the same way in its own frame (turned with the path, scaled
 with its size): a row of links all lifted off a curve, or pushed out from it.
+(Set Origin to Mesh, in the Objects card, leaves the object off the path's
+start in the same way, without moving a copy: see Objects.)
 On a mirrored array a copy on the far side can be picked too: dragging it right
 moves the original left, and a turn is turned the other way. The gizmo has no
 cubes, since a copy's size is set with the sliders. **Copies Back onto the
@@ -956,7 +1065,7 @@ pair; after that they can be moved apart and the joints stay on them.
 - **The app remembers how you left it**: interface size, tooltips on or off,
   which cards are open, which float over the view and where, which panels
   are folded away, fullscreen, millimetres or inches, the remesh settings,
-  dynamic topology and every brush's tuning. They are kept in
+  Decimate's target, dynamic topology and every brush's tuning. They are kept in
   `%APPDATA%\Sculpt\settings.json`, with the recent files; deleting that file
   puts everything back to how the app first starts.
 - **A crash does not take the session with it.** While the scene has changes
@@ -1057,7 +1166,8 @@ file a slicer gets is the whole model.
   wrong and offers **Export Anyway** (Enter) or **Cancel** (Esc); exported
   anyway, the status line says once more that it may not print.
 - **After anything that rebuilds a mesh** the result is checked, and the
-  warning follows the operation's own line: Remesh, Quad Remesh, Join (with
+  warning follows the operation's own line: Remesh, Quad Remesh, Cut &
+  Mirror, Decimate (which also says how it was before), Join (with
   or without the remesh), Subtract, Union and Intersect, Trim, Split,
   Extract, a tube merge or tubes kept as objects, built keys, an array made
   into one object or into separate ones, a lathe, an SSphere skin, and an
@@ -1172,6 +1282,55 @@ The **Objects** card at the top of the Scene panel is the scene graph.
   small part of it.
 - **Reset Shape** puts the selected object back to the shape it had before
   sculpting: as it was made, loaded or last remeshed.
+- **Set Origin to Mesh**, under Reset Rotation and Scale, moves the selected
+  object's centre to the middle of its mesh (the middle of the box round it)
+  and leaves the object exactly where it is: nothing changes on screen. The
+  centre is the point the object's Position names, where the gizmo sits,
+  what the object turns and resizes about, and where its own (Local) mirror
+  planes and radial axis pass. A piece split off a model keeps the model's
+  centre, which can be a long way from the piece; this gives it one of its
+  own. The button is grey while the centre is in the middle already.
+  - **How.** Every point of the mesh is shifted by the same amount inside
+    the object and the object's Position is moved the other way, through its
+    own turn and size, so the two cancel (to the last digit or two a number
+    holds). Position shows new numbers; Scale and the turn are untouched.
+  - **Instances** share the mesh, so each of them is corrected the same way,
+    with its own turn and size, and stays where it is.
+  - **Live mirror copies** are reflections across the world's planes of
+    where the object is drawn, so they stay where they are too, and the
+    mirror's own centre is not touched.
+  - **A live array** stays where it is, copy for copy, tapered and turned
+    ones included. An array is laid out from its object's centre, so the
+    Array tool keeps the path where it was and notes that the object now
+    sits off the path's start: **Copies Back onto the Path** lights up, and
+    would slide the object's new centre onto the start. Leave it be to keep
+    the copies where they are.
+  - **Symmetry.** A World symmetry's planes are the world's and stay put. A
+    Local symmetry goes through the object's centre, so its planes and its
+    radial axis move with the centre, and the status line says so. That is
+    the point for a piece far from its mirror plane (see Symmetry). On a
+    model that is symmetric about the centre it already has, and whose box
+    is lopsided (one arm raised), it would move the plane off the model's
+    middle: do not press it there, or Undo.
+  - **What comes across:** the mask, hidden parts, the quads of a quad
+    remesh, and the shape Reset Shape goes back to.
+  - **One undo step.** Z puts back every point of the mesh and every
+    Position exactly (the mesh from before is kept whole, as for a remesh,
+    and counts towards undo's memory), and an array follows. It is saved
+    like any other change: a `.sclp` saved afterwards holds the mesh about
+    its new centre and the Positions that go with it, and opens with
+    everything where it was.
+  - **When it is refused.** Unmerged tubes and planned keys are kept from
+    the centre of the object they stand on, and an attached SSphere rig
+    follows its object's centre; none of them is in a file, and each would
+    be left behind. So the centre is not moved while there are any (tubes
+    and keys on any object, a rig attached to this one or an instance of
+    it), and the status line says which and what finishes it: Merge or Keep
+    Separate, Build Keys, Detach. It also waits for a background job (a
+    merge, a cut) to finish. One thing is not guarded: tubes drawn, keys
+    planned or a rig attached after the centre was moved are left behind in
+    the same way if Undo is then taken back past the move while they still
+    stand. Finish them first.
 - The eye shows or hides an object, the bin deletes it. Hiding the object
   you are working on moves the brushes to one you can still see.
 - **H** hides the selection, **Shift + H** everything else, **Alt + H** shows
@@ -1261,7 +1420,9 @@ any other surface. Nothing is cut away.
 - Hiding, showing and inverting are each an undo step.
 - Remesh, Quad Remesh, Join and both exports always work on the whole model,
   hidden parts included, and what a remesh or a join makes starts with
-  everything showing, as in the Unity app.
+  everything showing, as in the Unity app. Cut & Mirror is the same. Decimate
+  works on the whole model too, and what was hidden is still hidden
+  afterwards (its triangles are the model's own, fewer of them).
 - The wireframe draws only the faces that show.
 
 ## Turntable
@@ -1432,6 +1593,8 @@ Ported from the Unity app, each described in its own section above:
   on Blender's rather than the Unity app's), mask painting and mask
   operations, mirror symmetry on X / Y / Z and radial symmetry, dynamic
   topology, voxel remesh, quad remesh, hidden parts, and undo / redo.
+  Decimate, Set Origin to Mesh and the buttons for Cut & Mirror are this
+  app's own.
 - **Objects**: the scene graph (add shapes, show / hide, rename, clone,
   instance, reorder), join and the booleans, live mirror copies, and the
   transform gizmo and view gizmo.
@@ -1450,6 +1613,12 @@ Ported from the Unity app, each described in its own section above:
 A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
 each start with a clear mask and everything showing.
 
+Of the Unity app's Symmetry Repair panel only Cut & Mirror has buttons (see
+Symmetry). Check Symmetry, Match Up and Symmetry Cleanup are ported and
+tested (`crates/symmetry/src/ops.rs`) and no button reaches them yet, nor is
+there a Match Tolerance slider: Cut & Mirror uses the setting that slider
+starts at.
+
 SSpheres, unmerged tubes, rulers, planned keys and the lathe's outline are
 scaffolds: they are not kept in `.sclp` files or in recovery copies, so make
 the skin, merge the tube, build the keys or create the mesh before closing the
@@ -1463,15 +1632,19 @@ Left out on purpose: the Unity app's mold maker and hard-surface tool.
 
 ```
 cargo test --release          # engine tests
+cargo test -p sculpt-geom --release timing_of_decimation -- --ignored --nocapture   # the decimation engine alone at 200k / 500k / 1M triangles, to 50% and 20%: time, closed, same volume
+cargo test --release timing_of_a_decimate -- --ignored --nocapture                  # Decimate as the app runs it, sculpt mesh included, at 200k and 1M triangles; prints the status lines
 cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
 SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
-sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut runs Cut & Mirror, which has no button yet, on a lumpy model and shows it before and after in wireframe, printing a line per check, and cut:alone shows the result by itself; corner presses Layer once where Mirror X and Y cross and once clear of the crossing, seen from the side, where both steps should be one height, and corner:front shows the same from where the dabs were made)
+sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut presses Cut & Mirror on a copy of a lumpy model, then Undo and Redo, and shows the model before and after in wireframe, printing the status line and a line per check, and cut:alone shows the result by itself (add --demo-ui "float=Symmetry@640:20" to see the whole card, buttons and all); corner presses Layer once where Mirror X and Y cross and once clear of the crossing, seen from the side, where both steps should be one height, and corner:front shows the same from where the dabs were made)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
+sculpt.exe --screenshot out.png --demo --decimate 8000 --look "wire=on"   # the scripted sculpt decimated to that many triangles by the routine under the Decimate button (it waits for the job), status line printed; add --demo-ui "float=Remesh@440:20" to see the card
+sculpt.exe --screenshot out.png --demo --demo-decimate   # Decimate worked through its button, its question about symmetry, Undo, Redo, Cancel and a model edited under it; prints the status lines and a line per check (SCULPT_DEMO_DECIMATE=ask stops at the question, for a picture of it)
 sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
-sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more; apart | aside | behind ask for a union and mirrored remeshes that are not started, to see what the status line says)
+sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more; apart | aside | behind ask for a union and mirrored remeshes that are not started, to see what the status line says; origin stands the centre of the cube, which has two instances, a live mirror and a live array, 400 lengths off, then presses Remesh (refused), Set Origin to Mesh, Undo, Redo and Remesh again, printing the status lines and a line per check; add --demo-ui "float=Objects@440:20" --size 1600x1400 to see the button)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
 sculpt.exe --screenshot out.png --demo --demo-matcap big.png   # a picture imported as a matcap by the routine under Import Matcap, with no file box: any size (it is copied into assets/matcaps/Imported)
 sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play | gizmo | gizmo-held | gizmo-play

@@ -377,6 +377,8 @@ pub struct Prefs {
     pub remesh_resolution: f32,
     /// Quads a quad remesh aims for.
     pub quad_target: f32,
+    /// Triangles Decimate brings an object down to.
+    pub decimate_target: f32,
     /// Triangle count of a new shape (Starting Detail).
     pub starting_detail: f32,
     /// Dynamic topology: whether brushes add detail as they go, and the
@@ -403,6 +405,7 @@ impl Default for Prefs {
             brush: BrushPrefs::default(),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
+            decimate_target: opts.decimate_target,
             starting_detail: opts.new_shape_tris,
             dynamic_topology: dyntopo.enabled,
             dynamic_topology_detail: dyntopo.detail,
@@ -438,6 +441,11 @@ impl Prefs {
     pub fn quad_target(&self) -> f32 {
         let range = crate::quadremesh::TARGET_RANGE;
         fit(self.quad_target, *range.start(), *range.end(), crate::doc::Options::default().quad_target)
+    }
+
+    pub fn decimate_target(&self) -> f32 {
+        let range = crate::decimate::TARGET_RANGE;
+        fit(self.decimate_target, *range.start(), *range.end(), crate::doc::Options::default().decimate_target).round()
     }
 
     pub fn starting_detail(&self) -> f32 {

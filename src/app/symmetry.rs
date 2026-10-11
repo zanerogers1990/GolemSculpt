@@ -138,15 +138,19 @@ impl Running {
         self.sync_view();
     }
 
-    /// `SCULPT_DEMO_SYMMETRY=cut`: Cut & Mirror (`sculpt_symmetry::ops`, which
-    /// no button reaches yet) run on a lumpy model, for a look at the seam it
-    /// leaves. The model as it was stands on the left and the result on the
-    /// right, its +X side kept and mirrored onto -X, both in wireframe and
-    /// seen from the front, so the seam runs straight down the middle of the
-    /// right one. A band of mask across the model shows the mask coming
-    /// through. `cut:alone` shows the result by itself, larger. Prints the
-    /// command's own message and a line per check (ok / FAIL).
+    /// `SCULPT_DEMO_SYMMETRY=cut`: Cut & Mirror, by the routine its buttons
+    /// run (app/cut_mirror.rs), on a lumpy model, for a look at the seam it
+    /// leaves. The model as it was stands on the left and a copy of it, cut,
+    /// on the right, its +X side kept and mirrored onto -X, both in wireframe
+    /// and seen from the front, so the seam runs straight down the middle of
+    /// the right one. A band of mask across the model shows the mask coming
+    /// through. The cut is then undone and redone. `cut:alone` shows the
+    /// result by itself, larger. Prints the status line the cut left and a
+    /// line per check (ok / FAIL).
     fn cut_and_mirror_demo(&mut self, alone: bool) {
+        // The Symmetry card, with the buttons at its foot, in the picture.
+        let shut = ["Brushes", "Clay Settings", "Move Settings"].map(|card| (card.to_owned(), false));
+        crate::prefs::cards::restore(&self.egui_ctx, &shut.into_iter().collect());
         // Coarse, so each triangle along the seam can be seen, and moved off
         // centre, so the plane runs through the sides of lumps at a slant.
         let ball = primitives::build(Primitive::Sphere, 6_000, 0.5);
@@ -159,34 +163,48 @@ impl Running {
         let band = |p: &Vec3| ((0.12 - (p.y - 0.1 + 0.5 * p.x).abs()) * 30.0).clamp(0.0, 1.0);
         let mask: Vec<f32> = positions.iter().map(band).collect();
 
-        let cut = sculpt_symmetry::ops::mirror_and_weld(&positions, &ball.indices, Some(&mask), Axis::X, 1.0, true);
-        let built = match cut {
-            Ok(built) => built,
-            Err(why) => return eprintln!("demo-symmetry cut: {why}"),
-        };
-        println!("{}", built.message());
-        let adjacency = MeshAdjacency::of(&built.mesh);
-        let edges = MeshEdges::of(&built.mesh, &adjacency);
-        let on_plane = built.mesh.positions.iter().filter(|p| p.x == 0.0).count();
+        self.replace_mesh(Mesh::new(positions, ball.indices.clone(), Some(mask)), false);
+        let before = self.doc.scene.active_id();
+        self.doc.scene.active_mut().position = Vec3::new(-0.75, 0.0, 0.0);
+        // A copy to the right of it, and the button pressed on that.
+        self.act(Action::CloneObject);
+        let object = self.doc.scene.active_mut();
+        (object.name, object.position) = ("Cut and Mirrored".to_owned(), Vec3::new(0.75, 0.0, 0.0));
+        let whole = (self.doc.mesh.vertex_count(), self.doc.mesh.triangle_count());
+        let steps = self.doc.history.steps().0;
+        self.act(Action::CutAndMirror { axis: Axis::X, from_positive: true });
+        println!("{}", self.ui.status.0);
+
+        let mesh = &self.doc.mesh;
+        let cut = (mesh.vertex_count(), mesh.triangle_count());
+        let built = sculpt_geom::TriMesh::new(mesh.positions.clone(), mesh.indices.clone());
+        let adjacency = MeshAdjacency::of(&built);
+        let edges = MeshEdges::of(&built, &adjacency);
+        let on_plane = built.positions.iter().filter(|p| p.x == 0.0).count();
         let places: std::collections::HashSet<[u32; 3]> =
-            built.mesh.positions.iter().map(|&p| (p + Vec3::ZERO).to_array().map(f32::to_bits)).collect();
+            built.positions.iter().map(|&p| (p + Vec3::ZERO).to_array().map(f32::to_bits)).collect();
         let mirrored = |p: &Vec3| places.contains(&(Vec3::new(-p.x, p.y, p.z) + Vec3::ZERO).to_array().map(f32::to_bits));
-        let checks = [
+        let masked = |side: f32| mesh.positions.iter().zip(&mesh.mask).any(|(p, &m)| p.x * side > 0.1 && m > 0.9);
+        let mut checks = vec![
             ("closed: every edge has two triangles", edges.is_closed()),
             ("no edge has more than two triangles", edges.non_manifold_edges().is_empty()),
-            ("every triangle faces the same way as its neighbours", edges.is_consistently_wound(&built.mesh.indices)),
-            ("every vertex has its mirror image, exactly", built.mesh.positions.iter().all(mirrored)),
+            ("every triangle faces the same way as its neighbours", edges.is_consistently_wound(&built.indices)),
+            ("every vertex has its mirror image, exactly", built.positions.iter().all(mirrored)),
             ("the seam is a row of vertices on the plane", on_plane > 20),
+            ("the mask came across, on both sides", masked(1.0) && masked(-1.0)),
+            ("the cut is one undo step", self.doc.history.steps().0 == steps + 1),
+            ("the status line is good news", self.ui.status.1 == crate::ui::theme::OK),
         ];
+        self.act(Action::Undo);
+        let undone = (self.doc.mesh.vertex_count(), self.doc.mesh.triangle_count());
+        checks.push(("one Undo brings the whole model back", undone == whole && self.doc.history.steps().0 == steps));
+        self.act(Action::Redo);
+        let redone = (self.doc.mesh.vertex_count(), self.doc.mesh.triangle_count());
+        checks.push(("and Redo cuts it again", redone == cut && cut != whole));
         for (what, ok) in checks {
             println!("{} {what}", if ok { "ok  " } else { "FAIL" });
         }
 
-        self.replace_mesh(Mesh::new(positions, ball.indices.clone(), Some(mask)), false);
-        let before = self.doc.scene.active_id();
-        self.doc.scene.active_mut().position = Vec3::new(-0.75, 0.0, 0.0);
-        self.add_object("Cut and Mirrored", Mesh::new(built.mesh.positions, built.mesh.indices, built.mask));
-        self.doc.scene.active_mut().position = Vec3::new(0.75, 0.0, 0.0);
         if alone {
             self.act(Action::ToggleVisible(before));
         }

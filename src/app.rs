@@ -31,6 +31,8 @@ use crate::ui::{self, Cursor, UiState, theme};
 use crate::{io, remesh};
 
 mod bridge;
+mod cut_mirror;
+mod decimate;
 mod dyntopo;
 mod echo;
 mod recording;
@@ -43,6 +45,7 @@ mod live_copies;
 mod masked;
 mod mirror_copies;
 mod new_scene;
+mod origin;
 mod pose;
 mod print_check;
 mod recovery;
@@ -71,6 +74,11 @@ pub struct Args {
     pub remesh: Option<u32>,
     /// Quad-remesh to about this many quads after that.
     pub quad_remesh: Option<u32>,
+    /// Decimate to this many triangles after that, and wait for it.
+    pub decimate: Option<u32>,
+    /// Work Decimate through its button, its question, Cancel and Undo, and
+    /// print a line per check (see app/decimate.rs).
+    pub demo_decimate: bool,
     pub flat: bool,
     /// Shading settings to start with (see `look::apply_spec`).
     pub look: Option<String>,
@@ -234,6 +242,8 @@ struct Running {
     /// How closed the mesh was before a stroke that can add triangles, so
     /// the stroke can be held to leaving it no worse (app/print_check.rs).
     print_watch: print_check::StrokeWatch,
+    /// A Decimate at work in the background (see app/decimate.rs).
+    decimate: decimate::State,
     /// A screenshot the Claude bridge is waiting for.
     capture: Option<bridge::Capture>,
     transform: transform::State,
@@ -515,6 +525,7 @@ impl Running {
             pivot_seen: None,
             stroke_ended: None,
             print_watch: Default::default(),
+            decimate: Default::default(),
             capture: None,
             transform: Default::default(),
             flash: Default::default(),
@@ -572,6 +583,16 @@ impl Running {
         if let Some(quads) = running.args.quad_remesh {
             running.doc.opts.quad_target = quads as f32;
             running.act(Action::QuadRemesh);
+        }
+        if let Some(triangles) = running.args.decimate {
+            // The answer to the question about symmetry, were it asked: no one is here to give it.
+            running.doc.opts.decimate_target = triangles as f32;
+            running.act(Action::DecimateAnyway);
+            running.decimate_wait();
+            println!("{}", running.ui.status.0);
+        }
+        if running.args.demo_decimate {
+            running.decimate_demo();
         }
         if running.args.demo_hide {
             running.demo_hide();
@@ -1253,6 +1274,9 @@ impl Running {
                     Err(e) => self.status(e, false),
                 }
             }
+            Action::CutAndMirror { axis, from_positive } => self.cut_and_mirror(axis, from_positive),
+            Action::Decimate => self.decimate_asking(),
+            Action::DecimateAnyway => self.decimate_start(),
             Action::Mask(op) => {
                 let delta = match op {
                     MaskOp::Invert => self.doc.mesh.remap_mask(|_, _, m| 1.0 - m),
@@ -1328,6 +1352,7 @@ impl Running {
             }
             Action::Tool(tool) => self.set_tool(tool),
             Action::ResetTransform => self.reset_transform(),
+            Action::SetOriginToMesh => self.set_origin_to_mesh(),
             Action::MakeSkin => self.spheres_make_skin(),
             Action::Mirror(command) => self.mirror_command(command),
             Action::NewRig => self.spheres_new_rig(),
@@ -1695,6 +1720,9 @@ impl Running {
 
         // A gizmo drag around a mask reshapes the mesh once a frame.
         self.transform_apply();
+
+        // A Decimate that has finished in the background takes the model's place.
+        self.decimate_frame();
 
         // The hosted tools' frame: before the interface, which draws their overlay.
         self.tools_frame();

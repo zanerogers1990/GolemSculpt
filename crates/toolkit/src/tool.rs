@@ -261,6 +261,19 @@ pub trait Tool {
     /// everything as it is.
     fn load_objects(&mut self, _objects: Vec<(ObjectId, Saved)>, _arrival: Arrival) {}
 
+    /// The app has moved `object`'s centre onto its mesh (Set Origin to
+    /// Mesh): its placement went from `from` to `to`, and its mesh went the
+    /// other way inside it, so that nothing moved in the world. Only the
+    /// position differs between the two. Called once for each object, with
+    /// the tool up or put away, after the scene has changed.
+    ///
+    /// A tool that keeps something for the object measured from the object's
+    /// position (an array's path) puts it right here, so that it too stays
+    /// where it is. The move is one step of the scene's history, and the
+    /// scene's Undo gives the object back exactly `from`: a tool that changed
+    /// something of its own must change it back when it sees that.
+    fn origin_moved(&mut self, _object: ObjectId, _from: Placement, _to: Placement) {}
+
     /// Puts the tool in a state worth a screenshot: `--demo-tool <id>` brings
     /// the tool up and calls this with whatever followed `<id>:` (empty if
     /// nothing did). No person is at the tablet, so do it through the same

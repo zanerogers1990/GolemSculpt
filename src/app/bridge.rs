@@ -879,6 +879,7 @@ impl Running {
             "masksharpen" => mask(MaskOp::Sharpen),
             "maskgrow" => mask(MaskOp::Grow),
             "maskshrink" => mask(MaskOp::Shrink),
+            "setorigintomesh" => Action::SetOriginToMesh,
             "clone" => Action::CloneObject,
             "instance" => Action::InstanceObject,
             "makeunique" => {

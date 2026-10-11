@@ -265,8 +265,9 @@ mod tests {
         let said = named(refused.err().unwrap(), "Rivet");
         let start = "\"Rivet\" is about 40 times its own size away from its X and Y mirror planes. Rebuilt mirrored, \
                      the grid has to reach from it to its mirror image, which is too big at this resolution. Turn \
-                     the X and Y mirrors off for this, or lower the resolution to ";
-        assert!(said.starts_with(start) && said.ends_with(" or less."), "{said}");
+                     the X and Y mirrors off for this, lower the resolution to ";
+        let end = " or less, or move its centre onto it with Set Origin to Mesh.";
+        assert!(said.starts_with(start) && said.ends_with(end), "{said}");
     }
 
     /// Twelve cubes in one place: surface enough to be over the triangle
@@ -292,7 +293,8 @@ mod tests {
             assert_eq!(
                 said,
                 "\"Rivet\" lies wholly on the far side of its mirror plane, so its mirror image is empty. Turn the \
-                 mirror off for this, or move the model across the plane.",
+                 mirror off for this, move the model across the plane, or move its centre onto it with Set Origin \
+                 to Mesh.",
                 "at {resolution}"
             );
         }

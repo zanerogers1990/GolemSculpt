@@ -307,6 +307,13 @@ pub fn highest_passing(at_most: u32, passes: impl Fn(u32) -> bool) -> Option<u32
     Some(fits)
 }
 
+/// The way out for one object that is far from, or behind, its own mirror
+/// plane, besides turning the mirror off: the app's Set Origin to Mesh (in
+/// its Objects card) puts the object's centre, and with it the plane, in the
+/// middle of the object's mesh. After that the lattice need reach no further
+/// than the object itself.
+pub const RECENTRE: &str = "move its centre onto it with Set Origin to Mesh";
+
 /// "X", "X and Y", "X, Y and Z".
 fn axis_names(axes: [bool; 3]) -> String {
     let names: Vec<&str> = (0..3).filter(|&a| axes[a]).map(|a| ["X", "Y", "Z"][a]).collect();
@@ -336,13 +343,13 @@ impl Refused {
                 } else {
                     format!("lies to one side of its {names} mirror {planes}")
                 };
-                let (how_big, or_lower) = match lower {
-                    Some(lower) => ("too big at this resolution", format!(", or {lower}")),
+                let (how_big, lower) = match lower {
+                    Some(lower) => ("too big at this resolution", format!(", {lower}")),
                     None => ("too big at any resolution", String::new()),
                 };
                 format!(
                     "{} {place}. Rebuilt mirrored, the grid has to reach from it to its mirror image, which is \
-                     {how_big}. Turn the {mirrors} off for this{or_lower}.",
+                     {how_big}. Turn the {mirrors} off for this{lower}, or {RECENTRE}.",
                     subject.named
                 )
             }
@@ -504,7 +511,7 @@ mod tests {
             format!(
                 "The model is about 26 times its own size away from its X and Y mirror planes. Rebuilt mirrored, \
                  the grid has to reach from it to its mirror image, which is too big at this resolution. Turn the \
-                 X and Y mirrors off for this, or lower the resolution to {fits} or less."
+                 X and Y mirrors off for this, lower the resolution to {fits} or less, or {RECENTRE}."
             )
         );
         // With the mirrors off it is an ordinary model.
@@ -530,14 +537,16 @@ mod tests {
             format!(
                 "The first object is about 40 times its own size away from its X mirror plane. Rebuilt mirrored, \
                  the grid has to reach from it to its mirror image, which is too big at this resolution. Turn the \
-                 X mirror off for this, or lower the resolution to {fits} or less."
+                 X mirror off for this, lower the resolution to {fits} or less, or move its centre onto it with Set \
+                 Origin to Mesh."
             )
         );
-        // So far off that no resolution helps: only the mirror is left to turn off.
+        // So far off that no resolution helps: the mirror is left to turn off, or the centre to move.
         let refused = planned(aside(20_000.0), 1, 64, [true, false, false]).unwrap_err();
         assert_eq!(refused.fits, None);
         let message = refused.message(&MODEL);
-        assert!(message.ends_with("which is too big at any resolution. Turn the X mirror off for this."), "{message}");
+        let end = format!("which is too big at any resolution. Turn the X mirror off for this, or {RECENTRE}.");
+        assert!(message.ends_with(&end), "{message}");
     }
 
     /// Two objects a long way apart on two axes, to be united: with no mirror

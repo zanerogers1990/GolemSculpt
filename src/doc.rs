@@ -35,6 +35,8 @@ pub struct Options {
     pub remesh_resolution: f32,
     /// Quads a quad remesh aims for.
     pub quad_target: f32,
+    /// Triangles Decimate brings the selected object down to.
+    pub decimate_target: f32,
     /// Triangle count for new shapes.
     pub new_shape_tris: f32,
     /// Tab: hide every panel.
@@ -70,6 +72,7 @@ impl Default for Options {
             ui_scale: 1.0,
             remesh_resolution: 128.0,
             quad_target: 5000.0,
+            decimate_target: 200_000.0,
             new_shape_tris: 200_000.0,
             clean_view: false,
             folded: [false; 2],
@@ -234,6 +237,16 @@ pub enum Action {
     CheckForPrinting,
     Remesh,
     QuadRemesh,
+    /// The Decimate button: bring the active object down to the Target
+    /// Triangles of the Remesh card, asking first if its symmetry would no
+    /// longer be exact (see app/decimate.rs).
+    Decimate,
+    /// The answer "Decimate Anyway" to that question: straight to the work.
+    DecimateAnyway,
+    /// Cut the active object at one of its own planes and rebuild the other
+    /// side as the mirror image of the side kept: the positive side when
+    /// `from_positive` (see app/cut_mirror.rs).
+    CutAndMirror { axis: sculpt_symmetry::Axis, from_positive: bool },
     Mask(MaskOp),
     /// Hide these triangles of the active object, or with `hide` false show
     /// them again: what a box or lasso hide gesture asks for.
@@ -256,6 +269,9 @@ pub enum Action {
     Tool(Tool),
     /// Put the active object's turn and size back to none.
     ResetTransform,
+    /// Move the active object's centre to the middle of its mesh, leaving
+    /// the object where it is (see app/origin.rs).
+    SetOriginToMesh,
     /// Turn the SSphere rig's skin into a new object.
     MakeSkin,
     /// A command of the Mirror section of the Objects card: live copies of the

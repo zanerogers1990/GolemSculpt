@@ -35,6 +35,7 @@ pub trait Tool {
     fn save_object(&self, object: ObjectId) -> Option<Saved> { None }   // what the file keeps for an object
     fn load_objects(&mut self, objects: Vec<(ObjectId, Saved)>, arrival: Arrival) {}   // a file's objects came in
     fn scaffold_at_risk(&self, loss: Loss) -> Option<String> { None }   // work in no file that closing or an Open would lose
+    fn origin_moved(&mut self, object: ObjectId, from: Placement, to: Placement) {}   // Set Origin to Mesh moved an object's centre under you
     fn demo(&mut self, cx: &mut Ctx, what: &str) {}           // --demo-tool
 }
 ```

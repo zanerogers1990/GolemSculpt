@@ -45,7 +45,7 @@ impl Cure {
 }
 
 /// 1234567 as "1,234,567".
-fn grouped(n: usize) -> String {
+pub fn grouped(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, digit) in digits.chars().enumerate() {

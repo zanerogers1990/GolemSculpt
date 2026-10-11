@@ -407,8 +407,9 @@ impl Running {
     /// to show the question that asks, `local` turns Local View on for the
     /// three, `subtract`, `union` and `intersect` show that boolean of the
     /// cube and the sphere, `apart`, `aside` and `behind` ask for a union and
-    /// a remesh that will not be started (`demo_too_big`), and `play` runs
-    /// `selection_play` first.
+    /// a remesh that will not be started (`demo_too_big`), `origin` moves the
+    /// centre of a piece that is far from it (`origin_demo`, app/origin.rs),
+    /// and `play` runs `selection_play` first.
     pub(super) fn demo_select(&mut self) {
         let extra = std::env::var("SCULPT_DEMO_SELECT").unwrap_or_default();
         if extra == "play" {
@@ -433,6 +434,7 @@ impl Running {
             "union" => self.demo_boolean(BooleanOp::Union),
             "intersect" => self.demo_boolean(BooleanOp::Intersect),
             "apart" | "aside" | "behind" => self.demo_too_big(&extra),
+            "origin" => self.origin_demo(),
             _ => {}
         }
     }
@@ -925,7 +927,8 @@ mod tests {
             let said = boolean(&mut scene, &mut mesh, &mut history, op, &mirrored, Others::Hidden).unwrap_err();
             let start = "Nothing changed. \"Cube\" is about 40 times its own size away from its X mirror plane. ";
             assert!(said.starts_with(start), "{op:?}: {said}");
-            assert!(said.contains(" Turn the X mirror off for this, or lower the resolution to "), "{op:?}: {said}");
+            assert!(said.contains(" Turn the X mirror off for this, lower the resolution to "), "{op:?}: {said}");
+            assert!(said.ends_with(" or less, or move its centre onto it with Set Origin to Mesh."), "{op:?}: {said}");
             assert_eq!((mesh.uid, scene.state()), (uid, before.clone()));
             assert!(!history.can_undo());
         }

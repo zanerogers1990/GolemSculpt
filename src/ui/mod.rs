@@ -417,7 +417,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         });
     });
 
-    symmetry::card(ui, doc);
+    symmetry::card(ui, doc, actions);
 
     let summary = fmt_count(doc.mesh.triangle_count());
     theme::category(ui, "Remesh", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {
@@ -458,6 +458,9 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         {
             actions.push(Action::QuadRemesh);
         }
+
+        ui.add_space(6.0);
+        decimate(ui, doc, tips, actions);
     });
 
     theme::category(ui, "Interface Size", Color32::from_rgb(242, 158, 89), &format!("{:.0}%", doc.opts.ui_scale * 100.0), false, |ui| {
@@ -524,6 +527,54 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             );
         }
     });
+}
+
+/// Two significant figures: 5,200 rather than 5,187.
+fn rounded_to_two_figures(value: f32) -> f32 {
+    if !(value > 0.0 && value.is_finite()) {
+        return 0.0;
+    }
+    let step = 10f32.powf(value.log10().floor() - 1.0);
+    (value / step).round() * step
+}
+
+/// Decimate, at the foot of the Remesh card: the count to come down to, a
+/// row of fractions of what the object has now that set it, and the button.
+fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Action>) {
+    theme::hint(ui, "Decimate takes triangles off and keeps the shape, for a game model that has to fit a budget (200k to 500k triangles, say).");
+    let range = crate::decimate::TARGET_RANGE;
+    let now = doc.mesh.triangle_count();
+    let mut log = doc.opts.decimate_target.clamp(*range.start(), *range.end()).log2();
+    let percent = |target: f32| if now > 0 { format!(" ({:.0}%)", (target / now as f32 * 100.0).min(999.0)) } else { String::new() };
+    let slider = theme::slider(ui, "Target Triangles", &mut log, range.start().log2()..=range.end().log2(), |v| {
+        format!("{}{}", fmt_count(v.exp2() as usize), percent(v.exp2()))
+    });
+    let help = "How many triangles Decimate brings the selected object down to. The number in brackets is what share of the triangles it has now.";
+    if tip(slider, tips, help).changed() {
+        doc.opts.decimate_target = rounded_to_two_figures(log.exp2()).clamp(*range.start(), *range.end());
+    }
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 4, 4.0);
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for share in [0.75f32, 0.5, 0.25, 0.1] {
+            let label = format!("{:.0}%", share * 100.0);
+            let help = format!("Sets Target Triangles to {label} of the triangles the selected object has now.");
+            if tip(theme::button(ui, w, &label, ButtonStyle::default()), tips, &help).clicked() {
+                doc.opts.decimate_target = rounded_to_two_figures(now as f32 * share).clamp(*range.start(), *range.end());
+            }
+        }
+    });
+    let target = doc.opts.decimate_target.round() as usize;
+    ui.add_enabled_ui(now > target, |ui| {
+        let style = ButtonStyle { active: Some(ACCENT), ..Default::default() };
+        let help = "Brings the selected object down to about Target Triangles, taking them from where the surface is flat and keeping them where it bends. A closed model stays closed. Fully masked surface is left as it is; hidden parts are decimated too and stay hidden. It works in the background on a large model, with its progress and a Cancel at the bottom of the view. It asks first if the object has symmetry on, which it does not keep exactly. Undo (Z) brings the triangles back.";
+        if tip(theme::button(ui, ui.available_width(), "Decimate", style), tips, help).clicked() {
+            actions.push(Action::Decimate);
+        }
+    });
+    if now > 0 && now <= target {
+        theme::hint(ui, "The selected object is at or under the target already.");
+    }
 }
 
 fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {

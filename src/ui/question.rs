@@ -50,6 +50,10 @@ pub enum Question {
     /// Export STL for Printing was pressed on an object that is not a closed
     /// surface. `text` is the question, with what is wrong (`printable.rs`).
     ExportNotClosed { object: u64, text: String },
+    /// Decimate was pressed on an object with a Local symmetry on, which it
+    /// would no longer be exact about. `text` is the question
+    /// (`app/decimate.rs`).
+    DecimateSymmetric { object: u64, text: String },
 }
 
 /// One answer: its button, and what it sets in motion. `None` only takes the
@@ -220,7 +224,7 @@ impl Question {
                 recover_words(when.as_deref(), what, *stopped, earlier.as_deref(), *others)
             }
             // It was asked of the selected object, and is about no other.
-            Question::ExportNotClosed { object, text } => {
+            Question::ExportNotClosed { object, text } | Question::DecimateSymmetric { object, text } => {
                 (doc.scene.active_id() == *object).then(|| text.clone())?
             }
         })
@@ -235,6 +239,7 @@ impl Question {
                 !lost.is_empty()
             }
             Question::Delete(_) | Question::Recover { .. } | Question::ExportNotClosed { .. } => false,
+            Question::DecimateSymmetric { .. } => false,
         }
     }
 
@@ -302,6 +307,9 @@ impl Question {
             }
             Question::ExportNotClosed { .. } => {
                 vec![Choice::new("Export Anyway", lossy, Action::ExportStlAnyway), cancel]
+            }
+            Question::DecimateSymmetric { .. } => {
+                vec![Choice::new("Decimate Anyway", lossy, Action::DecimateAnyway), cancel]
             }
         }
     }

@@ -770,3 +770,72 @@ fn the_mirror_and_pose_demos_set_up_what_they_say() {
     assert!(bench.doc.undo_steps() >= 3, "the placing, a move and a turn");
     assert!(tool.picked_copy().is_some() && !tool.is_posing());
 }
+
+// ---- the object's centre moved onto its mesh ---------------------------------------------------
+
+/// Set Origin to Mesh, as the app does it: the object's position goes one way
+/// (a step of the scene's history) and its mesh the other, by `shift` in the
+/// mesh's own space, so the object stays where it is; then the tool is told.
+/// Returns how far the position went.
+fn move_origin(bench: &mut Bench, tool: &mut ArrayTool, object: ObjectId, shift: Vec3) -> Vec3 {
+    let from = placement(bench, object);
+    let to = Placement { position: from.position + from.rotation * (from.scale * shift), ..from };
+    bench.call(|cx| cx.commit("Set Origin to Mesh", vec![Command::Place { object, placement: to }]));
+    tool.origin_moved(object, from, to);
+    to.position - from.position
+}
+
+#[test]
+fn moving_the_objects_centre_onto_its_mesh_leaves_every_copy_where_it_is_and_follows_undo() {
+    // A ring whose copies turn as they go round and shrink toward the last, on an object that
+    // is itself turned and stretched, and mirrored: every kind of copy there is.
+    let (mut bench, mut tool, object) = ring();
+    let stood = Placement { rotation: Quat::from_rotation_z(0.6), scale: Vec3::new(1.0, 0.5, 2.0), ..placement(&bench, object) };
+    bench.call(|cx| cx.commit("Place", vec![Command::Place { object, placement: stood }]));
+    bench.call(|cx| tool.edit(cx, "Array End Size", false, |a| a.settings.end_scale = 0.4));
+    bench.mirror(object, 1);
+    let before = copies(&bench.frame(&mut tool), object);
+    assert_eq!(before.len(), 14, "seven copies and their reflections");
+    let was = tool.state(object);
+    let scene_steps = bench.doc.undo_steps();
+
+    // The mesh's middle is here in its own space, say: every vertex goes by `-shift`.
+    let shift = Vec3::new(0.3, -0.7, 0.45);
+    let by = move_origin(&mut bench, &mut tool, object, shift);
+    assert_eq!(bench.doc.undo_steps(), scene_steps + 1, "one step of the scene's");
+    let after = copies(&bench.frame(&mut tool), object);
+    assert_eq!(after.len(), before.len());
+    // A point of the model is at `p - shift` in the mesh now: each copy still shows it where it did.
+    for (i, (now, then)) in after.iter().zip(&before).enumerate() {
+        for p in [Vec3::ZERO, Vec3::new(0.2, 0.1, -0.2), Vec3::new(-0.15, 0.2, 0.05)] {
+            near(now.transform_point3(p - shift), then.transform_point3(p), &format!("copy {i}"));
+        }
+    }
+    // The path is where it was in the world: the points went the other way.
+    let state = tool.state(object);
+    for (now, then) in state.points.iter().zip(&was.points) {
+        near(*now, *then - by, "a point of the path");
+    }
+    assert_eq!(state.settings, was.settings);
+
+    // The scene's own Z, with the tool away: the object goes back, and the array with it, exactly.
+    bench.leave(&mut tool);
+    bench.env.active = false;
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    assert_eq!(placement(&bench, object), stood);
+    assert_eq!(tool.state(object), was, "the array is as it was, to the bit");
+    assert_eq!(copies(&bench.frame(&mut tool), object), before);
+    // And Shift + Z moves the centre again.
+    assert!(bench.redo_scene());
+    bench.frame(&mut tool);
+    assert_eq!(tool.state(object), state);
+    assert_eq!(copies(&bench.frame(&mut tool), object), after);
+
+    // An object with no array is nothing to the tool.
+    let plain = bench.add("Other", cube(0.2));
+    let steps = (tool.can_undo(false), tool.state(plain));
+    move_origin(&mut bench, &mut tool, plain, shift);
+    assert!(tool.state(plain).is_none() && steps.1.is_none());
+    assert_eq!(tool.can_undo(false), steps.0);
+}

@@ -367,6 +367,10 @@ impl Tool for ArrayTool {
         }
     }
 
+    fn origin_moved(&mut self, object: ObjectId, from: Placement, to: Placement) {
+        ArrayTool::origin_moved(self, object, from, to);
+    }
+
     fn demo(&mut self, cx: &mut Ctx, what: &str) {
         crate::demo::demo(self, cx, what);
     }

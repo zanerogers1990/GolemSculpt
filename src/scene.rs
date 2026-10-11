@@ -23,10 +23,12 @@ use crate::mesh::bvh::Aabb;
 use crate::mesh::{Mesh, Polys, StrokeDelta};
 
 mod mirror;
+mod origin;
 mod places;
 mod symmetry;
 
 pub use mirror::{MirrorCommand, saved_mirror};
+pub use origin::OriginMoved;
 pub use places::TOOL_COPY;
 pub use symmetry::{Space, Symmetry, saved_symmetry};
 
@@ -156,13 +158,16 @@ pub struct Scene {
 /// left. (Building a mesh reorders its vertices and triangles, so the hidden
 /// flags and the quads' corners are carried over through the same renumbering.)
 fn duplicate(mesh: &Mesh) -> Mesh {
+    duplicate_placed(mesh, mesh.positions.clone()).0
+}
+
+/// [`duplicate`] with its vertices at `positions` instead (one for each of
+/// the mesh's own, in the same order), also returning where each of the
+/// mesh's vertices went in the copy.
+fn duplicate_placed(mesh: &Mesh, positions: Vec<Vec3>) -> (Mesh, Vec<u32>) {
     let hidden = mesh.hidden_triangles().unwrap_or(&[]);
-    let (mut copy, moved) = Mesh::new_mapped_with_hidden(
-        mesh.positions.clone(),
-        mesh.indices.clone(),
-        Some(mesh.mask.clone()),
-        hidden,
-    );
+    let (mut copy, moved) =
+        Mesh::new_mapped_with_hidden(positions, mesh.indices.clone(), Some(mesh.mask.clone()), hidden);
     if let Some(polys) = &mesh.polys {
         let corners: Vec<u32> =
             polys.indices.iter().map(|&i| moved.get(i as usize).copied().unwrap_or(u32::MAX)).collect();
@@ -170,7 +175,7 @@ fn duplicate(mesh: &Mesh) -> Mesh {
             copy.polys = Some(Polys { start: polys.start.clone(), indices: corners });
         }
     }
-    copy
+    (copy, moved)
 }
 
 impl Scene {

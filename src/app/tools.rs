@@ -178,6 +178,17 @@ impl Tools {
         Some((index, target))
     }
 
+    /// The centre of object `id` was moved onto its mesh (Set Origin to
+    /// Mesh, app/origin.rs): tells every tool, so that one which keeps
+    /// something measured from the object's position (the Array tool's
+    /// path) puts it right. `from` and `to` are where the object stood and
+    /// stands; nothing moved in the world.
+    pub fn origin_moved(&mut self, id: u64, from: kit::Placement, to: kit::Placement) {
+        for tool in self.slots.iter_mut().flatten() {
+            tool.origin_moved(ObjectId(id), from, to);
+        }
+    }
+
     /// The wheel tiles of the tool that is up.
     pub fn radial_items(&self, tool: Tool) -> Vec<kit::RadialItem> {
         let slot = self.active(tool).and_then(|i| self.slots.get(i)?.as_ref());
