@@ -631,7 +631,9 @@ mod tests {
             };
             assert_eq!(tried.unwrap_err(), CANNOT_TRIANGULATE);
         }
-        assert!(started.elapsed().as_secs_f32() < 4.0, "took {:?}", started.elapsed());
+        // A guard against the old minutes-long search, not a measure of speed: with few cores to
+        // itself an unoptimised build takes 4 s or so. `timing_of_a_doomed_bridge_between_two_long_rims` times it.
+        assert!(started.elapsed().as_secs_f32() < 60.0, "took {:?}", started.elapsed());
 
         // The same mistake small enough to list is listed, and says the same.
         let mut points = Vec::new();
