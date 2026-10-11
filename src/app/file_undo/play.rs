@@ -64,8 +64,9 @@ struct Files {
 }
 
 impl Running {
-    /// The fingerprint of the scene on screen.
-    fn print_now(&self) -> u64 {
+    /// The fingerprint of the scene on screen. (This and the three below
+    /// serve the check of New Scene too: app/new_scene/play.rs.)
+    pub(in crate::app) fn print_now(&self) -> u64 {
         self.scene_for_file().map_or(0, |(meshes, objects, _)| recovery::fingerprint(&meshes, &objects))
     }
 
@@ -78,17 +79,17 @@ impl Running {
 
     /// Save (Ctrl + S), short of the box it puts up for a scene with no file
     /// of its own: gives back the file it wrote, or `None` where it would ask.
-    fn save_unasked(&mut self) -> Option<PathBuf> {
+    pub(in crate::app) fn save_unasked(&mut self) -> Option<PathBuf> {
         let path = self.save_target(false)?;
         self.save_to(path.clone()).then_some(path)
     }
 
-    fn is_file(&self, path: &Path) -> bool {
+    pub(in crate::app) fn is_file(&self, path: &Path) -> bool {
         self.doc.path.as_deref() == Some(path)
     }
 
     /// Something done to the scene: a cone added.
-    fn edit(&mut self) {
+    pub(in crate::app) fn edit(&mut self) {
         self.act(Action::New(Primitive::Cone));
     }
 

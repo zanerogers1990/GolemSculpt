@@ -340,6 +340,39 @@ impl TubeTool {
 
     // ---- building ------------------------------------------------------------
 
+    /// Takes away every tube `gone` picks out, ending any gesture first.
+    fn drop_tubes(&mut self, gone: impl Fn(&LiveTube) -> bool) {
+        if !self.tubes.iter().any(&gone) {
+            return;
+        }
+        self.cancel_gesture();
+        let mut index = 0;
+        while index < self.tubes.len() {
+            if gone(&self.tubes[index]) {
+                self.remove_tube_at(index);
+            } else {
+                index += 1;
+            }
+        }
+        self.touch();
+    }
+
+    /// Another scene has taken this one's place (an Open, a New Scene). Every
+    /// object a tube was drawn on has gone, and those tubes go with them, now,
+    /// whether or not the tool is up. `refresh` finds them gone on the tool's
+    /// next frame, but only while it is up: put away, no frame looks, and the
+    /// tubes would outlive their objects, named by the question about closing
+    /// a scene they are nowhere in, and back with Undo of the Open on the
+    /// days the tool happened to be away. What the question before the Open
+    /// said (`unmerged`) has to be what happens. The tool's own undo steps
+    /// are of those tubes, so they end here and the next Z is the scene's. A
+    /// tube drawn in mid-air stands in the world and stays.
+    pub(crate) fn scene_replaced(&mut self) {
+        self.cancel_gesture();
+        self.drop_tubes(|tube| tube.state.anchor.is_some());
+        self.clear_history();
+    }
+
     /// Brings every tube's copies (and, with `previews`, its preview mesh)
     /// up to date with its points, its settings, where its anchor stands
     /// and the symmetry its anchor is sculpted under, which is each object's
@@ -348,19 +381,7 @@ impl TubeTool {
     /// nowhere to live and goes with it.
     pub(crate) fn refresh(&mut self, cx: &Ctx, previews: bool) {
         let scene = cx.scene();
-        let gone = |tube: &LiveTube| tube.state.anchor.is_some_and(|a| !scene.exists(a));
-        if self.tubes.iter().any(&gone) {
-            self.cancel_gesture();
-            let mut index = 0;
-            while index < self.tubes.len() {
-                if gone(&self.tubes[index]) {
-                    self.remove_tube_at(index);
-                } else {
-                    index += 1;
-                }
-            }
-            self.touch();
-        }
+        self.drop_tubes(|tube| tube.state.anchor.is_some_and(|a| !scene.exists(a)));
         let frame_of = |tube: &LiveTube| {
             let info = tube.state.anchor.and_then(|a| scene.info(a));
             info.map_or(Frame::WORLD, |info| Frame { placement: info.placement })

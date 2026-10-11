@@ -53,7 +53,7 @@ mod tool;
 pub mod types;
 
 use glam::{Vec2, Vec3};
-use sculpt_toolkit::{Button, Ctx, Draw, Event, Info, Key, Loss, RadialChange, Tool};
+use sculpt_toolkit::{Arrival, Button, Ctx, Draw, Event, Info, Key, Loss, ObjectId, RadialChange, Saved, Tool};
 
 pub use field::TubeField;
 pub use live::{Symmetry, TubeState};
@@ -138,6 +138,15 @@ impl Tool for TubeTool {
             0 => None,
             1 => Some("1 unmerged tube (Merge or Keep Separate first)".to_owned()),
             count => Some(format!("{count} unmerged tubes (Merge or Keep Separate first)")),
+        }
+    }
+
+    /// A file keeps nothing of this tool's. What matters here is how the
+    /// objects came: a scene put in place of this one takes the tubes drawn
+    /// on its objects with it (`TubeTool::scene_replaced`).
+    fn load_objects(&mut self, _objects: Vec<(ObjectId, Saved)>, arrival: Arrival) {
+        if arrival == Arrival::Replaced {
+            self.scene_replaced();
         }
     }
 

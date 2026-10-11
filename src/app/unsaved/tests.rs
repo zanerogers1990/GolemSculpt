@@ -359,6 +359,32 @@ fn a_file_chosen_over_work_that_stands_on_the_scene_asks_even_of_an_untouched_sc
     assert_eq!(asked, Some(Question::Open { path: file, unsaved: false, lost: Vec::new() }));
 }
 
+/// New Scene asks exactly when something would be lost: unsaved changes, or
+/// work in no file that stands on the scene's objects. Otherwise the scene
+/// it replaces is one Undo away, and it is simply made.
+#[test]
+fn a_new_scene_asks_only_when_there_is_unsaved_work_or_a_scaffold_on_the_scene() {
+    assert_eq!(new_scene_question(false, Vec::new()), None, "saved, and nothing stands on it: no question");
+    let unsaved = new_scene_question(true, Vec::new());
+    assert_eq!(unsaved, Some(Question::NewScene { unsaved: true, lost: Vec::new() }));
+    let tubes = vec!["2 unmerged tubes (Merge or Keep Separate first)".to_owned()];
+    // Tubes on a saved scene: nothing to save, and still something to lose.
+    let scaffold = new_scene_question(false, tubes.clone());
+    assert_eq!(scaffold, Some(Question::NewScene { unsaved: false, lost: tubes.clone() }));
+    assert_eq!(new_scene_question(true, tubes.clone()), Some(Question::NewScene { unsaved: true, lost: tubes }));
+}
+
+/// What it names is what a scene put in place of this one costs, as for an
+/// Open: not the spheres, which stand in the world and are still there.
+#[test]
+fn a_new_scene_does_not_ask_about_spheres_which_it_leaves_standing() {
+    let mut doc = doc();
+    build_rig(&mut doc);
+    assert_eq!(doc.scaffolds_at_risk(Loss::Closing).len(), 1, "closing would lose the rig");
+    let lost = doc.scaffolds_at_risk(Loss::SceneReplaced);
+    assert_eq!(new_scene_question(false, lost), None, "a new scene would not, and does not ask");
+}
+
 /// What the fingerprint costs, since it is worked out between every batch of events:
 /// `cargo test --release timing_of_the_kept_fingerprint -- --ignored --nocapture`.
 #[test]

@@ -1,11 +1,13 @@
 //! The scene's file through Undo and Redo.
 //!
-//! Opening a file in place of the scene is one undo step, and so is restoring
-//! a recovery copy. Either changes which file the scene belongs to, and Undo
-//! of it brings the objects from before back. Their file has to come back
-//! with them, and whether they had been saved: if the name of the opened file
-//! stayed behind, Save after Undo would write the old scene over the file
-//! that was just opened.
+//! Opening a file in place of the scene is one undo step, and so are
+//! restoring a recovery copy and starting a new scene. Each changes which
+//! file the scene belongs to, and Undo of it brings the objects from before
+//! back. Their file has to come back with them, and whether they had been
+//! saved: if the name of the opened file stayed behind, Save after Undo would
+//! write the old scene over the file that was just opened; and if the old
+//! scene's file name stayed with a new scene, Save would write an empty scene
+//! over the work it replaced.
 //!
 //! So such a step keeps the file of the scene on its other side
 //! (`history::FileState`), and each time Undo or Redo crosses it the two
@@ -23,7 +25,10 @@
 //! (`history::Restored`). A save retires the copies of the scene it saves and
 //! no others, so Undo of a restore must leave that note behind with the
 //! restored scene: the scene from before it is not the crashed work, and
-//! saving or closing it settles nothing about the copies.
+//! saving or closing it settles nothing about the copies. Likewise a file
+//! opened, or a new scene started, over a restored scene that has not been
+//! saved: the note goes aside with the restored scene and comes back with it
+//! on Undo, and saving the scene that took its place retires nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -62,14 +67,18 @@ impl File<'_> {
         FileState { path: self.path.clone(), saved: !self.unsaved(now), restored: self.restored.clone() }
     }
 
-    /// Another file's scene has taken the scene's place. `document` is that
-    /// file if the scene now belongs to it (an Open): the scene is what it
-    /// holds. With none (a recovery copy) the scene has no file and counts
-    /// as unsaved; `restored` then says which copy it was.
-    pub(super) fn became(&mut self, document: Option<PathBuf>, restored: Option<Restored>, now: Mark) {
-        *self.clean = document.is_some().then_some(now);
-        *self.path = document;
-        *self.restored = restored;
+    /// Another scene has taken the scene's place, and `file` is what it
+    /// brings: the file it was opened from, which holds it (an Open); no
+    /// file, nothing saved, and a note of the recovery copy it came from (a
+    /// restored copy, which is unsaved work until the user says where it
+    /// goes); or no file and nothing to save (a new scene: see
+    /// [`FileState::new_scene`]). The scene is that copy's only if `file`
+    /// says so: the note of the scene it replaced went into the step with
+    /// that scene's file (`state`), and comes back with it on Undo.
+    pub(super) fn became(&mut self, file: FileState, now: Mark) {
+        *self.clean = file.saved.then_some(now);
+        *self.path = file.path;
+        *self.restored = file.restored;
     }
 
     /// Putting another scene in place of this one broke off half way (a

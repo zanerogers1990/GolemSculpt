@@ -141,7 +141,7 @@ impl GizmoTarget {
 pub enum Loss {
     /// The app is closing. Everything that is in no file goes with it.
     Closing,
-    /// Another scene is about to take this one's place (Open). What stands on
+    /// Another scene is about to take this one's place (Open, New Scene). What stands on
     /// this scene's objects goes with them; what stands by itself (a ruler in
     /// the world, a profile beside the model) is still there afterwards.
     SceneReplaced,

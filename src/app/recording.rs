@@ -28,6 +28,7 @@ use winit::keyboard::KeyCode;
 use super::{Drag, Running};
 use crate::camera::{Camera, View};
 use crate::capture::{self, LoopFormat, LoopSink, Target};
+use crate::doc::Action;
 use crate::render::DrawItem;
 use crate::render::spheres::SkinLook;
 use crate::sculpt::{Brush, PointerSample};
@@ -950,6 +951,18 @@ impl Running {
                 // to follow.
                 if index == 1 && step == SCRIPT_STROKE_FRAMES + 40 {
                     self.doc.camera.orbit(Vec2::new(-140.0, 30.0), None);
+                }
+                // `SCULPT_DEMO_CAMERA=exit`: the File card's Exit is pressed
+                // in that rest, with the recording still running, and its
+                // question answered Exit Without Saving. The video must come
+                // out finished, as it does when the window is closed.
+                let exit = std::env::var("SCULPT_DEMO_CAMERA").is_ok_and(|v| v == "exit");
+                if exit && index == 1 && step == SCRIPT_STROKE_FRAMES + 20 {
+                    self.act(Action::Exit);
+                    println!("timelapse: Exit pressed mid-recording; it asks {:?}", self.ui.graph.question());
+                    self.ui.graph.answer(false);
+                    self.act(Action::Quit { save: false });
+                    println!("timelapse: Exit Without Saving; the app may close: {}", self.quitting());
                 }
                 return;
             }

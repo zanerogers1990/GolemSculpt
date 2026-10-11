@@ -1,5 +1,6 @@
-//! What closing the app, or opening a file over the scene, would lose. The
-//! rest of the app asks two things, and these are the two functions to call:
+//! What closing the app, or putting another scene in place of this one (an
+//! Open, a New Scene), would lose. The rest of the app asks two things, and
+//! these are the two functions to call:
 //!
 //! - **Is anything unsaved?** [`Running::unsaved`] (app/files.rs): the scene
 //!   differs from what its file holds. Save cures it.
@@ -10,8 +11,9 @@
 //!   Create Mesh).
 //!
 //! Anything that closes the app or replaces the scene on the user's behalf
-//! should refuse, or ask, when either has an answer; `closing_question` and
-//! `opening_question` are how the window's own close button and Open do.
+//! should refuse, or ask, when either has an answer; `closing_question`,
+//! `opening_question` and `new_scene_question` are how the window's own close
+//! button, Open and New Scene do.
 //!
 //! **Unsaved** is told by the scene's [`Mark`]. Most of what a file keeps
 //! changes as a step of the undo history, and the history's own count tells
@@ -139,6 +141,14 @@ pub(super) fn opening_question(path: PathBuf, untouched: bool, unsaved: bool, lo
     (!untouched || !lost.is_empty()).then_some(Question::Open { path, unsaved, lost })
 }
 
+/// The question to ask before a new scene takes this one's place, or `None`
+/// when it simply can: nothing is unsaved and nothing stands on the scene
+/// that would be lost (`lost` is `Loss::SceneReplaced`, as for an Open), so
+/// all that is put aside is one Undo away, file name and all.
+pub(super) fn new_scene_question(unsaved: bool, lost: Vec<String>) -> Option<Question> {
+    (unsaved || !lost.is_empty()).then_some(Question::NewScene { unsaved, lost })
+}
+
 impl Doc {
     /// The scene's mark now (see [`Running::history_mark`]).
     pub(super) fn mark(&self) -> Mark {
@@ -150,8 +160,8 @@ impl Doc {
     /// Empty when there is none.
     pub(crate) fn scaffolds_at_risk(&self, loss: Loss) -> Vec<String> {
         let mut lost = Vec::new();
-        // A new scene leaves the spheres standing where they are; only
-        // closing loses them.
+        // Another scene (an Open, a New Scene) leaves the spheres standing
+        // where they are; only closing loses them.
         if loss == Loss::Closing {
             let spheres = &self.spheres;
             let skin_in_scene = spheres.skin_object.is_some_and(|id| self.scene.get(id).is_some());

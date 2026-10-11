@@ -60,7 +60,7 @@ use sculpt_toolkit::{Job, JobCtx};
 use super::files::Mark;
 use super::{Drag, Running};
 use crate::doc::{Action, Recover};
-use crate::history::Restored;
+use crate::history::{FileState, Restored};
 use crate::io;
 use crate::prefs::{self, Home};
 use crate::recovery::{self, About, Faults, Kept, Left, Outcome, Schedule, Store};
@@ -398,8 +398,8 @@ impl Running {
             Ok(Err(e)) => return Tried::Unreadable(e),
             Err(_) => return Tried::Unreadable(format!("{} could not be opened.", kept.file.display())),
         };
-        let note = Some(State::note(kept));
-        let placed = catch_unwind(AssertUnwindSafe(|| self.put_in_place(saved, None, note)));
+        let file = FileState::restored(State::note(kept));
+        let placed = catch_unwind(AssertUnwindSafe(|| self.put_in_place(saved, file)));
         match placed {
             Ok((objects, _)) => {
                 let mark = self.history_mark();
@@ -534,7 +534,7 @@ impl Running {
     /// other way over unsaved work, they stay, and the next start offers
     /// them.
     pub(super) fn recovery_exit(&mut self) {
-        let settled = self.quitting() || !self.unsaved();
+        let settled = self.close_settled();
         self.recovery.closed(settled);
     }
 

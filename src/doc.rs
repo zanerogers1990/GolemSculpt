@@ -197,6 +197,12 @@ pub enum Action {
     InstanceObject,
     /// Give the active instance its own mesh.
     MakeUnique,
+    /// The New Scene button, or Ctrl + N: a fresh scene in place of this one,
+    /// asking first if that would cost work (see app/new_scene.rs).
+    NewScene,
+    /// The answer to that question: go ahead, saving the scene first if
+    /// `save` says so.
+    NewSceneAs { save: bool },
     Open,
     Save,
     SaveAs,
@@ -205,7 +211,11 @@ pub enum Action {
     OpenRecent(PathBuf),
     /// Bring a chosen `.sclp` file in, the way its question was answered.
     OpenAs(PathBuf, OpenHow),
-    /// Close the app, saving the scene first if `save` says so.
+    /// The Exit button: what the window's close button does, which asks
+    /// first if closing would cost work.
+    Exit,
+    /// The answer to that question: close the app, saving the scene first
+    /// if `save` says so.
     Quit { save: bool },
     /// The answer to the question about a copy a crash left behind.
     Recover(Recover),

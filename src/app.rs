@@ -17,11 +17,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-use crate::camera::{self, Camera, View};
+use crate::camera::{self, View};
 use crate::doc::{Action, Doc, MaskOp, Options, Stats, Tool};
 use crate::history::Next;
 use crate::mesh::Mesh;
-use crate::mesh::primitives::{self, Primitive};
+use crate::mesh::primitives::Primitive;
 use crate::printable::Cure;
 use crate::render::flash;
 use crate::render::{DrawItem, Globals, Gpu, Renderer};
@@ -41,6 +41,7 @@ mod focus;
 mod live_copies;
 mod masked;
 mod mirror_copies;
+mod new_scene;
 mod pose;
 mod print_check;
 mod recovery;
@@ -410,7 +411,7 @@ impl Running {
         opts.matcap = ui.assets.default_matcap_index();
         let renderer = Renderer::new(&gpu, &ui::assets::default_matcap());
 
-        let mut mesh = primitives::build(Primitive::Sphere, opts.new_shape_tris as usize, 0.5);
+        let mut mesh = new_scene::starting_mesh(opts.new_shape_tris);
         let mut scene = Scene::new(Primitive::Sphere.name());
         let mut path = None;
         // The look, view and mirror settings of a file opened here; put in
@@ -441,13 +442,10 @@ impl Running {
                 }
             }
         }
-        let mut camera = Camera::default();
         let size = window.inner_size();
         let aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
         let bounds = scene.bounds(&mesh);
-        camera.frame(bounds, aspect, false);
-        camera.yaw = 25.0;
-        camera.pitch = 15.0;
+        let camera = new_scene::starting_view(bounds, aspect);
         let scene_size = bounds.size().max_element().max(1e-4);
         let view = camera.view(Vec2::ZERO, Vec2::new(size.width as f32, size.height as f32), camera.distance, scene_size);
         let stats = Stats { adapter: gpu.adapter_name.clone(), ..Default::default() };
@@ -917,6 +915,12 @@ impl Running {
             KeyCode::KeyS if ctrl && shift => self.act(Action::SaveAs),
             KeyCode::KeyS if ctrl => self.act(Action::Save),
             KeyCode::KeyO if ctrl => self.act(Action::Open),
+            // Not in the middle of a drag: it would take the scene from under it.
+            KeyCode::KeyN if ctrl => {
+                if idle {
+                    self.act(Action::NewScene);
+                }
+            }
             KeyCode::Equal if ctrl => self.doc.opts.ui_scale = (self.doc.opts.ui_scale + 0.1).min(3.0),
             KeyCode::Minus if ctrl => self.doc.opts.ui_scale = (self.doc.opts.ui_scale - 0.1).max(0.75),
             KeyCode::KeyS if idle => {
@@ -1283,6 +1287,9 @@ impl Running {
             Action::MakeSkin => self.spheres_make_skin(),
             Action::Mirror(command) => self.mirror_command(command),
             Action::NewRig => self.spheres_new_rig(),
+            // A new scene is in app/new_scene.rs.
+            Action::NewScene => self.new_scene_action(),
+            Action::NewSceneAs { save } => self.new_scene_as(save),
             // Saving, opening and closing are in app/files.rs.
             Action::Open => self.open_action(),
             Action::Import => self.import_action(),
@@ -1291,6 +1298,7 @@ impl Running {
             }
             Action::OpenRecent(path) => self.open_recent(path),
             Action::OpenAs(path, how) => self.open_as(path, how),
+            Action::Exit => self.exit_action(),
             Action::Quit { save } => self.quit(save),
             Action::Recover(answer) => self.recover(answer),
             Action::ExportObj => {

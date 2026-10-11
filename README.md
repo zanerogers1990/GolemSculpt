@@ -49,6 +49,7 @@ pen last had (a mouse has no pressure and always sculpts at full strength).
 | J | Keys tool on / off |
 | Z, Shift + Z (also Ctrl + Z, Ctrl + Y) | Undo, redo |
 | Ctrl + S, Ctrl + Shift + S, Ctrl + O | Save, save as, open |
+| Ctrl + N | New scene (asks first if anything would be lost) |
 | Tab | Clean view: nothing on screen but the model (Tab or Esc brings the panels back) |
 | O | Spin the view round the model (turntable) |
 | F11 | Fullscreen |
@@ -806,8 +807,9 @@ pair; after that they can be moved apart and the joints stay on them.
   its objects added to it. Either is one undo step (undoing an Open brings back
   the scene as it was, live arrays included; see Array). If the scene has changes
   that are not saved it says so, and offers to save first. So does closing the
-  app (the window's close button, Alt + F4 or Ctrl + Q); with nothing to lose
-  it just closes. "Unsaved" means the scene is not what its file holds:
+  app (the File card's Exit, the window's close button, Alt + F4 or Ctrl + Q);
+  with nothing to lose it just closes. "Unsaved" means the scene is not what
+  its file holds:
   something was sculpted, added, moved or undone since the last save or open,
   or something was changed that is saved without being an undo step: an
   object's symmetry (the Symmetry card, the X key), what the hide keys and
@@ -816,6 +818,47 @@ pair; after that they can be moved apart and the joints stay on them.
   file: hide an object and show it again, or leave Local View, and there is
   nothing to save. Changing only the look, the view or which object is
   selected does not count.
+- **New Scene** (the File card, or Ctrl + N) starts again without restarting
+  the app: one fresh sphere at the Starting Detail, selected, with no
+  symmetry set, seen from the view the app starts with. It is one undo step,
+  like an Open: Undo brings the scene you had back, with its file name and
+  whether it was saved, and Redo gives the new scene back. The new scene has
+  no file (the File card says "Unsaved"), so Save asks where it should go:
+  it cannot be saved over the sculpt it replaced. Until something is done to
+  it there is nothing in it to save, so closing straight after asks nothing.
+  If the scene you have has changes that are not saved, New Scene asks first
+  ("Save, Then New Scene", "New Scene Without Saving", Cancel); with nothing
+  to lose it does not ask, since the scene is one Undo away. Like Open, it
+  also asks when work that is in no file stands on the scene's objects
+  (unmerged tubes, planned keys), names it, and makes Enter Cancel: that work
+  goes with its objects and Undo does not bring it back. SSpheres, a lathe
+  outline and rulers stand by themselves and are still there in the new
+  scene, so they are not named (closing still asks about them). A live array
+  belongs to its object and comes back with it on Undo.
+  **What stays as it is:** the look (material, finish, lighting, backdrop),
+  the brush and its settings, the tool that is up, and the settings. The app
+  itself starts with the default look, but Undo brings back objects, not a
+  look, so New Scene does not take the one on screen away.
+  **When it waits:** in the middle of a stroke or a gizmo drag it does
+  nothing, like every other command. While a background job is working (a
+  tube merge, a trim) it is refused with a line saying which job; let it
+  finish or press its Cancel. A 360 loop being recorded has the panels away
+  and the keys to itself. A timelapse just keeps recording.
+  **Recovery copies:** a new scene nothing has been done to is owed no copy.
+  Work put aside with "New Scene Without Saving" is kept in memory for Undo;
+  a copy of it already written stays in the recovery folder until the new
+  scene is saved, three newer copies have been written, or the app is closed
+  in the ordinary way. After a crash the app offers the newest copy, which
+  is of the new scene once that has work in it. A new scene started over a
+  scene that was restored after a crash and not yet saved leaves that
+  crash's copies where they are: the restored scene is one Undo away with
+  its note of where it came from, and only saving that scene, or Discard It,
+  retires them (see the rule under "A crash does not take the session with
+  it").
+- **Exit** (the File card) closes the app exactly as the window's close
+  button does, which is the way out in fullscreen without the keyboard: it
+  asks the same question when something would be lost, and a timelapse still
+  recording is finished into a video that plays.
 - **Work that is in no file is named before it is lost.** SSpheres, unmerged
   tubes, planned keys and a lathe outline are scaffolds: a `.sclp` does not
   hold them, so saving does not keep them. Closing the app with any of them
@@ -825,9 +868,10 @@ pair; after that they can be moved apart and the joints stay on them.
   or Keep Separate first)." If the scene has unsaved changes as well, the one
   question says both, and that saving will not keep the scaffolds. In these
   questions Enter is Cancel, as Esc is, so nothing is given up by a key
-  pressed in passing. Open asks the same way about what replacing the scene
-  would cost: tubes and planned keys stand on the scene's objects and go with
-  them, and "Add Its Objects to This Scene" keeps them. (SSpheres, a lathe
+  pressed in passing. Open and New Scene ask the same way about what
+  replacing the scene would cost: tubes and planned keys stand on the scene's
+  objects and go with them, whether or not their tool is up at the time, and
+  "Add Its Objects to This Scene" keeps them. (SSpheres, a lathe
   outline and rulers stand by themselves and are still there after an Open,
   so Open does not name them.) Only work is named: not a single sphere, not a
   preset or joints the tool laid out by itself, not spheres already made into
@@ -942,8 +986,9 @@ pair; after that they can be moved apart and the joints stay on them.
   and closing, leaves them where they are, and the next start asks again;
   the earlier copy beside one made on a fault is still there to be had if
   the newest turns out bad. Undo of the restore puts the scene from before
-  back, and saving that scene, or a file opened over the restored one,
-  settles nothing about the copies either. Not Now removes nothing. Whenever
+  back, and saving that scene, or a file opened or a new scene started over
+  the restored one, settles nothing about the copies either. Not Now removes
+  nothing. Whenever
   it cannot be told, the copy stays and the app asks again; the cost is being
   asked once more, and Discard It ends it. Until they are removed the copies
   can be opened with Open like any sculpt. A copy is only ever offered if
@@ -1292,7 +1337,8 @@ SSpheres, unmerged tubes, rulers, planned keys and the lathe's outline are
 scaffolds: they are not kept in `.sclp` files or in recovery copies, so make
 the skin, merge the tube, build the keys or create the mesh before closing the
 app. The app asks before it closes over any of them but rulers, and before an
-Open that would take the tubes or the planned keys with the scene (see Files).
+Open or a New Scene that would take the tubes or the planned keys with the
+scene (see Files).
 
 Left out on purpose: the Unity app's mold maker and hard-surface tool.
 
@@ -1330,7 +1376,7 @@ sculpt.exe --screenshot out.png --demo --clean-view  # the Tab view with its hin
 sculpt.exe --record-loop folder --demo               # writes a short 360 loop and closes: 12 pictures at 640x360 (--loop-size 1080x1920 --loop-frames 24 for others)
 sculpt.exe --record-loop out.mp4 --demo --loop-fps 60 # the same as a video (a name ending in .mp4): then reads the file back and checks its frames, size, frame rate and length
 sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 frames (SCULPT_DEMO_CAMERA=close closes the app instead) and checks nothing of the loop is left; a folder or file of that name that was already there is checked to be exactly as it was
-sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes
+sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes (SCULPT_DEMO_CAMERA=close closes the window mid-recording, SCULPT_DEMO_CAMERA=exit presses the File card's Exit and answers Exit Without Saving: either way the video must be whole)
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-open-clean | play
 sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-exit   # the question the close button would ask of the scene the other options left: here unsaved strokes and a live tube; ask-open is the one choosing a file would ask
@@ -1338,6 +1384,8 @@ sculpt.exe --screenshot out.png --demo-spheres attached --demo-tool tube --demo-
 sculpt.exe --screenshot out.png --demo-files ask-exit:mirror   # a change that is saved without an undo step, made first: mirror (the X key) | hide (H) | local (/)
 sculpt.exe --screenshot out.png --demo-files lost   # what closing and opening would lose, worked through the keys and every tool; prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files open-undo   # Open, Undo, Redo and Save in every order, looking at what is in the files after each; prints a line per check (name a .sclp or .sculpt to start from that file; open-undo:opened and open-undo:undone stop after an Open, and after its Undo, for a picture of the File card)
+sculpt.exe --screenshot out.png --demo --demo-files new         # New Scene and Exit through the routines the buttons run: unsaved work, a saved sculpt, Save and Undo in every order (looking at what is in the files), an array, a tube, spheres, a job at work, a stroke in progress; prints a line per check (new:fresh and new:undone stop after New Scene on a saved sculpt, and after its Undo, for a picture of the File card)
+sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-new   # the question New Scene would ask of the scene the other options left (ask-new:saved, ask-new:mirror as for ask-exit)
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)

@@ -935,3 +935,50 @@ fn a_scene_opened_in_place_of_this_one_takes_the_tubes_drawn_on_its_objects() {
     bench.frame(&mut tool);
     assert_eq!(tool.tube_count(), 0);
 }
+
+/// The same with the tool put away, when its frame does not look for objects
+/// that have gone: the tubes must go all the same, or the question that said
+/// they would be lost was wrong, closing the new scene would name tubes that
+/// are nowhere in it, and Undo would bring them back on some days only.
+#[test]
+fn a_scene_put_in_place_of_this_one_takes_those_tubes_with_the_tool_put_away_too() {
+    let (mut bench, mut tool, body) = bench();
+    draw_horn(&mut bench, &mut tool);
+    // One more in mid-air, which stands in the world (the body hidden, so the stroke lands on nothing).
+    bench.call(|cx| cx.commit("Hide", vec![Command::Show { object: body, visible: false }]));
+    bench.env.mods.ctrl = true;
+    bench.drag(&mut tool, Vec2::new(200.0, 300.0), Vec2::new(500.0, 250.0));
+    bench.env.mods.ctrl = false;
+    assert_eq!((tool.tube_count(), tool.mergeable_count()), (2, 1));
+    assert!(Tool::can_undo(&tool, false), "drawing them is the tool's own history");
+    bench.leave(&mut tool);
+    bench.env.active = false;
+    bench.frame(&mut tool);
+
+    let ids = bench.open(vec![("Opened", cube(0.5))]);
+    bench.load_tool(&mut tool, &ids, vec![None], sculpt_toolkit::Arrival::Replaced);
+    assert_eq!((tool.tube_count(), tool.mergeable_count()), (1, 0), "the tube on the body went with it, at once");
+    assert_eq!(at_risk(&tool, Loss::SceneReplaced), None);
+    assert!(at_risk(&tool, Loss::Closing).is_some(), "the one in the world is still there, and still work");
+    assert!(!Tool::can_undo(&tool, false), "the next Z is the scene's: the tool's own steps were of those tubes");
+    bench.frame(&mut tool);
+    // Undo brings the body back, but not the tube, as with the tool up.
+    assert!(bench.undo_scene());
+    bench.frame(&mut tool);
+    bench.env.active = true;
+    bench.enter(&mut tool);
+    bench.frame(&mut tool);
+    assert_eq!((tool.tube_count(), tool.mergeable_count()), (1, 0));
+}
+
+/// Objects added beside the scene's own (Import) cost nothing: every tube stays.
+#[test]
+fn objects_added_to_the_scene_leave_the_tubes_and_their_history_alone() {
+    let (mut bench, mut tool, _) = bench();
+    draw_horn(&mut bench, &mut tool);
+    let added = bench.add("Added", cube(0.2));
+    bench.load_tool(&mut tool, &[added], vec![None], sculpt_toolkit::Arrival::Added);
+    bench.frame(&mut tool);
+    assert_eq!((tool.tube_count(), tool.mergeable_count()), (1, 1));
+    assert!(Tool::can_undo(&tool, false));
+}

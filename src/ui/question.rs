@@ -1,7 +1,8 @@
 //! The questions the app asks before something that could cost work: delete
-//! this object, close with unsaved changes, open a file over the scene,
-//! export for printing a model that may not print, and at start-up, whether
-//! to bring back the copy a crash left behind.
+//! this object, close with unsaved changes, open a file over the scene or
+//! start a new one in its place, export for printing a model that may not
+//! print, and at start-up, whether to bring back the copy a crash left behind
+//! (one such time at a start, the latest; the rest are asked about later).
 //!
 //! One dialog serves them all (the Unity app's is `UIFactory.ShowModal`): the
 //! window dims, the question is put in plain words, and each answer is a
@@ -9,8 +10,8 @@
 //! Esc gives too. `scene_graph::State` holds the question that is up; the app
 //! sends it Enter and Esc and carries out the answer.
 //!
-//! Closing and opening can also cost work that is in no file at all: SSpheres,
-//! unmerged tubes, planned keys, a lathe outline (`lost`, from
+//! Closing, opening and a new scene can also cost work that is in no file at
+//! all: SSpheres, unmerged tubes, planned keys, a lathe outline (`lost`, from
 //! app/unsaved.rs). A question that names any is asked even when the scene
 //! itself is saved, says that saving does not keep them, and gives Cancel to
 //! Enter as well as to Esc: no key pressed in passing gives them up.
@@ -34,6 +35,10 @@ pub enum Question {
     /// objects? `unsaved` says the scene has changes that are not saved;
     /// `lost` names the work in no file that replacing the scene would cost.
     Open { path: PathBuf, unsaved: bool, lost: Vec<String> },
+    /// New Scene was asked for: a fresh scene in place of this one. `unsaved`
+    /// and `lost` are as for `Open`. At least one of them holds: with
+    /// nothing to lose a new scene is not asked about, only made.
+    NewScene { unsaved: bool, lost: Vec<String> },
     /// At start-up: the app did not close properly last time and a copy of
     /// the work was kept. `when` is when ("today at 14:35"), `what` what it
     /// holds; `stopped` says it was made as the app stopped on a fault, and
@@ -93,13 +98,18 @@ fn listed(lost: &[String]) -> String {
     }
 }
 
+/// That the scene has unsaved changes, naming its file if it has one.
+fn unsaved_words(file: Option<&std::path::Path>) -> String {
+    match file {
+        Some(path) => format!("\"{}\" has changes that have not been saved.", file_name(path)),
+        None => "This scene has not been saved.".to_owned(),
+    }
+}
+
 /// The question about closing (`Question::Exit`). `file` is the scene's file,
 /// if it has one.
 fn exit_words(file: Option<&std::path::Path>, unsaved: bool, lost: &[String]) -> String {
-    let changes = match file {
-        Some(path) => format!("\"{}\" has changes that have not been saved.", file_name(path)),
-        None => "This scene has not been saved.".to_owned(),
-    };
+    let changes = unsaved_words(file);
     match (unsaved, lost.is_empty()) {
         (_, true) => format!("Close GolemSculpt? {changes}"),
         (true, false) => format!(
@@ -128,6 +138,31 @@ fn open_words(path: &std::path::Path, unsaved: bool, lost: &[String]) -> String 
         (false, false) => format!(
             "Open \"{name}\"? Opening it in place of the scene you have loses these, \
              which are not kept in a file: {}. Adding its objects to this scene keeps them.",
+            listed(lost)
+        ),
+    }
+}
+
+/// The question about a new scene (`Question::NewScene`). `file` is the file
+/// of the scene that is open, if it has one. The scene's objects are one Undo
+/// away afterwards; what stands on them and is in no file is not, and the
+/// question says which is which.
+fn new_scene_words(file: Option<&std::path::Path>, unsaved: bool, lost: &[String]) -> String {
+    let aside = format!(
+        "{} A new scene puts this one aside: Undo (Z) brings it back, but only until the app is closed.",
+        unsaved_words(file)
+    );
+    match (unsaved, lost.is_empty()) {
+        (true, true) => format!("Start a new scene? {aside}"),
+        (false, true) => "Start a new scene in place of the one you have? Undo (Z) brings this one back.".to_owned(),
+        (true, false) => format!(
+            "Start a new scene? {aside}\n\nSaving does not keep these, and a new scene loses them either way: {}. \
+             Undo does not bring them back.",
+            listed(lost)
+        ),
+        (false, false) => format!(
+            "Start a new scene? It takes the place of the scene you have, which loses these: {}. \
+             They are not kept in a file, and Undo does not bring them back.",
             listed(lost)
         ),
     }
@@ -180,6 +215,7 @@ impl Question {
             }
             Question::Exit { unsaved, lost } => exit_words(doc.path.as_deref(), *unsaved, lost),
             Question::Open { path, unsaved, lost } => open_words(path, *unsaved, lost),
+            Question::NewScene { unsaved, lost } => new_scene_words(doc.path.as_deref(), *unsaved, lost),
             Question::Recover { when, what, stopped, earlier, others } => {
                 recover_words(when.as_deref(), what, *stopped, earlier.as_deref(), *others)
             }
@@ -195,7 +231,9 @@ impl Question {
     /// is Cancel and no answer is lit as the safe one but Cancel.
     fn names_lost_work(&self) -> bool {
         match self {
-            Question::Exit { lost, .. } | Question::Open { lost, .. } => !lost.is_empty(),
+            Question::Exit { lost, .. } | Question::Open { lost, .. } | Question::NewScene { lost, .. } => {
+                !lost.is_empty()
+            }
             Question::Delete(_) | Question::Recover { .. } | Question::ExportNotClosed { .. } => false,
         }
     }
@@ -237,6 +275,20 @@ impl Question {
                 choices.push(Choice::new("Add Its Objects to This Scene", None, open(OpenHow::Add)));
                 choices.push(cancel);
                 choices
+            }
+            Question::NewScene { unsaved: false, lost } => {
+                // With nothing named it is never asked (`new_scene_question`); the plain answer is for completeness.
+                let named = !lost.is_empty();
+                let (label, tint) = if named { ("New Scene and Lose Them", lossy) } else { ("New Scene", safe) };
+                vec![Choice::new(label, tint, Action::NewSceneAs { save: false }), cancel]
+            }
+            Question::NewScene { unsaved: true, lost } => {
+                let save = if lost.is_empty() { "Save, Then New Scene" } else { "Save the Scene, Then New Scene" };
+                vec![
+                    Choice::new(save, saving, Action::NewSceneAs { save: true }),
+                    Choice::new("New Scene Without Saving", lossy, Action::NewSceneAs { save: false }),
+                    cancel,
+                ]
             }
             Question::Recover { stopped, earlier, .. } => {
                 let mut choices = vec![Choice::new("Restore It", safe, Action::Recover(Recover::Newest))];
@@ -427,6 +479,77 @@ mod tests {
         let answers = ["Save, Then Open", "Open Without Saving", "Add Its Objects to This Scene", "Cancel"];
         assert_eq!(labels(&unsaved), answers);
         assert!(matches!(unsaved.default_action(), Some(Action::OpenAs(_, OpenHow::SaveThenReplace))));
+    }
+
+    fn new_scene(unsaved: bool, lost: &[&str]) -> Question {
+        Question::NewScene { unsaved, lost: lost.iter().map(|&what| what.to_owned()).collect() }
+    }
+
+    #[test]
+    fn a_new_scene_over_unsaved_changes_offers_to_save_first_and_says_undo_brings_the_scene_back() {
+        let question = new_scene(true, &[]);
+        assert_eq!(labels(&question), ["Save, Then New Scene", "New Scene Without Saving", "Cancel"]);
+        assert_eq!(question.default_action(), Some(Action::NewSceneAs { save: true }), "Enter saves first");
+        let file = PathBuf::from("folder/dragon head.sclp");
+        assert_eq!(
+            new_scene_words(Some(&file), true, &[]),
+            "Start a new scene? \"dragon head.sclp\" has changes that have not been saved. \
+             A new scene puts this one aside: Undo (Z) brings it back, but only until the app is closed."
+        );
+        let never_saved = new_scene_words(None, true, &[]);
+        assert!(never_saved.starts_with("Start a new scene? This scene has not been saved. A new scene puts"));
+    }
+
+    #[test]
+    fn a_new_scene_over_work_that_is_in_no_file_names_it_and_enter_does_not_give_it_up() {
+        // The scene is saved: there is nothing to save, only something to lose.
+        let question = new_scene(false, &[TUBES, KEYS]);
+        assert_eq!(labels(&question), ["New Scene and Lose Them", "Cancel"]);
+        assert!(enter_is_cancel(&question), "Enter is Cancel");
+        assert_eq!(question.choices().pop().unwrap().tint, Some(theme::ACCENT), "and Cancel is the answer that is lit");
+        let text = new_scene_words(None, false, &[TUBES.to_owned(), KEYS.to_owned()]);
+        assert_eq!(
+            text,
+            "Start a new scene? It takes the place of the scene you have, which loses these: 3 unmerged tubes \
+             (Merge or Keep Separate first) and 4 planned keys (Build Keys first). \
+             They are not kept in a file, and Undo does not bring them back."
+        );
+        assert!(!text.contains("not been saved"), "the scene is saved, and the question does not say otherwise");
+    }
+
+    #[test]
+    fn a_new_scene_over_both_says_saving_does_not_keep_the_scaffolds() {
+        let question = new_scene(true, &[TUBES]);
+        assert_eq!(labels(&question), ["Save the Scene, Then New Scene", "New Scene Without Saving", "Cancel"]);
+        assert!(enter_is_cancel(&question), "saving first would still lose the tubes: Enter is Cancel");
+        let saves = question.choices().into_iter().next().unwrap();
+        assert!(saves.tint.is_none(), "saving is not lit as the safe answer when it does not save everything");
+        assert_eq!(saves.action, Some(Action::NewSceneAs { save: true }));
+        let file = PathBuf::from("dragon head.sclp");
+        let text = new_scene_words(Some(&file), true, &[TUBES.to_owned()]);
+        assert!(text.starts_with("Start a new scene? \"dragon head.sclp\" has changes that have not been saved."));
+        assert!(text.contains("Undo (Z) brings it back"), "the scene's objects are one Undo away");
+        assert!(text.ends_with(
+            "Saving does not keep these, and a new scene loses them either way: \
+             3 unmerged tubes (Merge or Keep Separate first). Undo does not bring them back."
+        ));
+    }
+
+    /// Every answer to it starts a new scene or does nothing: none closes the
+    /// app or opens a file, whichever way the question was put.
+    #[test]
+    fn every_answer_to_the_new_scene_question_is_a_new_scene_or_nothing() {
+        for (unsaved, lost) in [(true, &[][..]), (false, &[TUBES][..]), (true, &[TUBES][..]), (false, &[][..])] {
+            let choices = new_scene(unsaved, lost).choices();
+            assert!(choices.last().is_some_and(|last| last.action.is_none() && last.label == "Cancel"));
+            for choice in &choices[..choices.len() - 1] {
+                let starts = matches!(choice.action, Some(Action::NewSceneAs { .. }));
+                assert!(starts, "{} does something else", choice.label);
+            }
+            let saves = Some(Action::NewSceneAs { save: true });
+            let saving = choices.iter().filter(|choice| choice.action == saves).count();
+            assert_eq!(saving, unsaved as usize, "saving first is offered exactly when there is something to save");
+        }
     }
 
     #[test]

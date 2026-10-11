@@ -534,6 +534,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
             ("O", "Spin the view"),
             ("F11", "Fullscreen"),
             ("Ctrl + S", "Save"),
+            ("Ctrl + N", "New scene"),
         ];
         for (key, what) in rows {
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::hover());
@@ -571,7 +572,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Unsaved".into());
     theme::category(ui, "File", Color32::from_rgb(153, 184, 230), &file, true, |ui| {
-        let mut row = |ui: &mut egui::Ui, items: &[(&str, Action, &str)]| {
+        let row = |ui: &mut egui::Ui, actions: &mut Vec<Action>, items: &[(&str, Action, &str)]| {
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, items.len(), 6.0);
                 for (label, action, help) in items {
@@ -581,12 +582,17 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
                 }
             });
         };
-        row(ui, &[
+        row(ui, actions, &[(
+            "New Scene",
+            Action::NewScene,
+            "Start again with a fresh sphere, in place of this scene (Ctrl+N). It asks first if anything would be lost; Undo brings this scene back.",
+        )]);
+        row(ui, actions, &[
             ("Open...", Action::Open, "Open a saved sculpt (.sclp, or a .sculpt from the Unity app), in place of the scene or added to it (Ctrl+O)."),
             ("Save", Action::Save, "Save this sculpt (Ctrl+S)."),
             ("Save As...", Action::SaveAs, "Save under a new name (Ctrl+Shift+S)."),
         ]);
-        row(ui, &[
+        row(ui, actions, &[
             (
                 "Import...",
                 Action::Import,
@@ -598,17 +604,23 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
                 "Write the selected object as a Wavefront OBJ, placed as it is in the scene (position, rotation and scale included).",
             ),
         ]);
-        row(ui, &[(
+        row(ui, actions, &[(
             "Export STL for Printing (mm)...",
             Action::ExportStl,
             "Write the selected object as a binary STL for a slicer: placed as it is in the scene, upright (Z up), in millimetres at real size (1 unit is 10 mm). If the object has holes it says so first, and asks.",
         )]);
-        row(ui, &[(
+        row(ui, actions, &[(
             "Check for Printing",
             Action::CheckForPrinting,
             "Look the selected object over for holes and for edges shared by more than two faces, either of which can stop it printing. The answer is in the line at the top of this panel.",
         )]);
         crate::recent::tiles(ui, &mut state.recent, tips, actions);
+        // Last, and away from the buttons that are pressed all day.
+        row(ui, actions, &[(
+            "Exit",
+            Action::Exit,
+            "Close GolemSculpt, as the window's close button does (Ctrl+Q). It asks first if anything would be lost.",
+        )]);
     });
 
     let model_size = crate::look::model_size(&doc.scene, &doc.mesh);

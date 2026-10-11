@@ -2,10 +2,10 @@
 //! kilobytes for a typical stroke); operations that replace the whole mesh
 //! (remesh, import, new shape) keep the previous mesh itself, so stepping
 //! across them is instant. Edits to the object list (add, delete, rename,
-//! reorder...) keep the list as it was. A step that put one file's scene in
-//! place of another's (an Open, a restored recovery copy) also keeps which
-//! file the scene on its other side belongs to (`FileState`), so that the
-//! file comes back with the objects.
+//! reorder...) keep the list as it was. A step that put one scene in place
+//! of another (an Open, a restored recovery copy, a New Scene) also keeps
+//! which file the scene on its other side belongs to (`FileState`), so that
+//! the file comes back with the objects.
 //!
 //! Mesh steps remember which mesh they belong to, so undo can bring that
 //! mesh back to hand before stepping.
@@ -69,7 +69,8 @@ pub enum Edit {
 pub struct FileState {
     /// That scene's file; `None` if it has none.
     pub path: Option<std::path::PathBuf>,
-    /// Whether that scene is what its file holds.
+    /// Whether that scene has nothing to save: it is what its file holds,
+    /// or it is a new scene that nothing has been done to yet.
     pub saved: bool,
     /// The recovery copy that scene was restored from, if it was and has not
     /// been saved since.
@@ -86,6 +87,27 @@ pub struct Restored {
     pub run: std::path::PathBuf,
     /// The file the copy was a copy of, for Save to offer.
     pub document: Option<std::path::PathBuf>,
+}
+
+impl FileState {
+    /// A scene opened from `path`: it is what that file holds.
+    pub fn opened(path: std::path::PathBuf) -> FileState {
+        FileState { path: Some(path), saved: true, restored: None }
+    }
+
+    /// A scene put back from a recovery copy, `from` saying which: it has no
+    /// file, and all of it is unsaved work until the user says where it
+    /// should go.
+    pub fn restored(from: Restored) -> FileState {
+        FileState { path: None, saved: false, restored: Some(from) }
+    }
+
+    /// A scene just begun (New Scene). It has no file, so Save asks where,
+    /// and nothing in it is unsaved: there is nothing in it to keep yet. It
+    /// is nobody's restored copy either, whatever scene it took the place of.
+    pub fn new_scene() -> FileState {
+        FileState { path: None, saved: true, restored: None }
+    }
 }
 
 struct Step {

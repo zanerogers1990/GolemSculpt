@@ -1,8 +1,8 @@
-//! Open, Undo, Redo and Save against real files, with the app's own history
-//! and the code that moves the scene's file across an Open (`File`). The
-//! `Desk` here does in a few lines each what `Running` does around them, so
-//! the cases read as a person at the app: open this, press Z, press Ctrl + S,
-//! then look at what is in the files.
+//! Open, New Scene, Undo, Redo and Save against real files, with the app's
+//! own history and the code that moves the scene's file across an Open
+//! (`File`). The `Desk` here does in a few lines each what `Running` does
+//! around them, so the cases read as a person at the app: open this, press
+//! Z, press Ctrl + S, then look at what is in the files.
 
 use std::path::{Path, PathBuf};
 
@@ -11,8 +11,10 @@ use glam::{Quat, Vec3};
 use super::File;
 use crate::app::files::Mark;
 use crate::app::install;
+use crate::app::new_scene::fresh_document;
+use crate::app::recovery::copy_owed;
 use crate::app::tools::Tools;
-use crate::history::{History, Restored};
+use crate::history::{FileState, History, Restored};
 use crate::io;
 use crate::mesh::Mesh;
 use crate::mesh::primitives::{self, Primitive};
@@ -51,6 +53,12 @@ fn write_kept(path: &Path, name: &str, (visible, mirror_x): (bool, bool)) {
     let symmetry = Symmetry { mirror: [mirror_x, false, false], ..Symmetry::default() };
     details.set_object(0, io::slot::SYMMETRY, &symmetry);
     io::save_scene_with(&[&ball()], &[object], 0, &details, path).expect("the file writes");
+}
+
+/// The note a scene restored from the copy at `path` carries: the folder the
+/// copy is in stands for the run that left it.
+fn from(path: &Path) -> Restored {
+    Restored { run: path.parent().expect("a copy is in a folder").to_owned(), document: None }
 }
 
 /// The name of the scene a file holds.
@@ -158,9 +166,23 @@ impl Desk {
         self.history.push_scene(before);
     }
 
-    /// As `Running::put_in_place`: an Open (`document`), or a recovery copy restored.
+    /// As `Running::replace_scene` (an Open: `document`), or as
+    /// `Running::restore` (a recovery copy restored, whose run's folder is
+    /// taken to be the one the file is in).
     fn replace(&mut self, path: &Path, document: bool) {
         let saved = io::load_scene(path).expect("the file reads");
+        let file = if document { FileState::opened(path.to_owned()) } else { FileState::restored(from(path)) };
+        self.put_in_place(saved, file);
+    }
+
+    /// As `Running::new_scene`: the scene the app starts with, which is
+    /// called "Sphere", in place of this one.
+    fn new_scene(&mut self) {
+        self.put_in_place(fresh_document(80.0, 1.6), FileState::new_scene());
+    }
+
+    /// As `Running::put_in_place`.
+    fn put_in_place(&mut self, saved: io::SavedScene, file: FileState) {
         let now = self.mark();
         let before = self.file().state(now);
         let state = self.scene.state();
@@ -170,8 +192,14 @@ impl Desk {
         // As `Running::apply_details`: each object's symmetry comes with it.
         self.scene.restore_symmetry(&details);
         let now = self.mark();
-        let restored = (!document).then(|| Restored { run: path.parent().unwrap().to_owned(), document: None });
-        self.file().became(document.then(|| path.to_owned()), restored, now);
+        self.file().became(file, now);
+    }
+
+    /// Whether `Running::recovery_tick` would count the scene as owed a
+    /// recovery copy, none having been written yet.
+    fn owed_a_copy(&mut self) -> bool {
+        let (unsaved, now) = (self.unsaved(), self.mark());
+        copy_owed(true, unsaved, None, now)
     }
 
     /// Open, in place of the scene.
@@ -184,12 +212,15 @@ impl Desk {
         self.replace(path, false);
     }
 
-    /// As `Running::save_scene` and the line after it in `save_to`.
-    fn save_as(&mut self, path: &Path) {
+    /// As `Running::save_scene` and the line after it in `save_to`. Gives
+    /// back the recovery copy the saved scene had been restored from, which
+    /// is what the app retires that run's copies by.
+    fn save_as(&mut self, path: &Path) -> Option<Restored> {
         write_kept(path, &self.shown().to_owned(), self.kept());
         let now = self.mark();
-        self.file().written(path, now);
+        let restored = self.file().written(path, now);
         self.path = Some(path.to_owned());
+        restored
     }
 
     /// Save (Ctrl + S): writes to the scene's own file and gives it back, or
@@ -488,6 +519,184 @@ fn once_the_open_is_too_old_to_undo_the_file_stays_the_opened_one() {
     assert_eq!((held(&desk.at("first")), held(&second)), ("first".to_owned(), "second".to_owned()));
 }
 
+/// New Scene on a saved sculpt: one undo step, a scene with no file, and the
+/// sculpt's file safe from it.
+#[test]
+fn a_new_scene_is_one_undo_step_and_undo_gives_the_scene_before_it_its_file_back() {
+    let mut desk = Desk::with_open("new_scene", "first");
+    let steps = desk.history.steps();
+    desk.new_scene();
+    assert_eq!(desk.history.steps(), (steps.0 + 1, 0), "one undo step");
+    assert_eq!(desk.all(), all("Sphere", None, false), "the new scene: no file, nothing unsaved");
+    assert_eq!(desk.scene.objects.len(), 1);
+
+    desk.undo();
+    assert_eq!(desk.all(), all("first", named("first"), false), "the sculpt is back: its own file, nothing unsaved");
+    assert_eq!(desk.history.steps(), (steps.0, 1));
+    desk.redo();
+    assert_eq!(desk.all(), all("Sphere", None, false));
+    desk.undo();
+    assert_eq!(desk.all(), all("first", named("first"), false));
+    assert_eq!(held(&desk.at("first")), "first", "and nothing was ever written to its file");
+}
+
+#[test]
+fn save_in_a_new_scene_asks_where_and_never_goes_to_the_file_of_the_scene_it_replaced() {
+    let mut desk = Desk::with_open("new_scene_save", "first");
+    desk.new_scene();
+    assert_eq!(desk.save(), None, "Save has no file to write to: it asks");
+    desk.edit("a new piece");
+    assert_eq!(desk.stands(), (None, true));
+    assert_eq!(desk.save(), None, "nor once the new scene has work in it");
+    // Not after the H and X keys either, which change what a save would write.
+    desk.mirror_key();
+    desk.hide_key();
+    assert_eq!(desk.save(), None);
+    assert_eq!(held(&desk.at("first")), "first", "the sculpt it replaced is as it was on disk");
+    assert_eq!(held_kept(&desk.at("first")), (true, false));
+
+    // Saved under a name of its own, that name is the new scene's and no one else's.
+    let second = desk.at("second");
+    desk.save_as(&second);
+    assert_eq!(desk.stands(), (named("second"), false));
+    desk.undo();
+    desk.undo();
+    assert_eq!(desk.all(), all("first", named("first"), false));
+    assert_eq!(desk.save(), Some(desk.at("first")));
+    assert_eq!((held(&desk.at("first")), held(&second)), ("first".to_owned(), "a new piece".to_owned()));
+}
+
+/// Closing straight after New Scene asks nothing, and no recovery copy is
+/// written for a scene nothing has been done to.
+#[test]
+fn an_untouched_new_scene_has_nothing_unsaved_and_is_owed_no_recovery_copy() {
+    let mut desk = Desk::with_open("new_scene_untouched", "first");
+    desk.edit("first, edited");
+    assert!(desk.unsaved() && desk.owed_a_copy(), "the sculpt has unsaved work, which is owed a copy");
+    // New Scene Without Saving.
+    desk.new_scene();
+    assert!(!desk.unsaved(), "nothing in the new scene is unsaved");
+    assert!(!desk.owed_a_copy(), "and it is owed no recovery copy");
+    // The X key and back again: still nothing.
+    desk.mirror_key();
+    assert!(desk.unsaved() && desk.owed_a_copy(), "Mirror X is something to save, in a new scene as in any");
+    desk.mirror_key();
+    assert!(!desk.unsaved() && !desk.owed_a_copy());
+    // The work that was put aside is unsaved again the moment Undo brings it back.
+    desk.undo();
+    assert_eq!(desk.all(), all("first, edited", named("first"), true));
+    assert!(desk.owed_a_copy());
+}
+
+#[test]
+fn a_new_scene_after_a_new_scene_is_a_step_of_its_own() {
+    let mut desk = Desk::with_open("new_scene_twice", "first");
+    desk.new_scene();
+    desk.new_scene();
+    assert_eq!(desk.history.steps().0, 3, "the Open and two new scenes");
+    assert_eq!(desk.all(), all("Sphere", None, false));
+    desk.edit("second new scene, edited");
+    desk.new_scene();
+    assert_eq!(desk.all(), all("Sphere", None, false), "a third, over unsaved work that is now one Undo away");
+    desk.undo();
+    assert_eq!(desk.all(), all("second new scene, edited", None, true));
+    desk.undo();
+    desk.undo();
+    assert_eq!(desk.all(), all("Sphere", None, false), "the first new scene, untouched");
+    assert_eq!(desk.save(), None);
+    desk.undo();
+    assert_eq!(desk.all(), all("first", named("first"), false));
+    for _ in 0..4 {
+        desk.redo();
+    }
+    assert_eq!(desk.all(), all("Sphere", None, false), "the third again, as it was left");
+    assert_eq!(held(&desk.at("first")), "first");
+}
+
+/// New Scene, an edit, Undo twice (past the New Scene), Save.
+#[test]
+fn new_scene_then_an_edit_then_undo_twice_and_save_writes_the_old_scene_to_its_own_file() {
+    let mut desk = Desk::with_open("new_scene_edit_undo", "first");
+    desk.edit("first, edited");
+    // New Scene Without Saving, then work in the new scene.
+    desk.new_scene();
+    desk.edit("a new piece");
+    desk.undo();
+    desk.undo();
+    assert_eq!(desk.all(), all("first, edited", named("first"), true));
+    assert_eq!(desk.save(), Some(desk.at("first")), "Save writes to the old scene's own file");
+    assert_eq!(held(&desk.at("first")), "first, edited", "and what it wrote is the old scene, not the new one");
+    assert!(!desk.unsaved());
+    // Forward again: the new scene, with no file whatever was saved meanwhile.
+    desk.redo();
+    assert_eq!(desk.stands().0, None);
+    assert_eq!(desk.save(), None);
+    desk.redo();
+    assert_eq!(desk.all(), all("a new piece", None, true));
+    assert_eq!(desk.save(), None);
+    assert_eq!(held(&desk.at("first")), "first, edited");
+}
+
+/// A scene that never had a file, a new scene, and back.
+#[test]
+fn a_new_scene_over_a_scene_with_no_file_leaves_both_without_one() {
+    let mut desk = Desk::new("new_scene_no_file");
+    desk.edit("start, edited");
+    desk.new_scene();
+    assert_eq!(desk.all(), all("Sphere", None, false));
+    desk.undo();
+    assert_eq!(desk.all(), all("start, edited", None, true));
+    assert_eq!(desk.save(), None);
+    // And over a restored recovery copy, which is unsaved work with no file.
+    let copy = desk.file_of("copy");
+    desk.restore(&copy);
+    desk.new_scene();
+    assert_eq!(desk.all(), all("Sphere", None, false));
+    desk.undo();
+    assert_eq!(desk.all(), all("copy", None, true), "the restored copy is still unsaved when Undo brings it back");
+}
+
+/// Where the two meet: New Scene over a scene that was restored from a
+/// recovery copy and has not been saved. The new scene is nobody's restored
+/// copy, so saving it retires no crashed run's copies; the restored scene is
+/// one Undo away with its note, and only its own save gives the note up.
+#[test]
+fn a_new_scene_over_a_restored_scene_carries_no_note_and_undo_gives_the_note_back() {
+    let mut desk = Desk::with_open("new_scene_over_restored", "first");
+    let copy = desk.file_of("copy");
+    let note = Some(from(&copy));
+    desk.restore(&copy);
+    assert_eq!((desk.all(), &desk.restored), (all("copy", None, true), &note));
+
+    // New Scene Without Saving.
+    desk.new_scene();
+    assert_eq!(desk.all(), all("Sphere", None, false), "clean, and in no file");
+    assert_eq!(desk.restored, None, "the new scene is not the crashed work");
+    assert_eq!(desk.save(), None, "Save asks where: it has no file");
+    let elsewhere = desk.at("elsewhere");
+    assert_eq!(desk.save_as(&elsewhere), None, "and saving it gives up no note: the crashed run's copies stay");
+    assert_eq!(desk.all(), all("Sphere", named("elsewhere"), false));
+
+    // Undo: the restored scene, with no file, unsaved, and its note.
+    desk.undo();
+    assert_eq!((desk.all(), &desk.restored), (all("copy", None, true), &note));
+    desk.redo();
+    assert_eq!((desk.all(), &desk.restored), (all("Sphere", named("elsewhere"), false), &None));
+    desk.undo();
+    // Past the restore as well, and forward again: the note is on the restored scene alone.
+    desk.undo();
+    assert_eq!((desk.all(), &desk.restored), (all("first", named("first"), false), &None));
+    desk.redo();
+    assert_eq!((desk.shown(), &desk.restored), ("copy", &note));
+    let kept = desk.at("kept");
+    assert_eq!(desk.save_as(&kept), note, "the save of the restored scene is the one that gives the note up");
+    assert_eq!(desk.restored, None);
+    // Saved, it is an ordinary scene: a new scene over it and back brings no note with it.
+    desk.new_scene();
+    desk.undo();
+    assert_eq!((desk.all(), &desk.restored), (all("copy", named("kept"), false), &None));
+}
+
 /// The H and X keys change what a save writes without being undo steps. A
 /// scene they have changed is unsaved until it is saved, or until the change
 /// is taken back by the same key.
@@ -540,13 +749,18 @@ fn such_a_change_is_still_unsaved_after_an_open_and_its_undo() {
     assert_eq!(desk.kept(), (false, false), "hidden, as it was left");
 }
 
-/// A long walk of opens, edits, saves, undos and redos, and of the H and X
-/// keys (which change what a save writes without being undo steps), checked
-/// at every step against two things that must never fail: where the app says
-/// there is nothing unsaved, the scene's file really holds the scene on
-/// screen, name, visibility and symmetry; and the scene's file is the one it
-/// was opened from or last saved as, worked out here a second way (a list of
-/// files beside the steps).
+/// A long walk of opens, restored recovery copies, new scenes, edits, saves,
+/// undos and redos, and of the H and X keys (which change what a save writes
+/// without being undo steps), checked at every step against things that must
+/// never fail: where the app says there is nothing unsaved, the scene's file
+/// really holds the scene on screen, name, visibility and symmetry; the
+/// scene's file is the one it was opened from or last saved as, worked out
+/// here a second way (a list of files beside the steps); the recovery copy
+/// the scene was restored from is its own and no other scene's, worked out
+/// the same second way, and a save gives up that note and no other; a scene
+/// with no file that counts as saved is a starting scene nothing has been
+/// done to; and Save writes to the scene's own file or to none, leaving
+/// every other file as it was.
 #[test]
 fn a_long_walk_never_calls_a_scene_saved_that_is_not_in_its_file() {
     let mut desk = Desk::new("long_walk");
@@ -558,12 +772,16 @@ fn a_long_walk_never_calls_a_scene_saved_that_is_not_in_its_file() {
     // and the file of each stretch of the history between two such steps.
     let (mut undo, mut redo): (Vec<bool>, Vec<bool>) = (Vec::new(), Vec::new());
     let mut files: Vec<Option<PathBuf>> = vec![None];
+    // And beside each of those, the recovery copy that stretch's scene was
+    // restored from, until a save of it gives the note up.
+    let mut notes: Vec<Option<Restored>> = vec![None];
     let mut seed = 0x2545_f491_4f6c_dd1du64;
     let mut next = |below: u64| {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (seed >> 33) % below
     };
-    let (mut crossed, mut keys, mut clean_after_a_key) = (0, 0, 0);
+    let (mut crossed, mut keys, mut clean_after_a_key, mut new_scenes, mut untouched) = (0, 0, 0, 0, 0);
+    let (mut restores, mut noted, mut given_up, mut new_over_restored) = (0, 0, 0, 0);
     for turn in 0..900 {
         let stretch = undo.iter().filter(|&&open| open).count();
         let file = desk.at(names[next(3) as usize]);
@@ -582,20 +800,48 @@ fn a_long_walk_never_calls_a_scene_saved_that_is_not_in_its_file() {
                 undo.push(false);
                 redo.clear();
                 files.truncate(stretch + 1);
+                notes.truncate(stretch + 1);
             }
             2 => {
-                let recovery = next(4) == 0;
-                desk.replace(&file, !recovery);
+                // An Open, a restored recovery copy or a new scene: the last two have no file.
+                let kind = next(5);
+                new_over_restored += (kind == 1 && desk.restored.is_some()) as usize;
+                match kind {
+                    0 => desk.restore(&file),
+                    1 => desk.new_scene(),
+                    _ => desk.open(&file),
+                }
+                new_scenes += (kind == 1) as usize;
+                restores += (kind == 0) as usize;
+                assert!(kind != 1 || !desk.unsaved(), "turn {turn}: a new scene with something unsaved in it");
+                assert!(kind != 0 || desk.unsaved(), "turn {turn}: a restored copy that counts as saved");
                 undo.push(true);
                 redo.clear();
                 files.truncate(stretch + 1);
-                files.push((!recovery).then_some(file));
+                notes.truncate(stretch + 1);
+                notes.push((kind == 0).then(|| from(&file)));
+                files.push((kind > 1).then_some(file));
             }
             3 => {
-                desk.save();
+                // Save writes to the scene's own file or asks; either way no other file changes.
+                let before = names.map(|name| held(&desk.at(name)));
+                let wrote = desk.save();
+                assert_eq!(wrote, files[stretch], "turn {turn}: Save went somewhere else than the scene's file");
+                // A restored scene has no file until Save As gives it one, which takes its note.
+                assert!(wrote.is_none() || notes[stretch].is_none(), "turn {turn}: a restored scene had a file");
+                for (name, was) in names.into_iter().zip(before) {
+                    let path = desk.at(name);
+                    let written = wrote.as_deref() == Some(path.as_path());
+                    let now = held(&path);
+                    assert!(written || now == was, "turn {turn}: Save wrote to {name}.sclp, which is not its file");
+                    assert!(!written || now == desk.shown(), "turn {turn}: {name}.sclp does not hold what was saved");
+                }
             }
             4 => {
-                desk.save_as(&file);
+                // Save As: the save of this scene, which gives up its note and no other scene's.
+                let gave = desk.save_as(&file);
+                assert_eq!(gave, notes[stretch].take(), "turn {turn}: the save gave up another note than its scene's");
+                given_up += gave.is_some() as usize;
                 files[stretch] = Some(file);
             }
             5..=7 if desk.history.can_undo() => {
@@ -614,12 +860,27 @@ fn a_long_walk_never_calls_a_scene_saved_that_is_not_in_its_file() {
         }
         let stretch = undo.iter().filter(|&&open| open).count();
         assert_eq!(desk.path, files[stretch], "turn {turn}: the scene's file is not its own");
+        assert_eq!(desk.restored, notes[stretch], "turn {turn}: where the scene was restored from is not its own");
+        noted += desk.restored.is_some() as usize;
         if let Some(path) = desk.path.clone().filter(|_| !desk.unsaved()) {
             assert_eq!(held(&path), desk.shown(), "turn {turn}: nothing unsaved, but the file holds another scene");
             let (in_file, on_screen) = (held_kept(&path), desk.kept());
             assert_eq!(in_file, on_screen, "turn {turn}: nothing unsaved, but the file shows and mirrors otherwise");
         }
+        // With no file, only a scene nothing has been done to has nothing to save.
+        if desk.path.is_none() && !desk.unsaved() {
+            let starting = ["start", "Sphere"].contains(&desk.shown()) && desk.kept() == (true, false);
+            assert!(starting, "turn {turn}: \"{}\" has no file and counts as saved", desk.shown());
+            assert_eq!(desk.save(), None, "turn {turn}: Save of a scene with no file wrote somewhere");
+            untouched += 1;
+        }
     }
+    assert!(new_scenes > 10, "the walk started a new scene only {new_scenes} times");
+    assert!(restores > 10, "the walk restored a copy only {restores} times");
+    assert!(noted > 30, "the walk stood on a restored scene that was not saved only {noted} times");
+    assert!(given_up > 3, "a save gave up a restored scene's note only {given_up} times");
+    assert!(new_over_restored > 0, "the walk never started a new scene over a restored one");
+    assert!(untouched > 10, "the walk stood on an untouched scene with no file only {untouched} times");
     assert!(crossed > 20, "the walk crossed an Open only {crossed} times");
     assert!(keys > 100, "the walk pressed H or X only {keys} times");
     assert!(clean_after_a_key > 5, "a key put a saved scene back as its file holds it only {clean_after_a_key} times");

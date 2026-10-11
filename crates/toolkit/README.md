@@ -337,8 +337,8 @@ fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
 ```
 
 - **It is asked of every tool, up or put away,** before the app closes
-  (`Loss::Closing`) and before a file is opened in place of the scene
-  (`Loss::SceneReplaced`). Answer from the tool's state as it is.
+  (`Loss::Closing`) and before another scene takes this one's place, by Open
+  or New Scene (`Loss::SceneReplaced`). Answer from the tool's state as it is.
 - **The answer goes into a sentence.** A short noun phrase, lower case, with a
   count where there is one, and in brackets what the user can do to keep the
   work: "3 unmerged tubes (Merge or Keep Separate first)", "a lathe outline you
@@ -350,7 +350,10 @@ fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
   `None` to `SceneReplaced` for work that stands by itself and is still there
   afterwards (a profile beside the model, a ruler in the world), and make sure
   that is true: `bench.open(..)` in a test shows what your tool does when the
-  objects go.
+  objects go. Try it with the tool put away as well (`bench.env.active =
+  false`): what you said would be lost has to go then too, and
+  `load_objects(.., Arrival::Replaced)` is where a tool that only looks at the
+  scene while it is up hears of it (the Tube tool does).
 - **Only work, and only work that can be kept.** `None`, the default, is right
   for most tools. Do not answer for what the tool laid out by itself and the
   user never touched (the Lathe's starting vase, joints the Keys tool planned),

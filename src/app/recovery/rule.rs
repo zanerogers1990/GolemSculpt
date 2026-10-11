@@ -8,8 +8,8 @@
 //! The named tests are the cases a review found, each of which lost work:
 //! Restore It and one Undo, a copy of this run's own, an answer about one of
 //! two runs. The last test walks random sequences of everything a person can
-//! do (answer the question any way, edit, Undo, Redo, Open, Save, wait for a
-//! copy, close, crash) over two or three runs that died, and after every
+//! do (answer the question any way, edit, Undo, Redo, Open, New Scene, Save,
+//! wait for a copy, close, crash) over two or three runs that died, and after every
 //! step compares what is on disk with what the rule allows to have gone. It
 //! keeps its own account of which run each scene was restored from
 //! ([`Shadow`]) and of what each dead run left ([`Dead`]), so that it does
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::app::file_undo::File;
 use crate::app::tools::Tools;
-use crate::history::History;
+use crate::history::{FileState, History};
 use crate::mesh::Mesh;
 use crate::mesh::primitives::{self, Primitive};
 use crate::scene::Scene;
@@ -224,24 +224,32 @@ impl Run {
     }
 
     /// As `Running::put_in_place`: the scene `name` takes this one's place,
-    /// as one undo step that keeps this scene's file. `document` is its file
-    /// (an Open); `restored` the copy it was restored from.
-    fn replace(&mut self, name: &str, document: Option<PathBuf>, restored: Option<Restored>) {
+    /// as one undo step that keeps this scene's file. `file` is what it
+    /// brings: its file (an Open), the copy it was restored from, or neither
+    /// (a new scene).
+    fn replace(&mut self, name: &str, file: FileState) {
         let now = self.mark();
         let before = self.file().state(now);
         let state = self.scene.state();
         self.scene.objects[0].name = name.into();
         self.history.push_scene(state);
         self.history.keep_file(before);
-        self.shadow.replaced(restored.as_ref().map(|from| from.run.clone()));
+        self.shadow.replaced(file.restored.as_ref().map(|from| from.run.clone()));
         let now = self.mark();
-        self.file().became(document, restored, now);
+        self.file().became(file, now);
     }
 
     /// Open, with "Open Without Saving" if anything is unsaved.
     fn open(&mut self, file: &Path) {
         let name = std::fs::read_to_string(file).expect("the file reads");
-        self.replace(&name, Some(file.to_owned()), None);
+        self.replace(&name, FileState::opened(file.to_owned()));
+    }
+
+    /// New Scene (`Running::new_scene`), with "New Scene Without Saving" if
+    /// anything is unsaved: a scene called `name`, in no file, with nothing
+    /// in it to save.
+    fn new_scene(&mut self, name: &str) {
+        self.replace(name, FileState::new_scene());
     }
 
     /// As `Running::restore`: one copy put in place of the scene.
@@ -250,7 +258,7 @@ impl Run {
             Ok(name) if name != DAMAGED => name,
             _ => return Tried::Unreadable(format!("{} is damaged", kept.file.display())),
         };
-        self.replace(&name, None, Some(State::note(kept)));
+        self.replace(&name, FileState::restored(State::note(kept)));
         let mark = self.mark();
         self.state.restored_at(mark);
         Tried::Restored(1)
@@ -474,6 +482,53 @@ fn saving_the_scene_from_before_the_restore_does_not_retire_the_copies() {
     assert_eq!(copies_of(&crashed), [true]);
 }
 
+/// Where recovery meets New Scene: a new scene started over a restored scene
+/// that has not been saved puts the crashed work one Undo away. Neither that,
+/// nor saving the new scene, nor closing, is a save of the restored scene or
+/// an answer to discard it, so the crashed run's copies stay.
+#[test]
+fn a_new_scene_over_a_restored_scene_that_is_not_saved_retires_none_of_that_runs_copies() {
+    let dir = settings("new_scene_over_restored");
+    let crashed = dies(&dir, 1, "dragon", 2, false);
+    let mut run = Run::start(&dir, 2);
+    assert!(run.restore(false).is_some());
+    assert_eq!(run.origin(), Some(crashed.folder.clone()));
+
+    // New Scene Without Saving.
+    run.new_scene("a fresh ball");
+    assert!(!run.unsaved() && run.path.is_none(), "the new scene: in no file, nothing unsaved");
+    assert_eq!(run.origin(), None, "and it is not the restored copy");
+    run.check("New Scene over the restored scene", &Allowed::default());
+    assert!(!run.timed_copy(), "an untouched new scene is owed no copy");
+    assert_eq!(copies_of(&crashed), [true, true]);
+
+    // Work in the new scene, saved: (a) is for this run's own copies, of which there are none yet.
+    run.edit("a fresh ball, worked on");
+    let allowed = run.save(&dir.join("ball.sclp"));
+    assert!(allowed.runs().is_empty(), "the save of the new scene retires no crashed run");
+    run.check("saving the new scene", &allowed);
+    assert_eq!(copies_of(&crashed), [true, true], "the crashed work is in no file of the user's yet");
+
+    // Closed with nothing unsaved, and nothing asked: the next start offers the copies again.
+    let allowed = run.close(false);
+    run.check("closing from the saved new scene", &allowed);
+    assert_eq!(copies_of(&crashed), [true, true]);
+    assert!(run.end().is_none());
+    let mut run = Run::start(&dir, 3);
+    assert_eq!(run.offer.as_ref().map(|offer| offer.newest.file.clone()), Some(crashed.copies[1].0.clone()));
+
+    // This time: restore, New Scene, Undo back to the restored scene, and save that.
+    run.restore(false);
+    run.new_scene("another ball");
+    run.step(true);
+    assert_eq!((run.shown().as_str(), run.origin()), ("dragon 2", Some(crashed.folder.clone())));
+    assert!(run.unsaved(), "Undo of the new scene gives the restored scene back unsaved");
+    let allowed = run.save(&dir.join("dragon.sclp"));
+    assert_eq!(allowed.runs(), [crashed.folder.clone()]);
+    run.check("saving the restored scene after Undo of a New Scene", &allowed);
+    assert_eq!(copies_of(&crashed), [false, false]);
+}
+
 /// Review point 2: the question warns that the copy made on a fault may be
 /// incomplete and offers the earlier one. The user takes Restore It; three
 /// minutes later this run's first copy removed every copy the crash left,
@@ -610,6 +665,9 @@ struct Seen {
     crossed_back: usize,
     several_left: usize,
     closed_unasked: usize,
+    /// New Scene, and New Scene over a restored scene that had not been saved.
+    new_scenes: usize,
+    new_over_restored: usize,
 }
 
 impl Seen {
@@ -705,6 +763,12 @@ fn a_random_walk_never_removes_a_copy_outside_the_rule() {
                     8 if run.history.can_redo() => run.step(false),
                     9 => run.open(&library),
                     10 => allowed = run.save(&dir.join(format!("saved by run {started}.sclp"))),
+                    11 if dice.one_in(2) => {
+                        seen.new_scenes += 1;
+                        seen.new_over_restored += run.shadow.here.is_some() as usize;
+                        run.new_scene(&format!("run {started} new scene {turn}"));
+                        assert!(!run.unsaved(), "world {world}: a new scene with something unsaved in it");
+                    }
                     _ => {}
                 }
                 run.check(&format!("world {world}, run {started}, turn {turn}"), &allowed);
@@ -747,4 +811,5 @@ fn a_random_walk_never_removes_a_copy_outside_the_rule() {
     assert!(counts.iter().all(|&count| count >= 3), "{seen:?}");
     let counts = [seen.retired_discarded, seen.crossed_back, seen.several_left, seen.closed_unasked, seen.none_read];
     assert!(counts.iter().all(|&count| count >= 3), "{seen:?}");
+    assert!(seen.new_scenes >= 10 && seen.new_over_restored >= 3, "{seen:?}");
 }

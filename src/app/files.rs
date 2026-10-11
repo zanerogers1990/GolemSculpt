@@ -15,7 +15,8 @@
 //! another matter, which the same questions name: also `unsaved.rs`.
 //!
 //! Which file the scene belongs to, and whether it is unsaved, follow the
-//! scene through Undo and Redo of an Open: see `file_undo.rs`.
+//! scene through Undo and Redo of an Open: see `file_undo.rs`. New Scene is
+//! an Open of a scene that is in no file: see `new_scene.rs`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -32,7 +33,7 @@ use super::unsaved::opening_question;
 use super::{Running, import_mesh, install, is_native, stem};
 use crate::camera::{Camera, SavedView};
 use crate::doc::{Action, OpenHow};
-use crate::history::Restored;
+use crate::history::FileState;
 use crate::io;
 use crate::look::Look;
 use crate::mesh::Mesh;
@@ -54,8 +55,11 @@ pub(super) struct State {
     next_check: Instant,
     /// The scene's mark at which it is what its file holds (see `File::clean`).
     clean: Option<Mark>,
-    /// The user has said the app may close.
+    /// The app has been told it may close.
     quit: bool,
+    /// It was told so with a question about closing still to ask, which a
+    /// scripted run for a picture never puts up: nobody gave anything up.
+    unasked: bool,
     /// How many damaged points the last save wrote mended (see `io::save_scene_with`).
     mended_on_save: usize,
     /// How many damaged points the file last put in place of the scene had, mended as it was read.
@@ -68,8 +72,18 @@ impl State {
         let kept = home.load();
         let next_check = Instant::now() + SETTINGS_CHECK;
         // `clean` is set once the scene the app starts with is in place (`mark_saved`).
-        State { home, kept, next_check, clean: None, quit: false, mended_on_save: 0, repaired_on_open: 0 }
+        let (quit, unasked) = (false, false);
+        State { home, kept, next_check, clean: None, quit, unasked, mended_on_save: 0, repaired_on_open: 0 }
     }
+}
+
+/// Whether a close is the user's own doing as far as the scene's work goes:
+/// there is nothing unsaved, or the question about closing was asked and
+/// answered with a way to close (`told`, and not `unasked`). Anything else
+/// that closes the app over unsaved work (the Claude bridge's quit, a
+/// scripted run that is never asked) is not the user giving that work up.
+fn settled(told: bool, unasked: bool, unsaved: bool) -> bool {
+    !unsaved || (told && !unasked)
 }
 
 /// A file's name without its folders, for a status line.
@@ -309,13 +323,35 @@ impl Running {
     /// there is unsaved work, or work that is in no file (SSpheres, unmerged
     /// tubes and the like); then it asks, naming what would be lost.
     pub(super) fn close_requested(&mut self, event_loop: &ActiveEventLoop) {
-        let question = self.question_before_closing().filter(|_| self.args.screenshot.is_none());
-        let Some(question) = question else {
+        self.exit_action();
+        if self.quitting() {
             event_loop.exit();
-            return;
-        };
-        self.ui.graph.ask(question);
+        }
+    }
+
+    /// The File card's Exit button: the close button, from the interface,
+    /// which has no event loop to tell. It asks the same question when there
+    /// is one to ask; when there is none it says the app may close, and the
+    /// loop closes it between events (`App::before_waiting`), the way it
+    /// does after "Exit Without Saving". Either way the app closes by the
+    /// one road, so what that road looks after (the settings, the recovery
+    /// copies, a timelapse still recording) is looked after here too.
+    pub(super) fn exit_action(&mut self) {
+        match self.question_before_closing() {
+            // A scripted run for a picture has nobody to answer, and closes.
+            // Nobody was asked, so nothing counts as given up (`close_settled`).
+            Some(_) if self.args.screenshot.is_some() => (self.files.quit, self.files.unasked) = (true, true),
+            Some(question) => self.ui.graph.ask(question),
+            None => self.files.quit = true,
+        }
         self.redraw = true;
+    }
+
+    /// Whether the app, closing now, closes properly as far as its work
+    /// goes (see [`settled`]). The recovery copies are kept or removed by
+    /// this (`recovery_exit`).
+    pub(super) fn close_settled(&self) -> bool {
+        settled(self.files.quit, self.files.unasked, self.unsaved())
     }
 
     /// The answer to that question. Saving first falls back to Save As for a
@@ -756,23 +792,22 @@ impl Running {
     /// touched if the file cannot be read.
     fn replace_scene(&mut self, path: &Path) -> io::Result<(usize, io::Details)> {
         let saved = io::load_scene(path)?;
-        Ok(self.put_in_place(saved, Some(path.to_owned()), None))
+        Ok(self.put_in_place(saved, FileState::opened(path.to_owned())))
     }
 
-    /// Puts a scene that has been read from a file in place of the one that
-    /// is open, as one undo step, with its look, mirror settings and view.
-    /// `document` is the file that becomes the scene's own, with nothing
-    /// unsaved (an Open). With none the scene is left with no file and counts
-    /// as unsaved: a restored recovery copy, and `restored` says which. The
-    /// step keeps the file of the scene it replaces, so Undo gives that scene
-    /// its file back (`file_undo.rs`). Gives back how many objects came, and
-    /// what else the file kept.
-    pub(super) fn put_in_place(
-        &mut self,
-        saved: io::SavedScene,
-        document: Option<PathBuf>,
-        restored: Option<Restored>,
-    ) -> (usize, io::Details) {
+    /// Puts `saved` in place of the scene that is open, as one undo step,
+    /// with whatever look, mirror settings and view it holds. `file` is what
+    /// the new scene brings: the file that becomes its own, with nothing
+    /// unsaved (an Open, `FileState::opened`); no file, all of it unsaved,
+    /// and a note of the recovery copy it came from (`FileState::restored`);
+    /// or no file and nothing to save (New Scene, `FileState::new_scene`).
+    /// This is the one way a whole scene arrives, from a file or from
+    /// nowhere, so each treats the scene it replaces alike: the step keeps
+    /// that scene's file, whether it was saved and which recovery copy it was
+    /// restored from, and Undo gives them back (`file_undo.rs`); the tools
+    /// are told their objects went (`apply_details`). Gives back how many
+    /// objects came, and what else `saved` held.
+    pub(super) fn put_in_place(&mut self, saved: io::SavedScene, file: FileState) -> (usize, io::Details) {
         let count = saved.objects.len();
         self.files.repaired_on_open = saved.repaired;
         let before = self.history_mark();
@@ -786,13 +821,13 @@ impl Running {
         self.doc.history.keep_file(before);
         self.doc.mesh_replaced = true;
         self.sync_view();
-        if restored.is_some() {
+        if file.restored.is_some() {
             // Where a scripted check of recovery may ask for a fault.
             self.restore_fault_point();
         }
         self.apply_details(&details);
         let now = self.history_mark();
-        self.file().became(document, restored, now);
+        self.file().became(file, now);
         (count, details)
     }
 
@@ -851,17 +886,18 @@ impl Running {
     // ---- visual checks
 
     /// Brings up something of this file's to look at with `--screenshot`:
-    /// `recent` fills the File card's recent tiles, `ask-exit` and `ask-open`
-    /// put up the question the close button, or choosing a file, would ask of
-    /// the scene as the other `--demo` options left it (`ask-open-clean`: of
-    /// a scene with nothing to lose), `play` runs `files_play` first, `lost`
-    /// the check of what closing and opening would lose (app/unsaved/play.rs),
-    /// and `open-undo` the check of Undo across an Open
-    /// (app/file_undo/play.rs). `ask-exit:mirror` makes a change first that
-    /// a file keeps and no undo step records: `mirror`, `hide` or `local`
-    /// (`Running::kept_change`); `ask-exit:saved` takes the scene as the
-    /// other options left it for saved, so that only what is in no file is
-    /// left to ask about. Everything it writes goes under the temp folder.
+    /// `recent` fills the File card's recent tiles, `ask-exit`, `ask-open`
+    /// and `ask-new` put up the question the close button, choosing a file,
+    /// or New Scene would ask of the scene as the other `--demo` options left
+    /// it (`ask-open-clean`: of a scene with nothing to lose), `play` runs
+    /// `files_play` first, `lost` the check of what closing and opening would
+    /// lose (app/unsaved/play.rs), `open-undo` the check of Undo across an
+    /// Open (app/file_undo/play.rs), and `new` the check of New Scene and
+    /// Exit (app/new_scene/play.rs). `ask-exit:mirror` makes a change first
+    /// that a file keeps and no undo step records: `mirror`, `hide` or
+    /// `local` (`Running::kept_change`); `ask-exit:saved` takes the scene as
+    /// the other options left it for saved, so that only what is in no file
+    /// is left to ask about. Everything it writes goes under the temp folder.
     pub(super) fn files_demo(&mut self, what: &str) {
         let folder = std::env::temp_dir().join("sculpt_files_demo");
         let _ = std::fs::remove_dir_all(&folder);
@@ -881,17 +917,20 @@ impl Running {
             "open-undo" | "open-undo:opened" | "open-undo:undone" => self.open_undo_play(&folder, what),
             // What closing and opening would lose, asked the way a person would (app/unsaved/play.rs).
             "lost" => self.lost_play(&folder),
+            // New Scene and the Exit button, through the routines the buttons run (app/new_scene/play.rs).
+            "new" | "new:fresh" | "new:undone" => self.new_scene_play(&folder, what),
             "ask-open-clean" => {
                 let path = folder.join("dragon head.sclp");
                 self.ui.graph.ask(Question::Open { path, unsaved: false, lost: Vec::new() });
             }
-            _ if what.starts_with("ask-exit") || what.starts_with("ask-open") => {
-                match what.split_once(':') {
-                    Some((_, "saved")) => self.mark_saved(),
-                    Some((_, change)) => self.kept_change(change),
+            _ if ["ask-exit", "ask-open", "ask-new"].iter().any(|ask| what.starts_with(ask)) => {
+                let (ask, change) = what.split_once(':').map_or((what, None), |(ask, change)| (ask, Some(change)));
+                match change {
+                    Some("saved") => self.mark_saved(),
+                    Some(change) => self.kept_change(change),
                     None => {}
                 }
-                self.demo_question(&folder, what.starts_with("ask-open"));
+                self.demo_question(&folder, ask);
             }
             _ => {
                 // The Objects card shut, as if it had been left that way, so
@@ -917,14 +956,22 @@ impl Running {
     }
 
     /// Puts up the question the close button would ask of the scene as it
-    /// stands, or (`open`) the one choosing a file would: the app's own
-    /// decision, so the picture is of what a person would see. Says so if
-    /// there would be no question at all.
-    fn demo_question(&mut self, folder: &Path, open: bool) {
-        if !open {
+    /// stands (`ask-exit`), or the one New Scene would (`ask-new`), or the
+    /// one choosing a file would (`ask-open`): the app's own decision, so
+    /// the picture is of what a person would see. Says so if there would be
+    /// no question at all.
+    fn demo_question(&mut self, folder: &Path, ask: &str) {
+        if ask == "ask-exit" {
             match self.question_before_closing() {
                 Some(question) => self.ui.graph.ask(question),
                 None => println!("ask-exit: nothing would be lost, so the app would close without asking"),
+            }
+            return;
+        }
+        if ask == "ask-new" {
+            self.new_scene_action();
+            if !self.ui.graph.asking() {
+                println!("ask-new: nothing would be lost, so the new scene was started without a question");
             }
             return;
         }
@@ -938,6 +985,20 @@ impl Running {
             let opened = self.doc.scene.objects.len();
             println!("ask-open: nothing to keep, so the file opened without a question ({objects} -> {opened} objects)");
         }
+    }
+
+    /// For a scripted check: presses Exit as a person's run would (a
+    /// `--screenshot` run never asks), then takes the press back, so the app
+    /// stays open. Gives whether the app would have closed at once, and the
+    /// question that was put up if it asked instead.
+    pub(super) fn exit_pressed(&mut self) -> (bool, Option<Question>) {
+        let shot = self.args.screenshot.take();
+        self.exit_action();
+        self.args.screenshot = shot;
+        let closing = std::mem::take(&mut self.files.quit);
+        let asked = self.ui.graph.question().cloned();
+        self.ui.graph.answer(false);
+        (closing, asked)
     }
 
     /// Writes the scene to `path` as a save would, and leaves what the scene
@@ -1080,6 +1141,20 @@ impl Running {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where the Exit button meets the recovery copies: the app is told it
+    /// may close in three ways, and only two of them are the user's word.
+    #[test]
+    fn a_close_over_unsaved_work_is_settled_only_when_the_question_was_answered() {
+        // Nothing unsaved: there was nothing to ask, however it closes.
+        assert!(settled(false, false, false) && settled(true, false, false) && settled(true, true, false));
+        // Unsaved, and the question answered with a way to close.
+        assert!(settled(true, false, true));
+        // Unsaved, and closed without the question: the bridge's quit, which
+        // tells nobody; a scripted run, which is told and never asked.
+        assert!(!settled(false, false, true), "this run's recovery copies must stay");
+        assert!(!settled(true, true, true), "this run's recovery copies must stay");
+    }
 
     #[test]
     fn a_file_that_will_not_open_at_start_up_is_named_and_explained() {
