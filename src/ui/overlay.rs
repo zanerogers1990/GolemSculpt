@@ -222,6 +222,21 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
     });
 }
 
+/// Where a hold-Space wheel that reaches `half` each way from its centre
+/// opens for a pointer at `anchor`: round the pointer, moved in as far as it
+/// takes for all of the wheel to be on `screen`. On a window smaller than
+/// the wheel there is no such place; it then sits in the middle, with as
+/// much of it showing as there can be. (`clamp` would panic there: its low
+/// end is past its high end.)
+pub fn wheel_center(anchor: Pos2, half: f32, screen: Rect) -> Pos2 {
+    let middle = |low: f32, high: f32| (low + high) * 0.5;
+    let fit = |v: f32, low: f32, high: f32| if low <= high && v.is_finite() { v.max(low).min(high) } else { middle(low, high) };
+    pos2(
+        fit(anchor.x, screen.left() + half, screen.right() - half),
+        fit(anchor.y, screen.top() + half, screen.bottom() - half),
+    )
+}
+
 /// Hold-Space wheel: the brushes when sculpting, the edit modes while the
 /// SSphere tool is up. Tiles are clicked; letting go of Space closes it.
 /// Under it is a bar for the one value worth setting from here: the brush's
@@ -238,10 +253,7 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
     // corners, so its ring is a little wider and its tiles a little smaller.
     let (half, disc, ring, tile_size, pick) =
         if spheres { (140.0, 134.0, 92.0, 58.0, 34.0) } else { (152.0, 146.0, 104.0, 54.0, 31.0) };
-    let center = pos2(
-        anchor.x.clamp(screen.left() + half, screen.right() - half),
-        anchor.y.clamp(screen.top() + half, screen.bottom() - half),
-    );
+    let center = wheel_center(anchor, half, screen);
     // Clockwise from the top; `None` is the mask tile.
     let brushes: [(Option<Brush>, &str, &str); 9] = [
         (Some(Brush::Move), "Move", "brush_move"),
@@ -349,11 +361,22 @@ const BAR_GAP: f32 = 6.0;
 
 /// Where the bar that goes with a wheel sits: under the wheel, or above it
 /// when the wheel is too near the bottom of the window for the bar to fit.
+/// On a window too short for either it goes beside the wheel, to the right
+/// if it fits there, else to the left. It is never put where part of it
+/// would be off the window or on the wheel's tiles: where none of the four
+/// places will do there is no bar (the value has its slider in the panel).
 /// `center` is the wheel's centre and `radius` its outer radius.
-fn wheel_bar_rect(center: Pos2, radius: f32, screen: Rect) -> Rect {
-    let below = center.y + radius + BAR_GAP;
-    let top = if below + BAR_SIZE.y <= screen.bottom() { below } else { center.y - radius - BAR_GAP - BAR_SIZE.y };
-    Rect::from_min_size(pos2(center.x - BAR_SIZE.x * 0.5, top), BAR_SIZE)
+fn wheel_bar_rect(center: Pos2, radius: f32, screen: Rect) -> Option<Rect> {
+    let wheel = Rect::from_center_size(center, Vec2::splat(2.0 * radius));
+    let across = center.x - BAR_SIZE.x * 0.5;
+    let down = center.y - BAR_SIZE.y * 0.5;
+    let places = [
+        pos2(across, wheel.bottom() + BAR_GAP),
+        pos2(across, wheel.top() - BAR_GAP - BAR_SIZE.y),
+        pos2(wheel.right() + BAR_GAP, down),
+        pos2(wheel.left() - BAR_GAP - BAR_SIZE.x, down),
+    ];
+    places.into_iter().map(|at| Rect::from_min_size(at, BAR_SIZE)).find(|bar| screen.contains_rect(*bar))
 }
 
 /// The part of a wheel bar's plate the slider is painted in. The whole plate
@@ -367,7 +390,8 @@ fn wheel_bar_slider(plate: Rect) -> Rect {
 /// wheel, the brush's strength under the brush wheel. A press anywhere on
 /// its plate sets the value and a drag follows the pointer, so a pen need
 /// not land on the thin track. `open` is how far the wheel has faded in
-/// (0 to 1). Returns whether the value changed.
+/// (0 to 1). Returns whether the value changed. On a window with no room
+/// for it (`wheel_bar_rect`) there is no bar, and nothing changes.
 pub fn wheel_bar(
     ctx: &egui::Context,
     id: &str,
@@ -377,7 +401,7 @@ pub fn wheel_bar(
     range: std::ops::RangeInclusive<f32>,
     readout: impl Fn(f32) -> String,
 ) -> bool {
-    let plate = wheel_bar_rect(center, radius, ctx.content_rect());
+    let Some(plate) = wheel_bar_rect(center, radius, ctx.content_rect()) else { return false };
     let mut changed = false;
     egui::Area::new(Id::new(id)).order(Order::Foreground).fixed_pos(plate.min).show(ctx, |ui| {
         ui.multiply_opacity(open);
@@ -494,16 +518,90 @@ mod tests {
 
     #[test]
     fn a_wheel_bar_sits_under_its_wheel_or_above_it_at_the_bottom_of_the_window() {
-        let under = wheel_bar_rect(pos2(800.0, 400.0), 152.0, SCREEN);
+        let under = wheel_bar_rect(pos2(800.0, 400.0), 152.0, SCREEN).unwrap();
         assert_eq!(under.top(), 400.0 + 152.0 + BAR_GAP);
         assert_eq!(under.center().x, 800.0);
         assert_eq!(under.size(), BAR_SIZE);
         // The wheel as low as it can open: the bar would hang off the window.
-        let above = wheel_bar_rect(pos2(800.0, 900.0 - 152.0), 152.0, SCREEN);
+        let above = wheel_bar_rect(pos2(800.0, 900.0 - 152.0), 152.0, SCREEN).unwrap();
         assert_eq!(above.bottom(), 900.0 - 304.0 - BAR_GAP);
         // And the last place it still fits under.
-        let fits = wheel_bar_rect(pos2(800.0, 900.0 - 152.0 - BAR_GAP - BAR_SIZE.y), 152.0, SCREEN);
+        let fits = wheel_bar_rect(pos2(800.0, 900.0 - 152.0 - BAR_GAP - BAR_SIZE.y), 152.0, SCREEN).unwrap();
         assert_eq!(fits.bottom(), 900.0);
+    }
+
+    /// The two wheels' half sizes: the brush wheel's, and the SSphere and
+    /// hosted tools' (see `radial_menu` and `tools::radial`).
+    const WHEELS: [f32; 2] = [152.0, 140.0];
+
+    /// Holding Space opens the wheel on a window of any size, down to one
+    /// point each way and none at all (house rule 9: the lowest input). It
+    /// is whole wherever the window is big enough for it, and in the middle
+    /// of a window that is not.
+    #[test]
+    fn a_wheel_has_a_place_on_a_window_of_any_size() {
+        let sizes = [(0.0, 0.0), (1.0, 1.0), (303.0, 900.0), (900.0, 303.0), (200.0, 150.0), (304.0, 304.0), (1600.0, 900.0)];
+        for half in WHEELS {
+            for (width, height) in sizes {
+                let screen = Rect::from_min_size(pos2(10.0, 20.0), vec2(width, height));
+                for anchor in [pos2(0.0, 0.0), screen.center(), screen.max, pos2(-5000.0, 9000.0), pos2(f32::NAN, f32::INFINITY)] {
+                    let what = format!("half {half}, {width} x {height}, pointer at {anchor:?}");
+                    let center = wheel_center(anchor, half, screen);
+                    assert!(center.x.is_finite() && center.y.is_finite(), "{what}: {center:?}");
+                    let wheel = Rect::from_center_size(center, Vec2::splat(2.0 * half));
+                    if width >= 2.0 * half {
+                        assert!(wheel.left() >= screen.left() && wheel.right() <= screen.right(), "{what}: {wheel:?}");
+                    } else {
+                        assert_eq!(center.x, screen.center().x, "{what}");
+                    }
+                    if height >= 2.0 * half {
+                        assert!(wheel.top() >= screen.top() && wheel.bottom() <= screen.bottom(), "{what}: {wheel:?}");
+                    } else {
+                        assert_eq!(center.y, screen.center().y, "{what}");
+                    }
+                }
+            }
+        }
+        // Where there is room it opens round the pointer, as it always has.
+        assert_eq!(wheel_center(pos2(700.0, 420.0), 152.0, SCREEN), pos2(700.0, 420.0));
+        assert_eq!(wheel_center(pos2(3.0, 899.0), 152.0, SCREEN), pos2(152.0, 900.0 - 152.0));
+    }
+
+    /// On a window of any size, wherever the wheel opens, its bar is all on
+    /// the window and off the wheel's tiles, or there is no bar.
+    #[test]
+    fn a_wheel_bar_is_never_off_the_window_or_on_the_tiles() {
+        let mut beside = 0;
+        for half in WHEELS {
+            for height in [0.0, 1.0, 40.0, 200.0, 303.0, 304.0, 330.0, 361.0, 362.0, 420.0, 900.0] {
+                for width in [0.0, 1.0, 235.0, 304.0, 545.0, 546.0, 700.0, 1600.0] {
+                    let screen = Rect::from_min_size(Pos2::ZERO, vec2(width, height));
+                    for anchor in [screen.min, screen.center(), screen.max, screen.left_bottom(), screen.right_top()] {
+                        let center = wheel_center(anchor, half, screen);
+                        let Some(bar) = wheel_bar_rect(center, half, screen) else { continue };
+                        let wheel = Rect::from_center_size(center, Vec2::splat(2.0 * half));
+                        let what = format!("half {half}, {width} x {height}, pointer at {anchor:?}: {bar:?}");
+                        assert!(screen.contains_rect(bar), "off the window: {what}");
+                        assert!(!bar.intersects(wheel.shrink(0.01)), "on the wheel: {what}");
+                        assert_eq!(bar.size(), BAR_SIZE);
+                        beside += usize::from(bar.center().y == center.y);
+                    }
+                }
+            }
+        }
+        assert!(beside > 0, "some short, wide window has the bar beside the wheel");
+        // A window 330 points high has no room over or under the brush wheel:
+        // the bar goes beside it, on whichever side has the room.
+        let short = Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 330.0));
+        let center = wheel_center(pos2(400.0, 100.0), 152.0, short);
+        assert_eq!(center, pos2(400.0, 152.0));
+        let right = wheel_bar_rect(center, 152.0, short).unwrap();
+        assert_eq!(right.min, pos2(400.0 + 152.0 + BAR_GAP, 152.0 - BAR_SIZE.y * 0.5));
+        let left = wheel_bar_rect(wheel_center(pos2(1590.0, 100.0), 152.0, short), 152.0, short).unwrap();
+        assert_eq!(left.right(), 1600.0 - 304.0 - BAR_GAP);
+        // And one with room on neither side has none.
+        let small = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 330.0));
+        assert_eq!(wheel_bar_rect(wheel_center(small.center(), 152.0, small), 152.0, small), None);
     }
 
     /// A pen pressed anywhere on the bar's plate sets the value from where
@@ -513,7 +611,7 @@ mod tests {
     fn a_press_and_drag_along_a_wheel_bar_sets_its_value() {
         let ctx = egui::Context::default();
         let wheel = (pos2(800.0, 400.0), 152.0, 1.0);
-        let plate = wheel_bar_rect(wheel.0, wheel.1, SCREEN);
+        let plate = wheel_bar_rect(wheel.0, wheel.1, SCREEN).unwrap();
         let track = wheel_bar_slider(plate).shrink2(vec2(7.0, 0.0));
         let mut value = 0.5;
         // A frame of the bar alone; true when the bar says its value changed.

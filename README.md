@@ -1340,7 +1340,11 @@ letting go of Space over the bar only closes the wheel. While painting a mask
 it reads "Mask Strength": a mask is painted at the strength of the brush under
 it, so that is the value it sets. The Pose brush makes no use of Strength, so
 its wheel has no bar. (The Unity app's wheel had a Size slider there as well;
-this one has Strength only.)
+this one has Strength only.) On a window too short for the bar under the
+wheel or over it (a very small window, or a very large interface size), the
+bar goes beside the wheel instead, and where there is no room there either
+the wheel comes up without it. The wheel itself opens on a window of any
+size; on one smaller than the wheel, part of it is off the edge.
 
 **Either panel folds away.** Each panel has a small arrow tab on its inner
 edge, just under the view gizmo's buttons. Tap it and the whole panel
@@ -1354,6 +1358,39 @@ still hides everything, tabs included, and brings the panels back folded or
 not as they were. Which panels are folded is remembered between runs. There is
 no key for it. A tool whose panel is folded away still works from the
 viewport, its wheel and its keys; its settings are a tap on the tab away.
+
+**What a folded panel would have told you is said over the view.** The status
+line at the top of the Scene panel is where the app says what it just did or
+could not do ("Could not save...", a Remesh that was refused, what a tool's
+cut left behind). While that panel is folded away, the same words in the same
+colours come up on a small plate at the top of the view, between the panels
+and beside the view gizmo; a long message wraps onto several lines.
+
+- **An error (red) stays** until something else is written, however long
+  that is: look up a minute later and it is still there.
+- **Anything else fades** once there has been time to read it: about six
+  seconds for a few words, longer for a long message, half a minute at most.
+- **Tap the plate to put the message away** (it has a small cross in its
+  corner). It is still on the Scene panel's status line when the panel comes
+  back. The plate is the only part of the view that takes the pen; right
+  beside it you are sculpting.
+- With the Sculpt panel folded away, two notes from its cards join the
+  plate: dynamic topology's "Triangle limit reached", for as long as that
+  holds, and the SSphere tool's one-off results. They go by themselves, so a
+  plate with only those on it lets the pen through to the model.
+- The clean view (Tab) hides the plate with everything else.
+
+Background work (a merge, a cut, Make Real) shows its progress and its Cancel
+at the bottom of the view whatever is folded, and the question a Delete or an
+unsaved file asks comes up over everything. A tool's own buttons (Accept,
+Create, Done) are in its panel: bring the panel back, or float that card.
+
+**A double tap on a control that goes away does not mark the model.** The
+fold tab jumps to the edge of the screen when it is tapped, and the button
+that puts a floating card back takes its window with it. A second tap that
+follows within a third of a second, on the same spot, would land on the model
+underneath; it is ignored. A stroke begun anywhere else, or any later, is a
+stroke as always.
 
 **Any card floats.** Every card of both panels (Brushes, the brush's own
 settings, Stroke, Masking, Hidden Parts, Symmetry, Remesh, Objects, File,
@@ -1469,9 +1506,10 @@ sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-new   #
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)
-sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5> | fold=left / right / both (panels folded away) | float=<card>@<x>:<y> (that card floating, its corner there in the interface's points; as many as wanted)
+sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | wheel=left (at the left edge) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5> | fold=left / right / both (panels folded away) | float=<card>@<x>:<y> (that card floating, its corner there in the interface's points; as many as wanted) | status=error / status=ok / status=fading (a made-up long error, a short success, or that success part-way through fading, on the status line) | limit (dynamic topology at its triangle limit)
+sculpt.exe --screenshot out.png --demo --demo-ui "fold=right,status=error"   # the status line over the view while the Scene panel is folded away (fold=both,status=error,limit for both panels' notes; --size 1600x330 with wheel for the bar beside the wheel)
 sculpt.exe --screenshot out.png --demo --demo-ui "fold=both,float=Brushes@60:40,float=Objects@700:60"   # two cards floating with both panels folded away (add --size 700x420 to see them follow a small window in)
-sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel, the panels' fold tabs, a card pulled out, dragged, kept through folded panels and put back), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window
+sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel, the panels' fold tabs, a card pulled out, dragged, kept through folded panels and put back, the status line over the view with a panel folded, a card asked to open while folded away, the wheel on a short window, a double tap on a fold tab), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window, and give it an empty SCULPT_SETTINGS_DIR (it changes the interface size as it goes)
 sculpt.exe --screenshot out.png --view 0,0 some.sclp        # a file (.sclp, .sculpt, .obj, .stl) seen whole from a yaw and pitch: 0,0 front | -90,0 right | 180,0 back | 0,89 top
 sculpt.exe --screenshot out.png --demo-files unity some.sculpt   # a sculpt from the Unity app: saved as a .sclp, reopened, added; prints a line per check
 SCULPT_UNDO_BYTES=1 sculpt.exe --screenshot out.png --demo   # undo's memory limit set in bytes (here to nothing): the second stroke lets the first go, and the line that says so is showing

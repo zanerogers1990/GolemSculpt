@@ -132,10 +132,7 @@ pub fn radial(ctx: &egui::Context, doc: &mut Doc, state: &UiState) {
         return;
     }
     let screen = ctx.content_rect();
-    let center = pos2(
-        anchor.x.clamp(screen.left() + 140.0, screen.right() - 140.0),
-        anchor.y.clamp(screen.top() + 140.0, screen.bottom() - 140.0),
-    );
+    let center = super::overlay::wheel_center(anchor, 140.0, screen);
     let open = ctx.animate_bool_with_time(Id::new("tool_radial_open"), true, 0.11);
     let current = tiles.iter().find(|t| t.on).map_or(doc.tools.info(index).map_or("", |info| info.name), |t| t.label);
     let mut clicked = None;

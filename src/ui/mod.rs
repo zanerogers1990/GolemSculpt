@@ -1,6 +1,7 @@
 //! The interface: two floating panels over a full-window viewport, a view
 //! gizmo, the brush cursor and the radial brush menu. Layout and wording
-//! follow the Unity app. Either panel folds away to a tab (see `panels`).
+//! follow the Unity app. Either panel folds away to a tab (see `panels`);
+//! what it alone would have said is then said over the view (see `status`).
 
 pub mod assets;
 mod brush_size;
@@ -14,6 +15,7 @@ mod pose;
 pub mod question;
 mod scene_graph;
 mod spheres;
+pub mod status;
 mod symmetry;
 pub mod theme;
 mod tools;
@@ -37,6 +39,9 @@ pub struct UiState {
     /// Message, colour and the time it appeared.
     pub toast: Option<(String, Color32, f64)>,
     pub status: (String, Color32),
+    /// When `status` was written, and whether its copy over the view (drawn
+    /// while the Scene panel is folded away) has been tapped away since.
+    pub status_seen: status::Seen,
     /// Where the radial brush menu is open (points), if it is.
     pub radial: Option<Pos2>,
     /// The object list: rename, drag-to-reorder and its text fields.
@@ -58,6 +63,7 @@ impl UiState {
             assets: Assets::load(ctx),
             toast: None,
             status: ("Import adds a model (.obj / .stl).".into(), theme::HINT),
+            status_seen: Default::default(),
             radial: None,
             graph: Default::default(),
             gizmo: Vec::new(),
@@ -125,6 +131,8 @@ pub fn build(
                 });
             });
         doc.opts.folded = folded;
+        // What a folded panel alone would have said: the status line first of all.
+        status::overlay(&ctx, doc, state, folded, time);
     }
 
     overlay::radial_menu(&ctx, doc, state);

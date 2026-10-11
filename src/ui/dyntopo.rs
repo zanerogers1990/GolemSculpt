@@ -9,7 +9,17 @@ use super::tip;
 use crate::sculpt::dyntopo::{DynTopo, MAX_DETAIL, MAX_TRIANGLES, MIN_DETAIL};
 
 /// The colour of a warning that is not an error.
-const WARNING: Color32 = Color32::from_rgb(242, 190, 77);
+pub const WARNING: Color32 = Color32::from_rgb(242, 190, 77);
+
+/// What to say while dynamic topology has stopped adding triangles at its
+/// limit; nothing while it has not. The Remesh card says it, and so does the
+/// plate over the view while the Sculpt panel is folded away (`status`):
+/// a brush that has quietly stopped adding detail looks broken otherwise.
+pub fn limit_note(dyntopo: &DynTopo) -> Option<String> {
+    (dyntopo.enabled && dyntopo.at_limit).then(|| {
+        format!("Triangle limit reached ({}M). Remesh at a lower resolution to keep refining.", MAX_TRIANGLES / 1_000_000)
+    })
+}
 
 pub fn section(ui: &mut egui::Ui, dyntopo: &mut DynTopo, tips: bool) {
     ui.add_space(6.0);
@@ -34,11 +44,7 @@ pub fn section(ui: &mut egui::Ui, dyntopo: &mut DynTopo, tips: bool) {
     {
         dyntopo.detail = (percent / 100.0).clamp(MIN_DETAIL, MAX_DETAIL);
     }
-    if dyntopo.enabled && dyntopo.at_limit {
-        let text = format!(
-            "Triangle limit reached ({}M). Remesh at a lower resolution to keep refining.",
-            MAX_TRIANGLES / 1_000_000
-        );
+    if let Some(text) = limit_note(dyntopo) {
         ui.add(egui::Label::new(egui::RichText::new(text).font(theme::font(11.0)).italics().color(WARNING)).wrap());
     }
 }

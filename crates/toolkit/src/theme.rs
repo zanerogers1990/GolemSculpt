@@ -144,12 +144,18 @@ pub fn category_as(
     let id = ui.make_persistent_id(("category", title));
     let header = CardHeader { title, accent, summary };
     if crate::floating::is_floating(ui.ctx(), key) {
+        // A floating card is always open: there is nothing left to ask for.
+        asked_open(ui.ctx(), title);
         return crate::floating::show(ui, key, &header, id, body);
     }
     if crate::floating::hidden(ui) {
         return;
     }
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open));
+    if asked_open(ui.ctx(), title) && !open {
+        open = true;
+        ui.data_mut(|d| d.insert_persisted(id, true));
+    }
     let width = ui.available_width();
     let mut pulled_out = None;
     egui::Frame::new().fill(CARD).corner_radius(7.0).show(ui, |ui| {
@@ -294,12 +300,32 @@ pub(crate) fn card_body(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// Opens the [`category`] titled `title` in this `ui`, as if the user had
-/// clicked its header: for a card that should show itself when its tool
-/// comes up. Call it just before drawing the category.
+/// Opens the [`category`] titled `title`, as if the user had clicked its
+/// header: for a card that should show itself when its tool comes up. Call
+/// it before drawing the category.
+///
+/// The card opens the next time it is drawn where it can be seen. That is
+/// usually this frame, but a panel that is folded away still runs its code
+/// (for its floating cards, see [`crate::floating::only`]), and a request
+/// made in such a run must not be used up there: it waits for the panel to
+/// come back. So a caller can make the request once, wherever it is run.
 pub fn open_category(ui: &mut Ui, title: &str) {
-    let id = ui.make_persistent_id(("category", title));
-    ui.data_mut(|d| d.insert_persisted(id, true));
+    opening(ui.ctx(), |titles| titles.insert(title.to_owned()));
+}
+
+/// The cards [`open_category`] was asked to open and that have not been
+/// drawn since, by title.
+#[derive(Clone, Default)]
+struct Opening(std::collections::BTreeSet<String>);
+
+fn opening<R>(ctx: &egui::Context, f: impl FnOnce(&mut std::collections::BTreeSet<String>) -> R) -> R {
+    ctx.data_mut(|d| f(&mut d.get_temp_mut_or_default::<Opening>(egui::Id::new("categories_to_open")).0))
+}
+
+/// Whether the card titled `title` was asked to open. Asking is over once
+/// this is called: call it only where the card is about to be drawn.
+fn asked_open(ctx: &egui::Context, title: &str) -> bool {
+    opening(ctx, |titles| titles.remove(title))
 }
 
 /// Sub-heading inside a category.
@@ -597,5 +623,66 @@ mod tests {
         // A track with no length, or one turned inside out, gives the lowest.
         assert_eq!(slider_value(100.0, 100.0, 100.0, 0.01, 1.0), 0.01);
         assert_eq!(slider_value(100.0, 300.0, 100.0, 0.01, 1.0), 0.01);
+    }
+
+    /// One frame of a panel holding the closed card "Size" and another card:
+    /// in view, or folded away and run out of sight because a card floats.
+    /// `ask` asks for "Size" to open first. True when its body was drawn.
+    fn size_card_frame(ctx: &egui::Context, folded: bool, ask: bool) -> bool {
+        let mut drawn = false;
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
+        let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |root| {
+            let mut panel = |ui: &mut Ui| {
+                if ask {
+                    open_category(ui, "Size");
+                }
+                category(ui, "Size", ACCENT, "", false, |_| drawn = true);
+                category(ui, "Other", ACCENT, "", false, |_| {});
+            };
+            if folded {
+                crate::floating::only(root, "right", 240.0, panel);
+            } else {
+                egui::Area::new(egui::Id::new("panel")).fixed_pos(pos2(10.0, 10.0)).show(root.ctx(), |ui| {
+                    ui.set_width(240.0);
+                    panel(ui);
+                });
+            }
+        })
+        .drop_without_applying_deltas();
+        drawn
+    }
+
+    /// A card asked to open while its panel is folded away, and run out of
+    /// sight for a floating card, is open when the panel comes back: the
+    /// request is not used up where nobody can see it.
+    #[test]
+    fn a_card_asked_to_open_while_its_panel_is_folded_away_opens_when_it_is_back() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        crate::floating::float(&ctx, "Other", pos2(600.0, 100.0));
+        assert!(!size_card_frame(&ctx, false, false), "it starts closed");
+        assert!(!size_card_frame(&ctx, true, true), "folded away, nothing of it is drawn");
+        assert!(!size_card_frame(&ctx, true, false));
+        assert!(size_card_frame(&ctx, false, false), "back in view it opens, as it was asked to");
+        assert!(size_card_frame(&ctx, false, false), "and stays open without being asked again");
+    }
+
+    /// Asked for in view, a card opens in that same frame, as it always did;
+    /// and a card that floats (always open) leaves no request waiting to
+    /// spring it open once it is docked and closed by hand.
+    #[test]
+    fn a_card_asked_to_open_in_view_opens_at_once() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        assert!(!size_card_frame(&ctx, false, false));
+        assert!(size_card_frame(&ctx, false, true));
+        assert!(!asked_open(&ctx, "Size"), "the request is used up by the frame that drew it");
+
+        let floats = egui::Context::default();
+        install(&floats);
+        crate::floating::float(&floats, "Size", pos2(600.0, 100.0));
+        assert!(size_card_frame(&floats, true, true), "a floating card is drawn open");
+        assert!(!asked_open(&floats, "Size"), "and that was the opening asked for");
     }
 }

@@ -32,6 +32,7 @@ use crate::{io, remesh};
 
 mod bridge;
 mod dyntopo;
+mod echo;
 mod recording;
 mod faces;
 mod file_arrays;
@@ -194,6 +195,11 @@ struct Input {
     pen_down: bool,
     pen_pressure: Option<f32>,
     last_click: Option<(Instant, Vec2)>,
+    /// Where the press under way began, if that was on an interface
+    /// control, and the last tap on one: a press on the view straight after
+    /// a tap, in the same place, is its echo and not a stroke (app/echo.rs).
+    on_control: Option<Vec2>,
+    ui_tap: Option<echo::Tap>,
     last_f: Option<Instant>,
     gauge: Option<Gauge>,
     hover: Option<Vec3>,
@@ -490,6 +496,8 @@ impl Running {
                 pen_down: false,
                 pen_pressure: None,
                 last_click: None,
+                on_control: None,
+                ui_tap: None,
                 last_f: None,
                 gauge: None,
                 hover: None,
@@ -626,12 +634,24 @@ impl Running {
             || self.egui_ctx.layer_id_at(pos).is_some_and(|l| l.order != egui::Order::Background)
     }
 
+    /// Whether a press where the pointer is now is the echo of a tap on an
+    /// interface control that is no longer under it (see app/echo.rs).
+    fn echoes_ui_tap(&self) -> bool {
+        let per_point = self.egui_ctx.pixels_per_point();
+        self.input.ui_tap.is_some_and(|tap| tap.echoed_by(Instant::now(), self.input.pointer, per_point))
+    }
+
     fn toast(&mut self, text: impl Into<String>) {
         self.ui.toast = Some((text.into(), Color32::WHITE, self.time()));
     }
 
+    /// Writes the status line: the one at the top of the Scene panel, which
+    /// is drawn over the view instead while that panel is folded away
+    /// (`ui::status`). Not `ok` is an error: red, and it stays up there
+    /// until something else is written or it is tapped away.
     fn status(&mut self, text: impl Into<String>, ok: bool) {
         self.ui.status = (text.into(), if ok { theme::OK } else { theme::ERROR });
+        self.ui.status_seen = ui::status::Seen::at(self.time());
     }
 
     /// The orbit/zoom anchor: the last sculpted point, if the option is on and
@@ -789,7 +809,17 @@ impl Running {
             return;
         }
         self.input.button = Some(button);
-        if self.over_ui() || self.ui.radial.is_some() || self.input.gauge.is_some() {
+        let on_interface = self.over_ui();
+        if on_interface || self.ui.radial.is_some() || self.input.gauge.is_some() {
+            self.input.drag = Drag::Ui;
+            // A held-key gauge is a drag on the view, not a tap on a control:
+            // the stroke that follows it may well begin where it ended.
+            self.input.on_control = (on_interface && self.input.gauge.is_none()).then_some(self.input.pointer);
+            return;
+        }
+        // The control tapped a moment ago has gone from under the pen (a
+        // panel folded, a card put back): its second tap is not a stroke.
+        if button == MouseButton::Left && self.echoes_ui_tap() {
             self.input.drag = Drag::Ui;
             return;
         }
@@ -856,6 +886,10 @@ impl Running {
             return;
         }
         self.input.button = None;
+        if let Some(pressed_at) = self.input.on_control.take() {
+            let per_point = self.egui_ctx.pixels_per_point();
+            self.input.ui_tap = echo::Tap::ending(pressed_at, self.input.pointer, per_point);
+        }
         if self.input.drag == Drag::Sculpt {
             self.finish_stroke();
         }

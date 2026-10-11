@@ -102,7 +102,7 @@ app sorts vertices its own way, so do not expect the order you sent. Copy
 | --- | --- |
 | `cx.commit(label, commands)` | Change the scene: **one undo step**. Returns a `Receipt` with the ids of what was added |
 | `cx.spawn(label, work)` | Run work on a background thread; returns a `Job<T>` |
-| `cx.status(text, ok)`, `cx.toast(text)` | The status line of the Scene panel; the fading word over the viewport |
+| `cx.status(text, ok)`, `cx.toast(text)` | The status line of the Scene panel (drawn over the viewport while that panel is folded away: not `ok` is an error and stays there until read, anything else fades after a few seconds); the fading word over the viewport |
 | `cx.finish()`, `cx.start()` | Put this tool away; bring it up (for a button on its card) |
 | `cx.frame_view(aabb)`, `cx.set_unit(u)`, `cx.set_mirror(axes)`, `cx.repaint()` | Camera glide; app-wide unit; the selected object's mirror axes; ask for another frame |
 | `cx.set_radial(RadialChange { on, count, axis })` | The selected object's radial symmetry: on or off, how many repeats, which axis. What is left `None` stays as the Symmetry card has it. It changes the object that is selected at the moment of asking, so the Lathe asks right after the commit that made and selected its object, and it is that object's symmetry that is set |
@@ -499,7 +499,9 @@ HINT)`, `button(ui, width, text, ButtonStyle { icon, active, badge, height })`,
 `text_field` / `labelled_field`, `shortcuts(ui, &[(key, what)])`,
 `row_width(ui, n, gap)` for a row of equal buttons, `tip(response, cx.tips,
 text)`, `count(n)`, and the colours (`ACCENT`, `TEXT`, `HINT`, `OK`, `ERROR`,
-`MASK`, `AXIS`...). `open_category` opens a card from code.
+`MASK`, `AXIS`...). `open_category` opens a card from code: ask once, and the
+card is open the next time it is drawn in view, even if its panel was folded
+away when you asked.
 
 Every `category` card has a button in its header that pulls it out of the
 panel to float over the viewport, and one to put it back

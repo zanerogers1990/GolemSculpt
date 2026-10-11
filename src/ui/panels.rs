@@ -7,7 +7,9 @@
 //! strokes off). Each side folds on its own and is remembered between runs
 //! (`crate::prefs`). The view gizmo and the bottom bar sit beside the panels,
 //! so they move out to the screen edge with them. Cards pulled out of a
-//! panel to float (`sculpt_toolkit::floating`) stay up when it is folded.
+//! panel to float (`sculpt_toolkit::floating`) stay up when it is folded,
+//! and what only a folded panel would have said (the status line above all)
+//! is said on a plate over the view (`super::status`).
 
 use egui::{Color32, Id, Order, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
@@ -18,7 +20,7 @@ pub const RIGHT_WIDTH: f32 = 260.0;
 pub const MARGIN: f32 = 8.0;
 
 /// The view gizmo's column: its bubbles, then Persp, Stroke Pivot and Frame.
-const GIZMO_SIZE: Vec2 = vec2(108.0, 108.0 + 3.0 * (4.0 + 22.0));
+pub(super) const GIZMO_SIZE: Vec2 = vec2(108.0, 108.0 + 3.0 * (4.0 + 22.0));
 const GIZMO_TOP: f32 = 14.0;
 /// The gap between the gizmo and the panel, or the folded tab, beside it.
 const GIZMO_GAP: f32 = 14.0;
@@ -94,7 +96,7 @@ pub fn tab_rect(side: Side, folded: bool, screen: Rect) -> Rect {
 
 /// What of the screen takes a tap for the tab painted at `tab`: a little
 /// more than its picture, on every side but the one it hangs from.
-fn tab_reach(side: Side, tab: Rect) -> Rect {
+pub(super) fn tab_reach(side: Side, tab: Rect) -> Rect {
     let mut reach = tab.expand2(vec2(0.0, TAB_REACH));
     match side {
         Side::Left => reach.max.x += TAB_REACH,

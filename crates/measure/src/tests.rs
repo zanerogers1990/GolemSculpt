@@ -274,3 +274,50 @@ fn a_scene_opened_in_place_of_this_one_leaves_the_rulers_where_they_are() {
     let kept = tool.rulers().get(0).unwrap();
     assert_eq!((kept.a, kept.b), (laid.a, laid.b));
 }
+
+/// One frame of the Scene panel's part of the tool: its Measure & Size card
+/// in a panel in view, or in one folded away and run out of sight. Returns
+/// how tall the card was drawn (nothing when folded away).
+fn card_frame(ctx: &egui::Context, bench: &mut Bench, tool: &mut Measure, folded: bool) -> f32 {
+    let mut height = 0.0;
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+    let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+    ctx.run_ui(input, |root| {
+        bench.call(|cx| {
+            if folded {
+                sculpt_toolkit::floating::only(root, "right", 240.0, |ui| sculpt_toolkit::Tool::card(tool, ui, cx));
+                return;
+            }
+            egui::Area::new(egui::Id::new("scene_panel")).fixed_pos(egui::pos2(1300.0, 10.0)).show(root.ctx(), |ui| {
+                ui.set_width(240.0);
+                sculpt_toolkit::Tool::card(tool, ui, cx);
+                height = ui.min_rect().height();
+            });
+        });
+    })
+    .drop_without_applying_deltas();
+    height
+}
+
+/// Bringing the tool up opens its card in the Scene panel. With that panel
+/// folded away at the time (and run out of sight, because some other card
+/// floats), the card is open when the panel comes back.
+#[test]
+fn the_size_card_opens_for_the_tool_even_if_its_panel_was_folded_away_then() {
+    let ctx = egui::Context::default();
+    sculpt_toolkit::theme::install(&ctx);
+    let mut bench = Bench::new();
+    bench.add("Cube", cube(0.5));
+    let mut tool = Measure::default();
+    let closed = card_frame(&ctx, &mut bench, &mut tool, false);
+    assert!(closed < 40.0, "the card starts closed, a header and no more: {closed}");
+
+    sculpt_toolkit::floating::float(&ctx, "Brushes", egui::pos2(400.0, 100.0));
+    bench.enter(&mut tool);
+    for _ in 0..2 {
+        card_frame(&ctx, &mut bench, &mut tool, true);
+    }
+    card_frame(&ctx, &mut bench, &mut tool, false);
+    let open = card_frame(&ctx, &mut bench, &mut tool, false);
+    assert!(open > 100.0, "back in view the card is open, sizes and all: {open}");
+}

@@ -1,19 +1,25 @@
 //! Looks and self-checks of the interface's own furniture, for runs made
 //! without a person at the tablet (`--demo-ui`): the strength bar under the
-//! brush wheel, the tabs that fold the panels away, and cards pulled out of
-//! their panel to float.
+//! brush wheel, the tabs that fold the panels away, cards pulled out of
+//! their panel to float, and the status line drawn over the view while its
+//! panel is folded away.
 //!
 //! `--demo-ui` takes a list, `key` or `key=value` with commas between:
 //! `size=1.5` (interface size), `brush=Clay`, `mask`, `strength=0.3`,
 //! `wheel` (the brush wheel in the middle of the window; `wheel=low` near
-//! the bottom, where its bar goes above it), `fold=left`, `fold=right` or
-//! `fold=both` (panels folded away), `float=Brushes@300:200` (that card
-//! floating with its top-left corner there, in the interface's points; as
-//! many as wanted) and `play`.
+//! the bottom, where its bar goes above it; `wheel=left` at the left edge),
+//! `fold=left`, `fold=right` or `fold=both` (panels folded away),
+//! `float=Brushes@300:200` (that card floating with its top-left corner
+//! there, in the interface's points; as many as wanted), `status=error`,
+//! `status=ok` or `status=fading` (a long error, a short success, or that
+//! success as it fades, on the status line), `limit` (dynamic topology
+//! stopped at its triangle limit) and `play`.
 //!
 //! `play` works the interface the way a pen would, through the same routines
 //! real input goes through, prints a line per check and closes the app. The
 //! real pointer must stay off the window while it runs.
+
+use std::time::{Duration, Instant};
 
 use egui::{Id, LayerId, Order, Pos2, pos2, vec2};
 use glam::Vec2;
@@ -24,7 +30,15 @@ use winit::keyboard::KeyCode;
 use super::{Drag, Running};
 use crate::doc::Tool;
 use crate::sculpt::Brush;
+use crate::ui::status;
 use sculpt_toolkit::floating;
+
+/// What `status=error` and `status=ok` write, and `play` with them: made up,
+/// but the length and the kind of thing the app says. Three sentences is as
+/// long as its messages get.
+const ERROR_SAMPLE: &str = "Could not save Dragon.sclp: the disk is full. Nothing was written, and the file from \
+                            before is untouched. Free some space, or use Save As to put it somewhere else.";
+const OK_SAMPLE: &str = "Saved Dragon.sclp";
 
 /// Frames between the steps of `play`: the interface answers a press with
 /// the layout of the frame before, and an area takes a frame to size itself.
@@ -73,12 +87,23 @@ impl Running {
                 ("wheel", place) => wheel = Some(place.to_owned()),
                 ("fold", which) => self.doc.opts.folded = [which != "right", which != "left"],
                 ("float", card) => self.ui_demo_float(card),
+                ("status", "ok") => self.status(OK_SAMPLE, true),
+                ("status", "fading") => {
+                    // Written long enough ago to be part of the way through its fade.
+                    self.status(OK_SAMPLE, true);
+                    self.ui.status_seen.since -= 7.0;
+                }
+                ("status", _) => self.status(ERROR_SAMPLE, false),
+                ("limit", _) => (self.doc.sculptor.dyntopo.enabled, self.doc.sculptor.dyntopo.at_limit) = (true, true),
                 ("play", _) => self.ui_demo.play = Some(Play { step: 0, wait: LEAD_IN, failed: 0 }),
                 (other, _) => eprintln!("--demo-ui: unknown item {other}"),
             }
         }
-        if let Some(place) = wheel {
-            self.ui_demo_wheel(if place == "low" { 0.92 } else { 0.5 });
+        match wheel.as_deref() {
+            Some("low") => self.ui_demo_wheel(Vec2::new(0.5, 0.92)),
+            Some("left") => self.ui_demo_wheel(Vec2::new(0.0, 0.5)),
+            Some(_) => self.ui_demo_wheel(Vec2::splat(0.5)),
+            None => {}
         }
     }
 
@@ -94,13 +119,21 @@ impl Running {
         }
     }
 
-    /// Opens the hold-Space wheel `down` of the way down the middle of the
-    /// window.
-    fn ui_demo_wheel(&mut self, down: f32) {
+    /// Opens the hold-Space wheel for a pointer `place` of the way across
+    /// and down the window (0 to 1 each way).
+    fn ui_demo_wheel(&mut self, place: Vec2) {
         // In the interface's units, which no frame has set up yet.
         let per_point = self.window.scale_factor() as f32 * self.doc.opts.ui_scale;
-        let at = (self.view.origin + self.view.size * Vec2::new(0.5, down)) / per_point;
+        let at = (self.view.origin + self.view.size * place) / per_point;
         self.ui.radial = Some(pos2(at.x, at.y));
+    }
+
+    /// Makes the last tap on an interface control one that ended `ago` ago:
+    /// `play` cannot count on how long its frames take on a busy machine.
+    fn ui_demo_tap_was(&mut self, ago: Duration) {
+        if let Some(tap) = &mut self.input.ui_tap {
+            tap.at = Instant::now().checked_sub(ago).unwrap_or(tap.at);
+        }
     }
 
     /// Moves the pointer to `at` (in the interface's points), for the
@@ -173,7 +206,7 @@ impl Running {
                 let s = &mut self.doc.sculptor.settings;
                 (s.brush, s.mask_mode) = (Brush::Clay, false);
                 s.current_mut().strength = 0.5;
-                self.ui_demo_wheel(0.5);
+                self.ui_demo_wheel(Vec2::splat(0.5));
             }
             1 => {
                 expect("the brush wheel has a strength bar under it", bar.zip(wheel).is_some_and(|(b, w)| b.top() >= w.bottom()));
@@ -224,7 +257,7 @@ impl Running {
                 let ppp = self.egui_ctx.pixels_per_point();
                 self.ui_demo_button(pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp), false);
                 self.doc.sculptor.settings.brush = Brush::Pose;
-                self.ui_demo_wheel(0.5);
+                self.ui_demo_wheel(Vec2::splat(0.5));
             }
             9 => {
                 expect("the Pose brush, which has no use for Strength, gets no bar", bar.is_none() && wheel.is_some());
@@ -467,6 +500,223 @@ impl Running {
             20 => {
                 let back = button.zip(panel).is_some_and(|(at, panel)| panel.contains(at));
                 expect("unfolded, the card is in the Sculpt panel again", back);
+            }
+            _ => return self.ui_demo_status_step(step - 21, expect),
+        }
+        false
+    }
+
+    /// The steps of `play` for what a folded panel would otherwise leave
+    /// unsaid: the status line over the view while the Scene panel is away
+    /// (an error that stays, a success that fades, a tap that puts it away),
+    /// and the Sculpt panel's triangle-limit note.
+    fn ui_demo_status_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        let ctx = self.egui_ctx.clone();
+        let screen = ctx.content_rect();
+        let plate = self.ui_demo_area(status::AREA, Order::Foreground);
+        let area = |id: &str| self.ui_demo_area(id, Order::Middle);
+        let tab = |side: &str| self.ui_demo_area(("panel_tab", side), Order::Middle);
+        // Everything of the interface's own that the plate must keep off.
+        let others = [area("view_gizmo"), area("bottom_bar"), area("sculpt_panel"), area("scene_panel"), tab("left"), tab("right")];
+        let scene_panel = area("scene_panel");
+        let clear = |plate: egui::Rect| screen.contains_rect(plate) && others.iter().flatten().all(|other| !other.intersects(plate));
+        let ppp = ctx.pixels_per_point();
+        let here = pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp);
+        match step {
+            0 => {
+                self.doc.opts.folded = [false, true];
+                self.status(ERROR_SAMPLE, false);
+            }
+            1 => {
+                expect("with the Scene panel folded away an error is still on screen", plate.is_some());
+                expect("clear of the view gizmo, the tabs, the bottom bar and the Sculpt panel", plate.is_some_and(clear));
+                let wrapped = plate.is_some_and(|plate| plate.width() <= 441.0 && plate.height() > 40.0);
+                expect("its three sentences wrapped, not run across the view", wrapped);
+                if let Some(plate) = plate {
+                    self.ui_demo_move(plate.center_bottom() + vec2(0.0, 14.0));
+                }
+            }
+            2 => {
+                expect("the view right under it is still the pen's", plate.is_some() && !self.over_ui());
+                self.ui.status_seen.since -= 600.0;
+            }
+            3 => {
+                expect("ten minutes on, the error is still there to be read", plate.is_some());
+                self.ui_demo.kept.0 = plate.map_or(0.0, |plate| plate.height());
+                self.status(OK_SAMPLE, true);
+            }
+            4 => {
+                expect("a success takes its place, on one line", plate.is_some_and(|plate| plate.height() < self.ui_demo.kept.0));
+                self.ui.status_seen.since -= 600.0;
+            }
+            5 => {
+                expect("and has faded away by the time it is old news", plate.is_none());
+                self.status(ERROR_SAMPLE, false);
+            }
+            6 => {
+                if let Some(plate) = plate {
+                    self.ui_demo_button(plate.center(), true);
+                }
+            }
+            7 => {
+                expect("a press on the message is the interface's, not a stroke", self.input.drag == Drag::Ui && !self.doc.sculptor.is_active());
+                self.ui_demo_button(here, false);
+            }
+            8 => {
+                expect("a tap on it puts it away", plate.is_none());
+                // The second tap of a double tap, where the message was.
+                self.ui_demo_tap_was(Duration::ZERO);
+                self.ui_demo_button(here, true);
+            }
+            9 => {
+                let ignored = self.input.drag == Drag::Ui && !self.over_ui() && !self.doc.sculptor.is_active();
+                expect("and a second tap where it was is not a stroke or an orbit", ignored);
+                self.ui_demo_button(here, false);
+                self.status(ERROR_SAMPLE, false);
+            }
+            10 => {
+                expect("the same error written again is back up", plate.is_some());
+                self.doc.opts.folded = [true, true];
+            }
+            11 => {
+                expect("with both panels folded away it is there, clear of both tabs, the gizmo and the bottom bar", plate.is_some_and(clear));
+                self.doc.opts.ui_scale = 2.0;
+            }
+            12 => {
+                expect("and at twice the interface size", plate.is_some_and(clear));
+                self.doc.opts.ui_scale = 1.0;
+                crate::turntable::set_clean_view(&mut self.doc, true);
+            }
+            13 => {
+                expect("the clean view (Tab) takes it away with the rest", plate.is_none());
+                crate::turntable::set_clean_view(&mut self.doc, false);
+                self.doc.opts.folded = [true, false];
+            }
+            14 => {
+                expect("with the Scene panel back the message is on its status line, not over the view", plate.is_none() && scene_panel.is_some());
+                let dyntopo = &mut self.doc.sculptor.dyntopo;
+                (dyntopo.enabled, dyntopo.at_limit) = (true, true);
+            }
+            15 => {
+                let said = plate.is_some_and(clear);
+                expect("with the Sculpt panel folded away, dynamic topology stopping at its limit is said over the view", said);
+                if let Some(plate) = plate {
+                    self.ui_demo_move(plate.center());
+                }
+            }
+            16 => {
+                expect("that note goes by itself, so the pen goes through it to the model", plate.is_some() && !self.over_ui());
+                let dyntopo = &mut self.doc.sculptor.dyntopo;
+                (dyntopo.enabled, dyntopo.at_limit) = (false, false);
+                self.doc.opts.folded = [false; 2];
+            }
+            _ => return self.ui_demo_card_step(step - 17, expect),
+        }
+        false
+    }
+
+    /// The steps of `play` for a card asked to open while its panel is
+    /// folded away: Measure's, which opens itself when the tool comes up.
+    fn ui_demo_card_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        let ctx = self.egui_ctx.clone();
+        // How tall the Measure & Size card is in the Scene panel: from its
+        // header down to the header of the card under it.
+        let header = |card: &str| floating::button(&ctx, card).map(|rect| rect.top());
+        let height = header("Measure & Size").zip(header("File")).map(|(top, next)| next - top);
+        match step {
+            0 => {
+                expect("the Measure & Size card starts closed", height.is_some_and(|height| height < 60.0));
+                // The Scene panel away, and run out of sight because a card floats.
+                self.doc.opts.folded = [false, true];
+                floating::float(&ctx, "Brushes", pos2(400.0, 120.0));
+            }
+            1 => {
+                let measure = self.doc.tools.info_index("measure");
+                expect("there is a Measure tool to bring up", measure.is_some());
+                if let Some(index) = measure {
+                    self.tools_activate(index);
+                }
+            }
+            2 => self.doc.opts.folded = [false; 2],
+            3 => {
+                let open = height.is_some_and(|height| height > 100.0);
+                expect("brought up while the Scene panel was folded away, Measure finds its card open when the panel is back", open);
+                floating::dock(&ctx, "Brushes");
+                self.tools_leave();
+            }
+            _ => return self.ui_demo_short_step(step - 4, expect),
+        }
+        false
+    }
+
+    /// The steps of `play` on a window too short for the brush wheel and its
+    /// bar. The window stays as it is: the interface is made larger instead,
+    /// which leaves it as few points to work in.
+    fn ui_demo_short_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        let screen = self.egui_ctx.content_rect();
+        let bar = self.ui_demo_area("radial_strength", Order::Foreground);
+        let wheel = self.ui_demo_area("radial_menu", Order::Foreground);
+        // The interface size at which the window is `points` high.
+        let size_for = |points: f32| self.doc.opts.ui_scale * screen.height() / points;
+        match step {
+            0 => {
+                let s = &mut self.doc.sculptor.settings;
+                (s.brush, s.mask_mode) = (Brush::Clay, false);
+                self.ui_demo.kept.0 = self.doc.opts.ui_scale;
+                // Under 362 points there is no room for the bar under the wheel or over it.
+                self.doc.opts.ui_scale = size_for(330.0);
+            }
+            // At the left edge: the only room for the bar is beside the wheel.
+            1 => self.ui.radial = Some(pos2(0.0, screen.center().y)),
+            2 => {
+                let whole = wheel.is_some_and(|wheel| screen.expand(0.5).contains_rect(wheel));
+                expect("on a window too short for a bar under the wheel or over it, the wheel still opens whole", whole);
+                let beside = bar.zip(wheel).is_some_and(|(bar, wheel)| screen.expand(0.5).contains_rect(bar) && !bar.intersects(wheel));
+                expect("and its Strength bar is beside it: on the window and off the tiles", beside);
+                self.ui.radial = None;
+                self.doc.opts.ui_scale = size_for(200.0);
+            }
+            3 => self.ui.radial = Some(screen.center()),
+            4 => {
+                expect("on a window shorter than the wheel itself, holding Space still opens it", wheel.is_some());
+                expect("with no bar, as there is no room for one", bar.is_none());
+                self.ui.radial = None;
+                self.doc.opts.ui_scale = self.ui_demo.kept.0;
+            }
+            _ => return self.ui_demo_echo_step(step - 5, expect),
+        }
+        false
+    }
+
+    /// The last steps of `play`: the second tap of a double tap on a fold
+    /// tab, which lands on the view once the panel has gone.
+    fn ui_demo_echo_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        let tab = self.ui_demo_area(("panel_tab", "left"), Order::Middle);
+        let ppp = self.egui_ctx.pixels_per_point();
+        let here = pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp);
+        match step {
+            0 => {
+                if let Some(tab) = tab {
+                    self.ui_demo_button(tab.center(), true);
+                }
+            }
+            1 => self.ui_demo_button(here, false),
+            2 => {
+                expect("a tap on its tab folds the Sculpt panel away from under the pen", self.doc.opts.folded == [true, false] && !self.over_ui());
+                self.ui_demo_tap_was(Duration::ZERO);
+                self.ui_demo_button(here, true);
+            }
+            3 => {
+                let ignored = self.input.drag == Drag::Ui && !self.over_ui() && !self.doc.sculptor.is_active();
+                expect("a second tap where the tab was a moment ago is not a stroke or an orbit", ignored);
+                self.ui_demo_button(here, false);
+                self.ui_demo_tap_was(Duration::from_secs(1));
+                self.ui_demo_button(here, true);
+            }
+            4 => {
+                expect("a second later, a press in that place is the view's again", matches!(self.input.drag, Drag::Orbit | Drag::Sculpt));
+                self.ui_demo_button(here, false);
+                self.doc.opts.folded = [false; 2];
             }
             _ => return true,
         }
