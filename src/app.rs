@@ -30,6 +30,7 @@ use crate::sculpt::{Brush, PointerSample, Sculptor};
 use crate::ui::{self, Cursor, UiState, theme};
 use crate::{io, remesh};
 
+mod blender;
 mod bridge;
 mod cut_mirror;
 mod decimate;
@@ -146,6 +147,9 @@ pub struct Args {
     /// Set the interface up for a look, or work it and print a line per check:
     /// a list such as `wheel,brush=Clay` or `play` (see app/ui_demo.rs).
     pub demo_ui: Option<String>,
+    /// Work the Blender link without Blender, or with one that has no window:
+    /// `play` or `round` (see app/blender.rs).
+    pub demo_blender: Option<String>,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -258,6 +262,8 @@ struct Running {
     recovery: recovery::State,
     /// The interface's self-check, while one runs (see app/ui_demo.rs).
     ui_demo: ui_demo::State,
+    /// What has gone to Blender and come back (see app/blender.rs).
+    blender: blender::State,
     args: Args,
 }
 
@@ -266,6 +272,8 @@ pub struct App {
     running: Option<Running>,
     error: Option<String>,
     bridge: Option<bridge::Bridge>,
+    /// The watch on what Blender sends (see app/blender.rs).
+    blender: Option<blender::Watch>,
 }
 
 pub fn run(args: Args) -> Result<(), String> {
@@ -276,7 +284,9 @@ pub fn run(args: Args) -> Result<(), String> {
     let home = crate::prefs::Home::for_run(false);
     let folder = home.folder().filter(|_| home.writable());
     let bridge = if scripted { None } else { bridge::start(event_loop.create_proxy(), folder) };
-    let mut app = App { args, running: None, error: None, bridge };
+    // Nor does a scripted run take what Blender sends the real app.
+    let blender = if scripted { None } else { blender::watch(event_loop.create_proxy(), folder) };
+    let mut app = App { args, running: None, error: None, bridge, blender };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     app.error.map_or(Ok(()), Err)
 }
@@ -321,11 +331,15 @@ impl ApplicationHandler for App {
         });
     }
 
-    /// The Claude bridge woke the loop: it has requests to run.
+    /// The Claude bridge woke the loop: it has requests to run. Or the watch
+    /// on Blender's tray did: something has arrived.
     fn user_event(&mut self, event_loop: &ActiveEventLoop, _: ()) {
         self.guarded(|app| {
             if let (Some(bridge), Some(running)) = (&app.bridge, &mut app.running) {
                 bridge.pump(running, event_loop);
+            }
+            if let (Some(blender), Some(running)) = (&app.blender, &mut app.running) {
+                blender.pump(running);
             }
         });
     }
@@ -534,6 +548,7 @@ impl Running {
             files: files::State::new(args.screenshot.is_some()),
             recovery,
             ui_demo: Default::default(),
+            blender: blender::State::new(args.screenshot.is_some()),
             args,
         };
         running.scene_changed();
@@ -613,6 +628,9 @@ impl Running {
         }
         if let Some(what) = running.args.demo_ui.clone() {
             running.ui_demo(&what);
+        }
+        if let Some(what) = running.args.demo_blender.clone() {
+            running.blender_demo(&what);
         }
         if let Some((yaw, pitch)) = running.args.view {
             // Every object in the picture, from the side asked for.
@@ -1387,6 +1405,8 @@ impl Running {
                 }
             }
             Action::ExportFbx => self.export_fbx_action(),
+            // The Blender link is in app/blender.rs.
+            Action::SendToBlender => self.send_to_blender(),
             // Checking and exporting for printing are in app/print_check.rs.
             Action::ExportStl => self.export_stl_asking(),
             Action::ExportStlAnyway => self.export_stl_now(),

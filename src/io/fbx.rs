@@ -217,10 +217,29 @@ pub fn export_fbx(mesh: &Mesh, model: Mat4, path: &Path) -> Result<usize> {
 ///
 /// Returns how many points of the mesh were not numbers and were written
 /// mended, as [`super::export_obj_placed`] does.
+#[allow(dead_code)] // the app writes every selected object (`export_fbx_objects`); this is the one-mesh form
 pub fn export_fbx_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> Result<usize> {
     nothing_to_export(mesh)?;
-    let (points, mended) = export_points(mesh);
-    let top = document(mesh, &points, places);
+    export_fbx_objects(&[(mesh, places)], path)
+}
+
+/// [`export_fbx_placed`] for several objects at once, all in the one file:
+/// each mesh with the places it is drawn. They arrive in the other program
+/// together, each an object of its own under its own name, standing to one
+/// another as they do in the scene.
+///
+/// A mesh with no surface is left out; with none that has one, nothing is
+/// written. Returns how many points were written mended, over all of them.
+pub fn export_fbx_objects(objects: &[(&Mesh, &[(&str, Mat4)])], path: &Path) -> Result<usize> {
+    let solid: Vec<&(&Mesh, &[(&str, Mat4)])> = objects.iter().filter(|(mesh, _)| !mesh.indices.is_empty()).collect();
+    if solid.is_empty() {
+        return Err("There is nothing to export: no selected object has a surface.".into());
+    }
+    let points: Vec<(Points, usize)> = solid.iter().map(|(mesh, _)| export_points(mesh)).collect();
+    let mended = points.iter().map(|(_, mended)| mended).sum();
+    let pieces: Vec<Piece> =
+        solid.iter().zip(&points).map(|(&&(mesh, places), (points, _))| Piece { mesh, points, places }).collect();
+    let top = document(&pieces);
     // Every offset in the file is four bytes.
     let nodes_end = MAGIC.len() as u64 + 4 + children_len(&top);
     if nodes_end > u32::MAX as u64 {
@@ -244,9 +263,16 @@ pub fn export_fbx_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> R
     Ok(mended)
 }
 
+/// One mesh of an export: its points as they are written, and its places.
+struct Piece<'a> {
+    mesh: &'a Mesh,
+    points: &'a Points<'a>,
+    places: &'a [(&'a str, Mat4)],
+}
+
 /// The records at the top of the file, in the order FBX has them.
-fn document<'a>(mesh: &'a Mesh, points: &'a Points<'a>, places: &[(&str, Mat4)]) -> Vec<Node<'a>> {
-    let count = places.len() as i32;
+fn document<'a>(pieces: &[Piece<'a>]) -> Vec<Node<'a>> {
+    let count = pieces.iter().map(|piece| piece.places.len()).sum::<usize>() as i32;
     // Ids only have to differ from one another, and from 0, which is the scene itself.
     let geometry_id = |place: usize| 1_000 + 2 * place as i64;
     let model_id = |place: usize| 1_001 + 2 * place as i64;
@@ -254,7 +280,9 @@ fn document<'a>(mesh: &'a Mesh, points: &'a Points<'a>, places: &[(&str, Mat4)])
     let mut objects = Vec::new();
     let mut links = Vec::new();
     let link = |child: i64, parent: i64| node("C", vec![text("OO"), Value::Long(child), Value::Long(parent)], Vec::new());
-    for (i, &(name, model)) in places.iter().enumerate() {
+    // Every place of every mesh, numbered through the file.
+    let places = pieces.iter().flat_map(|piece| piece.places.iter().map(move |place| (piece.mesh, piece.points, place)));
+    for (i, (mesh, points, &(name, model))) in places.enumerate() {
         let name = if name.is_empty() { "Object" } else { name };
         objects.push(geometry(geometry_id(i), name, mesh, points, model));
         objects.push(node("Model", vec![Value::Long(model_id(i)), named(name, "Model"), text("Mesh")], vec![
@@ -715,5 +743,70 @@ mod tests {
 
         let empty = Mesh::new(Vec::new(), Vec::new(), None);
         assert!(export_fbx(&empty, Mat4::IDENTITY, &temp("empty.fbx")).is_err());
+    }
+
+    #[test]
+    fn several_objects_go_into_one_file_each_with_its_own_mesh() {
+        let ball = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        let mut block = primitives::build(Primitive::Cube, 500, 0.5);
+        block.positions[3] = Vec3::NAN;
+        let empty = Mesh::new(Vec::new(), Vec::new(), None);
+        assert_ne!(ball.positions.len(), block.positions.len());
+        let aside = Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0));
+        let mirrored = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+        let objects: [(&Mesh, &[(&str, Mat4)]); 3] = [
+            (&ball, &[("Ball", Mat4::IDENTITY), ("Ball_MirrorX", mirrored)]),
+            (&empty, &[("Nothing", Mat4::IDENTITY)]),
+            (&block, &[("Block", aside)]),
+        ];
+        let path = temp("several.fbx");
+        assert_eq!(export_fbx_objects(&objects, &path).unwrap(), 1, "the block's one damaged point");
+        let file = read(&path);
+
+        let records = file.child("Objects");
+        let (geometries, models) = (records.all("Geometry"), records.all("Model"));
+        let names: Vec<String> = models.iter().map(|m| m.text(1)).collect();
+        // The one with no surface is not in the file.
+        assert_eq!(names, ["Ball\u{0}\u{1}Model", "Ball_MirrorX\u{0}\u{1}Model", "Block\u{0}\u{1}Model"]);
+        let wanted = [(&ball, Mat4::IDENTITY), (&ball, mirrored), (&block, aside)];
+        assert_eq!(geometries.len(), wanted.len());
+        for (geometry, (mesh, model)) in geometries.iter().zip(wanted) {
+            let points = vec3s(geometry.doubles("Vertices"));
+            assert_eq!(points.len(), mesh.positions.len());
+            assert!(points.iter().all(|p| p.is_finite()));
+            for (got, was) in points.iter().zip(&mesh.positions).filter(|(_, was)| was.is_finite()) {
+                assert!((*got - model.transform_point3(*was)).length() < 1e-5);
+            }
+            let faces = faces_of(geometry);
+            assert_eq!(faces.len(), mesh.triangle_count());
+            assert!(faces.iter().flatten().all(|&corner| corner < points.len()), "a face names its own mesh's points");
+        }
+
+        // No two records share an id, and each mesh hangs from the model of its own place.
+        let id = |record: &&Record| match record.values[0] {
+            Got::Long(id) => id,
+            _ => panic!("no id"),
+        };
+        let mut ids: Vec<i64> = geometries.iter().chain(&models).map(id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 6);
+        let links: Vec<(i64, i64)> = file
+            .child("Connections")
+            .all("C")
+            .iter()
+            .map(|c| match (&c.values[1], &c.values[2]) {
+                (Got::Long(child), Got::Long(parent)) => (*child, *parent),
+                _ => panic!("a link without ids"),
+            })
+            .collect();
+        assert_eq!(links.len(), 6);
+        for (geometry, model) in geometries.iter().zip(&models) {
+            assert!(links.contains(&(id(model), 0)) && links.contains(&(id(geometry), id(model))));
+        }
+        assert_eq!(file.child("Definitions").child("Count").values, [Got::Int(7)]);
+
+        assert!(export_fbx_objects(&[(&empty, &[("Nothing", Mat4::IDENTITY)])], &temp("none.fbx")).is_err());
+        assert!(export_fbx_objects(&[], &temp("none.fbx")).is_err());
     }
 }

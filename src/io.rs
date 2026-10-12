@@ -45,6 +45,7 @@ use crate::mesh::{Mesh, Polys};
 pub type Result<T> = std::result::Result<T, String>;
 
 mod fbx;
+mod link;
 mod tool_data;
 mod repair;
 #[cfg(test)]
@@ -52,7 +53,8 @@ mod damage_tests;
 
 #[cfg(test)]
 use fbx::export_fbx;
-pub use fbx::export_fbx_placed;
+pub use fbx::export_fbx_objects;
+pub use link::{LINK_ENDING, LinkObject, LinkPackage, read_link_package, write_link_package};
 pub use repair::{note_saved, notes_opened};
 
 /// A model as read from a file, already in the app's axes and units.

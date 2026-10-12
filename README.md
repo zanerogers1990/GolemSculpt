@@ -1145,6 +1145,63 @@ keep something new in it without changing the format, are set out in
 is one more field of that object's entry in the JSON, under the tool's name
 (`"array"`), which a version that does not know it steps over.
 
+## Blender
+
+**Send to Blender** (the File tab) sends every selected object to Blender as
+it stands, at its real size, and opens Blender if it is not open. There is no
+file to save, find or import. In Blender, **Send to GolemSculpt** brings
+objects back: it is in the GolemSculpt tab of the sidebar (N), and at the
+bottom of the Object menu. Either button is the whole trip; the other program
+takes what was sent within a second, and is opened first if it is closed.
+
+- **Size is kept exactly, both ways.** 1 unit here is 1 cm. In Blender a model
+  is that real size in whatever units the Blender file has. A new Blender file
+  that has not been worked in is set to millimetres as the first object
+  arrives (1 Blender unit = 1 mm, so a 5 cm sculpt is 50 units, sizes read in
+  mm, and an STL exported from Blender is the size a slicer expects). A file
+  that is saved, has been worked in, or has had its units chosen is left
+  exactly as it is. Up is up in both: Y here is Z there.
+- **An object that came from here goes back as itself.** Its shape is
+  replaced, in one undo step, where it stands in Blender, whatever was done
+  to it there: moved, turned, resized, modifiers and all. The object here
+  keeps its centre, turn and size, its symmetry, its live mirror and its
+  instances, so a symmetric sculpt is still sculpted about the same planes.
+  If the model was moved a long way in Blender, Set Origin to Mesh brings its
+  centre after it.
+- **Anything made in Blender arrives as a new object**, selected and framed,
+  under the name it has there, and goes back as itself from then on.
+- **Only what was worked on is replaced.** Select everything and send it back
+  and forth: an object neither program has changed since the last trip is
+  left alone on both sides, and the status line says how many were. So a
+  mask, hidden faces or the quads of a quad remesh are lost only on an object
+  Blender really changed (what comes from Blender is a new mesh). Quads go to
+  Blender as quads.
+- **Live mirror and array copies go too**, as objects of their own
+  (`Ball_MirrorX`), since they are part of the model on screen. Coming back
+  unchanged they are passed over; one that was worked on in Blender arrives
+  as a new object.
+- **Modifiers in Blender.** What is sent here is the object as it looks, with
+  its modifiers worked in. If it is then sculpted here and sent to Blender
+  again, the modifiers that were worked in are switched off there (not
+  deleted), because the sculpt already has them in it, and Blender says so.
+  An object that was not touched here keeps its modifiers live in Blender.
+- The first time, Blender is looked for where it is installed (Blender's own
+  installer, Steam); if it is not found, a box asks where `blender.exe` is,
+  once. Blender's side of the link is one script that GolemSculpt starts
+  Blender with; it then keeps itself in Blender's own startup folder
+  (`scripts\startup\golemsculpt_link.py` in Blender's settings), so the link
+  is there however Blender is opened. Deleting that file removes it. A
+  Blender that was already open the very first time does not have the link
+  yet: a second one is started, and the status line says to close the other.
+- Colours and materials are not sent. In Blender, an object that is updated
+  keeps the materials it had there.
+
+The two programs meet in a folder, `blender_link` in the settings folder
+(`%APPDATA%\Sculpt`): each leaves a file in the other's tray there and looks
+in its own twice a second. Nothing listens on a port and nothing leaves the
+computer. What was sent and not taken within ten minutes (the other program
+was never opened) is cleared away. The format is set out in `src/io/link.rs`.
+
 ## Checking a model for printing
 
 A printer needs a closed surface: every edge shared by exactly two faces. The
@@ -1655,7 +1712,7 @@ Ported from the Unity app, each described in its own section above:
 - **Files and recording**: `.sclp` files, OBJ and STL import and export,
   recent files, the turntable with its 360 loop as a video or as pictures,
   and the timelapse. Recovery copies against a crash are this app's own: the
-  Unity app has none.
+  Unity app has none. So is the link to Blender (see Blender).
 - **Interface**: the two panels and the tabs that fold them away, cards that
   float over the view, the brush wheel with its strength bar, the clean view,
   tooltips and interface size.
@@ -1719,6 +1776,7 @@ sculpt.exe --record-loop out.mp4 --demo --loop-cancel 15   # cancels after 15 fr
 sculpt.exe --demo-timelapse out.mp4                  # sculpts a few scripted strokes while recording, prints what the file holds, closes (SCULPT_DEMO_CAMERA=close closes the window mid-recording, SCULPT_DEMO_CAMERA=exit presses the File card's Exit and answers Exit Without Saving: either way the video must be whole)
 SCULPT_DEMO_CAMERA=check sculpt.exe --record-loop folder --demo   # presses the turntable's own keys and buttons and prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's recent tiles; or ask-open-clean | play
+sculpt.exe --screenshot out.png --demo-blender play   # the Blender link worked without Blender: this run writes what Blender's side would; prints the status lines and a line per check (round and live put a real Blender at the other end: tests/blender_link/README.md)
 sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-exit   # the question the close button would ask of the scene the other options left: here unsaved strokes and a live tube; ask-open is the one choosing a file would ask
 sculpt.exe --screenshot out.png --demo-spheres attached --demo-tool tube --demo-files ask-exit:saved   # the same with the scene taken for saved: only what is in no file is left to ask about
 sculpt.exe --screenshot out.png --demo-files ask-exit:mirror   # a change that is saved without an undo step, made first: mirror (the X key) | hide (H) | local (/)

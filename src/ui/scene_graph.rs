@@ -6,7 +6,8 @@
 //! Ctrl or Shift + click on a row adds it to the selection. The row brushes
 //! work on is bright, the others selected with it grey. Join merges them
 //! into the bright one, and Subtract, Union and Intersect cut it with them
-//! or weld them into it. The question the Delete key asks is drawn here too.
+//! or weld them into it; Export as FBX writes them all into one file. The
+//! question the Delete key asks is drawn here too.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -533,7 +534,17 @@ fn selected(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: b
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 3, 6.0);
         for (value, axis) in scale.iter_mut().zip(["X ", "Y ", "Z "]) {
-            let drag = egui::DragValue::new(value).speed(0.005).range(0.02..=1000.0).fixed_decimals(2).prefix(axis);
+            // The range is for what is dragged or typed here, never for the
+            // size the object already has: a model brought in at a small
+            // scale (0.0075, say) must not grow because its row was selected.
+            let speed = (*value * 0.01).clamp(0.0001, 0.005);
+            let drag = egui::DragValue::new(value)
+                .speed(speed)
+                .range(0.001..=1000.0)
+                .clamp_existing_to_range(false)
+                .min_decimals(2)
+                .max_decimals(4)
+                .prefix(axis);
             let response = ui.add_sized([w, 22.0], drag);
             changed |= response.changed();
             busy |= response.dragged() || response.has_focus();
@@ -641,6 +652,16 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
         let help = "Merges every selected object into the bright one, as one mesh. Each shell is kept as it is, masks included. Undo (Z) brings the separate objects back.";
         if tip(theme::button(ui, ui.available_width(), "Join", style), tips, help).clicked() {
             actions.push(Action::Join { remesh: st.join_remesh });
+        }
+    });
+
+    // Not a way of combining, but it takes the same selection, and this is where that is made.
+    ui.add_space(6.0);
+    ui.add_enabled_ui(count > 1, |ui| {
+        let label = if count > 1 { format!("Export {count} Objects as FBX...") } else { "Export Selected as FBX...".to_owned() };
+        let help = "Writes every selected object into one Autodesk FBX, for Blender, Unity and the like. They arrive together, each an object of its own under its name, standing to one another as they do here, with their live mirror and array copies. Nothing in the scene changes. The same as Export FBX on the File tab.";
+        if tip(theme::button(ui, ui.available_width(), &label, ButtonStyle::default()), tips, help).clicked() {
+            actions.push(Action::ExportFbx);
         }
     });
 }

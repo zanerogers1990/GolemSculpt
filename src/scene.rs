@@ -22,6 +22,7 @@ use sculpt_symmetry::MirrorRepeater;
 use crate::mesh::bvh::Aabb;
 use crate::mesh::{Mesh, Polys, StrokeDelta};
 
+mod link;
 mod mirror;
 mod origin;
 mod places;

@@ -440,6 +440,13 @@ impl Running {
             "add_shape" => self.add_shape(args),
             "select_object" => {
                 let id = self.object(args)?;
+                // As Ctrl + click on a row: one more in the selection, the active object as it was.
+                if flag(args, "add").unwrap_or(false) {
+                    self.act(Action::SelectAlso(id));
+                    let scene = &self.doc.scene;
+                    let (count, name) = (scene.selected().len(), &scene.active().name);
+                    return Ok(format!("{count} objects are selected. \"{name}\" is the active object."));
+                }
                 self.act(Action::SelectObject(id));
                 Ok(format!("\"{}\" is the active object.", self.doc.scene.active().name))
             }
@@ -578,6 +585,7 @@ impl Running {
                     "id": o.id,
                     "name": o.name,
                     "active": o.id == doc.scene.active_id(),
+                    "selected": doc.scene.is_selected(o.id),
                     "visible": o.visible,
                     "position": point(o.position),
                     "size": point(size),
@@ -1003,7 +1011,7 @@ impl Running {
                 self.export_stl_to(&path)
             }
             "fbx" => self.export_fbx_to(&path),
-            _ => Err("The path must end in .sclp (the whole scene), or .obj, .fbx or .stl (the active object).".into()),
+            _ => Err("The path must end in .sclp (the whole scene), .obj or .stl (the active object), or .fbx (every selected object).".into()),
         }
     }
 

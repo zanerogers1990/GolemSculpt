@@ -185,6 +185,8 @@ fn window_options(args: &[String]) -> app::Args {
             // wheel | wheel=low | brush=<name> | mask | strength=<0..1> | size=<1.5> | fold=left|right|both |
             // float=<card>@<x>:<y> | play, with commas between.
             "--demo-ui" => opts.demo_ui = it.next().cloned(),
+            // The Blender link, worked without Blender (play) or with one that has no window (round).
+            "--demo-blender" => opts.demo_blender = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

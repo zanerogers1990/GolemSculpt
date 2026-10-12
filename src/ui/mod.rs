@@ -622,9 +622,14 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             (
                 "Export FBX...",
                 Action::ExportFbx,
-                "Write the selected object as an Autodesk FBX, for Blender, Unity and the like: placed as it is in the scene, Y up, at real size (1 unit is 1 cm).",
+                "Write every selected object into one Autodesk FBX, for Blender, Unity and the like: each an object of its own under its name, placed as it is in the scene, Y up, at real size (1 unit is 1 cm). Ctrl + click rows of the Objects list to select more than one.",
             ),
         ]);
+        // The list that shows the selection is on another tab, so say here what the file would hold.
+        let picked = doc.scene.selected().len();
+        if picked > 1 {
+            theme::hint(ui, &format!("{picked} objects are selected. Export FBX writes them all into one file; OBJ and STL write the bright one only."));
+        }
         row(ui, actions, &[(
             "Export STL for Printing (mm)...",
             Action::ExportStl,
@@ -634,6 +639,11 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             "Check for Printing",
             Action::CheckForPrinting,
             "Look the selected object over for holes and for edges shared by more than two faces, either of which can stop it printing. The answer is in the line at the top of this panel.",
+        )]);
+        row(ui, actions, &[(
+            "Send to Blender",
+            Action::SendToBlender,
+            "Send every selected object to Blender as it stands, at its real size, and open Blender if it is not open. No file to save or find. In Blender, Send to GolemSculpt (the GolemSculpt tab of the sidebar, N) brings an object back: one that came from here returns as itself, with its new shape, and anything made there arrives as a new object.",
         )]);
         crate::recent::tiles(ui, &mut state.recent, tips, actions);
         // Last, and away from the buttons that are pressed all day.

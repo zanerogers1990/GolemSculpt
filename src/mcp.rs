@@ -614,7 +614,16 @@ fn tools() -> Value {
             }),
             &["shape"],
         ),
-        tool("select_object", "Make an object the active one: the one strokes and commands apply to.", json!({ "object": object() }), &["object"]),
+        tool(
+            "select_object",
+            "Make an object the active one: the one strokes and commands apply to. With add, the object joins the \
+             selection instead and the active one stays as it is; an .fbx save_file writes every selected object.",
+            json!({
+                "object": object(),
+                "add": boolean("True adds the object to the selection, as Ctrl + click on its row does. Default false."),
+            }),
+            &["object"],
+        ),
         tool(
             "edit_object",
             "Rename, show, hide or move an object. Only what is given changes.",
@@ -644,9 +653,9 @@ fn tools() -> Value {
         ),
         tool(
             "save_file",
-            "Save to a file, replacing it if it exists. A .sclp path saves the whole scene; an .obj, .fbx or .stl \
-             path exports the active object where it stands in the scene (STL in millimetres, Z up, 1 unit = 10 mm; \
-             FBX in centimetres, Y up).",
+            "Save to a file, replacing it if it exists. A .sclp path saves the whole scene; an .obj or .stl path \
+             exports the active object where it stands in the scene (STL in millimetres, Z up, 1 unit = 10 mm); an \
+             .fbx path exports every selected object into the one file, each under its own name (centimetres, Y up).",
             json!({
                 "path": string("Full path to write, on this computer's own drives, ending in .sclp, .obj, .fbx or .stl."),
             }),

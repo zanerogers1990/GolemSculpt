@@ -235,6 +235,9 @@ pub enum Action {
     Recover(Recover),
     ExportObj,
     ExportFbx,
+    /// Send the selected objects to Blender, opening it if it is not open
+    /// (see app/blender.rs).
+    SendToBlender,
     /// Export STL for Printing: checks the object first, and asks before
     /// writing one that is not a closed surface.
     ExportStl,
