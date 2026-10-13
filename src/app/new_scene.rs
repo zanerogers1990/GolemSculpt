@@ -23,10 +23,11 @@
 //!
 //! What a new scene leaves as it is. The look (material, finish, lighting,
 //! backdrop) stays as it is on screen, although the app itself starts with
-//! the default look: Undo brings back objects, not a look, so a look reset
-//! here could not be had back, and it is one click to change. The brush, the
-//! tool that is up, the interface size and the other settings are the user's,
-//! not the scene's, and stay too.
+//! the default look: it was chosen for working in, it is one click to
+//! change, and the document names none. (The view is the starting one, and
+//! Undo gives the scene from before its own view back: `files.rs`,
+//! `seen_stepped`.) The brush, the tool that is up, the interface size and
+//! the other settings are the user's, not the scene's, and stay too.
 //!
 //! When it is not done. A stroke or a gizmo drag in progress ignores it, as
 //! it ignores every command (`Running::act`). While a background job is at
@@ -85,7 +86,8 @@ pub(super) fn fresh_document(triangles: f32, aspect: f32) -> io::SavedScene {
     };
     let mut details = io::Details::default();
     details.set(io::slot::CAMERA, &view);
-    io::SavedScene { meshes: vec![mesh], objects: vec![ball], active: 0, details, repaired: 0, left_out: 0 }
+    let lost = io::Lost::default();
+    io::SavedScene { meshes: vec![mesh], objects: vec![ball], active: 0, details, repaired: 0, left_out: 0, lost }
 }
 
 /// Why a new scene cannot be started just now, in words for the status line;

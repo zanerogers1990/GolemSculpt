@@ -28,6 +28,10 @@ pub struct Deform {
     verts: Vec<u32>,
     /// The parts of the mesh's spatial index those vertices touch.
     leaves: Vec<u32>,
+    /// The turn and stretch of the drag as last applied, in the mesh's own
+    /// space: what the mesh's sculpt layers are carried by when the drag
+    /// ends (`Mesh::end_stroke_moved`).
+    linear: std::cell::Cell<glam::Mat3>,
 }
 
 impl Deform {
@@ -43,7 +47,7 @@ impl Deform {
             (0..mask.len() as u32).into_par_iter().with_min_len(1 << 14).filter(|&v| mask[v as usize] < 1.0).collect();
         let leaves = mesh.leaves_of(&verts);
         mesh.begin_stroke();
-        Some(Deform { uid: mesh.uid, verts, leaves })
+        Some(Deform { uid: mesh.uid, verts, leaves, linear: std::cell::Cell::new(glam::Mat3::IDENTITY) })
     }
 
     /// How many vertices the drag can move.
@@ -69,6 +73,7 @@ impl Deform {
             let model = model.as_dmat4();
             Affine3A::from_mat4((model.inverse() * world * model).as_mat4())
         };
+        self.linear.set(glam::Mat3::from(local.matrix3));
         mesh.move_listed(&self.verts, |_, vertex| {
             let moved = local.transform_point3(vertex.start);
             // A half-masked vertex goes half the way, which gives a pulled
@@ -86,7 +91,7 @@ impl Deform {
         if mesh.uid != self.uid {
             return None;
         }
-        match mesh.end_stroke(false) {
+        match mesh.end_stroke_moved(self.linear.get()) {
             Some(StrokeDelta::Positions { before, after, .. }) if before == after => None,
             delta => delta,
         }

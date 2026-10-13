@@ -16,7 +16,11 @@ use rayon::prelude::*;
 use sculpt_geom::SymmetryOp;
 
 use super::Brush;
+use super::alpha::{Frame, Stamp};
+use super::erase::{self, Erased};
 use super::falloff::Falloff;
+use super::modes::{FlattenMode, SmoothMode};
+use super::share::{Shared, Sharing};
 use crate::mesh::Mesh;
 use crate::mesh::bvh::Leaf;
 
@@ -95,6 +99,8 @@ pub struct Params {
     pub build_up: f32,
     /// The brush's focal shift, and its hand-drawn curve if it has one.
     pub falloff: Falloff,
+    /// The picture the brush prints, if it has one (see `alpha.rs`).
+    pub alpha: Option<Stamp>,
     pub front_facing: bool,
     pub clay_depth: f32,
     pub clay_soft: f32,
@@ -103,6 +109,25 @@ pub struct Params {
     pub flatten_offset: f32,
     pub layer_height: f32,
     pub mask_hardness: f32,
+    /// Smooth: what it evens out, and how much of the shrinkage it gives
+    /// back (Keep Volume, 0 to 1).
+    pub smooth_mode: SmoothMode,
+    pub keep_volume: f32,
+    /// Flatten: which side of its plane it works on.
+    pub flatten_mode: FlattenMode,
+    /// The distance from the dab before, as a fraction of the radius: the
+    /// brush's Spacing, or more when a stroke that has fallen behind is being
+    /// laid coarser (`pace.rs`).
+    pub spacing: f32,
+    /// How much one dab does, against a dab at the spacing the brush's
+    /// amounts were tuned at: 1 there, 2 at twice that spacing, where half as
+    /// many dabs cover each stretch of the stroke (see `Stroke::dose`). It is
+    /// what makes Spacing change how smooth a stroke is and not how much it
+    /// builds.
+    pub dose: f32,
+    /// Erase Layer: the sculpt layer the stroke rubs out, if there is one
+    /// for it to (`erase.rs`).
+    pub erase: Option<Erased>,
 }
 
 #[derive(Clone, Copy)]
@@ -117,6 +142,11 @@ pub struct Dab {
     pub prev: Option<Vec3>,
     pub cam: Vec3,
     pub pressure: f32,
+    /// Where the brush's alpha lies on the surface, if it has one.
+    pub frame: Frame,
+    /// Flatten with Lock Plane: the plane the whole stroke levels to (a
+    /// point of it and its normal), from the stroke's first dab.
+    pub plane: Option<(Vec3, Vec3)>,
 }
 
 impl Dab {
@@ -129,12 +159,14 @@ impl Dab {
             prev: self.prev.map(|p| op.apply_point(p)),
             cam: op.apply_point(self.cam),
             pressure: self.pressure,
+            frame: self.frame.mirrored(op),
+            plane: self.plane.map(|(origin, normal)| (op.apply_point(origin), op.apply_dir(normal))),
         }
     }
 }
 
 impl Params {
-    fn e(&self, pressure: f32) -> f32 {
+    pub(super) fn e(&self, pressure: f32) -> f32 {
         self.strength * pressure
     }
 
@@ -148,23 +180,69 @@ impl Params {
         self.strength * (1.0 + (pressure - 1.0) * 0.5) * self.build_up
     }
 
-    /// Distance between dabs, as a fraction of the radius. Mask painting has
-    /// its own pace whichever brush is selected.
-    pub fn spacing(&self) -> f32 {
-        if self.mask { 0.2 } else { self.brush.spacing() }
+    /// Whether the stroke is one print of the brush's alpha, placed by
+    /// dragging (see `alpha::Print`), and not a run of dabs.
+    pub fn prints(&self) -> bool {
+        !self.mask && self.alpha.is_some_and(|stamp| stamp.drags())
     }
 
-    /// Cost ceiling for a frame in which the pointer jumped a long way.
-    pub fn max_dabs_per_frame(&self) -> usize {
-        if self.mask { 24 } else { self.brush.max_dabs_per_frame() }
+    /// The weight the brush's alpha gives a vertex `rel` from the centre of
+    /// dab `d` (measured where the stroke found it, so the print does not
+    /// creep as the surface rises). 1 with no alpha, and a weight times 1 is
+    /// that weight to the last bit.
+    #[inline]
+    pub(super) fn printed(&self, d: &Dab, rel: Vec3) -> f32 {
+        match &self.alpha {
+            Some(stamp) => stamp.at(&d.frame, rel),
+            None => 1.0,
+        }
     }
 
-    /// Whether the brush raises the surface to a set height in one dab and
-    /// never past it (Layer). Copies of such a dab that overlap must not be
-    /// added up beyond what any one of them asked for: see `radial.rs`, and
-    /// [`held_to_furthest`], which both walks over a dab's copies use.
-    pub fn holds_a_height(&self) -> bool {
-        !self.mask && self.brush == Brush::Layer
+    /// The stroke's settings as one dab of it takes them: the dab's own
+    /// radius (Pressure -> Size and Size Jitter make it smaller than the
+    /// ring), with the alpha sized to match, and its own spacing and dose.
+    /// With the ring's radius this is the stroke's own settings to the bit.
+    pub fn for_dab(mut self, radius: f32, spacing: f32, dose: f32) -> Params {
+        if radius != self.radius {
+            self.radius = radius;
+            self.alpha = self.alpha.map(|stamp| stamp.sized(radius));
+        }
+        (self.spacing, self.dose) = (spacing, dose);
+        self
+    }
+
+    /// For a brush that seeks: the share `k` of the gap to its target that a
+    /// dab at the tuned spacing closes, as a dab with this one's dose closes
+    /// it. Closing `k` of what is left, `dose` times over, is what the dabs
+    /// it stands in for would have done between them; scaling `k` itself
+    /// would overshoot at wide spacing and fall short at tight.
+    #[inline]
+    pub(super) fn share(&self, k: f32) -> f32 {
+        if self.dose == 1.0 { k } else { 1.0 - (1.0 - k).powf(self.dose) }
+    }
+
+    /// How copies of a dab that overlap share a vertex between them (see
+    /// `share.rs`). A brush seeks when each dab closes a share of the gap to
+    /// a place and stops there: a height above the surface the stroke began
+    /// on (Layer, and Standard and Crease without Accumulate), a plane
+    /// (Flatten), the mean of a vertex's neighbours (Smooth), a point
+    /// (Inflate without Accumulate). The rest add a step each dab, Clay
+    /// among them with or without Accumulate: its plane rises with the
+    /// surface, so it goes on building until its depth for the stroke is
+    /// spent.
+    pub fn sharing(&self) -> Sharing {
+        if self.prints() {
+            return Sharing::Seeks;
+        }
+        match self.brush {
+            // Pinch closes a share of the gap to the stroke's line each dab
+            // (and spreads away from it by a share of the distance), and
+            // Erase Layer a share of the gap to the surface without its layer.
+            Brush::Layer | Brush::Flatten | Brush::Smooth | Brush::Pinch | Brush::EraseLayer => Sharing::Seeks,
+            Brush::Standard | Brush::Inflate | Brush::Crease if !self.accumulate => Sharing::Seeks,
+            // Nudge among them: every dab carries the surface a step.
+            _ => Sharing::Adds,
+        }
     }
 
     /// How far from a dab centre vertices can be affected.
@@ -174,20 +252,6 @@ impl Params {
             _ => self.radius,
         }
     }
-}
-
-/// The move `step`, which is what the overlapping copies of a dab did to one
-/// vertex, added up and shared out, held to the furthest any one of those
-/// copies moved it (`furthest` is that distance squared). For a brush that
-/// [holds a height](Params::holds_a_height): shared out by one number for the
-/// whole set, the sum comes out longer than any copy's own move wherever more
-/// copies cover a vertex than the set counts as, and such a brush never takes
-/// that back. Held like this it is what the copies would have left applied
-/// one after another, each only topping up the last, with no order to it.
-#[inline]
-pub(super) fn held_to_furthest(step: Vec3, furthest: f32) -> Vec3 {
-    let length = step.length_squared();
-    if length > furthest { step * (furthest / length).sqrt() } else { step }
 }
 
 #[inline]
@@ -429,7 +493,7 @@ pub(super) fn each_stretch<T: Send>(
 /// Fills `out` with `f(place in the buffer, vertex)` for every vertex owned
 /// by `leaves`. A hidden vertex keeps its place in the buffer and gets the
 /// default value (no weight, no target) without `f` being asked.
-fn fill<T: Copy + Default + Send>(
+pub(super) fn fill<T: Copy + Default + Send>(
     mesh: &Mesh,
     leaves: &[u32],
     out: &mut Vec<T>,
@@ -457,11 +521,13 @@ fn fill<T: Copy + Default + Send>(
 #[derive(Default)]
 pub struct Scratch {
     weights: Vec<f32>,
-    targets: Vec<Vec3>,
-    /// For the walk over mirrored copies by two or three planes at once
-    /// (`Sculptor::apply_symmetric`), when the brush holds a height: the
-    /// square of the furthest any one copy moved each vertex.
-    pub(super) furthest: Vec<f32>,
+    pub(super) targets: Vec<Vec3>,
+    /// Where a Smooth dab found its vertices, for Keep Volume.
+    before: Vec<Vec3>,
+    /// For the walk over mirror images that can meet
+    /// (`Sculptor::apply_symmetric`): what they have done to each vertex
+    /// between them.
+    pub(super) shared: Vec<Shared>,
 }
 
 /// Totals `add` over every vertex owned by `leaves` that is not hidden. The
@@ -525,6 +591,13 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut
     if p.mask {
         return mask_paint(mesh, p, d, leaves);
     }
+    if p.brush == Brush::EraseLayer {
+        // Before the print below, which raises the surface: this brush's own print takes away.
+        return erase::dab(mesh, p, d, leaves, scratch);
+    }
+    if p.prints() {
+        return print(mesh, p, d, leaves);
+    }
     match p.brush {
         Brush::Inflate => inflate(mesh, p, d, leaves),
         Brush::Standard => standard(mesh, p, d, leaves),
@@ -534,15 +607,18 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut
         Brush::Crease => crease(mesh, p, d, leaves),
         Brush::Smooth => smooth_dab(mesh, p, d, leaves, scratch),
         Brush::SnakeHook => snake(mesh, p, d, leaves),
-        // Move and Pose take hold once at the press and are dragged, not dabbed.
-        Brush::Move | Brush::Pose => {}
+        Brush::Pinch => pinch(mesh, p, d, leaves),
+        Brush::Nudge => nudge(mesh, p, d, leaves),
+        // Move and Pose take hold once at the press and are dragged, not
+        // dabbed. Erase Layer was seen to above.
+        Brush::Move | Brush::Pose | Brush::EraseLayer => {}
     }
 }
 
 fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
     let r2 = r * r;
-    let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS);
+    let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
     let ease = p.e_off(d.pressure) * 4.0 * 0.1;
     let target = d.center + d.normal * (0.6 * r * p.sign);
     mesh.move_vertices(leaves, |_, vt| {
@@ -554,11 +630,12 @@ fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         let n = vt.normal;
         let w = p.falloff.at(d2.sqrt() / r, smooth)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, n, pos, d.cam);
+            * facing(p.front_facing, n, pos, d.cam)
+            * p.printed(d, vt.start - d.center);
         if w <= 0.0 {
             return None;
         }
-        Some(if p.accumulate { pos + n * (w * rate) } else { pos + (target - pos) * (w * ease).clamp(0.0, 1.0) })
+        Some(if p.accumulate { pos + n * (w * rate) } else { pos + (target - pos) * p.share((w * ease).clamp(0.0, 1.0)) })
     });
 }
 
@@ -568,9 +645,9 @@ fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     // Direction comes from the stroke-start surface: on the live surface the
     // brush runs away up its own ridge.
     let dir = footprint_normal(mesh, d.center, r, true).unwrap_or(d.normal);
-    let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS);
+    let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
     let height = p.sign * 0.3 * r;
-    let ease = (p.e_off(d.pressure) * 4.0 * 0.1).clamp(0.0, 1.0);
+    let ease = p.share((p.e_off(d.pressure) * 4.0 * 0.1).clamp(0.0, 1.0));
     mesh.move_vertices(leaves, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
@@ -579,7 +656,8 @@ fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         }
         let w = p.falloff.at(d2.sqrt() / r, quintic)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam);
+            * facing(p.front_facing, vt.normal, pos, d.cam)
+            * p.printed(d, vt.start - d.center);
         if w <= 0.0 {
             return None;
         }
@@ -591,12 +669,37 @@ fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     });
 }
 
+/// A print of the brush's alpha placed by dragging: every vertex under it
+/// is set to its full height above where the stroke found it, in one dab,
+/// whichever brush is in hand. The dab is made afresh, on the surface as the
+/// stroke found it, each time the drag resizes the print (`alpha::Print`).
+fn print(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
+    let r = p.radius;
+    let r2 = r * r;
+    let dir = footprint_normal(mesh, d.center, r, true).unwrap_or(d.normal);
+    // At full Strength a print stands half as tall as its radius; taller
+    // than that is a spike, not a print.
+    let height = p.sign * r * p.strength * 0.5;
+    mesh.move_vertices(leaves, |_, vt| {
+        let start = vt.start;
+        let d2 = start.distance_squared(d.center);
+        if d2 >= r2 {
+            return None;
+        }
+        let w = p.falloff.at(d2.sqrt() / r, quintic)
+            * (1.0 - vt.mask)
+            * facing(p.front_facing, vt.normal, start, d.cam)
+            * p.printed(d, start - d.center);
+        (w > 0.0).then(|| start + dir * (height * w))
+    });
+}
+
 fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
     let r2 = r * r;
     let dir = footprint_normal(mesh, d.center, r, false).unwrap_or(d.normal);
     let height = p.sign * r * p.layer_height;
-    let ease = (p.e_off(d.pressure) * 40.0 * 0.1).clamp(0.0, 1.0);
+    let ease = p.share((p.e_off(d.pressure) * 40.0 * 0.1).clamp(0.0, 1.0));
     mesh.move_vertices(leaves, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
@@ -606,7 +709,8 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         // Flat plateau in the middle so overlapping dabs build one even step.
         let w = p.falloff.at(d2.sqrt() / r, layer_built_in)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam);
+            * facing(p.front_facing, vt.normal, pos, d.cam)
+            * p.printed(d, vt.start - d.center);
         if w <= 0.0 {
             return None;
         }
@@ -654,55 +758,88 @@ impl PlaneSum {
     }
 }
 
+/// Flatten's weight for a vertex at `pos`, before the mask: the brush's
+/// falloff round the dab and Front Facing.
+#[inline]
+fn flatten_weight(p: &Params, d: &Dab, pos: Vec3, normal: Vec3) -> f32 {
+    let r = p.radius;
+    let d2 = pos.distance_squared(d.center);
+    if d2 >= r * r {
+        return 0.0;
+    }
+    p.falloff.at(d2.sqrt() / r, quintic) * facing(p.front_facing, normal, pos, d.cam)
+}
+
+/// The plane a Flatten dab levels to: fitted to the surface under the ring
+/// and moved along its normal by Plane Offset. A point of it and its normal,
+/// or `None` where nothing under the ring carries weight.
+///
+/// It is fitted with mask-free weights: a mask edge would otherwise tilt it
+/// and raise a ridge along the mask boundary. Its origin comes from the
+/// stroke-start positions: with a live origin a non-zero offset drills or
+/// balloons without limit.
+pub fn flatten_plane(mesh: &Mesh, p: &Params, d: &Dab, leaves: &[u32]) -> Option<(Vec3, Vec3)> {
+    let fit = fold_leaves(
+        mesh,
+        leaves,
+        |sum: &mut PlaneSum, v| {
+            let i = v as usize;
+            let w = flatten_weight(p, d, mesh.positions[i], mesh.normals[i]);
+            if w > 0.0 {
+                sum.add(mesh.start_pos(v), mesh.normals[i], w);
+            }
+        },
+        PlaneSum::merge,
+    );
+    let (origin, n) = fit.plane(d.normal)?;
+    Some((origin + n * (p.radius * p.flatten_offset), n))
+}
+
+/// How much of a dab's levelling a vertex `along` from a LOCKED plane gets,
+/// for a brush of radius `r`: all of it within a quarter of a radius of the
+/// plane, none half a radius away. A stroke that wanders off the plane
+/// (round the side of the form it is cutting a facet on, say) then stops
+/// working where the plane has left the surface behind, instead of hauling
+/// the surface the whole way to it. Half a radius is as far as a stroke of
+/// inverted Flatten may move a vertex, and so as far as this can: nothing
+/// further from the plane is touched.
+#[inline]
+fn locked_reach(along: f32, r: f32) -> f32 {
+    smooth(2.0 - 4.0 * along.abs() / r.max(1e-12))
+}
+
 fn flatten(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
-    let r2 = r * r;
-    // The plane is fitted with mask-free weights: a mask edge would otherwise
-    // tilt it and raise a ridge along the mask boundary.
-    let plane_w = |pos: Vec3, normal: Vec3| {
-        let d2 = pos.distance_squared(d.center);
-        if d2 >= r2 {
-            return 0.0;
-        }
-        p.falloff.at(d2.sqrt() / r, quintic) * facing(p.front_facing, normal, pos, d.cam)
-    };
-    // Origin from stroke-start positions: with a live origin a non-zero
-    // offset drills or balloons without limit.
-    let fit = {
-        let mesh = &*mesh;
-        fold_leaves(
-            mesh,
-            leaves,
-            |sum: &mut PlaneSum, v| {
-                let i = v as usize;
-                let w = plane_w(mesh.positions[i], mesh.normals[i]);
-                if w > 0.0 {
-                    sum.add(mesh.start_pos(v), mesh.normals[i], w);
-                }
-            },
-            PlaneSum::merge,
-        )
-    };
-    let Some((origin, n)) = fit.plane(d.normal) else { return };
-    let origin = origin + n * (r * p.flatten_offset);
+    // The stroke's one plane with Lock Plane, else this dab's own.
+    let Some((origin, n)) = d.plane.or_else(|| flatten_plane(mesh, p, d, leaves)) else { return };
+    let locked = d.plane.is_some();
+    let mode = p.flatten_mode.inverted(p.sign < 0.0);
     let e = p.e(d.pressure) * 4.0 * 0.1;
     mesh.move_vertices(leaves, |_, vt| {
         let pos = vt.pos;
-        let fit_w = plane_w(pos, vt.normal);
+        let fit_w = flatten_weight(p, d, pos, vt.normal);
         if fit_w <= 0.0 {
             return None;
         }
         let w = fit_w * (1.0 - vt.mask);
         let along = (pos - origin).dot(n);
-        let k = (w * e).clamp(0.0, 1.0);
-        Some(if p.sign >= 0.0 {
-            pos - n * (along * k)
-        } else {
-            // Inverted: push away from the plane (contrast), bounded per stroke.
-            let new = pos + n * (along * k);
-            let h = (new - vt.start).dot(n);
-            new - n * (h - h.clamp(-0.5 * r, 0.5 * r))
-        })
+        let mut k = p.share((w * e).clamp(0.0, 1.0));
+        if locked {
+            k *= locked_reach(along, r);
+        }
+        match mode {
+            // One side of the plane only: what is on the other is left alone.
+            FlattenMode::Scrape if along <= 0.0 => None,
+            FlattenMode::Fill if along >= 0.0 => None,
+            FlattenMode::Scrape | FlattenMode::Fill => Some(pos - n * (along * k)),
+            FlattenMode::Both if p.sign >= 0.0 => Some(pos - n * (along * k)),
+            FlattenMode::Both => {
+                // Inverted: push away from the plane (contrast), bounded per stroke.
+                let new = pos + n * (along * k);
+                let h = (new - vt.start).dot(n);
+                Some(new - n * (h - h.clamp(-0.5 * r, 0.5 * r)))
+            }
+        }
     });
 }
 
@@ -745,17 +882,18 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
 
     let per_dab = {
         let base = p.e(pressure) * 4.0 * 0.05;
-        if p.accumulate { base.max(p.e_acc(pressure) * 4.0 * 0.05 / 0.25) } else { base }
+        p.dose * if p.accumulate { base.max(p.e_acc(pressure) * 4.0 * 0.05 / 0.25) } else { base }
     };
     // Strong dabs are swept from the previous centre instead of stamped;
-    // whole stamps print their rims as a row of crescents.
+    // whole stamps print their rims as a row of crescents. The steps of the
+    // sweep are no further apart than a third of the tip's soft edge.
     let steps = match d.prev {
-        Some(_) => ((per_dab / 0.15).ceil().max((0.2 * 3.0 / soft - 1e-3).ceil()) as usize).clamp(1, 8),
+        Some(_) => ((per_dab / 0.15).ceil().max((p.spacing * 3.0 / soft - 1e-3).ceil()) as usize).clamp(1, 8),
         None => 1,
     };
     let prev = d.prev.unwrap_or(d.center);
-    let lerp_scale = p.e(pressure) * 4.0 * 0.05 / steps as f32;
-    let rate = p.sign * p.clay_depth * p.e_acc(pressure) * 4.0 * 0.05 * (r / REF_RADIUS)
+    let lerp_scale = p.e(pressure) * 4.0 * 0.05 * p.dose / steps as f32;
+    let rate = p.sign * p.clay_depth * p.e_acc(pressure) * 4.0 * 0.05 * (r / REF_RADIUS) * p.dose
         / steps as f32;
     let max_along = height.abs() * if p.accumulate { 3.0 } else { 1.5 };
     let band = 0.75 * height.abs();
@@ -769,11 +907,13 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         let mut pos = vt.pos;
         let guard = (1.0 - vt.mask) * facing(p.front_facing, vt.normal, pos, d.cam);
         for s in 1..=steps {
+            // The alpha shapes what is laid down, not the plane it is laid
+            // on: `fit` above is taken without it.
             let w = if steps == 1 {
-                tip_w(start, vt.normal, vt.pos) * (1.0 - vt.mask)
+                tip_w(start, vt.normal, vt.pos) * (1.0 - vt.mask) * p.printed(d, start - d.center)
             } else {
                 let centre = prev.lerp(d.center, s as f32 / steps as f32);
-                clay_weight(&p.falloff, start.distance(centre) / eff_r, soft) * guard
+                clay_weight(&p.falloff, start.distance(centre) / eff_r, soft) * guard * p.printed(d, start - centre)
             };
             if w <= 0.0 {
                 continue;
@@ -812,7 +952,7 @@ fn crease(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let n = d.normal;
     let dir = d.dir;
     let e_off = (p.e_off(d.pressure) * 4.0 * 0.2).max(0.0);
-    let e_acc = p.e_acc(d.pressure) * 4.0 * 0.2;
+    let e_acc = p.e_acc(d.pressure) * 4.0 * 0.2 * p.dose;
     mesh.move_vertices(leaves, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
@@ -852,7 +992,7 @@ fn crease(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
             pinched = live_across;
         }
         let target = d.center + n * (start_n + carve) + dir * start_along + pinched;
-        Some(pos + (target - pos) * (w * e_off).clamp(0.0, 1.0))
+        Some(pos + (target - pos) * p.share((w * e_off).clamp(0.0, 1.0)))
     });
 }
 
@@ -873,8 +1013,23 @@ fn neighbour_mean(mesh: &Mesh, v: u32) -> Option<Vec3> {
 /// Jacobi relaxation passes over the vertices of `leaves` that
 /// `scratch.weights` gives a weight above zero: every target is computed from
 /// the pass's starting positions, then all are written. (Updating in place is
-/// order dependent and breaks mirror symmetry.)
+/// order dependent and breaks mirror symmetry.) Each vertex goes all the way
+/// toward the mean of its neighbours by its weight.
 fn relax_passes(mesh: &mut Mesh, leaves: &[u32], scratch: &mut Scratch, amount: f32, min_move2: f32) {
+    stepped_passes(mesh, leaves, scratch, amount, min_move2, |_, _, pos, mean, k| pos + (mean - pos) * k);
+}
+
+/// [`relax_passes`] with the step a vertex takes left to `step`: it is given
+/// the mesh as the pass found it, the vertex, where it is, the mean of its
+/// neighbours and its weight for this pass (0 to 1), and says where it goes.
+fn stepped_passes(
+    mesh: &mut Mesh,
+    leaves: &[u32],
+    scratch: &mut Scratch,
+    amount: f32,
+    min_move2: f32,
+    step: impl Fn(&Mesh, u32, Vec3, Vec3, f32) -> Vec3 + Sync,
+) {
     let full = amount.floor() as usize;
     let frac = amount - full as f32;
     let passes = full + usize::from(frac > 0.001);
@@ -891,7 +1046,7 @@ fn relax_passes(mesh: &mut Mesh, leaves: &[u32], scratch: &mut Scratch, amount: 
                 }
                 let pos = mesh.positions[v as usize];
                 match neighbour_mean(mesh, v) {
-                    Some(avg) => pos + (avg - pos) * (w * factor).clamp(0.0, 1.0),
+                    Some(avg) => step(mesh, v, pos, avg, (w * factor).clamp(0.0, 1.0)),
                     None => pos,
                 }
             });
@@ -925,7 +1080,342 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mu
             if w > 0.0 { w * 4.0 * 0.1 } else { 0.0 }
         });
     }
-    relax_passes(mesh, leaves, scratch, p.e(d.pressure) * 10.0, 0.0);
+    let amount = p.e(d.pressure) * 10.0 * p.dose;
+    match p.smooth_mode {
+        SmoothMode::All if p.keep_volume > 0.0 => {
+            fill(mesh, leaves, &mut scratch.before, |_, v| mesh.positions[v as usize]);
+            relax_passes(mesh, leaves, scratch, amount, 0.0);
+            give_back(mesh, leaves, scratch, p.keep_volume.min(1.0));
+        }
+        SmoothMode::All => relax_passes(mesh, leaves, scratch, amount, 0.0),
+        // Along the normal only, and one way only. What a vertex would have
+        // slid sideways is left out, so nothing jumps where the surface
+        // passes from standing up to lying low.
+        SmoothMode::Peaks => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
+            let n = mesh.normals[v as usize];
+            pos + n * ((mean - pos).dot(n).min(0.0) * k)
+        }),
+        SmoothMode::Valleys => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
+            let n = mesh.normals[v as usize];
+            pos + n * ((mean - pos).dot(n).max(0.0) * k)
+        }),
+        // Within the surface only: the part of the way to the mean that lies
+        // across the normal, and then back down on to the surface.
+        SmoothMode::Relax => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
+            let n = mesh.normals[v as usize];
+            let toward = mean - pos;
+            slid(mesh, v, pos, n, (toward - n * toward.dot(n)) * k)
+        }),
+    }
+}
+
+/// Where the vertex `v`, at `pos` with normal `n`, comes to when it is slid
+/// `across` its own tangent plane: that far across, and back on to the
+/// surface.
+///
+/// A step in the tangent plane leaves a curved surface behind: by the square
+/// of the step times half the curvature that way. How the surface curves
+/// that way is read off the vertex's neighbours, each of which says how far
+/// the surface has fallen away (or risen) at its own distance and in its own
+/// direction, and counts by how nearly it lies along the step. So a step
+/// along a cylinder is not corrected at all and a step round it is, which
+/// the mean curvature alone would get half wrong each way. Summed in double
+/// (see the module docs).
+#[inline]
+pub(super) fn slid(mesh: &Mesh, v: u32, pos: Vec3, n: Vec3, across: Vec3) -> Vec3 {
+    let step2 = across.length_squared();
+    if step2 <= 0.0 {
+        return pos;
+    }
+    let (mut fall, mut count) = (0.0f64, 0.0f64);
+    for &o in mesh.neighbours(v) {
+        let to = mesh.positions[o as usize] - pos;
+        let height = to.dot(n);
+        let flat = to - n * height;
+        let reach2 = flat.length_squared();
+        if reach2 < 1e-18 {
+            continue;
+        }
+        // The square of the step's length along this neighbour's direction.
+        let along2 = flat.dot(across).powi(2) / reach2;
+        fall += (along2 * height / reach2) as f64;
+        count += along2 as f64;
+    }
+    let lift = if count > 0.0 { (fall / count) as f32 * step2 } else { 0.0 };
+    // On any surface worth the name the way back is a small part of the
+    // step. Where the mesh is crumpled (a neighbour all but straight above
+    // the vertex reads as a hairpin bend) it is held to half the step, so a
+    // bad patch is slid over and not flung away.
+    let most = 0.5 * step2.sqrt();
+    pos + across + n * lift.clamp(-most, most)
+}
+
+/// Keep Volume: gives back `keep` of what a Smooth dab took from the form
+/// under it.
+///
+/// Smoothing a curved surface draws it in: every vertex moves toward the
+/// middle of its neighbours, which on a ball, a finger or a fin's edge is
+/// inward, so each stroke leaves the form thinner. What the dab did to the
+/// form's bulk is how far it moved its vertices along their normals, added
+/// up; that much is put back, spread over the same vertices by the brush's
+/// own weights. The bumps a dab flattened stay flattened (pushing every
+/// vertex out a little does not bring one back), and on a flat surface,
+/// where smoothing moves as much up as down, nothing is put back at all.
+///
+/// One number for the whole dab, so it cannot ring or roughen the surface
+/// the way undoing the shrinkage vertex by vertex does (Taubin's inflating
+/// pass sharpens what the smoothing pass has just blunted, and on a form
+/// only a few vertices round it reads the whole form as a detail and lets
+/// it shrink regardless).
+fn give_back(mesh: &mut Mesh, leaves: &[u32], scratch: &Scratch, keep: f32) {
+    let Scratch { weights, before, .. } = scratch;
+    let (starts, _) = layout(mesh, leaves);
+    // How far the dab moved the surface along its normals, and the weights,
+    // leaf by leaf and then in the leaves' order: the same total whatever
+    // threads did the adding.
+    let total = {
+        let mesh = &*mesh;
+        let hidden = mesh.hidden_vertices();
+        let of_leaf = |(k, &l): (usize, &u32)| {
+            let (mut moved, mut weight) = (0.0f64, 0.0f64);
+            for (n, v) in owned(&mesh.bvh.leaves[l as usize]).enumerate() {
+                let w = weights[starts[k] + n];
+                if w > 0.0 && !hidden.is_some_and(|hidden| hidden[v]) {
+                    moved += (mesh.positions[v] - before[starts[k] + n]).dot(mesh.normals[v]) as f64;
+                    weight += w as f64;
+                }
+            }
+            (moved, weight)
+        };
+        let sums: Vec<(f64, f64)> = if leaf_vertex_total(mesh, leaves) < PAR_MIN {
+            leaves.iter().enumerate().map(of_leaf).collect()
+        } else {
+            leaves.par_iter().enumerate().with_min_len(8).map(of_leaf).collect()
+        };
+        sums.into_iter().fold((0.0, 0.0), |(moved, weight), (m, w)| (moved + m, weight + w))
+    };
+    let (moved, weight) = total;
+    if weight <= 1e-12 || moved == 0.0 {
+        return;
+    }
+    let back = (-(keep as f64) * moved / weight) as f32;
+    mesh.move_vertices(leaves, |at, vt| {
+        let w = weights[at];
+        (w > 0.0).then(|| vt.pos + vt.normal * (w * back))
+    });
+}
+
+/// How much of the way to the stroke's line one Pinch dab at full strength
+/// draws the surface under the middle of the brush. Five dabs cover each
+/// point of a stroke at the brush's own spacing, so a full-strength stroke
+/// draws it about three quarters of the way.
+const PINCH_RATE: f32 = 0.25;
+
+/// Pinch: draws the surface in toward the stroke's line, or with the brush
+/// inverted spreads it away from the line.
+///
+/// Each vertex moves across the way the stroke is going and within the
+/// plane the dab touches the surface in, never along the stroke: drawn
+/// toward the dab's centre instead, the surface is dragged along the stroke
+/// and bunches into beads (the same reason Crease pinches across its travel
+/// only). Nothing moves in or out along the brush's direction, so there is
+/// no carving: the flanks of a ridge are drawn in under it and it sharpens.
+///
+/// A dab with no direction (a press that never set off) pinches toward its
+/// centre: there is no line yet, only a point.
+fn pinch(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
+    let r = p.radius;
+    let r2 = r * r;
+    let (n, dir) = (d.normal, d.dir);
+    let rate = p.e(d.pressure) * PINCH_RATE;
+    mesh.move_vertices(leaves, |_, vt| {
+        let pos = vt.pos;
+        let d2 = pos.distance_squared(d.center);
+        if d2 >= r2 {
+            return None;
+        }
+        let w = p.falloff.at(d2.sqrt() / r, smooth)
+            * (1.0 - vt.mask)
+            * facing(p.front_facing, vt.normal, pos, d.cam);
+        if w <= 0.0 {
+            return None;
+        }
+        let from_centre = pos - d.center;
+        let flat = from_centre - n * from_centre.dot(n);
+        let across = flat - dir * flat.dot(dir);
+        let k = p.share((w * rate).clamp(0.0, 1.0));
+        Some(if p.sign >= 0.0 { pos - across * k } else { pos + across * k })
+    });
+}
+
+/// The surface under a dab as one smooth cap: its height over the plane the
+/// dab touches it in, to the second order (a tilt, and how it curves each
+/// way), fitted to every vertex under the ring by the brush's own soft
+/// weight.
+///
+/// It is what Nudge slides the surface along. Read off the neighbours of
+/// each vertex instead ([`slid`], which Relax uses), the surface is only as
+/// good as the mesh just there, and a hard nudge crumples the mesh under
+/// itself: the crumpled patch then read as a tight bend, vertices were set
+/// down off the surface, and a stroke that was meant to push clay sideways
+/// left a cusp where it stopped. A fit over the whole footprint does not
+/// see the crumpling.
+struct Cap {
+    /// Across, up and out: the plane the dab touches the surface in, and
+    /// the way it faces.
+    across: Vec3,
+    up: Vec3,
+    out: Vec3,
+    /// One over the brush's radius: the fit is made in radii.
+    per_radius: f32,
+    /// The height at (x, y) radii from the centre is
+    /// `c[0] + c[1] x + c[2] y + c[3] x x + c[4] x y + c[5] y y`.
+    c: [f32; 6],
+}
+
+/// The sums a [`Cap`] is fitted from: for the six terms of its height, each
+/// times each (the upper half, row by row) and each times the height.
+#[derive(Default)]
+struct CapSum {
+    products: [f64; 21],
+    heights: [f64; 6],
+}
+
+impl Cap {
+    fn terms(x: f64, y: f64) -> [f64; 6] {
+        [1.0, x, y, x * x, x * y, y * y]
+    }
+
+    /// The cap under dab `d`, or `None` where too little of the surface is
+    /// under the ring to say how it curves.
+    fn fit(mesh: &Mesh, p: &Params, d: &Dab, leaves: &[u32]) -> Option<Cap> {
+        let out = d.normal.try_normalize()?;
+        let (across, up) = out.any_orthonormal_pair();
+        let (r, r2) = (p.radius, p.radius * p.radius);
+        let per_radius = 1.0 / r.max(1e-12);
+        let sums = fold_leaves(
+            mesh,
+            leaves,
+            |sum: &mut CapSum, v| {
+                let i = v as usize;
+                let from = mesh.positions[i] - d.center;
+                let d2 = from.length_squared();
+                // The sheet the brush is on, not the far side of a thin form.
+                if d2 >= r2 || mesh.normals[i].dot(out) <= 0.0 {
+                    return;
+                }
+                let w = smooth(1.0 - d2.sqrt() * per_radius) as f64;
+                let terms = Cap::terms((from.dot(across) * per_radius) as f64, (from.dot(up) * per_radius) as f64);
+                let height = from.dot(out) as f64;
+                let mut k = 0;
+                for row in 0..6 {
+                    for col in row..6 {
+                        sum.products[k] += w * terms[row] * terms[col];
+                        k += 1;
+                    }
+                    sum.heights[row] += w * terms[row] * height;
+                }
+            },
+            |sum, part| {
+                sum.products.iter_mut().zip(part.products).for_each(|(a, b)| *a += b);
+                sum.heights.iter_mut().zip(part.heights).for_each(|(a, b)| *a += b);
+            },
+        );
+        let c = sums.solve()?;
+        Some(Cap { across, up, out, per_radius, c: c.map(|c| c as f32) })
+    }
+
+    /// The cap's height over the point (x, y), in radii from the centre.
+    #[inline]
+    fn height(&self, x: f32, y: f32) -> f32 {
+        let c = &self.c;
+        c[0] + c[1] * x + c[2] * y + c[3] * x * x + c[4] * x * y + c[5] * y * y
+    }
+
+    /// Where a point at `pos` comes to when it is slid `by` along the
+    /// surface: that far across the cap's plane, keeping the height it has
+    /// above (or below) the cap. So a bump is carried along as a bump.
+    #[inline]
+    fn slide(&self, center: Vec3, pos: Vec3, by: Vec3) -> Vec3 {
+        let flat = by - self.out * by.dot(self.out);
+        let at = |p: Vec3| ((p - center).dot(self.across) * self.per_radius, (p - center).dot(self.up) * self.per_radius);
+        let ((x0, y0), (x1, y1)) = (at(pos), at(pos + flat));
+        pos + flat + self.out * (self.height(x1, y1) - self.height(x0, y0))
+    }
+}
+
+impl CapSum {
+    /// The six numbers of the cap that fits the sums best (least squares),
+    /// by elimination with the largest pivot first. `None` if the sums do
+    /// not pin all six down: next to no vertices, or all of them in a line.
+    fn solve(&self) -> Option<[f64; 6]> {
+        let mut m = [[0.0f64; 7]; 6];
+        let mut k = 0;
+        for row in 0..6 {
+            for col in row..6 {
+                (m[row][col], m[col][row]) = (self.products[k], self.products[k]);
+                k += 1;
+            }
+            m[row][6] = self.heights[row];
+        }
+        let scale = m[0][0];
+        if !(scale > 0.0) {
+            return None;
+        }
+        for col in 0..6 {
+            let pivot = (col..6).max_by(|&a, &b| m[a][col].abs().total_cmp(&m[b][col].abs()))?;
+            if m[pivot][col].abs() <= 1e-9 * scale {
+                return None;
+            }
+            m.swap(col, pivot);
+            for row in 0..6 {
+                if row != col {
+                    let f = m[row][col] / m[col][col];
+                    for j in col..7 {
+                        m[row][j] -= f * m[col][j];
+                    }
+                }
+            }
+        }
+        let c: [f64; 6] = std::array::from_fn(|i| m[i][6] / m[i][i]);
+        c.iter().all(|c| c.is_finite()).then_some(c)
+    }
+}
+
+/// Nudge: slides the surface under the ring along with the stroke, within
+/// the surface.
+///
+/// Each dab carries what is under it now a share of the way the stroke has
+/// come since the dab before (`Dab::step`): all of that way under the middle
+/// of the brush at full Strength, where the surface stays under the pen, and
+/// less toward the rim by the falloff, so the surface is left behind as the
+/// brush moves on. It goes along the surface as the dab finds it ([`Cap`]),
+/// so a nudge pushes clay sideways and does not raise or sink it. A dab that
+/// has come no way (the first of a stroke, a pen held still) moves nothing.
+///
+/// The steps of a stroke add up to the way it has come whatever its
+/// Spacing, so there is no dose to apply.
+fn nudge(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
+    if d.step == Vec3::ZERO {
+        return;
+    }
+    let r = p.radius;
+    let r2 = r * r;
+    let follow = p.e(d.pressure).clamp(0.0, 1.0);
+    // With no cap to go by (next to nothing under the ring) nothing is
+    // moved: there is no surface to slide along.
+    let Some(cap) = Cap::fit(mesh, p, d, leaves) else { return };
+    mesh.move_vertices(leaves, |_, vt| {
+        let pos = vt.pos;
+        let d2 = pos.distance_squared(d.center);
+        if d2 >= r2 {
+            return None;
+        }
+        let w = p.falloff.at(d2.sqrt() / r, smooth)
+            * (1.0 - vt.mask)
+            * facing(p.front_facing, vt.normal, pos, d.cam);
+        (w > 0.0).then(|| cap.slide(d.center, pos, d.step * (w * follow)))
+    });
 }
 
 fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
@@ -1046,6 +1536,15 @@ pub(super) fn relax_gate(departure: f32) -> f32 {
     RELAX_CURVATURE_FLOOR + (1.0 - RELAX_CURVATURE_FLOOR) * smooth(ramp)
 }
 
+/// One dab of a frame, for Clay's finishing pass: where it was laid, the
+/// camera as that copy of the brush sees it, and the dab's radius.
+#[derive(Clone, Copy)]
+pub struct Centre {
+    pub at: Vec3,
+    pub cam: Vec3,
+    pub radius: f32,
+}
+
 /// Clay's finishing pass, run once per frame over that frame's dabs. It only
 /// works the rim of the footprint and only where the surface is sharply
 /// curved, which removes the ridges dabs leave at their edges without erasing
@@ -1054,7 +1553,7 @@ pub(super) fn relax_gate(departure: f32) -> f32 {
 pub fn clay_relax(
     mesh: &mut Mesh,
     p: &Params,
-    centres: &[(Vec3, Vec3)],
+    centres: &[Centre],
     dab_count: usize,
     relax: f32,
     object_size: f32,
@@ -1064,11 +1563,9 @@ pub fn clay_relax(
     if centres.is_empty() || relax <= 0.0 {
         return;
     }
-    let r = p.radius;
-    let r2 = r * r;
     let mut leaves = Vec::new();
-    for &(c, _) in centres {
-        mesh.bvh.leaves_in_sphere(c, r, &mut leaves);
+    for c in centres {
+        mesh.bvh.leaves_in_sphere(c.at, c.radius, &mut leaves);
     }
     leaves.sort_unstable();
     leaves.dedup();
@@ -1076,16 +1573,18 @@ pub fn clay_relax(
     let weigh = |mesh: &Mesh, v: u32| {
         let i = v as usize;
         let start = mesh.start_pos(v);
+        // The dab the vertex is deepest inside: the nearest, or where the
+        // dabs are of different sizes, the nearest for its size.
         let mut best = f32::INFINITY;
-        let mut cam = Vec3::ZERO;
-        for &(c, cm) in centres {
-            let d2 = start.distance_squared(c);
-            if d2 < best {
-                best = d2;
-                cam = cm;
+        let (mut r, mut cam) = (centres[0].radius, Vec3::ZERO);
+        for c in centres {
+            let d2 = start.distance_squared(c.at);
+            let deeper = if c.radius == r { d2 < best } else { d2 * r * r < best * c.radius * c.radius };
+            if deeper {
+                (best, r, cam) = (d2, c.radius, c.cam);
             }
         }
-        if best >= r2 {
+        if best >= r * r {
             return 0.0;
         }
         let u = (best.sqrt() - 0.65 * r) / (0.35 * r);

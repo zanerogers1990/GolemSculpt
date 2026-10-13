@@ -66,10 +66,27 @@ struct Cone {
     spheres_only: bool,
     min: Vec3,
     max: Vec3,
+    /// A flattened cone is a round one in a space stretched along `up`: `a` and `b` above are in that
+    /// space, `ends` where they really are. `stretch` is how much is added along `up` (0 for a round
+    /// cone) and `flat` the cone's depth as a fraction of its width.
+    up: Vec3,
+    stretch: f32,
+    flat: f32,
+    ends: (Vec3, Vec3),
 }
 
 impl Cone {
-    fn new(a: Vec3, b: Vec3, ra: f32, rb: f32) -> Cone {
+    /// The hull of two spheres squeezed along `up` to `flat` of its width: an elliptical cross-section,
+    /// `ra` and `rb` its half widths.
+    fn flattened(a: Vec3, b: Vec3, ra: f32, rb: f32, up: Vec3, flat: f32) -> Cone {
+        let round = up == Vec3::ZERO || flat >= 0.999;
+        let (up, flat) = if round { (Vec3::ZERO, 1.0) } else { (up, flat.max(0.05)) };
+        let stretch = 1.0 / flat - 1.0;
+        let ends = (a, b);
+        // The round cone holds the flattened one, so its box does too.
+        let min = (a - Vec3::splat(ra)).min(b - Vec3::splat(rb));
+        let max = (a + Vec3::splat(ra)).max(b + Vec3::splat(rb));
+        let (a, b) = (a + up * (stretch * a.dot(up)), b + up * (stretch * b.dot(up)));
         let ba = b - a;
         let l2 = ba.dot(ba);
         let rr = ra - rb;
@@ -85,20 +102,42 @@ impl Cone {
             rr,
             a2,
             spheres_only: l2 < 1e-12 || a2 <= 1e-12,
-            min: (a - Vec3::splat(ra)).min(b - Vec3::splat(rb)),
-            max: (a + Vec3::splat(ra)).max(b + Vec3::splat(rb)),
+            min,
+            max,
+            up,
+            stretch,
+            flat,
+            ends,
         }
     }
 
-    /// The same cone with neither end thinner than `floor`.
+    /// The same cone with neither end thinner than `floor`, in width or in depth: a flattened one
+    /// rounds up where it would be thinner.
     fn thickened(&self, floor: f32) -> Cone {
-        Cone::new(self.a, self.b, self.ra.max(floor), self.rb.max(floor))
+        let (ra, rb) = (self.ra.max(floor), self.rb.max(floor));
+        let flat = self.flat.max(floor / ra.max(rb)).min(1.0);
+        Cone::flattened(self.ends.0, self.ends.1, ra, rb, self.up, flat)
+    }
+
+    /// Half the cone's least depth: what a lattice has to resolve.
+    fn thinnest(&self) -> f32 {
+        self.ra.min(self.rb) * self.flat
+    }
+
+    /// Signed distance: exact for a round cone. For a flattened one it is exact along `up` and short
+    /// by up to `flat` across it, with the surface itself in the right place.
+    #[inline]
+    fn distance(&self, p: Vec3) -> f32 {
+        if self.stretch == 0.0 {
+            return self.round_distance(p);
+        }
+        self.round_distance(p + self.up * (self.stretch * p.dot(self.up))) * self.flat
     }
 
     /// Exact signed distance to the hull, after Inigo Quilez's region-split
     /// formulation.
     #[inline]
-    fn distance(&self, p: Vec3) -> f32 {
+    fn round_distance(&self, p: Vec3) -> f32 {
         let pa = p - self.a;
         if self.spheres_only {
             return (pa.length() - self.ra).min((p - self.b).length() - self.rb);
@@ -219,9 +258,11 @@ impl TubeField {
             return;
         }
         for pair in samples.windows(2) {
-            let cone = Cone::new(pair[0].center, pair[1].center, pair[0].radius, pair[1].radius);
+            let up = (pair[0].up + pair[1].up).normalize_or_zero();
+            let flat = if up == Vec3::ZERO { 1.0 } else { 0.5 * (pair[0].flat + pair[1].flat) };
+            let cone = Cone::flattened(pair[0].center, pair[1].center, pair[0].radius, pair[1].radius, up, flat);
             self.bounds = Aabb::union(self.bounds, Aabb::new(cone.min, cone.max));
-            self.min_radius = self.min_radius.min(cone.ra).min(cone.rb);
+            self.min_radius = self.min_radius.min(cone.thinnest());
             self.max_radius = self.max_radius.max(cone.ra).max(cone.rb);
             self.cones.push(cone);
         }

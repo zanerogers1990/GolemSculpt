@@ -14,11 +14,12 @@
 //!     system always yields an orientable surface in which every link borders
 //!     exactly two face sides, so the result is manifold along edges by
 //!     construction.
-//!  5. Faces are cleaned: a face whose corner angles sum like the OUTSIDE of
-//!     a polygon is the trace around an open boundary of the input and is
-//!     dropped (the hole stays a hole); faces of five or more sides are split
-//!     into quads (and one triangle when odd) around a centre vertex; a face
-//!     that revisits a vertex is cut into its simple loops.
+//!  5. Faces are cleaned: a loop that runs along the open edges of the
+//!     input, or stands by one with corner angles that sum like the OUTSIDE
+//!     of a polygon, is the trace around that opening and is dropped (the
+//!     hole stays a hole); faces of five or more sides are split into quads
+//!     (and one triangle when odd) around a centre vertex; a face that
+//!     revisits a vertex is cut into its simple loops.
 //!
 //! The output positions are the fields' tangent-plane lattice points, not yet
 //! on the surface; the caller projects and relaxes them afterwards.
@@ -35,14 +36,18 @@ use super::poly::{PolyMesh, find, normalize_or, union};
 
 const MAX_FACE_SIZE: usize = 64;
 
+/// The longest loop taken for a face when its corner angles sum halfway
+/// between a face's and a rim's (see `is_opening`).
+const MAX_DOUBTFUL_FACE: usize = 8;
+
 const IGNORE: u8 = 0;
 const COLLAPSE: u8 = 1;
 const OUTPUT: u8 = 2;
 
 /// The mesh, and how many traced loops were left out of it: walks too long
-/// to be a face, and loops that read as the outside of an opening. On a model
-/// with open edges the second is the trace round each rim and is expected; on
-/// a closed model either one leaves a hole.
+/// to be a face, and loops that are the trace round an opening. On a model
+/// with open edges both are expected (a long rim is counted in stretches). A
+/// closed model has no rim to trace, so nothing of it is left out as one.
 pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> (PolyMesh, usize) {
     let n = level.count();
     let inv = 1.0 / scale;
@@ -113,6 +118,17 @@ pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> (PolyMesh, 
         pos[c] /= weight[c];
         normal[c] = normalize_or(normal[c], Vec3::Y);
     }
+    // The output vertices that stand at an opening of the input: those made
+    // of a vertex on one of its open edges (`at_opening`) and, further down,
+    // those and the ones linked to them (`by_opening`: pruning can take the
+    // outermost row away). Only a loop through one of the second can be the
+    // trace round a rim, and a loop nearly all of the first is one.
+    let mut at_opening = vec![false; count];
+    if level.open.contains(&true) {
+        for v in 0..n {
+            at_opening[cluster[v] as usize] |= level.open[v];
+        }
+    }
 
     // 3. Links between clusters, deduplicated.
     let mut link_keys: Vec<u64> = Vec::new();
@@ -130,10 +146,13 @@ pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> (PolyMesh, 
     link_keys.par_sort_unstable();
     link_keys.dedup();
     let mut neighbours: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut by_opening = at_opening.clone();
     for key in link_keys {
         let (a, b) = ((key >> 32) as u32, key as u32);
         neighbours[a as usize].push(b);
         neighbours[b as usize].push(a);
+        by_opening[a as usize] |= at_opening[b as usize];
+        by_opening[b as usize] |= at_opening[a as usize];
     }
 
     // Prune vertices with fewer than two links, repeatedly: a dangling chain
@@ -223,8 +242,13 @@ pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> (PolyMesh, 
             loops.clear();
             split_into_simple_loops(&face, &mut loops);
             for simple in &loops {
-                if simple.len() >= 3 && !emit_face(simple, &neighbours, &angles, &mut out) {
+                if simple.len() < 3 {
+                    continue;
+                }
+                if is_opening(simple, &at_opening, &by_opening, &neighbours, &angles) {
                     left_out += 1;
+                } else {
+                    emit_face(simple, &mut out);
                 }
             }
         }
@@ -232,26 +256,54 @@ pub fn extract(level: &Level, q: &[Vec3], o: &[Vec3], scale: f32) -> (PolyMesh, 
     (out.remove_unused_vertices(), left_out)
 }
 
-/// Adds the face, split into quads if it has five sides or more. False, and
-/// nothing is added, for a loop that reads as the outside of an opening.
-fn emit_face(face: &[u32], neighbours: &[Vec<u32>], angles: &[Vec<f32>], out: &mut PolyMesh) -> bool {
-    // Interior of a planar k-gon: angles sum to (k - 2) * 180; the same loop
-    // traced around its outside sums to (k + 2) * 180. Split the difference.
-    // Only for k >= 5: a real opening in the sculpt is many quads around,
-    // while a triangle or quad that reads as "outside" is a folded face on a
-    // closed surface, and covering a hole that small is harmless anyway.
+/// Whether a loop is the trace round an opening of the input, not a face.
+///
+/// Only for five sides and up: a real opening in the sculpt is many quads
+/// around, and covering a hole smaller than that is harmless. And only for a
+/// loop that stands by an open edge of the input: nowhere else is there an
+/// opening to trace, so a closed model loses no face to this.
+///
+/// Of those, a loop with three corners in four or more on the open edges
+/// themselves runs along the rim and is its trace (a face that stands at the
+/// rim has a side on it, and its other corners in from it).
+///
+/// The corner angles settle the rest, and cannot settle it alone. The
+/// interior of a planar k-gon sums to (k - 2) * 180, and so does the rim of
+/// a hole in a flat sheet, which is why the rim is asked first. The same
+/// loop traced around its outside, as round the rim of a patch, sums to
+/// (k + 2) * 180. A sum halfway between the two, k * 180, is the rim of a
+/// bowl or of a tube's end, where the surface neither closes in nor opens
+/// out, or it is a face with one corner read the wrong way round: two links
+/// that leave a vertex in almost the same direction (a needle-thin corner)
+/// sort in either order, and the corner between them reads as 360 degrees
+/// where it is 0. A rim is long, so a short loop there is a face.
+fn is_opening(
+    face: &[u32],
+    at_opening: &[bool],
+    by_opening: &[bool],
+    neighbours: &[Vec<u32>],
+    angles: &[Vec<f32>],
+) -> bool {
     let k = face.len();
-    if k >= 5 {
-        let sum: f64 = (0..k)
-            .map(|j| corner_angle(face[(j + k - 1) % k], face[j], face[(j + 1) % k], neighbours, angles))
-            .sum();
-        if sum > k as f64 * PI {
-            return false;
-        }
+    if k < 5 || !face.iter().any(|&v| by_opening[v as usize]) {
+        return false;
     }
+    if face.iter().filter(|&&v| at_opening[v as usize]).count() * 4 >= k * 3 {
+        return true;
+    }
+    let sum: f64 =
+        (0..k).map(|j| corner_angle(face[(j + k - 1) % k], face[j], face[(j + 1) % k], neighbours, angles)).sum();
+    // How far past a face's sum, in half turns: 0 for a face, 4 for a patch's rim.
+    let past = sum / PI - (k as f64 - 2.0);
+    past > 3.0 || (past > 1.0 && k > MAX_DOUBTFUL_FACE)
+}
+
+/// Adds the face, split into quads if it has five sides or more.
+fn emit_face(face: &[u32], out: &mut PolyMesh) {
+    let k = face.len();
     if k <= 4 {
         out.add_face(face);
-        return true;
+        return;
     }
     // Centre fan: quads (centre, f[2m], f[2m + 1], f[2m + 2]); odd k leaves
     // one triangle.
@@ -265,7 +317,6 @@ fn emit_face(face: &[u32], neighbours: &[Vec<u32>], angles: &[Vec<f32>], out: &m
     if k & 1 == 1 {
         out.add_face(&[cv, face[k - 1], face[0]]);
     }
-    true
 }
 
 /// Splits a closed walk into simple cycles: whenever a vertex repeats, the

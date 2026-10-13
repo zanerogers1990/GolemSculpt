@@ -36,6 +36,7 @@ fn registry() -> Vec<Box<dyn kit::Tool>> {
     vec![
         sculpt_measure::tool(),
         sculpt_tube::tool(),
+        sculpt_tube::muscle(),
         sculpt_array::tool(),
         sculpt_lathe::tool(),
         sculpt_region::mask(),
@@ -108,7 +109,7 @@ impl Default for Tools {
         // the slow part of making a large object; a job builds them on its
         // own thread.
         let baker: kit::Baker = Arc::new(|mesh: TriMesh, mask| {
-            MeshData::Baked(kit::Baked::new(Mesh::new(mesh.positions, mesh.indices, mask)))
+            MeshData::Baked(kit::Baked::new(super::groups::Handed::built(mesh.positions, mesh.indices, mask)))
         });
         let view = kit::View::perspective(glam::Vec3::Z * 3.0, glam::Vec3::ZERO, 60.0, Vec2::new(1600.0, 960.0));
         Tools {
@@ -332,13 +333,14 @@ struct Access<'a> {
     rebuilt: Vec<u64>,
 }
 
-/// The app's sculptable mesh from what a command carries.
-fn build(data: MeshData) -> Option<Mesh> {
-    let mesh = match data {
-        MeshData::Plain { mesh, mask } => Mesh::new(mesh.positions, mesh.indices, mask),
-        MeshData::Baked(baked) => baked.take::<Mesh>()?,
+/// The app's sculptable mesh from what a command carries, with the order its
+/// triangles were handed over in (see `groups::Handed`).
+fn build(data: MeshData) -> Option<super::groups::Handed> {
+    let handed = match data {
+        MeshData::Plain { mesh, mask } => super::groups::Handed::built(mesh.positions, mesh.indices, mask),
+        MeshData::Baked(baked) => baked.take::<super::groups::Handed>()?,
     };
-    (mesh.triangle_count() > 0).then_some(mesh)
+    (handed.mesh.triangle_count() > 0).then_some(handed)
 }
 
 impl Access<'_> {
@@ -452,7 +454,13 @@ impl kit::Document for Access<'_> {
     }
 
     fn add(&mut self, object: kit::NewObject) -> Option<ObjectId> {
-        let mesh = build(object.mesh)?;
+        let mut mesh = build(object.mesh)?.mesh;
+        // A piece of an object is in that object's face groups where it is its surface.
+        if let Some(from) = object.symmetry_of {
+            let place = &object.placement;
+            let model = Mat4::from_scale_rotation_translation(place.scale, place.rotation, place.position);
+            super::groups::piece_of(self.scene, self.mesh, from.0, model, &mut mesh);
+        }
         let previous = self.scene.active_id();
         let id = self.scene.add(&object.name, mesh, self.mesh);
         if let Some(o) = self.scene.get_mut(id) {
@@ -479,7 +487,9 @@ impl kit::Document for Access<'_> {
     /// it, exactly as a deleted object's is.
     fn replace(&mut self, object: ObjectId, mesh: MeshData) -> bool {
         let Some(old) = self.scene.get(object.0).map(|o| o.mesh) else { return false };
-        let Some(mesh) = build(mesh) else { return false };
+        let Some(handed) = build(mesh) else { return false };
+        // What is left of the object's surface stays in its face groups, and so does every copy of it.
+        let mesh = super::groups::replacing(self.scene, self.mesh, object.0, handed);
         let previous = self.scene.active_id();
         // The scene only takes in a mesh along with an object, so one is
         // added for a moment to carry it.
@@ -1134,6 +1144,7 @@ impl Running {
             eprintln!("no tool called {id:?}; there are: {}", known.join(", "));
             return;
         };
+        self.demo_stage();
         self.sync_view();
         self.tools_activate(index);
         if what == "play" {
@@ -1149,10 +1160,50 @@ impl Running {
             return;
         }
         self.tools_call(index, None, |tool, cx| tool.demo(cx, what));
+        // The picture may be taken from somewhere other than where the demo drew from.
+        self.demo_view("SCULPT_DEMO_LOOK");
         // A glide the demo asked for is over before the picture is taken, so that
         // the gizmo and the overlay are drawn from the camera that ends up there.
         self.doc.camera.update(10.0);
         self.sync_view();
+    }
+
+    /// For a scripted tool run on a real file: `SCULPT_DEMO_OBJECT` names the object to show alone and
+    /// select, and `SCULPT_DEMO_VIEW` (`yaw,pitch[,zoom[,right,up]]`) is where to look at it from, how
+    /// much closer than fitted, and how far off its middle in units of its size.
+    fn demo_stage(&mut self) {
+        if let Ok(name) = std::env::var("SCULPT_DEMO_OBJECT") {
+            let found = self.doc.scene.objects.iter().find(|o| o.name == name).map(|o| o.id);
+            if let Some(id) = found {
+                for o in &mut self.doc.scene.objects {
+                    o.visible = o.id == id;
+                }
+                self.doc.scene.select(id, &mut self.doc.mesh);
+                self.scene_changed();
+            }
+        }
+        for o in &self.doc.scene.objects {
+            println!("object {:?} visible {}", o.name, o.visible);
+        }
+        self.demo_view("SCULPT_DEMO_VIEW");
+    }
+
+    fn demo_view(&mut self, variable: &str) {
+        let Ok(spec) = std::env::var(variable) else { return };
+        let v: Vec<f32> = spec.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if v.len() < 2 {
+            return;
+        }
+        let aspect = self.view.size.x / self.view.size.y.max(1.0);
+        let bounds = self.doc.scene.selection_bounds(&self.doc.mesh);
+        let reach = (bounds.max - bounds.min).length() * 0.5;
+        let camera = &mut self.doc.camera;
+        (camera.yaw, camera.pitch) = (v[0], v[1].clamp(-89.0, 89.0));
+        camera.frame(bounds, aspect, false);
+        camera.distance /= v.get(2).copied().unwrap_or(1.0).max(0.05);
+        self.sync_view();
+        let (right, up) = (v.get(3).copied().unwrap_or(0.0), v.get(4).copied().unwrap_or(0.0));
+        self.doc.camera.pivot += (self.view.right * right + self.view.up * up) * reach;
     }
 
     /// `--demo-tool id:check`: runs each kind of command against the real

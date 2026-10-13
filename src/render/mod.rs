@@ -17,6 +17,7 @@ mod dof;
 pub mod env;
 mod mips;
 pub mod flash;
+pub mod groups;
 pub mod post;
 pub mod preview;
 pub mod spheres;
@@ -66,6 +67,8 @@ impl Gpu {
                 required_limits: wgpu::Limits {
                     // Dense meshes need index buffers beyond the 256 MB default.
                     max_buffer_size: adapter.limits().max_buffer_size,
+                    // The face group colours read a dense mesh's own buffers (render/groups.rs).
+                    max_storage_buffer_binding_size: adapter.limits().max_storage_buffer_binding_size,
                     ..Default::default()
                 },
                 memory_hints: wgpu::MemoryHints::Performance,
@@ -250,7 +253,7 @@ fn index_buffer(gpu: &Gpu, corners: &[u32]) -> wgpu::Buffer {
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("indices"),
         size: corners.len().max(3) as u64 * 4,
-        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST | groups::READ,
         mapped_at_creation: false,
     });
     gpu.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(corners));
@@ -295,6 +298,8 @@ pub struct Renderer {
     pub flash: flash::Layer,
     /// The wireframe overlay.
     pub wire: wire::Layer,
+    /// The face group colours.
+    pub groups: groups::Layer,
     /// Off, the pulses and the tools' previews are left out: the clean view,
     /// and pictures drawn for a recording.
     pub overlays: bool,
@@ -649,6 +654,7 @@ impl Renderer {
             previews: preview::Layer::new(gpu),
             flash: flash::Layer::new(gpu),
             wire: wire::Layer::new(gpu),
+            groups: groups::Layer::new(gpu),
             overlays: true,
         }
     }
@@ -714,6 +720,7 @@ impl Renderer {
             self.update_mesh(gpu, id, mesh);
         }
         self.wire.sync(gpu, id, mesh);
+        self.groups.sync(gpu, id, mesh, self.meshes.get(&id));
     }
 
     /// Frees the buffers of meshes the scene no longer has.
@@ -721,6 +728,7 @@ impl Renderer {
         self.meshes.retain(|&id, _| keep(id));
         let meshes = &self.meshes;
         self.wire.retain(|id| meshes.contains_key(&id));
+        self.groups.retain(|id| meshes.contains_key(&id));
     }
 
     /// Creates fresh buffers for a mesh whose topology changed.
@@ -753,7 +761,7 @@ impl Renderer {
         let shown = mesh.visible_indices();
         let buffers = MeshBuffers {
             uid: mesh.uid,
-            positions: make("positions", bytemuck::cast_slice(&mesh.positions), vertex),
+            positions: make("positions", bytemuck::cast_slice(&mesh.positions), vertex | groups::READ),
             normals: make("normals", bytemuck::cast_slice(&mesh.normals), vertex),
             mask: make("mask", bytemuck::cast_slice(&mesh.mask), vertex),
             curv: make("curvature", bytemuck::cast_slice(curv), vertex),
@@ -782,7 +790,8 @@ impl Renderer {
             let room = count + count / 2;
             let vertex = wgpu::BufferUsages::VERTEX;
             let make = |label, data: &[u8], stride: u64| roomy_buffer(gpu, label, data, room as u64 * stride, vertex);
-            buffers.positions = make("positions", bytemuck::cast_slice(&mesh.positions), 12);
+            let positions: &[u8] = bytemuck::cast_slice(&mesh.positions);
+            buffers.positions = roomy_buffer(gpu, "positions", positions, room as u64 * 12, vertex | groups::READ);
             buffers.normals = make("normals", bytemuck::cast_slice(&mesh.normals), 12);
             buffers.mask = make("mask", bytemuck::cast_slice(&mesh.mask), 4);
             // Neutral all the way to the end while no finish reads it, so the
@@ -842,7 +851,8 @@ impl Renderer {
             if corners > buffers.index_room {
                 let room = corners + corners / 2;
                 let data: &[u8] = bytemuck::cast_slice(&mesh.indices);
-                buffers.indices = roomy_buffer(gpu, "indices", data, room as u64 * 4, wgpu::BufferUsages::INDEX);
+                let usage = wgpu::BufferUsages::INDEX | groups::READ;
+                buffers.indices = roomy_buffer(gpu, "indices", data, room as u64 * 4, usage);
                 buffers.index_room = room;
                 bytes += data.len();
             } else {
@@ -1105,7 +1115,9 @@ impl Renderer {
         if self.overlays {
             self.flash.draw(&mut pass, &self.meshes);
         }
-        self.wire.draw(gpu, &mut pass, globals, &self.meshes, self.objects.as_ref().map(|o| &o.0), items);
+        let objects = self.objects.as_ref().map(|o| &o.0);
+        self.groups.draw(gpu, &mut pass, &globals.view_proj, &self.meshes, objects, items);
+        self.wire.draw(gpu, &mut pass, globals, &self.meshes, objects, items);
         self.spheres.draw(&mut pass);
         if self.overlays {
             self.previews.draw(&mut pass);

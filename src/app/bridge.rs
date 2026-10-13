@@ -45,9 +45,13 @@ use crate::io;
 use crate::mesh::bvh::Aabb;
 use crate::mesh::primitives::{self, Primitive};
 use crate::scene::Space;
-use crate::sculpt::{Brush, PointerSample, PoseMode, PoseSettings, Radial, RadialAxis};
+use crate::sculpt::alpha::{self, AlphaSettings};
+use crate::sculpt::cavity;
+use crate::sculpt::{BrushSettings, FlattenMode, PointerSample, PoseMode, PoseSettings, Radial, RadialAxis, SmoothMode};
 use crate::ui::question::listed;
 use crate::ui::theme;
+
+mod brushes;
 
 /// How long a connection waits for the main thread. A remesh of a heavy mesh
 /// holds it for a while.
@@ -534,7 +538,7 @@ impl Running {
         let b = s.current();
         // The active object's own symmetry, which is the one strokes are made under.
         let symmetry = self.doc.scene.active_symmetry();
-        json!({
+        let mut state = json!({
             "name": s.brush.name(),
             "radius": round(s.radius_px / self.view.size.y.max(1.0)),
             "radius_px": round(s.radius_px),
@@ -542,6 +546,17 @@ impl Running {
             "focal_shift": round(b.focal_shift),
             "direction": if b.positive { "add" } else { "subtract" },
             "accumulate": b.accumulate,
+            "spacing": round(b.spacing),
+            "scatter": round(b.scatter),
+            "size_jitter": round(b.size_jitter),
+            "pressure_size": round(b.pressure_size),
+            "pressure_strength": round(b.pressure_strength),
+            "smooth_mode": b.smooth_mode.name().to_ascii_lowercase(),
+            "keep_volume": round(b.keep_volume),
+            "flatten_mode": b.flatten_mode.name().to_ascii_lowercase(),
+            "lock_plane": b.lock_plane,
+            "alpha": s.alpha[s.brush.index()].image.map(|image| image.name.as_str()),
+            "alpha_random_rotation": round(s.alpha[s.brush.index()].random_rotation),
             "mask_mode": s.mask_mode,
             "mirror": { "x": symmetry.mirror[0], "y": symmetry.mirror[1], "z": symmetry.mirror[2] },
             "radial": {
@@ -556,7 +571,11 @@ impl Running {
                 "offset": round(s.pose.offset),
                 "rigidity": round(s.pose.rigidity),
             },
-        })
+        });
+        // The brush as one of the library's: its own name, the rest of its
+        // record, and the names there are to pick from.
+        self.bridge_brush_state(&mut state);
+        state
     }
 
     fn camera_state(&self) -> Value {
@@ -594,6 +613,9 @@ impl Running {
                     "instances": doc.scene.users(o.mesh),
                     "mirror": o.mirror.map(|m| sculpt_symmetry::MirrorRepeater::axis_name_of(m.axis_mask)),
                     "symmetry": doc.scene.symmetry(o.id).summary(),
+                    "levels": super::levels::state_of(mesh),
+                    "layers": super::layers::state_of(mesh),
+                    "groups": super::groups::state_of(&doc.scene, &doc.opts.groups, o, mesh),
                     "on_screen": if o.visible { self.on_screen(bounds) } else { Value::Null },
                 })
             })
@@ -625,16 +647,11 @@ impl Running {
     fn set_brush(&mut self, args: &Value) -> Result<String, String> {
         self.sync_view();
         let height = self.view.size.y;
+        // Which brush of the library is in hand comes first: everything
+        // after it sets that brush. As with the number keys, picking a brush
+        // leaves mask painting.
+        let mut said = self.bridge_library(args)?;
         let s = &mut self.doc.sculptor.settings;
-        if let Some(name) = text(args, "brush") {
-            let brush = Brush::ALL.iter().find(|b| key(b.name()) == key(name));
-            s.brush = *brush.ok_or_else(|| {
-                let names: Vec<&str> = Brush::ALL.iter().map(|b| b.name()).collect();
-                format!("There is no brush \"{name}\". The brushes are: {}.", names.join(", "))
-            })?;
-            // As with the number keys, picking a brush leaves mask painting.
-            s.mask_mode = false;
-        }
         if let Some(on) = flag(args, "mask_mode") {
             s.mask_mode = on;
         }
@@ -657,6 +674,43 @@ impl Running {
         if let Some(on) = flag(args, "accumulate") {
             s.current_mut().accumulate = on;
         }
+        // The brush's own stroke settings, each kept to what its slider allows.
+        let within = |name: &str, range: std::ops::RangeInclusive<f32>| {
+            num(args, name).map(|value| value.clamp(*range.start(), *range.end()))
+        };
+        let b = s.current_mut();
+        b.spacing = within("spacing", BrushSettings::SPACING).unwrap_or(b.spacing);
+        b.scatter = within("scatter", BrushSettings::SCATTER).unwrap_or(b.scatter);
+        b.size_jitter = within("size_jitter", BrushSettings::SIZE_JITTER).unwrap_or(b.size_jitter);
+        b.pressure_size = within("pressure_size", BrushSettings::PRESSURE).unwrap_or(b.pressure_size);
+        b.pressure_strength = within("pressure_strength", BrushSettings::PRESSURE).unwrap_or(b.pressure_strength);
+        // The kernel's own options: they are the brush's, whichever kernel reads them.
+        b.keep_volume = within("keep_volume", 0.0..=1.0).unwrap_or(b.keep_volume);
+        b.lock_plane = flag(args, "lock_plane").unwrap_or(b.lock_plane);
+        if let Some(name) = text(args, "smooth_mode") {
+            b.smooth_mode = SmoothMode::named(name).ok_or("smooth_mode is \"all\", \"peaks\", \"valleys\" or \"relax\".")?;
+        }
+        if let Some(name) = text(args, "flatten_mode") {
+            b.flatten_mode = FlattenMode::named(name).ok_or("flatten_mode is \"both\", \"scrape\" or \"fill\".")?;
+        }
+        let slot = s.brush.index();
+        if let Some(name) = text(args, "alpha") {
+            if !s.brush.takes_alpha() {
+                return Err(format!("{} does not print an alpha. Standard, Clay, Inflate and Layer do.", s.brush.name()));
+            }
+            s.alpha[slot].image = match key(name).as_str() {
+                "none" => None,
+                wanted => Some(alpha::listing().iter().find(|l| key(&l.name) == wanted).and_then(|l| alpha::find(&l.name)).ok_or_else(
+                    || {
+                        let names: Vec<String> = alpha::listing().iter().map(|l| l.name.clone()).collect();
+                        format!("There is no alpha \"{name}\". The alphas are: none, {}.", names.join(", "))
+                    },
+                )?),
+            };
+        }
+        if let Some(turn) = within("alpha_random_rotation", AlphaSettings::RANDOM_ROTATION) {
+            s.alpha[slot].random_rotation = turn;
+        }
         if let Some(name) = text(args, "pose_mode") {
             s.pose.mode = PoseMode::ALL
                 .into_iter()
@@ -672,6 +726,7 @@ impl Running {
         if let Some(rigidity) = num(args, "pose_rigidity") {
             s.pose.rigidity = rigidity.clamp(0.0, 1.0);
         }
+        self.bridge_brush_values(args)?;
         // Symmetry is the active object's own; nothing is set if any of it is wrong.
         let mut symmetry = self.doc.scene.active_symmetry();
         for (axis, name) in ["mirror_x", "mirror_y", "mirror_z"].into_iter().enumerate() {
@@ -703,7 +758,17 @@ impl Running {
             symmetry.space = space.ok_or("symmetry_space is \"local\" or \"world\".")?;
         }
         self.doc.edit_symmetry(|own| *own = symmetry);
-        Ok(self.brush_state().to_string())
+        said.extend(self.bridge_library_after(args)?);
+        let mut state = self.brush_state();
+        if flag(args, "list") == Some(true) {
+            state["brushes"] = self.bridge_library_list();
+        }
+        // What the app would have put on its status line: a brush that came
+        // in without its alpha, where a deleted brush's file went.
+        if !said.is_empty() {
+            state["said"] = json!(said);
+        }
+        Ok(state.to_string())
     }
 
     /// Draws one stroke along a path of window positions, fed to the sculptor
@@ -753,10 +818,15 @@ impl Running {
             pressure: pen.then_some(samples[i].1),
             time: start + i as f64 / 240.0,
         };
-        // As for a stroke of the pointer's: if it adds triangles, it is checked for holes.
+        // As for a stroke of the pointer's: a sculpt layer that records but does not show takes none.
+        if let Some(why) = self.doc.layer_stroke_refusal().or_else(|| self.doc.erase_refusal(smooth)) {
+            return Err(why);
+        }
+        // And if it adds triangles, it is checked for holes.
         self.stroke_baseline(smooth);
         let doc = &mut self.doc;
-        let brush = doc.sculptor.effective_brush(smooth);
+        // By the name of the brush as the library has it, not of its kernel.
+        let what = doc.sculptor.library.stroke_name(&doc.sculptor.settings, smooth).to_owned();
         let dabs_before = doc.sculptor.dabs_applied;
         if !doc.begin_stroke(&local, sample(0), invert, smooth) {
             return Err("The stroke did not land on the mesh.".into());
@@ -776,7 +846,6 @@ impl Running {
             None => false,
         };
         let dabs = doc.sculptor.dabs_applied - dabs_before;
-        let what = if doc.sculptor.settings.mask_mode { "Mask" } else { brush.name() };
         self.stroke_check();
         Ok(if changed && dabs == 0 {
             // Move and Pose take hold once and are dragged: they lay no dabs.
@@ -854,6 +923,7 @@ impl Running {
                 "active": hit.id == scene.active_id(),
                 "position": point(hit.pos),
                 "normal": point(hit.normal),
+                "group": super::groups::group_at(scene, &self.doc.mesh, hit.id, hit.copy, hit.pos),
             }),
             None => json!({ "object": null }),
         }
@@ -887,6 +957,11 @@ impl Running {
             "masksharpen" => mask(MaskOp::Sharpen),
             "maskgrow" => mask(MaskOp::Grow),
             "maskshrink" => mask(MaskOp::Shrink),
+            // A mask from the surface's shape, as much of it as `amount` says (sculpt/cavity.rs).
+            "maskrecesses" | "maskpeaks" => {
+                let shape = if key(name) == "maskpeaks" { cavity::Shape::Peaks } else { cavity::Shape::Recesses };
+                Action::MaskShape(shape, num(args, "amount").unwrap_or(cavity::DEFAULT_AMOUNT).clamp(0.0, 1.0))
+            }
             "setorigintomesh" => Action::SetOriginToMesh,
             "clone" => Action::CloneObject,
             "instance" => Action::InstanceObject,
@@ -897,7 +972,14 @@ impl Running {
                 }
                 Action::MakeUnique
             }
-            _ => return Err(format!("There is no command \"{name}\".")),
+            // Subdivision levels and sculpt layers answer for their own (app/levels.rs, app/layers.rs).
+            other => {
+                let own = self.levels_command(other, args).or_else(|| self.layers_command(other, args));
+                let own = own.or_else(|| self.groups_command(other, args));
+                // A scripted run's stroke drawn by hand answers for its two (app/ui_demo/hand.rs).
+                let own = own.or_else(|| self.hand_demo_command(other));
+                return own.unwrap_or_else(|| Err(format!("There is no command \"{name}\".")));
+            }
         };
         self.reported(|app| app.act(action))
     }
@@ -960,7 +1042,13 @@ impl Running {
     /// one a caller can know. `open_file` and `save_file` are the tools that
     /// take a path, and both come through here.
     fn path(args: &Value) -> Result<(PathBuf, String), String> {
-        let given = text(args, "path").ok_or("A path is needed.")?;
+        Self::path_named(args, "path")
+    }
+
+    /// [`Self::path`] for a path under another name: the brush files
+    /// `set_brush` imports and exports are held to the same rule.
+    fn path_named(args: &Value, name: &str) -> Result<(PathBuf, String), String> {
+        let given = text(args, name).ok_or("A path is needed.")?;
         if let Some(why) = guard::off_limits(given) {
             return Err(why.into());
         }

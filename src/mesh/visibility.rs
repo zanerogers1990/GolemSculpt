@@ -45,18 +45,77 @@ pub(super) struct Hidden {
     /// Goes up with every change, so the renderer can tell that the faces it
     /// was sent are no longer the ones that show.
     version: u64,
+    /// What a stroke that stays in its face group may not touch.
+    fence: Fence,
+}
+
+/// Stay in Group: for the length of one stroke, everything outside the face
+/// groups the stroke began on is off limits to it.
+///
+/// It is done here, where hidden faces are, because it is the same promise
+/// kept the same way: the faces outside are treated by the stroke exactly as
+/// hidden ones are. The stroke loops pass over their vertices, the brushes'
+/// read-only passes skip them (they ask `Mesh::hidden_vertices`), and dynamic
+/// topology neither splits nor flips them (it asks [`Hidden::hides`]). No
+/// brush knows the fence exists, so there is no brush that can forget it,
+/// and Move, Pose and Snake Hook are held to it like the rest. A vertex on
+/// the border of the group has a face inside it, so it is ordinary,
+/// sculptable surface, as the edge of a hidden patch is: the border moves
+/// with the stroke instead of standing as a frozen wall with a crease along
+/// it.
+///
+/// What it does not touch is what is drawn and what the pointer hits: the
+/// rest of the model stays in view, and the brush still rides over it.
+///
+/// The lists are kept after the stroke, with what they were built from, so a
+/// second stroke on the same group costs nothing to begin.
+#[derive(Default)]
+struct Fence {
+    /// Whether a stroke is being held to it now.
+    up: bool,
+    /// One flag per triangle and per vertex: hidden, or outside the groups.
+    tris: Vec<bool>,
+    verts: Vec<bool>,
+    /// The groups inside, and the versions of the groups and of the hidden
+    /// faces the lists were built from.
+    groups: Vec<u16>,
+    built_from: (u64, u64),
 }
 
 impl Hidden {
     pub(super) fn bytes(&self) -> usize {
-        self.tris.len() + self.verts.len()
+        self.tris.len() + self.verts.len() + self.fence.tris.len() + self.fence.verts.len()
     }
 
-    /// Whether triangle `t` is hidden. One that dynamic topology has only
-    /// just appended has no flag yet, and shows.
+    /// Whether triangle `t` is hidden, or outside the groups the stroke now
+    /// open is kept to. One that dynamic topology has only just appended has
+    /// no flag yet, and shows.
     #[inline]
     pub(super) fn hides(&self, t: u32) -> bool {
+        if self.fence.up {
+            return self.fence.tris.get(t as usize).copied().unwrap_or(false);
+        }
         self.count > 0 && self.tris.get(t as usize).copied().unwrap_or(false)
+    }
+
+    /// Whether a stroke has vertices to pass over: some are hidden, or it is
+    /// kept to its groups.
+    #[inline]
+    pub(super) fn keeps_off(&self) -> bool {
+        self.count > 0 || self.fence.up
+    }
+
+    /// One flag per vertex a stroke passes over; empty when
+    /// [`Self::keeps_off`] is false.
+    #[inline]
+    pub(super) fn kept_off(&self) -> &[bool] {
+        if self.fence.up { &self.fence.verts } else { &self.verts }
+    }
+
+    /// The stroke that was kept to its groups has ended.
+    #[inline]
+    pub(super) fn lift_fence(&mut self) {
+        self.fence.up = false;
     }
 
     /// Keeps one flag per triangle and per vertex after dynamic topology
@@ -65,6 +124,12 @@ impl Hidden {
     /// face is never split or flipped, so its triangle keeps its number and
     /// a hidden vertex keeps every triangle it had.
     pub(super) fn resize(&mut self, triangles: usize, vertices: usize) {
+        // What a stroke kept to its groups added is inside them, like the
+        // faces it was split from.
+        if self.fence.up {
+            self.fence.tris.resize(triangles, false);
+            self.fence.verts.resize(vertices, false);
+        }
         if self.count == 0 || (self.tris.len() == triangles && self.verts.len() == vertices) {
             return;
         }
@@ -152,9 +217,49 @@ impl Mesh {
     /// One flag per vertex, or `None` while nothing is hidden. A vertex is
     /// hidden only when every triangle on it is, so the vertices along the
     /// edge of a hidden area are not.
-    #[allow(dead_code)] // for the region mask tool
+    ///
+    /// During a stroke that stays in its face group the vertices outside the
+    /// group are flagged too: this is the list every brush's read-only pass
+    /// asks for, and to the stroke they are as good as hidden (see [`Fence`]).
     pub fn hidden_vertices(&self) -> Option<&[bool]> {
-        self.any_hidden().then_some(&self.hidden.verts[..])
+        self.hidden.keeps_off().then_some(self.hidden.kept_off())
+    }
+
+    /// Stay in Group: keeps the stroke about to begin to the faces of
+    /// `groups` (0 among them is the surface in no group). Everything else is
+    /// to that stroke as hidden faces are, until it ends (see [`Fence`]).
+    /// Call it before the stroke begins; a stroke that then does not begin
+    /// has to call [`Self::leave_groups`].
+    pub fn stay_in_groups(&mut self, groups: &[u16]) {
+        debug_assert!(!self.in_stroke);
+        let mut inside = groups.to_vec();
+        inside.sort_unstable();
+        inside.dedup();
+        let from = (self.groups_version(), self.hidden.version);
+        let fence = &self.hidden.fence;
+        let whole = fence.tris.len() == self.triangle_count() && fence.verts.len() == self.vertex_count();
+        if !(whole && fence.groups == inside && fence.built_from == from) {
+            let hidden = self.hidden_triangles();
+            let tris: Vec<bool> = (0..self.triangle_count())
+                .into_par_iter()
+                .with_min_len(MIN_PARALLEL)
+                .map(|t| hidden.is_some_and(|hidden| hidden[t]) || inside.binary_search(&self.group_of(t as u32)).is_err())
+                .collect();
+            let verts = select::hidden_vertices(self.positions.len(), &self.indices, &tris);
+            self.hidden.fence = Fence { up: false, tris, verts, groups: inside, built_from: from };
+        }
+        self.hidden.fence.up = true;
+    }
+
+    /// Takes back [`Self::stay_in_groups`] for a stroke that did not begin.
+    pub fn leave_groups(&mut self) {
+        debug_assert!(!self.in_stroke);
+        self.hidden.lift_fence();
+    }
+
+    /// Whether the stroke now open is kept to its face groups.
+    pub fn stays_in_groups(&self) -> bool {
+        self.hidden.fence.up
     }
 
     #[inline]
@@ -452,7 +557,8 @@ mod tests {
     fn changed(delta: &Option<StrokeDelta>) -> &[u32] {
         match delta {
             Some(StrokeDelta::Positions { verts, .. }) | Some(StrokeDelta::Mask { verts, .. }) => verts,
-            None => &[],
+            // These meshes have no sculpt layers.
+            Some(StrokeDelta::Layered { .. }) | None => &[],
         }
     }
 
@@ -576,7 +682,9 @@ mod tests {
         let centre = SIZE * 0.5;
         let points: Vec<Vec2> =
             (0..=40).map(|i| centre + Vec2::new(14.0, -90.0 + 180.0 * i as f32 / 40.0)).collect();
-        for (brush, mask_mode) in Brush::ALL.into_iter().map(|b| (b, false)).chain([(Brush::Standard, true)]) {
+        // (Not Erase Layer: it does nothing without a sculpt layer, and `sculpt/erase/tests.rs` has it on hidden faces.)
+        let sculpting = Brush::ALL.into_iter().filter(|&b| b != Brush::EraseLayer);
+        for (brush, mask_mode) in sculpting.map(|b| (b, false)).chain([(Brush::Standard, true)]) {
             let mut mesh = sphere(80_000);
             let view = view_of(&mesh);
             let left = triangles_where(&mesh, |p| p.x <= 0.0);

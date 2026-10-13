@@ -46,7 +46,10 @@ pub(crate) fn cut_and_mirrored(mesh: &Mesh, axis: Axis, from_positive: bool) -> 
     if mesh.any_hidden() {
         text += " Its hidden parts were cut with the rest, and everything is showing again.";
     }
-    Ok((Mesh::new(built.mesh.positions, built.mesh.indices, built.mask), text))
+    let mut cut = Mesh::new(built.mesh.positions, built.mesh.indices, built.mask);
+    // Face groups: the side kept keeps its own, and the rebuilt side is their mirror image.
+    super::groups::mirrored(mesh, &mut cut, axis as usize, from_positive);
+    Ok((cut, text))
 }
 
 impl Running {

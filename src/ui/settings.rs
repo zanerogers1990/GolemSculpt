@@ -113,6 +113,7 @@ fn shortcuts(ui: &mut egui::Ui) {
             ("1 - 0", "Pick a brush"),
             ("Shift (hold)", "Smooth"),
             ("Ctrl / Right button", "Invert the brush"),
+            ("Ctrl + drag (Move)", "Push in / pull out"),
             ("S + drag", "Brush size"),
             ("F + drag", "Brush strength"),
             ("D + drag", "Focal shift"),

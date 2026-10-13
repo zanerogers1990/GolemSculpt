@@ -19,6 +19,7 @@ else's build.
 | `tube` | `sculpt-tube` | The Tube tool: tubes drawn along curves and fused into the model. |
 | `keys` | `sculpt-keys` | The Keys tool: joints that register the pieces of a split model. |
 | `region` | `sculpt-region` | The region tools: box and lasso select, hide, mask, trim and split, and mask extract. |
+| `multires` | `sculpt-multires` | Subdivision levels: Loop and Catmull-Clark subdivision, and a mesh held at several levels with the finer detail carried through edits of the coarser ones. Also carries the app's own per-vertex vectors (sculpt layers) through a new level and up from an edited one, and reads how a surface turned at a point off the faces round it. |
 
 The Unity app these are ported from is `D:\Unity\sculptingapplication`
 (read-only; ignore its `.claude\worktrees`, `Library`, `Temp` and `Logs`).

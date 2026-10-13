@@ -479,6 +479,40 @@ fn a_mouse_stroke_is_still_full_strength_after_a_light_pen_stroke() {
     sculptor.end(&mut mesh, &view);
 }
 
+/// A pen's first touch can arrive with no pressure (too light to measure),
+/// and its pressure with the samples after. The stroke opens as a mouse's
+/// would, there being nothing yet to say it is not one, and from the first
+/// sample that carries pressure it is a pen's: eased toward what the pen
+/// reports, not jumped to it, and still a pen's at the lift.
+#[test]
+fn pressure_arriving_mid_stroke_is_taken_up_from_there() {
+    let mut mesh = sphere(20_000);
+    let view = view_of(&mesh);
+    let mut sculptor = Sculptor::default();
+    sculptor.settings.brush = Brush::Inflate;
+    let at = |i: usize, pressure| PointerSample {
+        pos: SIZE * 0.5 + Vec2::new(i as f32 * 3.0, 0.0),
+        pressure,
+        time: 40.0 + i as f64 / 240.0,
+    };
+    let pressure = |sculptor: &Sculptor| sculptor.stroke.as_ref().unwrap().pressure;
+    assert!(sculptor.begin(&mut mesh, &view, at(0, None), false, false));
+    assert_eq!(pressure(&sculptor), 1.0, "with nothing reported it is full, as a mouse's");
+    let mut seen = Vec::new();
+    for i in 1..=40 {
+        sculptor.sample(&mut mesh, &view, at(i, Some(0.2)));
+        seen.push(pressure(&sculptor));
+    }
+    assert!(seen[0] < 1.0 && seen[0] > 0.5, "the first reported pressure starts it easing down: {}", seen[0]);
+    assert!(seen.windows(2).all(|pair| pair[1] <= pair[0]), "and it goes on down, never back up: {seen:?}");
+    let settled = 0.2f32.powf(sculptor.settings.pressure_curve);
+    assert!((seen[39] - settled).abs() < 0.02, "to what the pen is pressing: {} against {settled}", seen[39]);
+    // The lift carries no pressure, and is still the pen's.
+    sculptor.sample(&mut mesh, &view, at(41, None));
+    assert!(pressure(&sculptor) <= seen[39] + 1e-6, "the lift went back to full: {}", pressure(&sculptor));
+    sculptor.end(&mut mesh, &view);
+}
+
 // ------------------------------------------------------------------- Move
 
 /// Two balls of radius 0.2 with a 0.04 gap between them, one each side of
@@ -567,6 +601,158 @@ fn move_front_facing_fades_out_toward_the_silhouette() {
     assert!(partly > 20, "only {partly} vertices sit on the ramp: the edge is a hard cut");
 }
 
+/// Strength is how much of the pen's travel the grabbed surface follows: at
+/// 100% the grabbed point stays under the pen, at 50% it goes half as far.
+/// It used to be read by every brush but this one.
+#[test]
+fn move_follows_the_pen_by_its_strength() {
+    let front = Vec3::new(0.0, 0.0, 0.5);
+    let dragged = |strength: f32| {
+        let mut mesh = sphere(80_000);
+        let view = view_of(&mesh);
+        let grabbed = (0..mesh.vertex_count())
+            .min_by(|&a, &b| mesh.positions[a].distance(front).total_cmp(&mesh.positions[b].distance(front)))
+            .unwrap();
+        let mut sculptor = sculptor_with(Brush::Move, 0.15);
+        sculptor.settings.current_mut().strength = strength;
+        let from = view.project(mesh.positions[grabbed]).unwrap();
+        let to = from + Vec2::new(60.0, -25.0);
+        let before = mesh.positions[grabbed];
+        run_stroke(&mut mesh, &mut sculptor, &view, &line(from, to, 16));
+        (mesh.positions[grabbed] - before, view.project(mesh.positions[grabbed]).unwrap().distance(to))
+    };
+    let (whole, from_the_pen) = dragged(1.0);
+    assert!(whole.length() > 0.02, "the drag carried nothing: {whole}");
+    assert!(from_the_pen < 1.0, "at full strength the grabbed point ends {from_the_pen} px from the pen");
+    for strength in [0.5, 0.1] {
+        let (part, _) = dragged(strength);
+        assert!(part.distance(whole * strength) < whole.length() * 1e-4, "{strength}: {part} of {whole}");
+    }
+}
+
+/// One Move drag on a fresh ball from the surface point `at`, the pen going
+/// to where `to` is on screen, with Ctrl held or not: where every vertex
+/// was, and where it went.
+fn move_drag(at: Vec3, to: Vec3, ctrl: bool, mirror: bool) -> (Vec<Vec3>, Vec<Vec3>) {
+    let mut mesh = sphere(80_000);
+    let view = view_of(&mesh);
+    let before = mesh.positions.clone();
+    let mut sculptor = sculptor_with(Brush::Move, 0.15);
+    sculptor.settings.current_mut().strength = 1.0;
+    sculptor.settings.symmetry = [mirror, false, false];
+    let path = line(view.project(at).unwrap(), view.project(to).unwrap(), 16);
+    let sample = |i: usize| PointerSample { pos: path[i], pressure: None, time: i as f64 / 240.0 };
+    assert!(sculptor.begin(&mut mesh, &view, sample(0), ctrl, false), "the press missed the ball");
+    for i in 1..path.len() {
+        sculptor.sample(&mut mesh, &view, sample(i));
+        sculptor.frame(&mut mesh, &view, 1.0 / 60.0);
+    }
+    sculptor.end(&mut mesh, &view);
+    let moved = mesh.positions.iter().zip(&before).map(|(a, b)| *a - *b).collect();
+    (before, moved)
+}
+
+/// Which of `positions` is nearest `at`.
+fn vertex_at(positions: &[Vec3], at: Vec3) -> usize {
+    (0..positions.len()).min_by(|&a, &b| positions[a].distance(at).total_cmp(&positions[b].distance(at))).unwrap()
+}
+
+/// Ctrl + Move on surface seen head on: up pulls it out toward the camera
+/// and down pushes it in, by as far as the pen went, and not across the
+/// screen at all. A plain Move from there can only slide it across.
+#[test]
+fn ctrl_move_pushes_and_pulls_surface_that_faces_the_camera() {
+    let view = view_of(&sphere(80_000));
+    let out = view.pos.normalize();
+    let front = out * 0.5;
+    let pen = view.up * 0.08;
+    let (ball, pulled) = move_drag(front, front + pen, true, false);
+    let grabbed = vertex_at(&ball, front);
+    let went = pulled[grabbed];
+    assert!((went.dot(out) / 0.08 - 1.0).abs() < 0.05, "up went {went}, not 0.08 out along {out}");
+    assert!((went - out * went.dot(out)).length() < 0.002, "and across the screen as well: {went}");
+    // The whole grab goes the one way, by the brush's falloff.
+    let stray = pulled.iter().map(|m| (*m - out * m.dot(out)).length()).fold(0.0, f32::max);
+    assert!(stray < 0.002, "some of the grab went sideways by {stray}");
+    let half_way = (0..pulled.len())
+        .filter(|&v| (ball[v].distance(front) / 0.15 - 0.5).abs() < 0.02)
+        .map(|v| pulled[v].dot(out) / went.dot(out))
+        .fold((f32::MAX, 0.0f32), |(low, high), share| (low.min(share), high.max(share)));
+    assert!(half_way.0 > 0.4 && half_way.1 < 0.6, "half way out the grab went {half_way:?} of the way");
+
+    let (_, pushed) = move_drag(front, front - pen, true, false);
+    assert!(pushed[grabbed].distance(-went) < 0.002, "down went {}, not the reverse of {went}", pushed[grabbed]);
+    // Sideways with the pen is neither in nor out.
+    let (_, sideways) = move_drag(front, front + view.right * 0.08, true, false);
+    assert!(sideways[grabbed].length() < 0.004, "a sideways drag went {}", sideways[grabbed]);
+    // Without Ctrl the same drag slides the surface across the screen.
+    let (_, plain) = move_drag(front, front + pen, false, false);
+    assert!(plain[grabbed].dot(out).abs() < 0.004 && plain[grabbed].dot(view.up) > 0.07, "{}", plain[grabbed]);
+}
+
+/// Ctrl + Move on surface seen from the side, at the outline: the pen is
+/// dragged the way the surface faces to pull it out, the surface goes that
+/// way and no other, and a drag along the outline leaves it alone. With a
+/// mirror on, the other side does the same in the mirror.
+#[test]
+fn ctrl_move_at_the_outline_follows_the_way_the_surface_faces() {
+    let view = view_of(&sphere(80_000));
+    // Seventy degrees round the ball from head on, toward +X or -X,
+    // whichever is more across the screen.
+    let side = if view.right.x >= 0.0 { Vec3::X } else { Vec3::NEG_X };
+    let across = (side - view.forward * side.dot(view.forward)).normalize();
+    let faces = (view.pos.normalize() * 70f32.to_radians().cos() + across * 70f32.to_radians().sin()).normalize();
+    let at = faces * 0.5;
+    for mirror in [false, true] {
+        let (ball, pulled) = move_drag(at, at + faces * 0.08, true, mirror);
+        let grabbed = vertex_at(&ball, at);
+        let went = pulled[grabbed];
+        let along = went.dot(faces);
+        assert!(along > 0.06 && along < 0.09, "mirror {mirror}: went {went}, {along} the way it faces");
+        assert!((went - faces * along).length() < 0.003, "mirror {mirror}: and off to one side: {went}");
+        if mirror {
+            let image = |p: Vec3| Vec3::new(-p.x, p.y, p.z);
+            let twin = pulled[vertex_at(&ball, image(ball[grabbed]))];
+            assert!(twin.distance(image(went)) < 0.004, "the other side went {twin}, not the image of {went}");
+        }
+        let (_, slid) = move_drag(at, at + faces.cross(view.forward).normalize() * 0.08, true, mirror);
+        assert!(slid[grabbed].length() < 0.006, "mirror {mirror}: a drag along the outline went {}", slid[grabbed]);
+    }
+}
+
+/// A grab on a mirror plane holds the surface as a grab with no symmetry
+/// does: its two copies are one grab, falloff and all. They used to be added
+/// up, which held everything inside half the radius as firmly as the centre.
+#[test]
+fn a_mirrored_move_on_the_plane_is_no_firmer_than_one_alone() {
+    let front = Vec3::new(0.0, 0.0, 0.5);
+    let dragged = |mirror: bool| {
+        let mut mesh = sphere(80_000);
+        let view = view_of(&mesh);
+        let before = mesh.positions.clone();
+        let mut sculptor = sculptor_with(Brush::Move, 0.2);
+        sculptor.settings.current_mut().strength = 1.0;
+        sculptor.settings.symmetry = [mirror, false, false];
+        // Along the plane: across the view, with nothing of X in it.
+        let along = view.forward.cross(Vec3::X).normalize();
+        let path = line(view.project(front).unwrap(), view.project(front + along * 0.1).unwrap(), 16);
+        run_stroke(&mut mesh, &mut sculptor, &view, &path);
+        let moved: Vec<Vec3> = mesh.positions.iter().zip(&before).map(|(a, b)| *a - *b).collect();
+        (before, moved)
+    };
+    let ((before, alone), (_, mirrored)) = (dragged(false), dragged(true));
+    let travel = alone.iter().map(|m| m.length()).fold(0.0, f32::max);
+    assert!(travel > 0.09, "the drag carried nothing: {travel}");
+    let worst = alone.iter().zip(&mirrored).map(|(a, m)| a.distance(*m)).fold(0.0, f32::max);
+    assert!(worst < travel * 0.02, "mirrored, a vertex went {worst} from where it goes alone, of {travel}");
+    // And that is the falloff: half way out, about half way along.
+    let half_way = (0..before.len())
+        .filter(|&v| (before[v].distance(front) / 0.2 - 0.5).abs() < 0.02)
+        .map(|v| mirrored[v].length() / travel)
+        .fold((f32::MAX, 0.0f32), |(low, high), share| (low.min(share), high.max(share)));
+    assert!(half_way.0 > 0.4 && half_way.1 < 0.6, "half way out the grab holds {half_way:?} of the pull");
+}
+
 // ------------------------------------------------------------------- mask
 
 /// How squarely the surface at `p` (with normal `n`) faces the camera: 1 head
@@ -615,8 +801,15 @@ fn mask_paint_ignores_the_brush_front_facing_setting() {
 /// selected they used to come twice as close together.
 #[test]
 fn mask_paint_is_paced_the_same_whichever_brush_is_selected() {
-    let with_move = mask_stroke(|s| s.brush = Brush::Move);
-    let with_crease = mask_stroke(|s| s.brush = Brush::Crease);
+    // At one Strength, which the mask takes from the selected brush: Move
+    // starts with a Strength of its own.
+    let with = |brush: Brush| {
+        mask_stroke(|s| {
+            s.brush = brush;
+            s.current_mut().strength = 0.1;
+        })
+    };
+    let (with_move, with_crease) = (with(Brush::Move), with(Brush::Crease));
     assert!(with_move.mask.iter().any(|&m| m > 0.0));
     assert!(with_move.mask == with_crease.mask);
 }

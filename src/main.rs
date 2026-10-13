@@ -5,6 +5,7 @@ mod app;
 mod bench;
 mod bench_matched;
 mod bridge_guard;
+mod brush_files;
 mod camera;
 mod capture;
 mod decimate;
@@ -187,6 +188,14 @@ fn window_options(args: &[String]) -> app::Args {
             "--demo-ui" => opts.demo_ui = it.next().cloned(),
             // The Blender link, worked without Blender (play) or with one that has no window (round).
             "--demo-blender" => opts.demo_blender = it.next().cloned(),
+            // Subdivision levels: play (worked and checked), or a picture:
+            // card | base | fine | down | bent | up | quads (see app/levels.rs).
+            "--demo-levels" => opts.demo_levels = it.next().cloned(),
+            // play | card | full | half | off | under | under-off | dyntopo | dyntopo-off | levels | levels-off |
+            // levels-low (see app/layers.rs).
+            "--demo-layers" => opts.demo_layers = it.next().cloned(),
+            // Face groups: play (worked and checked), or a picture (see app/groups/play.rs).
+            "--demo-groups" => opts.demo_groups = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

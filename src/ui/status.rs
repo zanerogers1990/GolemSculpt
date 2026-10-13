@@ -20,6 +20,11 @@
 //! while that panel is folded away: dynamic topology stopping at its
 //! triangle limit, and the SSphere tool's one-off results. They come and go
 //! by themselves, so a plate with only those on it lets the pen through.
+//!
+//! The clean view (Tab) has no panels at all and is for looking, so nothing
+//! of this is drawn on it, with one exception: an error. Ctrl + S works
+//! there, and a save that failed must not pass for one that did. The plate
+//! comes up for it as it does over a folded panel, and a tap puts it away.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -167,6 +172,22 @@ fn status_line(status: &(String, Color32), seen: Seen, time: f64) -> Option<(Lin
     Some((Line { text: text.clone(), color: *color, strength }, next))
 }
 
+/// The status line as the clean view shows it: an error only, until it is
+/// put away. What went well is not said there, nor is a hint.
+fn clean_view_line(status: &(String, Color32), seen: Seen, time: f64) -> Option<Line> {
+    (status.1 == theme::ERROR).then(|| status_line(status, seen, time)).flatten().map(|(line, _)| line)
+}
+
+/// Draws the plate on the clean view, when the status line is an error.
+pub fn clean_view(ctx: &egui::Context, state: &mut UiState, tips: bool, time: f64) {
+    let Some(line) = clean_view_line(&state.status, state.status_seen, time) else { return };
+    // Placed as with both panels folded away: there is neither on this view.
+    if show(ctx, &[line], true, [true; 2], tips) {
+        state.status_seen.put_away = true;
+        ctx.request_repaint();
+    }
+}
+
 /// Draws the plate, when there is anything for it. For a frame in which the
 /// panels show (not the clean view); `folded` is which of them are away.
 pub fn overlay(ctx: &egui::Context, doc: &Doc, state: &mut UiState, folded: [bool; 2], time: f64) {
@@ -294,6 +315,48 @@ mod tests {
         // The hint the app starts with is not an error either; nothing to say is nothing to show.
         assert_eq!(shown(&("Import adds a model.".to_owned(), theme::HINT()), Seen::default(), 600.0), None);
         assert_eq!(shown(&("  ".to_owned(), theme::ERROR), Seen::at(0.0), 1.0), None);
+    }
+
+    /// On the clean view only an error is said: a save that failed there
+    /// must not pass without a word, and anything else can wait for the
+    /// panels. It stays until it is tapped away, as over a folded panel.
+    #[test]
+    fn the_clean_view_shows_an_error_and_nothing_else() {
+        let error = (ERROR.to_owned(), theme::ERROR);
+        let shown = |status: &(String, Color32), seen: Seen, time: f64| {
+            clean_view_line(status, seen, time).map(|line| (line.text, line.color, line.strength))
+        };
+        let whole = Some((ERROR.to_owned(), theme::ERROR, 1.0));
+        assert_eq!(shown(&error, Seen::at(2.0), 2.0), whole);
+        assert_eq!(shown(&error, Seen::at(2.0), 9_000.0), whole, "it waits to be read");
+        assert_eq!(shown(&error, Seen { since: 2.0, put_away: true }, 3.0), None, "until it is tapped away");
+        assert_eq!(shown(&error, Seen::at(40.0), 41.0), whole, "written again, it is back");
+        // What went well, the hint the app starts with, and nothing at all.
+        assert_eq!(shown(&("Saved Dragon.sclp".to_owned(), theme::OK), Seen::at(10.0), 10.5), None);
+        assert_eq!(shown(&("Import adds a model.".to_owned(), theme::HINT()), Seen::at(10.0), 10.5), None);
+        assert_eq!(shown(&("  ".to_owned(), theme::ERROR), Seen::at(0.0), 1.0), None);
+
+        // Drawn, it is the same plate, in the window and with the pen on it.
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut state = UiState::new(&ctx);
+        (state.status, state.status_seen) = (error, Seen::at(1.0));
+        let draw = |state: &mut UiState, events: Vec<Event>| {
+            let input = egui::RawInput { screen_rect: Some(screen(1600.0, 960.0)), events, ..Default::default() };
+            ctx.run_ui(input, |root| clean_view(root.ctx(), state, false, 5.0)).drop_without_applying_deltas();
+        };
+        draw(&mut state, vec![]);
+        draw(&mut state, vec![]);
+        let up = plate(&ctx).expect("the plate is up on the clean view");
+        assert!(screen(1600.0, 960.0).contains_rect(up) && up.center().x.round() == 800.0, "{up:?}");
+        let at = up.center();
+        draw(&mut state, vec![Event::PointerMoved(at), pen(at, true)]);
+        assert!(!state.status_seen.put_away);
+        draw(&mut state, vec![pen(at, false)]);
+        assert!(state.status_seen.put_away, "a tap puts it away");
+        draw(&mut state, vec![]);
+        draw(&mut state, vec![]);
+        assert_eq!(plate(&ctx), None, "and it is gone");
     }
 
     /// The window sizes the fold tabs are checked at, in the interface's

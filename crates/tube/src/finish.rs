@@ -18,6 +18,7 @@ use crate::field::{MAX_VOXEL_SAMPLES, TubeField};
 use crate::live::{LiveTube, TubeState};
 use crate::merge::{self, MergePlan, Stage};
 use crate::tool::TubeTool;
+use crate::types::Kind;
 
 /// Blend setting 1 is a fillet whose size (the smooth union's `k`) is twice
 /// the tube radius.
@@ -151,11 +152,12 @@ fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
-fn stage_text(stage: Stage) -> &'static str {
-    match stage {
-        Stage::Tubes => "Building the tubes",
-        Stage::Union => "Fusing into the model",
-        Stage::Blend => "Smoothing the join",
+fn stage_text(stage: Stage, kind: Kind) -> &'static str {
+    match (stage, kind) {
+        (Stage::Tubes, Kind::Tube) => "Building the tubes",
+        (Stage::Tubes, Kind::Muscle) => "Building the muscles",
+        (Stage::Union, _) => "Fusing into the model",
+        (Stage::Blend, _) => "Smoothing the join",
     }
 }
 
@@ -178,8 +180,9 @@ impl TubeTool {
         if self.finish.is_busy() {
             return;
         }
+        let kind = self.kind();
         if self.tubes.is_empty() {
-            self.say("Draw a tube first.");
+            self.say(format!("Draw a {} first.", kind.one()));
             return;
         }
         self.refresh(cx, false);
@@ -194,7 +197,8 @@ impl TubeTool {
             }
         }
         if groups.is_empty() {
-            self.say("These tubes were drawn in empty space, so there is nothing to merge them into. Use Keep Separate.");
+            let many = kind.many();
+            self.say(format!("These {many} were drawn in empty space, so there is nothing to merge them into. Use Keep Separate."));
             return;
         }
 
@@ -214,12 +218,12 @@ impl TubeTool {
                 let tube = &self.tubes[index];
                 tube.add_to(&mut field);
                 let settings = &tube.state.settings;
-                blend = blend.max(settings.blend * settings.radius * BLEND_PER_RADIUS);
+                blend = blend.max(settings.blend * settings.proud() * BLEND_PER_RADIUS);
                 max_radius = max_radius.max(settings.radius);
-                thinnest = thinnest.min(settings.radius);
+                thinnest = thinnest.min(settings.thin_radius());
             }
             if field.is_empty() {
-                failure = Some(format!("{}: the tubes have no length.", info.name));
+                failure = Some(format!("{}: the {} have no length.", info.name, kind.many()));
                 continue;
             }
             let plan = merge::plan(mesh.positions, mesh.indices, &to_field, &field, max_radius, thinnest);
@@ -241,14 +245,14 @@ impl TubeTool {
 
         self.finish.loose = self.tubes.len() - self.mergeable_count();
         self.finish.targets = targets;
-        self.finish.job = Some(cx.spawn("Merge Tubes", move |job| {
+        self.finish.job = Some(cx.spawn(self.label("Merge Tubes", "Merge Muscles"), move |job| {
             let started = Instant::now();
             let count = work.len();
             let mut meshes = Vec::with_capacity(count);
             for (n, work) in work.into_iter().enumerate() {
                 let stage = |stage: Stage| {
                     let which = if count > 1 { format!(" ({} of {count})", n + 1) } else { String::new() };
-                    job.progress(format!("{}{which}", stage_text(stage)));
+                    job.progress(format!("{}{which}", stage_text(stage, kind)));
                     !job.cancelled()
                 };
                 let merged =
@@ -265,7 +269,7 @@ impl TubeTool {
             }
             Ok(Fused { meshes, seconds: started.elapsed().as_secs_f64() })
         }));
-        self.say("Merging the tubes into the model...");
+        self.say(format!("Merging the {} into the model...", kind.many()));
     }
 
     /// Stops the merge in progress. False if none is running.
@@ -302,11 +306,12 @@ impl TubeTool {
     fn land(&mut self, cx: &mut Ctx, result: Result<Fused, String>) {
         let targets = std::mem::take(&mut self.finish.targets);
         let loose = std::mem::take(&mut self.finish.loose);
+        let (one, many) = (self.kind().one(), self.kind().many());
         let fused = match result {
             Ok(fused) => fused,
             Err(error) => {
                 let cancelled = error == "Cancelled.";
-                self.tell(if cancelled { "Merge cancelled. The tubes are still live.".into() } else { error }, cancelled);
+                self.tell(if cancelled { format!("Merge cancelled. The {many} are still live.") } else { error }, cancelled);
                 return;
             }
         };
@@ -325,7 +330,7 @@ impl TubeTool {
             // The model must still be the one the merge was given.
             let unchanged = cx.scene().mesh(target.object).is_some_and(|m| m.id == target.mesh && checksum(m.positions) == target.checksum);
             if !unchanged {
-                failure = Some(format!("{} changed while its tubes were merging. Merge again.", target.name));
+                failure = Some(format!("{} changed while its {many} were merging. Merge again.", target.name));
                 continue;
             }
             commands.push(Command::Replace { object: target.object, mesh });
@@ -335,7 +340,7 @@ impl TubeTool {
         let mut merged = 0;
         let thin = landed.iter().any(|t| t.too_thin);
         if !commands.is_empty() {
-            cx.commit("Merge Tubes", commands);
+            cx.commit(self.label("Merge Tubes", "Merge Muscles"), commands);
             let mut models = Vec::new();
             let mut tubes = Vec::new();
             for target in landed {
@@ -352,16 +357,18 @@ impl TubeTool {
         }
 
         let mut message = if merged > 0 {
-            format!("Merged {} in {:.1}s. Z undoes it and gives the tubes back.", plural(merged, "tube", "tubes"), fused.seconds)
+            format!("Merged {} in {:.1}s. Z undoes it and gives the {many} back.", plural(merged, one, many), fused.seconds)
         } else {
             "Nothing merged.".to_owned()
         };
         if thin {
-            message += " A tube was thinner than the model's detail, so it came out thicker than drawn: to keep it \
-                        thin, undo, remesh the model finer, and merge again.";
+            message += &format!(
+                " A {one} was thinner than the model's detail, so it came out thicker than drawn: to keep it thin, undo, \
+                 remesh the model finer, and merge again."
+            );
         }
         if loose > 0 {
-            message += &format!(" {} drawn in empty space left live: use Keep Separate.", plural(loose, "tube", "tubes"));
+            message += &format!(" {} drawn in empty space left live: use Keep Separate.", plural(loose, one, many));
         }
         if let Some(failure) = &failure {
             message += &format!(" Failed: {failure}");
@@ -386,8 +393,9 @@ impl TubeTool {
         if self.finish.is_busy() {
             return;
         }
+        let kind = self.kind();
         if self.tubes.is_empty() {
-            self.say("Draw a tube first.");
+            self.say(format!("Draw a {} first.", kind.one()));
             return;
         }
         self.refresh(cx, false);
@@ -417,7 +425,7 @@ impl TubeTool {
             };
             // It grew on the anchor, so it is sculpted the way the anchor is:
             // it takes the anchor's symmetry settings, as in the Unity app.
-            let mut object = NewObject::new("Tube", mesh).placed(placement);
+            let mut object = NewObject::new(kind.title(), mesh).placed(placement);
             if let Some(anchor) = tube.state.anchor {
                 object = object.with_symmetry_of(anchor);
             }
@@ -425,20 +433,21 @@ impl TubeTool {
             kept.push(tube.state.clone());
         }
         if commands.is_empty() {
-            self.say("Nothing to keep: the tubes have no length.");
+            self.say(format!("Nothing to keep: the {} have no length.", kind.many()));
             return;
         }
 
         let before = listing(cx.scene());
-        let receipt = cx.commit("Keep Tubes", commands);
+        let receipt = cx.commit(self.label("Keep Tubes", "Keep Muscles"), commands);
         if receipt.added.is_empty() {
-            self.tell("The tubes could not be made into objects.", false);
+            self.tell(format!("The {} could not be made into objects.", kind.many()), false);
             return;
         }
         let count = receipt.added.len();
         self.remove_tubes(&kept);
         self.finish.record(Made::Objects { added: receipt.added, before }, kept);
-        self.say(format!("Made {}. Z undoes it and gives the tubes back.", plural(count, "tube object", "tube objects")));
+        let (one, many) = (format!("{} object", kind.one()), format!("{} objects", kind.one()));
+        self.say(format!("Made {}. Z undoes it and gives the {} back.", plural(count, &one, &many), kind.many()));
     }
 
     /// Voxel size for a kept tube: the anchor's own density where there is
@@ -447,7 +456,7 @@ impl TubeTool {
         let scale = tube.frame.placement.scale.abs();
         let anchor = tube.state.anchor.and_then(|a| cx.scene().mesh(a));
         let cell = anchor.map(|mesh| merge::density_cell(mesh.positions, mesh.indices) * (scale.x + scale.y + scale.z) / 3.0);
-        merge::separate_cell(tube.state.settings.radius, cell, field)
+        merge::separate_cell(tube.state.settings.thin_radius(), cell, field)
     }
 
     // ---- handing tubes back --------------------------------------------------
@@ -509,7 +518,8 @@ impl TubeTool {
                     if !cx.active {
                         cx.start();
                     }
-                    self.say(format!("{} live again.", plural(restored, "tube is", "tubes are")));
+                    let (one, many) = (format!("{} is", self.kind().one()), format!("{} are", self.kind().many()));
+                    self.say(format!("{} live again.", plural(restored, &one, &many)));
                 }
             } else {
                 self.remove_tubes(&tubes);

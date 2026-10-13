@@ -62,12 +62,20 @@ fn line(from: Vec2, to: Vec2, n: usize) -> Vec<Vec2> {
     (0..=n).map(|i| from.lerp(to, i as f32 / n as f32)).collect()
 }
 
+/// Every brush that sculpts a plain mesh. Erase Layer does nothing to one:
+/// it rubs out a sculpt layer, and its strokes (what they move, undo, the
+/// mirror plane) are in `sculpt/erase/tests.rs`, on a mesh that has layers.
+fn brushes() -> impl Iterator<Item = Brush> {
+    Brush::ALL.into_iter().filter(|&brush| brush != Brush::EraseLayer)
+}
+
 fn moved_count(delta: &Option<StrokeDelta>) -> usize {
     match delta {
         Some(StrokeDelta::Positions { verts, .. }) | Some(StrokeDelta::Mask { verts, .. }) => {
             verts.len()
         }
-        None => 0,
+        // These meshes have no sculpt layers.
+        Some(StrokeDelta::Layered { .. }) | None => 0,
     }
 }
 
@@ -116,7 +124,7 @@ fn raycast_hits_the_front_of_the_sphere() {
 
 #[test]
 fn every_brush_moves_the_surface_and_undo_restores_it_exactly() {
-    for brush in Brush::ALL {
+    for brush in brushes() {
         let mut mesh = sphere(80_000);
         let view = view_of(&mesh);
         let before = mesh.positions.clone();
@@ -184,7 +192,7 @@ fn every_brush_moves_the_surface_and_undo_restores_it_exactly() {
 
 #[test]
 fn mirrored_strokes_stay_mirror_exact_across_the_plane() {
-    for brush in Brush::ALL {
+    for brush in brushes() {
         let mut mesh = sphere(80_000);
         let twins = twins(&mesh);
         let view = view_of(&mesh);

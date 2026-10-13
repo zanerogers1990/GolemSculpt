@@ -276,7 +276,7 @@ pub fn resample(
 /// Finite-difference tangents: central inside a span, one-sided at the ends
 /// and on either side of a corner. A zero-length difference (never expected,
 /// but a degenerate drag can produce one) inherits its neighbour's direction.
-fn compute_tangents(samples: &mut [Sample]) {
+pub(crate) fn compute_tangents(samples: &mut [Sample]) {
     let n = samples.len();
     let mut last_good = Vec3::Z;
     for i in 0..n {

@@ -1,22 +1,25 @@
-//! Layer where mirror planes cross.
+//! Brushes where mirror planes meet: on one plane, beside it, and where two
+//! or three cross.
 //!
 //! Layer raises the surface to a set height and no further, however many
-//! times the stroke passes over it. Next to one mirror plane a dab and its
-//! image are applied in both orders and averaged, each only topping up the
-//! other. Next to two or three planes at once there are four or eight copies,
-//! applied to the same starting surface and their moves added up and shared
-//! out by how much the copies overlap (`Sculptor::apply_symmetric`). A
-//! quarter of a radius from two planes the four copies count as 2.93 dabs
-//! while all four cover the middle, so the middle came up 4 / 2.93 = 1.37
-//! times the height (1.33 to 1.37 measured here, 1.50 with three planes), and
-//! Layer never takes anything back down. Such a brush is now also held to the
-//! furthest any one copy moved a vertex (`kernels::held_to_furthest`), as it
-//! already was round a radial axis.
+//! times the stroke passes over it. Where two or three planes cross there
+//! are four or eight copies of a dab, and while their moves were added up
+//! and shared out by how much their discs overlap, a quarter of a radius
+//! from two planes the four counted as 2.93 dabs while all four covered the
+//! middle: the middle came up 4 / 2.93 = 1.37 times the height (1.33 to 1.37
+//! measured here, 1.50 with three planes), and Layer never takes anything
+//! back down. A brush that seeks a place, as Layer does, now moves a vertex
+//! no further than the copy that asked most of it (`share.rs`).
 //!
-//! These tests measure that: the height reached on the line the planes cross
-//! along and across the whole dab, against the height the brush is set to,
-//! and against the highest any one copy of the mark would have raised each
-//! vertex on its own.
+//! The first tests measure that: the height reached on the line the planes
+//! cross along and across the whole dab, against the height the brush is set
+//! to, and against the highest any one copy of the mark would have raised
+//! each vertex on its own. Standard without Accumulate works toward a height
+//! of its own the same way, a share of what is left each dab, and has a test
+//! of the same kind.
+//!
+//! The last is every brush's: a dab, and a stroke, are as strong on a mirror
+//! plane, beside one and where two cross as they are well clear of both.
 
 use glam::Quat;
 use sculpt_symmetry::Placement;
@@ -55,7 +58,7 @@ const CORNERS: [Corner; 6] = [
 /// Where a dab is laid, in brush radii from each of the two planes: on both,
 /// a quarter and half a radius and one radius from both, well clear of both
 /// (no plane in reach, the plain walk), and unevenly (the last is next to one
-/// plane only, the pair that is applied in both orders).
+/// plane only, a dab and its one image).
 const DISTANCES: [(f32, f32); 8] =
     [(0.0, 0.0), (0.25, 0.25), (0.5, 0.5), (1.0, 1.0), (4.0, 4.0), (0.0, 0.25), (0.25, 1.0), (0.25, 4.0)];
 
@@ -212,32 +215,18 @@ impl Failures {
 }
 
 /// How far past the height a mark may come out, as a share of the height,
-/// where its copies are applied one after another: the pair by one plane
-/// alone (in both orders, averaged), and dab after dab along a stroke. Each
-/// raises along the normal of its own footprint and tops up what it measures
-/// as missing along that, so on a surface as bumpy as the ball's two that
-/// stand on different slopes leave up to 5% more than the height between
-/// them. (A Layer stroke with no symmetry at all ends 0 to 13% over on this
-/// ball for the same reason.) Piled-up copies were 16 to 50% over.
+/// where one dab is laid on what another left: dab after dab along a stroke.
+/// Each raises along the normal of its own footprint and tops up what it
+/// measures as missing along that, so on a surface as bumpy as the ball's
+/// two that stand on different slopes leave up to 5% more than the height
+/// between them. (A Layer stroke with no symmetry at all ends 0 to 13% over
+/// on this ball for the same reason.) Piled-up copies were 16 to 50% over.
 const IN_TURN: f32 = 0.06;
 
-/// The same where the copies are shared out and held to the furthest any one
-/// of them went, by two planes or three: nothing to speak of.
+/// The same for a single dab, whose copies are each laid on the surface as
+/// it stood and a vertex moved no further than the one that asked most of
+/// it: nothing to speak of.
 const HELD: f32 = 0.01;
-
-/// The holding itself: a move no longer than the furthest one copy went is
-/// left alone, a longer one is cut to that length along its own direction,
-/// and a vertex nothing moved stays a vertex nothing moved.
-#[test]
-fn a_shared_out_move_is_held_to_the_furthest_one_copy_went() {
-    let step = Vec3::new(0.0, 3.0, 4.0);
-    assert_eq!(kernels::held_to_furthest(step, 36.0), step);
-    assert_eq!(kernels::held_to_furthest(step, 25.0), step);
-    let held = kernels::held_to_furthest(step, 4.0);
-    assert!((held.length() - 2.0).abs() < 1e-6 && held.normalize().distance(step.normalize()) < 1e-6, "{held}");
-    assert_eq!(kernels::held_to_furthest(step, 0.0), Vec3::ZERO);
-    assert_eq!(kernels::held_to_furthest(Vec3::ZERO, 0.0), Vec3::ZERO);
-}
 
 /// One dab, at every distance from the planes and at three strengths: the
 /// default (which rises 40% of the way a dab), one that gets there in a dab,
@@ -257,9 +246,7 @@ fn a_layer_dab_by_two_mirror_planes_rises_no_higher_than_one_copy_would() {
         println!("{}: set height {set:.3e}", corner.name());
         for (a, b) in corner.distances() {
             let at = [corner.place(a, b)];
-            // In reach of one plane only, the dab and its image are a pair.
-            let within = |radii: f32| radii < 1.5;
-            let slack = if within(a) != within(b) { IN_TURN } else { HELD };
+            let slack = HELD;
             // At full strength a dab alone goes all the way to the height.
             let full = mark(&mut ball, &view, layer(corner.radius, 1.0, [false; 3]), &at, &[]);
             assert!((0.97..=1.03).contains(&(full.peak() / set)), "a dab alone reached {:.3e}, not {set:.3e}", full.peak());
@@ -295,8 +282,9 @@ const STROKES: [((f32, f32), (f32, f32)); 3] =
 
 /// A stroke passes over the corner many times. It still ends at the set
 /// height there and not above it (but for what dabs laid one after another
-/// leave, see [`IN_TURN`]), and it gets as high as the same stroke does with
-/// no symmetry.
+/// leave, see [`IN_TURN`]: the same stroke with no symmetry at all is up to
+/// 13% over on this ball, and a mirrored one is not asked to do better than
+/// that), and it gets as high as the same stroke does with no symmetry.
 #[test]
 fn a_layer_stroke_by_two_mirror_planes_keeps_to_its_height() {
     let mut ball = Ball::new();
@@ -327,7 +315,8 @@ fn a_layer_stroke_by_two_mirror_planes_keeps_to_its_height() {
                     mirrored.pair
                 );
                 println!("{report}");
-                failures.check(peak <= (1.0 + IN_TURN) * set, "past the set height", &report);
+                let ceiling = ((1.0 + IN_TURN) * set).max(1.01 * alone.peak());
+                failures.check(peak <= ceiling, "past the set height", &report);
                 failures.check(on_the_line <= (1.0 + IN_TURN) * set, "past the set height on the line", &report);
                 failures.check(peak >= 0.9 * alone.peak(), "lower than the stroke alone", &report);
                 failures.check(mirrored.pair <= Tolerance::OTHERS.allows(peak), "no longer mirrored", &report);
@@ -531,4 +520,169 @@ fn layer_fingerprints_round_an_axis() {
             ball.undo(delta);
         }
     }
+}
+
+/// Standard without Accumulate, set to `strength` and `build_up`, under the
+/// flat-topped falloff or its own.
+fn standard(strength: f32, build_up: f32, flat_topped: bool, mirror: [bool; 3]) -> Sculptor {
+    let mut sculptor = sculptor_with(Brush::Standard);
+    let tip = sculptor.settings.current_mut();
+    (tip.strength, tip.build_up, tip.accumulate) = (strength, build_up, false);
+    sculptor.settings.falloff[Brush::Standard.index()] =
+        flat_topped.then(|| FalloffCurve::preset(FalloffPreset::Plateau));
+    sculptor.settings.symmetry = mirror;
+    sculptor
+}
+
+/// Standard without Accumulate raises the surface toward a height of its own
+/// (0.3 of the radius at the middle, less toward the edge by the falloff) and
+/// stops there. One dab by two mirror planes or three goes no higher than the
+/// highest single copy of it would: gently, at the default strength, and at
+/// full strength with build-up 3, where a dab alone goes the whole way at
+/// once and anything more is past the brush's height for good.
+///
+/// Under a flat-topped falloff every copy covers the middle alike, and the
+/// dab came up 1.33 times what one copy makes (1.50 by three planes) before
+/// it was held to the furthest any one copy went.
+#[test]
+fn a_standard_dab_by_two_mirror_planes_rises_no_higher_than_one_copy_would() {
+    let mut ball = Ball::new();
+    let mut failures = Failures::default();
+    for corner in CORNERS.into_iter().filter(|corner| corner.radius == BRUSH_RADIUS) {
+        let view = corner.view(&ball.mesh);
+        let partners = ball.partners_under(&corner.group());
+        // Both planes in reach, so the copies are shared out, not laid in turn.
+        for (a, b) in corner.distances().filter(|&(a, b)| a.max(b) < 1.5) {
+            let at = [corner.place(a, b)];
+            for flat_topped in [true, false] {
+                for (strength, build_up) in [(0.5, 1.0), (1.0, 3.0)] {
+                    let brush = |mirror| standard(strength, build_up, flat_topped, mirror);
+                    let alone = mark(&mut ball, &view, brush([false; 3]), &at, &[]);
+                    let ceiling = highest_of_any_copy(&alone.by, &partners);
+                    let mirrored = mark(&mut ball, &view, brush(corner.mirror), &at, &partners);
+                    let (peak, over) = (mirrored.peak(), mirrored.over(&ceiling));
+                    let report = format!(
+                        "{}, {a} and {b} radii from the planes, {} falloff, strength {strength}, build-up {build_up}:                          peak {:.3} of a dab alone, {:.3} over one copy at worst, pair {:.1e}",
+                        corner.name(),
+                        if flat_topped { "flat-topped" } else { "its own" },
+                        peak / alone.peak(),
+                        over / alone.peak(),
+                        mirrored.pair
+                    );
+                    println!("{report}");
+                    failures.check(peak <= (1.0 + HELD) * alone.peak(), "higher than a dab alone", &report);
+                    failures.check(over <= HELD * alone.peak(), "past what any one copy would raise", &report);
+                    failures.check(mirrored.pair <= Tolerance::OTHERS.allows(peak), "no longer mirrored", &report);
+                }
+            }
+        }
+    }
+    failures.none();
+}
+
+/// The brushes a dab is laid with by a mirror plane, as the app sets them up
+/// and with Accumulate the other way: which of them adds a step each dab and
+/// which seeks a place is `Params::sharing`.
+const TIPS: [(&str, Brush, bool); 11] = [
+    ("Standard", Brush::Standard, true),
+    ("Standard without Accumulate", Brush::Standard, false),
+    ("Clay", Brush::Clay, true),
+    ("Clay without Accumulate", Brush::Clay, false),
+    ("Inflate", Brush::Inflate, true),
+    ("Inflate without Accumulate", Brush::Inflate, false),
+    ("Crease", Brush::Crease, false),
+    ("Crease with Accumulate", Brush::Crease, true),
+    ("Flatten", Brush::Flatten, false),
+    ("Layer", Brush::Layer, false),
+    // (Nudge moves nothing with one dab: its strokes are in `kernel_tests`.)
+    ("Pinch", Brush::Pinch, false),
+];
+
+/// `brush` at `strength`, with or without Accumulate, under its own falloff
+/// or the flat-topped one, mirrored across `mirror`.
+fn tip(brush: Brush, accumulate: bool, strength: f32, flat_topped: bool, mirror: [bool; 3]) -> Sculptor {
+    let mut sculptor = sculptor_with(brush);
+    let tip = sculptor.settings.current_mut();
+    (tip.strength, tip.accumulate) = (strength, accumulate);
+    sculptor.settings.falloff[brush.index()] = flat_topped.then(|| FalloffCurve::preset(FalloffPreset::Plateau));
+    sculptor.settings.symmetry = mirror;
+    // Without Clay's finishing pass, which is not a dab's doing.
+    sculptor.settings.clay_relax = 0.0;
+    sculptor
+}
+
+/// A dab is as strong on a mirror plane, beside it, and where two planes
+/// cross, as the same dab is with no symmetry: it moves the surface as far
+/// at the most, give or take, and nowhere a twentieth further. Every brush, at
+/// the strength the app starts with and at full strength, under its own
+/// falloff and a flat-topped one, from on the plane to a whole radius off
+/// it, where the dab and its image no longer touch.
+///
+/// Before the copies were shared out this way (`share.rs`), a dab on one
+/// plane moved the surface 1.9 to 2.0 times as far as the same dab beside
+/// it, with every brush here; a dab half a radius from two planes half as
+/// far (0.49 to 0.58 for Standard, Inflate, Crease and Flatten); and with a
+/// flat-topped falloff a dab between two planes 1.33 to 1.58 times as far.
+#[test]
+fn a_dab_is_as_strong_by_a_mirror_plane_as_anywhere_else() {
+    let mut ball = Ball::new();
+    let corner = CORNERS[0];
+    let view = corner.view(&ball.mesh);
+    let (one, two) = ([true, false, false], corner.mirror);
+    let mut failures = Failures::default();
+    for (name, brush, accumulate) in TIPS {
+        for flat_topped in [false, true] {
+            for strength in [0.1, 1.0] {
+                let (mut weakest, mut strongest) = (f32::MAX, 0.0f32);
+                for radii in [0.0, 0.125, 0.25, 0.35, 0.5, 0.75, 1.0] {
+                    // By one plane, well clear of the other; and as near to both.
+                    for (mirror, at) in [(one, corner.place(radii, 4.0)), (two, corner.place(radii, radii))] {
+                        let mut peak = |mirror| mark(&mut ball, &view, tip(brush, accumulate, strength, flat_topped, mirror), &[at], &[]).peak();
+                        let against_alone = peak(mirror) / peak([false; 3]);
+                        (weakest, strongest) = (weakest.min(against_alone), strongest.max(against_alone));
+                        let planes = if mirror == one { "one plane" } else { "two planes" };
+                        let report = format!(
+                            "{name}{}, strength {strength}, {radii} radii from {planes}: {against_alone:.3} of the dab alone",
+                            if flat_topped { ", flat-topped" } else { "" }
+                        );
+                        failures.check((0.85..=1.06).contains(&against_alone), "not as strong as alone", &report);
+                    }
+                }
+                let falloff = if flat_topped { ", flat-topped" } else { "" };
+                println!("{name}{falloff}, strength {strength}: {weakest:.2} to {strongest:.2} of the dab alone");
+            }
+        }
+    }
+    failures.none();
+}
+
+/// And so is a stroke: drawn down a mirror plane, or a quarter of a radius
+/// beside it, where it runs into its own image all the way, it builds up as
+/// high as the same stroke with no symmetry, give or take a tenth (Crease
+/// with Accumulate, which also pinches the surface in toward both strokes,
+/// a sixth more). At the strength the app starts with, where a stroke is
+/// nowhere near any limit of its own and twice the dabs would be twice the
+/// height: drawn down the plane it was 1.6 to 2.0 times as high with every
+/// brush here but Layer, and 1.3 to 1.8 times a quarter of a radius beside
+/// it.
+#[test]
+fn a_stroke_is_as_strong_by_a_mirror_plane_as_anywhere_else() {
+    let mut ball = Ball::new();
+    let corner = CORNERS[0];
+    let view = corner.view(&ball.mesh);
+    let mut failures = Failures::default();
+    for (name, brush, accumulate) in TIPS {
+        for from_plane in [0.0, 0.25] {
+            // Along the plane, well clear of where the other one would be.
+            let points: Vec<Vec3> = (0..STROKE_FRAMES)
+                .map(|frame| corner.place(from_plane, 2.5 + 3.0 * frame as f32 / (STROKE_FRAMES - 1) as f32))
+                .collect();
+            let mut peak = |mirror| mark(&mut ball, &view, tip(brush, accumulate, 0.1, false, mirror), &points, &[]).peak();
+            let against_alone = peak([true, false, false]) / peak([false; 3]);
+            let report = format!("{name}, a stroke {from_plane} radii from the plane: {against_alone:.3} of the stroke alone");
+            println!("{report}");
+            failures.check((0.9..=1.2).contains(&against_alone), "not as strong as alone", &report);
+        }
+    }
+    failures.none();
 }

@@ -155,9 +155,10 @@ pub struct Scene {
 }
 
 /// An independent copy of a mesh with everything the user can see of it: its
-/// mask, the faces hidden with the box or lasso, and the quads a quad remesh
-/// left. (Building a mesh reorders its vertices and triangles, so the hidden
-/// flags and the quads' corners are carried over through the same renumbering.)
+/// mask, the faces hidden with the box or lasso, the quads a quad remesh
+/// left, and its subdivision levels. (Building a mesh reorders its vertices
+/// and triangles, so the hidden flags, the quads' corners and the levels are
+/// carried over through the same renumbering.)
 fn duplicate(mesh: &Mesh) -> Mesh {
     duplicate_placed(mesh, mesh.positions.clone()).0
 }
@@ -167,8 +168,14 @@ fn duplicate(mesh: &Mesh) -> Mesh {
 /// mesh's vertices went in the copy.
 fn duplicate_placed(mesh: &Mesh, positions: Vec<Vec3>) -> (Mesh, Vec<u32>) {
     let hidden = mesh.hidden_triangles().unwrap_or(&[]);
-    let (mut copy, moved) =
-        Mesh::new_mapped_with_hidden(positions, mesh.indices.clone(), Some(mesh.mask.clone()), hidden);
+    let (mut copy, numbering) = Mesh::new_numbered(positions, mesh.indices.clone(), Some(mesh.mask.clone()), hidden);
+    // Its subdivision levels come too, under the copy's numbering.
+    copy.levels = mesh.levels.as_ref().and_then(|levels| levels.renumbered(&copy, &numbering));
+    // And its sculpt layers: an offset belongs to its vertex wherever the vertex is put.
+    copy.layers = mesh.layers_renumbered(&numbering.vertex);
+    // And its face groups, each face in the group it was in.
+    copy.set_group_ids(crate::mesh::groups::renumbered(mesh.group_ids(), &numbering.triangle));
+    let moved = numbering.vertex;
     if let Some(polys) = &mesh.polys {
         let corners: Vec<u32> =
             polys.indices.iter().map(|&i| moved.get(i as usize).copied().unwrap_or(u32::MAX)).collect();
@@ -815,7 +822,8 @@ impl Scene {
     pub fn keep_baseline(&mut self, slot: &Mesh) {
         let id = self.active_mesh();
         if self.baselines.get(&id).is_none_or(|b| b.uid != slot.uid) {
-            self.baselines.insert(id, Baseline { uid: slot.uid, positions: slot.positions.clone() });
+            // The model under any sculpt layers: Reset Shape puts that back and leaves the layers on it.
+            self.baselines.insert(id, Baseline { uid: slot.uid, positions: slot.model_underneath() });
         }
     }
 
@@ -837,6 +845,10 @@ impl Scene {
     /// if it is at rest already.
     pub fn reset_shape(&self, slot: &mut Mesh) -> Option<StrokeDelta> {
         let rest = slot.rest_shape(&self.baseline(slot)?.positions)?;
+        if slot.layers.is_some() {
+            // With sculpt layers it is the model underneath that goes back: the layers stay on it.
+            return slot.rest_underneath(&rest);
+        }
         let verts: Vec<u32> =
             (0..rest.len() as u32).filter(|&v| slot.positions[v as usize] != rest[v as usize]).collect();
         if verts.is_empty() {

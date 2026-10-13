@@ -4,6 +4,9 @@
 
 pub mod bvh;
 pub mod dyntopo;
+pub mod groups;
+pub mod layers;
+pub mod levels;
 mod lists;
 pub mod primitives;
 pub mod visibility;
@@ -81,6 +84,21 @@ pub struct Mesh {
 
     /// What dynamic topology keeps for this mesh (see dyntopo.rs).
     topo: dyntopo::State,
+
+    /// The mesh's subdivision levels, when it has more than one (see
+    /// levels.rs, which also says why they are kept here). A mesh built by
+    /// anything else starts without them.
+    pub levels: Option<Box<levels::MeshLevels>>,
+
+    /// The mesh's sculpt layers, when it has any (see layers.rs). `positions`
+    /// is the shape with every layer in it.
+    pub layers: Option<Box<layers::Layers>>,
+    /// How the stroke now open, or the next one, carries the layers when it
+    /// moves the model underneath them (see `layers::Ride`).
+    pub layer_ride: layers::Ride,
+
+    /// The mesh's face groups: which group each triangle is in (see groups.rs).
+    groups: groups::Groups,
 }
 
 /// Polygon faces over a mesh's own vertices: face `f`'s corners are
@@ -176,6 +194,11 @@ pub enum StrokeDelta {
         topology: Option<Box<dyntopo::TopologyDelta>>,
     },
     Mask { verts: Vec<u32>, before: Vec<f32>, after: Vec<f32> },
+    /// A `Positions` stroke on a mesh with sculpt layers, with what it did
+    /// to them: what a layer recorded of it, or how the layers' offsets were
+    /// carried when it moved the model underneath (see layers.rs). A stroke
+    /// that changed nothing of the layers is a plain `Positions`.
+    Layered { stroke: Box<StrokeDelta>, layers: Box<layers::StrokeLayers> },
 }
 
 impl StrokeDelta {
@@ -185,6 +208,7 @@ impl StrokeDelta {
                 verts.len() * 28 + topology.as_ref().map_or(0, |t| t.bytes())
             }
             StrokeDelta::Mask { verts, .. } => verts.len() * 12,
+            StrokeDelta::Layered { stroke, layers } => stroke.bytes() + layers.bytes(),
         }
     }
 }
@@ -270,6 +294,10 @@ impl Mesh {
             dirty_mask: BitSet::with_len(leaf_count),
             dirty_curv: BitSet::with_len(leaf_count),
             topo: dyntopo::State::default(),
+            levels: None,
+            layers: None,
+            layer_ride: layers::Ride::default(),
+            groups: groups::Groups::default(),
         };
         mesh.build_adjacency();
         mesh.recompute_all_normals();
@@ -570,7 +598,7 @@ impl Mesh {
             orig_nrm: SharedMut::new(&mut self.orig_nrm),
             orig_mask: SharedMut::new(&mut self.orig_mask),
             normals: &self.normals,
-            hidden: &self.hidden.verts,
+            hidden: self.hidden.kept_off(),
             stroke_id: self.stroke_id,
             in_stroke: self.in_stroke,
         };
@@ -590,7 +618,7 @@ impl Mesh {
         leaves: &[u32],
         f: impl Fn(usize, &StrokeVertex) -> Option<(Vec3, f32)> + Sync,
     ) {
-        if self.any_hidden() {
+        if self.hidden.keeps_off() {
             self.edit_leaves_as::<true>(leaves, f);
         } else {
             self.edit_leaves_as::<false>(leaves, f);
@@ -683,7 +711,7 @@ impl Mesh {
         verts: &[u32],
         f: impl Fn(usize, &StrokeVertex) -> Option<Vec3> + Sync,
     ) {
-        if self.any_hidden() {
+        if self.hidden.keeps_off() {
             self.move_listed_as::<true>(verts, f);
         } else {
             self.move_listed_as::<false>(verts, f);
@@ -733,8 +761,22 @@ impl Mesh {
     /// Ends the stroke, tightening the spatial index and returning the undo
     /// record (or `None` if nothing changed).
     pub fn end_stroke(&mut self, mask_stroke: bool) -> Option<StrokeDelta> {
+        self.end_stroke_as(mask_stroke, None)
+    }
+
+    /// [`Self::end_stroke`] for a stroke that moved the surface by a matrix
+    /// (the gizmo, reshaping what is not masked): the matrix's turn and
+    /// stretch, in the mesh's own space, so that sculpt layers can be carried
+    /// by exactly that (see layers.rs).
+    pub fn end_stroke_moved(&mut self, linear: glam::Mat3) -> Option<StrokeDelta> {
+        self.end_stroke_as(false, Some(linear))
+    }
+
+    fn end_stroke_as(&mut self, mask_stroke: bool, linear: Option<glam::Mat3>) -> Option<StrokeDelta> {
         debug_assert!(self.in_stroke);
         self.in_stroke = false;
+        // A stroke kept to its group (Stay in Group) is over: see visibility.rs.
+        self.hidden.lift_fence();
 
         // Bounds only grew during the stroke; make them exact again.
         let mut leaves = Vec::new();
@@ -761,12 +803,14 @@ impl Mesh {
                 verts,
             }
         } else {
-            StrokeDelta::Positions {
+            let delta = StrokeDelta::Positions {
                 before: verts.iter().map(|&v| self.orig_pos[v as usize]).collect(),
                 after: verts.iter().map(|&v| self.positions[v as usize]).collect(),
                 verts,
                 topology,
-            }
+            };
+            // What the stroke means for the sculpt layers, if there are any.
+            self.settle_layers(delta, linear)
         })
     }
 
@@ -953,6 +997,10 @@ impl Mesh {
                 let leaves = self.leaves_of(verts);
                 self.mask_changed(&leaves);
             }
+            StrokeDelta::Layered { stroke, layers } => {
+                self.apply_delta(stroke, undo);
+                self.apply_stroke_layers(layers, undo);
+            }
         }
     }
 
@@ -1008,5 +1056,8 @@ impl Mesh {
             + self.bvh.bytes()
             + self.hidden.bytes()
             + self.topo.bytes()
+            + self.levels.as_ref().map_or(0, |levels| levels.bytes())
+            + self.layers.as_ref().map_or(0, |layers| layers.bytes())
+            + self.groups.bytes()
     }
 }

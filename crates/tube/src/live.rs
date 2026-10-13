@@ -4,15 +4,19 @@
 
 use glam::{Mat3, Mat4, Vec3};
 use sculpt_geom::{SymmetryGroup, SymmetryOp};
-use sculpt_toolkit::{ObjectId, Placement, Preview, PreviewData};
+use sculpt_toolkit::{Hit, MeshId, ObjectId, Placement, Preview, PreviewData, Ray};
 
 use crate::field::TubeField;
 use crate::merge::{CELLS_ACROSS_RADIUS, RESOLVED_TIP_FRACTION};
-use crate::spine;
-use crate::types::{CapStyle, ControlPoint, Sample, TubePoint, TubeSettings};
+use crate::types::{ControlPoint, Kind, Sample, TubePoint, TubeSettings};
+use crate::{muscle, spine};
 
 /// The preview lattice: this many cells per tube radius.
 const PREVIEW_CELLS_ACROSS_RADIUS: f32 = 5.0;
+/// A muscle's preview lattice: this many cells across half its depth, and no finer than its tips need
+/// down to this fraction of that.
+const MUSCLE_CELLS_ACROSS_DEPTH: f32 = 3.5;
+const MUSCLE_TIP_FRACTION: f32 = 0.6;
 /// Most samples a preview lattice holds; past it the preview coarsens rather
 /// than stall a drag. Merge and Keep Separate build finer.
 pub const PREVIEW_MAX_SAMPLES: usize = 3_000_000;
@@ -70,7 +74,13 @@ impl Frame {
             // inverse of the inverse-transpose they went out through).
             normal = op.apply_inverse(Mat3::from_mat4(local_to_world).transpose() * world_normal).normalize_or_zero();
         }
-        TubePoint { position: op.apply_inverse_point(local), surface_normal: normal, size, sharp }
+        TubePoint { position: op.apply_inverse_point(local), surface_normal: normal, facing: Vec3::ZERO, size, sharp }
+    }
+
+    /// A world direction as one in the tube's own space, through the inverse of copy `op`: the way a
+    /// floating point of a muscle faces.
+    pub fn to_tube_direction(&self, op: &SymmetryOp, world: Vec3) -> Vec3 {
+        op.apply_inverse(Mat3::from_mat4(self.local_to_world()).transpose() * world).normalize_or_zero()
     }
 }
 
@@ -171,28 +181,34 @@ impl TubeCopy {
 #[derive(Clone, Debug, PartialEq)]
 struct Built {
     points: Vec<TubePoint>,
-    radius: f32,
-    taper: f32,
-    flip_taper: bool,
-    caps: CapStyle,
-    smoothness: f32,
+    shape: TubeSettings,
     frame: Frame,
     symmetry: Symmetry,
+    ground: Option<Ground>,
+}
+
+/// Which mesh a muscle was laid on: its anchor's, and how many vertices it had. A mesh put in the
+/// anchor's place (a merge, a remesh) is another one; one that was only reshaped is the same one, and
+/// [`LiveTube::lay_again`] is for that.
+pub type Ground = (MeshId, usize);
+
+/// The settings with the ones that do not change the shape put aside.
+fn shape_of(settings: &TubeSettings) -> TubeSettings {
+    TubeSettings { blend: 0.0, on_surface: false, ..*settings }
 }
 
 impl Built {
-    fn matches(&self, state: &TubeState, frame: Frame, symmetry: Symmetry) -> bool {
-        let s = &state.settings;
+    fn matches(&self, state: &TubeState, frame: Frame, symmetry: Symmetry, ground: Option<Ground>) -> bool {
         self.frame == frame
             && self.symmetry == symmetry
-            && self.radius == s.radius
-            && self.taper == s.taper
-            && self.flip_taper == s.flip_taper
-            && self.caps == s.caps
-            && self.smoothness == s.smoothness
+            && self.ground == ground
+            && self.shape == shape_of(&state.settings)
             && self.points == state.points
     }
 }
+
+/// Where a world ray meets the object a tube was drawn on.
+pub type Cast<'a> = &'a dyn Fn(&Ray) -> Option<Hit>;
 
 pub struct LiveTube {
     pub state: TubeState,
@@ -229,36 +245,60 @@ impl LiveTube {
     /// world-space handles and curves, unless what they were last built from
     /// is unchanged. `symmetry` is the anchor's own: its mirror axes and
     /// radial repeats.
-    pub fn build(&mut self, frame: Frame, symmetry: Symmetry) {
-        if self.built.as_ref().is_some_and(|b| b.matches(&self.state, frame, symmetry)) {
+    ///
+    /// A muscle is laid on its anchor between its points, which takes `cast` to find the anchor's
+    /// surface, and `ground` to say which mesh that surface is. It is laid when it is built, so it
+    /// follows its points, its anchor's placement and a new mesh in its anchor's place; after the
+    /// anchor has been reshaped it has to be asked ([`Self::lay_again`]).
+    pub fn build(&mut self, frame: Frame, symmetry: Symmetry, cast: Option<Cast>, ground: Option<Ground>) {
+        let ground = ground.filter(|_| self.state.settings.kind == Kind::Muscle);
+        if self.built.as_ref().is_some_and(|b| b.matches(&self.state, frame, symmetry, ground)) {
             return;
         }
+        let laid_on = ground;
         let group = symmetry.group();
         let local_to_frame = frame.local_to_frame();
         let frame_to_world = frame.frame_to_world();
+        let world_to_frame = frame_to_world.inverse();
+        let surface = |at: Vec3, up: Vec3, reach: f32| {
+            let ray = Ray::new(frame_to_world.transform_point3(at + up * reach), frame_to_world.transform_vector3(-up));
+            let hit = cast.and_then(|cast| cast(&ray)).filter(|hit| hit.distance <= 2.0 * reach)?;
+            Some((world_to_frame.transform_point3(hit.position), world_to_frame.transform_vector3(hit.normal)))
+        };
+        let muscle = self.state.settings.kind == Kind::Muscle;
         self.copies = group
             .iter()
             .map(|op| {
-                let (controls, samples) = spine::sample(&self.state.points, &self.state.settings, &local_to_frame, op);
+                let (points, settings) = (&self.state.points, &self.state.settings);
+                let (controls, samples) = if muscle {
+                    let surface: Option<muscle::Ground> = if cast.is_some() { Some(&surface) } else { None };
+                    muscle::sample(points, settings, &local_to_frame, op, surface)
+                } else {
+                    spine::sample(points, settings, &local_to_frame, op)
+                };
                 let handle_world = controls.iter().map(|c| frame_to_world.transform_point3(c.position)).collect();
                 let curve_world = samples.iter().map(|s| frame_to_world.transform_point3(s.center)).collect();
                 TubeCopy { op: *op, controls, samples, handle_world, curve_world }
             })
             .collect();
-        let s = &self.state.settings;
         self.built = Some(Built {
             points: self.state.points.clone(),
-            radius: s.radius,
-            taper: s.taper,
-            flip_taper: s.flip_taper,
-            caps: s.caps,
-            smoothness: s.smoothness,
+            shape: shape_of(&self.state.settings),
             frame,
             symmetry,
+            ground: laid_on,
         });
         self.frame = frame;
         self.symmetry = symmetry;
         self.preview_current = false;
+    }
+
+    /// The surface under the muscle may have changed shape: lay it on it afresh at the next build.
+    /// Nothing to a tube, which only touches the surface at its points.
+    pub fn lay_again(&mut self) {
+        if self.state.settings.kind == Kind::Muscle && self.state.anchor.is_some() {
+            self.built = None;
+        }
     }
 
     /// Every copy's round cones, in the tube's frame.
@@ -293,9 +333,18 @@ impl LiveTube {
             self.preview.clear();
             return;
         }
-        let r = self.state.settings.radius;
-        let floor = field.min_radius().max(r * RESOLVED_TIP_FRACTION);
-        let cell = (r / PREVIEW_CELLS_ACROSS_RADIUS).min(floor / CELLS_ACROSS_RADIUS);
+        let settings = &self.state.settings;
+        let r = settings.radius;
+        let cell = if settings.kind == Kind::Muscle {
+            // A muscle is as thin as its depth, not its width: the lattice follows that, so a flat
+            // strap is still a few cells through.
+            let thin = settings.thin_radius();
+            let floor = field.min_radius().max(thin * MUSCLE_TIP_FRACTION);
+            (thin / MUSCLE_CELLS_ACROSS_DEPTH).min(floor / CELLS_ACROSS_RADIUS)
+        } else {
+            let floor = field.min_radius().max(r * RESOLVED_TIP_FRACTION);
+            (r / PREVIEW_CELLS_ACROSS_RADIUS).min(floor / CELLS_ACROSS_RADIUS)
+        };
         let Ok(built) = field.voxelize(cell, self.symmetry.exact_planes(), PREVIEW_MAX_SAMPLES) else {
             self.preview.clear();
             return;

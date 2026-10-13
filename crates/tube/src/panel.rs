@@ -8,9 +8,10 @@ use sculpt_toolkit::theme::{self, ACCENT, ButtonStyle};
 use sculpt_toolkit::{Ctx, Env};
 
 use crate::tool::TubeTool;
-use crate::types::{CapStyle, TubeSettings};
+use crate::types::{CapStyle, Kind, TubeSettings};
 
 const ACCENT_TUBE: Color32 = Color32::from_rgb(255, 163, 56);
+const ACCENT_MUSCLE: Color32 = Color32::from_rgb(226, 104, 92);
 
 /// The radius slider works on a log scale: tubes run from threads to trunks.
 const MIN_LOG_RADIUS: f32 = -7.0;
@@ -72,36 +73,56 @@ fn pair(ui: &mut egui::Ui, cx: &Ctx, first_on: bool, labels: [&str; 2], tips: [&
 impl TubeTool {
     pub(crate) fn show_panel(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
         self.now = cx.time;
+        let kind = self.kind();
+        let muscle = kind == Kind::Muscle;
+        let (one, title) = (kind.one(), kind.title());
+        let key = if muscle { "B" } else { "T" };
         let count = self.tube_count();
         let summary = if count == 0 { String::new() } else { format!("{count} live") };
-        theme::category(ui, "Tube", ACCENT_TUBE, &summary, true, |ui| {
+        theme::category(ui, title, if muscle { ACCENT_MUSCLE } else { ACCENT_TUBE }, &summary, true, |ui| {
             self.finish_rows(ui, cx);
-            self.shape_controls(ui, cx);
+            if muscle {
+                self.muscle_controls(ui, cx);
+            } else {
+                self.shape_controls(ui, cx);
+            }
             self.point_controls(ui, cx);
             self.edit_rows(ui, cx);
-            let style = ButtonStyle { badge: "T", ..Default::default() };
+            let style = ButtonStyle { badge: key, ..Default::default() };
             let r = theme::button(ui, ui.available_width(), "Back to Sculpt", style);
-            if theme::tip(r, cx.tips, "Put the tube tool away (T). Live tubes are still there next time.").clicked() {
+            let help = format!("Put the {one} tool away ({key}). Live {} are still there next time.", kind.many());
+            if theme::tip(r, cx.tips, &help).clicked() {
                 cx.finish();
             }
         });
-        theme::category(ui, "Tube Shortcuts", Color32::from_rgb(230, 204, 102), "", false, |ui| {
+        theme::category(ui, &format!("{title} Shortcuts"), Color32::from_rgb(230, 204, 102), "", false, |ui| {
+            let draw = format!("Draw a {one}");
+            let extend = format!("Extend the {one}");
+            let add = format!("Click the {one}");
+            let size = format!("Size point, else {one}");
+            let delete = format!("Delete point, else {one}");
+            let history = format!("Undo / redo the {}", kind.many());
+            let (from, mid_air) = if muscle {
+                ("Drag across the model", "Draw floating, anywhere")
+            } else {
+                ("Drag from the model", "Draw in mid-air")
+            };
             theme::shortcuts(
                 ui,
                 &[
-                    ("Drag from the model", "Draw a tube"),
-                    ("Ctrl + drag", "Draw in mid-air"),
+                    (from, draw.as_str()),
+                    ("Ctrl + drag", mid_air),
                     ("Drag a point", "Move it"),
-                    ("Shift + drag an end", "Extend the tube"),
-                    ("Click the tube", "Add a point"),
+                    ("Shift + drag an end", extend.as_str()),
+                    (add.as_str(), "Add a point"),
                     ("Double-click a point", "Sharp / smooth"),
                     ("Right-click a point", "Delete it"),
                     ("Drag the square", "Thicker / thinner there"),
                     ("Wheel over a point", "Thicker / thinner"),
-                    ("S + move sideways", "Size point, else tube"),
-                    ("Delete", "Delete point, else tube"),
+                    ("S + move sideways", size.as_str()),
+                    ("Delete", delete.as_str()),
                     ("Enter", "Merge"),
-                    ("Z / Shift + Z", "Undo / redo the tubes"),
+                    ("Z / Shift + Z", history.as_str()),
                     ("Esc", "Cancel, deselect, leave"),
                     ("Drag on background", "Orbit"),
                 ],
@@ -113,22 +134,28 @@ impl TubeTool {
     /// Merge and Keep Separate, then what they and everything else last
     /// said.
     fn finish_rows(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
+        let kind = self.kind();
+        let (one, many) = (kind.one(), kind.many());
         let (count, mergeable) = (self.tube_count(), self.mergeable_count());
         let merging = self.is_merging();
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 2, 6.0);
             ui.add_enabled_ui(mergeable > 0 && !merging, |ui| {
                 let style = ButtonStyle { active: Some(ACCENT()), badge: "Enter", ..Default::default() };
-                let help = "Fuses every live tube into the object it was drawn on: one solid surface with a smooth join. \
-                            The object is rebuilt at its current density. Undo (Z) gives the tubes back.";
-                if theme::tip(theme::button(ui, w, "Merge", style), cx.tips, help).clicked() {
+                let help = format!(
+                    "Fuses every live {one} into the object it was drawn on: one solid surface with a smooth join. The \
+                     object is rebuilt at its current density. Undo (Z) gives the {many} back."
+                );
+                if theme::tip(theme::button(ui, w, "Merge", style), cx.tips, &help).clicked() {
                     self.merge_all(cx);
                 }
             });
             ui.add_enabled_ui(count > 0 && !merging, |ui| {
-                let help = "Makes each live tube its own sculptable object, placed with the object it was drawn on. \
-                            Undo (Z) gives the tubes back.";
-                if theme::tip(theme::button(ui, w, "Keep Separate", ButtonStyle::default()), cx.tips, help).clicked() {
+                let help = format!(
+                    "Makes each live {one} its own sculptable object, placed with the object it was drawn on. Undo (Z) \
+                     gives the {many} back."
+                );
+                if theme::tip(theme::button(ui, w, "Keep Separate", ButtonStyle::default()), cx.tips, &help).clicked() {
                     self.keep_separate(cx);
                 }
             });
@@ -136,25 +163,25 @@ impl TubeTool {
         if let Some(progress) = self.finish.progress() {
             theme::line(ui, &format!("Merging: {progress}"), theme::OK);
             let r = theme::button(ui, ui.available_width(), "Cancel Merge", ButtonStyle { badge: "Esc", ..Default::default() });
-            if theme::tip(r, cx.tips, "Stops the merge. The tubes stay live.").clicked() {
+            if theme::tip(r, cx.tips, &format!("Stops the merge. The {many} stay live.")).clicked() {
                 self.cancel_merge();
             }
         } else if !self.status.is_empty() {
             theme::line(ui, &self.status, theme::OK);
         } else {
-            theme::hint(ui, "Drag from the model to grow a tube out of it.");
+            theme::hint(ui, self.invitation());
         }
         let line = match count {
-            0 => "No live tubes.".to_owned(),
+            0 => format!("No live {many}."),
             _ if mergeable < count => {
-                format!("{count} live tube{}, {} in empty space (Keep Separate only).", plural(count), count - mergeable)
+                format!("{count} live {one}{}, {} in empty space (Keep Separate only).", plural(count), count - mergeable)
             }
-            _ => format!("{count} live tube{}.", plural(count)),
+            _ => format!("{count} live {one}{}.", plural(count)),
         };
         theme::line(ui, &line, theme::HINT());
         if let Some(symmetry) = symmetry_summary(cx) {
             let text = format!(
-                "Symmetry of the selected object: {symmetry}. A tube is made under the symmetry of the object it is \
+                "Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is \
                  drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's)."
             );
             theme::hint(ui, &text);
@@ -228,7 +255,99 @@ impl TubeTool {
         theme::tip(r, cx.tips, help);
     }
 
+    /// A muscle's placement and shape. They edit the selected muscle, and always the next one drawn.
+    fn muscle_controls(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
+        let settings = self.settings();
+        let percent = |v: f32| format!("{:.0}%", v * 100.0);
+
+        theme::heading(ui, "Placement");
+        let tips = [
+            "The muscle lies on the model along its whole length, sunk in by Depth. A stroke that starts just off the \
+             model is pulled onto it. Dragged points slide over the surface.",
+            "The muscle floats on its own, drawn on a plane facing you: in front of the model where the stroke starts \
+             on it, or anywhere with Ctrl. A dragged point lifts off the surface and floats too.",
+        ];
+        if let Some(i) = pair(ui, cx, self.on_surface(), ["On Surface", "Free"], tips) {
+            self.set_on_surface(i == 0);
+        }
+
+        theme::heading(ui, "Shape");
+        let unit = cx.unit;
+        let label = if self.active_tube().is_some() { "Width" } else { "Width (next muscle)" };
+        let mut log_radius = settings.radius.max(TubeSettings::MIN_RADIUS).ln();
+        let r = theme::slider(ui, label, &mut log_radius, MIN_LOG_RADIUS..=MAX_LOG_RADIUS, |v| {
+            units::format(2.0 * v.exp(), unit, true)
+        });
+        if r.changed() {
+            self.set_radius(log_radius.exp());
+        }
+        let help = "How wide the selected muscle is at its belly (and the next one you draw). Hold S and move sideways in \
+                    the viewport for the same.";
+        theme::tip(r, cx.tips, help);
+
+        let mut swell = settings.swell;
+        let r = theme::slider(ui, "Swell", &mut swell, 0.0..=1.0, percent);
+        if r.changed() {
+            self.set_swell(swell);
+        }
+        theme::tip(r, cx.tips, "How full the muscle is: low is a lean spindle, high stays wide almost to its ends.");
+
+        let mut belly = settings.belly;
+        let r = theme::slider(ui, "Belly", &mut belly, 0.1..=0.9, percent);
+        if r.changed() {
+            self.set_belly(belly);
+        }
+        theme::tip(r, cx.tips, "Where along the muscle its widest part sits: 50% is the middle.");
+
+        let mut taper = settings.taper;
+        let r = theme::slider(ui, "Taper", &mut taper, 0.0..=1.0, percent);
+        if r.changed() {
+            self.set_taper(taper);
+        }
+        theme::tip(r, cx.tips, "How thin the two ends are: 0 is as wide as the belly, 100% comes to a point.");
+
+        let mut flatten = settings.flatten;
+        let r = theme::slider(ui, "Thickness", &mut flatten, TubeSettings::MIN_FLATTEN..=1.0, |v| {
+            if v >= 0.995 { "round".to_owned() } else { format!("{:.0}% of width", v * 100.0) }
+        });
+        if r.changed() {
+            self.set_flatten(flatten);
+        }
+        theme::tip(r, cx.tips, "How deep the muscle is for its width: low is a flat strap, 100% is round.");
+
+        let mut depth = settings.depth;
+        let r = theme::slider(ui, "Depth", &mut depth, 0.0..=TubeSettings::MAX_DEPTH, |v| {
+            if v <= 0.02 { "on top".to_owned() } else { format!("{:.0}% sunk", v * 100.0) }
+        });
+        if r.changed() {
+            self.set_depth(depth);
+        }
+        let help = "How far the muscle is sunk into the model: from resting on top to grown out of it. Only where it lies \
+                    on the surface.";
+        theme::tip(r, cx.tips, help);
+
+        let mut smoothness = settings.smoothness;
+        let r = theme::slider(ui, "Smoothness", &mut smoothness, 0.0..=1.0, percent);
+        if r.changed() {
+            self.set_smoothness(smoothness);
+        }
+        let help = "How the muscle flows between its points: low is straight runs with a kink at each point, high is \
+                    loose, round curves. Never moves a point.";
+        theme::tip(r, cx.tips, help);
+
+        let mut blend = settings.blend;
+        let readout = |v: f32| if v <= 0.0 { "crisp seam".to_owned() } else { format!("{v:.2}x height") };
+        let r = theme::slider(ui, "Blend", &mut blend, 0.0..=TubeSettings::MAX_BLEND, readout);
+        if r.changed() {
+            self.set_blend(blend);
+        }
+        let help = "How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. \
+                    Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.";
+        theme::tip(r, cx.tips, help);
+    }
+
     fn point_controls(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
+        let one = self.kind().one();
         theme::heading(ui, "Selected Point");
         let selected = self.selected_point().is_some();
         let sharp = self.selected_is_sharp();
@@ -245,9 +364,11 @@ impl TubeTool {
             if r.changed() {
                 self.set_selected_point_size(log_size.exp());
             }
-            let help = "Thickness at the selected point, as a multiple of the tube's radius. Dragging the point's square \
-                        handle, or the wheel over the point, does the same.";
-            theme::tip(r, cx.tips, help);
+            let help = format!(
+                "Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square \
+                 handle, or the wheel over the point, does the same."
+            );
+            theme::tip(r, cx.tips, &help);
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, 2, 6.0);
                 let label = if sharp { "Make Smooth" } else { "Make Sharp" };
@@ -267,16 +388,19 @@ impl TubeTool {
     }
 
     fn edit_rows(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
+        let kind = self.kind();
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 3, 6.0);
             let small = || ButtonStyle { height: 24.0, ..Default::default() };
             ui.add_enabled_ui(self.active_tube().is_some(), |ui| {
-                if theme::tip(theme::button(ui, w, "Delete Tube", small()), cx.tips, "Removes the selected tube.").clicked() {
+                let (label, help) = (self.label("Delete Tube", "Delete"), format!("Removes the selected {}.", kind.one()));
+                if theme::tip(theme::button(ui, w, label, small()), cx.tips, &help).clicked() {
                     self.delete_active_tube();
                 }
             });
             ui.add_enabled_ui(self.can_undo(), |ui| {
-                if theme::tip(theme::button(ui, w, "Undo", small()), cx.tips, "Undoes the last tube edit (Z).").clicked() {
+                let help = format!("Undoes the last {} edit (Z).", kind.one());
+                if theme::tip(theme::button(ui, w, "Undo", small()), cx.tips, &help).clicked() {
                     self.undo();
                 }
             });
@@ -288,7 +412,7 @@ impl TubeTool {
         });
         match self.next_undo_label() {
             Some(label) => theme::hint(ui, &format!("Undo (Z): {label}")),
-            None => theme::hint(ui, "Tube history empty."),
+            None => theme::hint(ui, &format!("{} history empty.", kind.title())),
         }
     }
 }

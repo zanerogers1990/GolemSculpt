@@ -14,6 +14,10 @@
 //! the files: the bug this guards against was the old scene saved over the
 //! file that had just been opened.
 //!
+//! One case is about how the scene is seen, not its file: an opened file
+//! brings its own look and view, and Undo of the Open has to give the scene
+//! from before its own back (`Running::seen_stepped`).
+//!
 //! Nothing here asks the user anything: Save is taken as far as the box it
 //! would put up, and no further (`save_target`).
 
@@ -29,6 +33,12 @@ use crate::{io, prefs, recovery, unity_import};
 
 fn say(what: &str, ok: bool) {
     println!("{} {what}", if ok { "ok  " } else { "FAIL" });
+}
+
+/// Whether two scenes are seen alike: the same shading, look, mirror guides
+/// and view, as a file would keep them (`Running::seen`).
+fn seen_alike(a: &io::Details, b: &io::Details) -> bool {
+    [io::slot::SHADING, io::slot::LOOK, io::slot::MIRROR, io::slot::CAMERA].iter().all(|slot| a.same(b, slot))
 }
 
 /// The fingerprint of the scene a file holds; 0 for a file that does not read.
@@ -144,6 +154,7 @@ impl Running {
         self.from_unsaved_changes(&files);
         self.with_edits_about(&files);
         self.with_a_save_as_between(&files);
+        self.with_a_look_and_a_view_of_its_own(&files);
         self.adding_leaves_the_file_alone(&files);
         if let Some(sculpt) = start.0.clone().filter(|path| unity_import::is_unity(path)) {
             self.over_a_unity_sculpt(&files, &sculpt);
@@ -279,6 +290,43 @@ impl Running {
         say("which now holds the other scene, so the first counts as unsaved", overwritten);
         let saved = self.save_unasked();
         say("and Save puts it back in its file", saved.is_some() && print_of(&files.first) == first && !self.unsaved());
+    }
+
+    /// A scene that has been given a colour, a finish and a view of its own,
+    /// then an Open: the opened file comes with the look and view it was
+    /// saved with. Undo of the Open gives the scene from before its own
+    /// back, and Redo the file's, as often as the step is crossed.
+    fn with_a_look_and_a_view_of_its_own(&mut self, files: &Files) {
+        self.first_open(files);
+        let as_opened = self.seen();
+        self.doc.camera.yaw += 70.0;
+        self.doc.camera.distance *= 1.6;
+        let opts = &mut self.doc.opts;
+        (opts.base_color, opts.smoothness, opts.flat_shading) = ([0.2, 0.5, 0.3], 0.15, !opts.flat_shading);
+        (opts.look.metallic, opts.look.brightness) = (0.85, opts.look.brightness * 0.5);
+        opts.symmetry_guides = !opts.symmetry_guides;
+        let own = self.seen();
+        say("(set up) the scene has a look and a view unlike its file's", !seen_alike(&own, &as_opened));
+
+        self.load(files.second.clone(), true);
+        let files_own = self.seen();
+        say("an opened file comes with the look and the view it was saved with", !seen_alike(&files_own, &own));
+        self.act(Action::Undo);
+        say("Undo of the Open: the scene from before has its own look and view back", seen_alike(&self.seen(), &own));
+        self.act(Action::Redo);
+        say("Redo: the opened file's look and view again", seen_alike(&self.seen(), &files_own));
+        self.act(Action::Undo);
+        say("and Undo once more: the first scene's own again", seen_alike(&self.seen(), &own));
+        // A step that is not an Open leaves the look and the view alone.
+        // (The mirror guides' slot names the selected object's axes beside
+        // them, and Undo of a new object changes which is selected.)
+        self.edit();
+        self.doc.camera.yaw += 15.0;
+        let turned = self.seen();
+        self.act(Action::Undo);
+        let now = self.seen();
+        let same = [io::slot::SHADING, io::slot::LOOK, io::slot::CAMERA].iter().all(|slot| now.same(&turned, slot));
+        say("Undo of an ordinary step leaves the look and the view where they are", same);
     }
 
     /// Import adds to the scene: the file stays the scene's own, both ways.

@@ -45,6 +45,9 @@ use crate::mesh::{Mesh, Polys};
 pub type Result<T> = std::result::Result<T, String>;
 
 mod fbx;
+mod groups;
+mod layers;
+mod levels;
 mod link;
 mod tool_data;
 mod repair;
@@ -55,6 +58,8 @@ mod damage_tests;
 use fbx::export_fbx;
 pub use fbx::export_fbx_objects;
 pub use link::{LINK_ENDING, LinkObject, LinkPackage, read_link_package, write_link_package};
+pub use groups::imported_mesh;
+pub use layers::Lost;
 pub use repair::{note_saved, notes_opened};
 
 /// A model as read from a file, already in the app's axes and units.
@@ -65,6 +70,9 @@ pub struct RawMesh {
     /// it. An OBJ's units are anyone's guess, so it is fitted to the scene
     /// instead: see [`place_import`].
     pub real_size: bool,
+    /// The face group of each triangle, where the file named groups (an
+    /// OBJ's `g` lines: see `io/groups.rs`); empty otherwise.
+    pub groups: Vec<u16>,
 }
 
 pub fn import(path: &Path) -> Result<RawMesh> {
@@ -89,9 +97,11 @@ fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
     let mut positions: Vec<Vec3> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut face: Vec<u32> = Vec::new();
+    let mut named = groups::ObjGroups::default();
     for line in text.lines() {
         let mut parts = line.split_ascii_whitespace();
         match parts.next() {
+            Some("g") => named.named(line),
             Some("v") => {
                 let mut c = [0.0f32; 3];
                 for slot in &mut c {
@@ -114,13 +124,16 @@ fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
                 // Fan-triangulate polygons.
                 for k in 1..face.len().saturating_sub(1) {
                     indices.extend_from_slice(&[face[0], face[k], face[k + 1]]);
+                    named.triangle();
                 }
             }
             _ => {}
         }
     }
     let (positions, indices) = weld_exact(positions, indices);
-    Ok(tidy(positions, indices, false))
+    // The groups of the triangles `tidy` is about to keep.
+    let groups = named.ids(|t| sound_triangle(&positions, &indices[t * 3..t * 3 + 3]));
+    Ok(RawMesh { groups, ..tidy(positions, indices, false) })
 }
 
 // ---------------------------------------------------------------- STL axes
@@ -400,8 +413,7 @@ fn tidy(positions: Vec<Vec3>, indices: Vec<u32>, real_size: bool) -> RawMesh {
     let mut used = vec![false; positions.len()];
     let mut kept = Vec::with_capacity(indices.len());
     for t in indices.chunks_exact(3) {
-        let sound = t[0] != t[1] && t[1] != t[2] && t[0] != t[2] && t.iter().all(|&i| positions[i as usize].is_finite());
-        if sound {
+        if sound_triangle(&positions, t) {
             kept.extend_from_slice(t);
             for &i in t {
                 used[i as usize] = true;
@@ -419,7 +431,12 @@ fn tidy(positions: Vec<Vec3>, indices: Vec<u32>, real_size: bool) -> RawMesh {
     for i in &mut kept {
         *i = new_id[*i as usize];
     }
-    RawMesh { positions: out, indices: kept, real_size }
+    RawMesh { positions: out, indices: kept, real_size, groups: Vec::new() }
+}
+
+/// Whether [`tidy`] keeps triangle `t`: three different corners, each a number.
+fn sound_triangle(positions: &[Vec3], t: &[u32]) -> bool {
+    t[0] != t[1] && t[1] != t[2] && t[0] != t[2] && t.iter().all(|&i| positions[i as usize].is_finite())
 }
 
 /// Readies a freshly imported model to be added as an object, the way the
@@ -472,6 +489,14 @@ pub fn place_import(raw: &mut RawMesh, first_half_size: Option<Vec3>) -> Vec3 {
 //         (u32, one more of them than faces), the corners (u32 each).
 //   HIDE  after its mesh, if any of its faces are hidden: the mesh's number
 //         (u32), then a byte per triangle, 1 for hidden.
+//   LVLS  after its mesh, if it has subdivision levels: the mesh's number
+//         (u32), then what `io/levels.rs` sets out. The mesh itself is the
+//         level that was current.
+//   LAYR  after its mesh, if it has sculpt layers: the mesh's number (u32),
+//         then what `io/layers.rs` sets out. The mesh itself is the finished
+//         shape, with every layer in it.
+//   GRPS  after its mesh, if it has face groups: the mesh's number (u32),
+//         then what `io/groups.rs` sets out: the group of every triangle.
 //   INFO  last, once: everything else, as JSON (see `Details`). What a hosted
 //         tool keeps for an object (an array) is a field of that object's
 //         entry named by the tool's id: see `io/tool_data.rs`.
@@ -499,6 +524,9 @@ const MESH: &[u8; 4] = b"MESH";
 const MASK: &[u8; 4] = b"MASK";
 const QUAD: &[u8; 4] = b"QUAD";
 const HIDE: &[u8; 4] = b"HIDE";
+const LVLS: &[u8; 4] = b"LVLS";
+const LAYR: &[u8; 4] = b"LAYR";
+const GRPS: &[u8; 4] = b"GRPS";
 const INFO: &[u8; 4] = b"INFO";
 
 // ---- writing a file without harming the one already there
@@ -700,6 +728,11 @@ impl Details {
         if let Ok(value) = serde_json::to_value(value) {
             self.scene.insert(slot.to_owned(), value);
         }
+    }
+
+    /// Whether `other` keeps the very same under `slot`, or nothing as this does.
+    pub fn same(&self, other: &Details, slot: &str) -> bool {
+        self.scene.get(slot) == other.scene.get(slot)
     }
 
     /// What the file kept under `slot`, if it kept anything that reads.
@@ -922,6 +955,9 @@ pub struct SavedScene {
     /// How many triangles the file held that could not be used, and were
     /// left out as its meshes were built (see [`stray_triangles`]).
     pub left_out: usize,
+    /// How many meshes had subdivision levels, or sculpt layers, in the file
+    /// that could not be read. The meshes themselves are whole.
+    pub lost: Lost,
 }
 
 /// How many triangles of a mesh read from a file cannot be used: each one
@@ -1077,6 +1113,18 @@ fn write_scene(w: &mut impl Write, meshes: &[&Mesh], info: &[u8]) -> std::io::Re
             w.write_all(&number)?;
             w.write_all(&flags)?;
         }
+        if let Some(saved) = mesh.levels.as_ref().map(|levels| levels.saved()) {
+            block(w, LVLS, levels::length(&saved))?;
+            levels::write(w, u32::from_le_bytes(number), &saved)?;
+        }
+        if let Some(saved) = mesh.layers.as_ref().map(|layers| layers.saved(None)) {
+            block(w, LAYR, layers::length(&saved))?;
+            layers::write(w, u32::from_le_bytes(number), &saved)?;
+        }
+        if let Some(saved) = groups::saved(mesh) {
+            block(w, GRPS, groups::length(&saved))?;
+            groups::write(w, u32::from_le_bytes(number), &saved)?;
+        }
     }
     block(w, INFO, info.len())?;
     w.write_all(info)
@@ -1092,6 +1140,15 @@ struct LoadedMesh {
     polys: Option<Polys>,
     /// One flag per triangle of `indices`, where any are hidden.
     hidden: Option<Vec<bool>>,
+    /// The mesh's subdivision levels, if it was saved with any.
+    levels: Option<crate::mesh::levels::SavedLevels>,
+    /// The mesh's sculpt layers, if it was saved with any.
+    layers: Option<crate::mesh::layers::SavedLayers>,
+    /// The mesh's face groups, if it was saved with any.
+    groups: Option<groups::SavedGroups>,
+    /// Whether the file had levels, layers, and face groups, for this mesh
+    /// that could not be read.
+    lost: [bool; 3],
 }
 
 impl LoadedMesh {
@@ -1099,7 +1156,14 @@ impl LoadedMesh {
     /// how many triangles could not be used and were left out: a file is
     /// never refused for a point that is not a number, or for a triangle
     /// that names a point it does not hold.
-    fn build(mut self) -> (Mesh, usize, usize) {
+    fn build(self) -> (Mesh, usize, usize) {
+        let (mesh, repaired, left_out, _) = self.build_noting();
+        (mesh, repaired, left_out)
+    }
+
+    /// [`Self::build`], also saying whether the mesh's levels, its layers
+    /// and its face groups were lost on the way.
+    fn build_noting(mut self) -> (Mesh, usize, usize, [bool; 3]) {
         let mut no_mask = Vec::new();
         let repaired = repair::repair_points(
             &mut self.positions,
@@ -1107,7 +1171,12 @@ impl LoadedMesh {
             self.mask.as_deref_mut().unwrap_or(&mut no_mask),
         );
         let left_out = stray_triangles(&self.indices, self.positions.len());
-        (self.build_sound(), repaired, left_out)
+        if self.levels.is_some() || self.layers.is_some() || self.groups.is_some() {
+            let (mesh, lost) = levels::build(self);
+            return (mesh, repaired, left_out, lost);
+        }
+        let lost = self.lost;
+        (self.build_sound(), repaired, left_out, lost)
     }
 
     fn build_sound(self) -> Mesh {
@@ -1165,11 +1234,14 @@ impl Loaded {
     /// Builds the meshes (their spatial index, adjacency and normals: the
     /// slow part of opening a large scene), several at once.
     fn into_scene(self) -> SavedScene {
-        let built: Vec<(Mesh, usize, usize)> = self.meshes.into_par_iter().map(LoadedMesh::build).collect();
-        let repaired = built.iter().map(|(_, points, _)| points).sum();
-        let left_out = built.iter().map(|(.., triangles)| triangles).sum();
+        let built: Vec<_> = self.meshes.into_par_iter().map(LoadedMesh::build_noting).collect();
+        let repaired = built.iter().map(|(_, points, ..)| points).sum();
+        let left_out = built.iter().map(|(_, _, triangles, _)| triangles).sum();
+        let count = |which: usize| built.iter().filter(|(.., lost)| lost[which]).count();
+        let lost = Lost { levels: count(0), layers: count(1), groups: count(2) };
         let meshes = built.into_iter().map(|(mesh, ..)| mesh).collect();
-        SavedScene { meshes, objects: self.objects, active: self.active, details: self.details, repaired, left_out }
+        let (objects, active, details) = (self.objects, self.active, self.details);
+        SavedScene { meshes, objects, active, details, repaired, left_out, lost }
     }
 }
 
@@ -1205,7 +1277,8 @@ fn read_mesh(r: &mut impl Read, length: u64) -> Option<LoadedMesh> {
     }
     let positions = read_array::<Vec3>(r, verts as usize).ok()?;
     let indices = read_array::<u32>(r, indices as usize).ok()?;
-    Some(LoadedMesh { positions, indices, mask: None, polys: None, hidden: None })
+    let (levels, layers, groups, lost) = (None, None, None, [false; 3]);
+    Some(LoadedMesh { positions, indices, mask: None, polys: None, hidden: None, levels, layers, groups, lost })
 }
 
 /// The body of a `QUAD` block, and the mesh it belongs to.
@@ -1292,6 +1365,27 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
             }
             let flags: Vec<u8> = read_array(&mut r, triangles).map_err(|_| bad())?;
             mesh.hidden = Some(flags.iter().map(|&flag| flag != 0).collect());
+        } else if tag == LVLS || tag == LAYR || tag == GRPS {
+            // Read through a counter, so that a block this version cannot
+            // make sense of is stepped over like any unknown one: the mesh
+            // opens without its levels (or with its layers part of its
+            // shape), the rest of the file is intact, and the mesh is marked
+            // so that the sculptor can be told.
+            let mut body = (&mut r).take(length);
+            let number = read_u32(&mut body).map(|number| number as usize);
+            if let Some(mesh) = number.and_then(|number| meshes.get_mut(number)) {
+                if tag == LVLS {
+                    mesh.levels = levels::read(&mut body, length);
+                    mesh.lost[0] = mesh.levels.is_none();
+                } else if tag == LAYR {
+                    mesh.layers = layers::read(&mut body, length, mesh.positions.len());
+                    mesh.lost[1] = mesh.layers.is_none();
+                } else {
+                    mesh.groups = groups::read(&mut body, length, mesh.indices.len() / 3);
+                    mesh.lost[2] = mesh.groups.is_none();
+                }
+            }
+            std::io::copy(&mut body, &mut std::io::sink()).map_err(|_| bad())?;
         } else if tag == INFO {
             let mut bytes = vec![0u8; length as usize];
             r.read_exact(&mut bytes).map_err(|_| bad())?;
@@ -1357,7 +1451,8 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
             SavedObject { name, visible: true, mesh: 0, position: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE };
         let (mesh, repaired, left_out) = load_native_counted(path)?;
         let details = Details::default();
-        return Ok(SavedScene { meshes: vec![mesh], objects: vec![only], active: 0, details, repaired, left_out });
+        let lost = Lost::default();
+        return Ok(SavedScene { meshes: vec![mesh], objects: vec![only], active: 0, details, repaired, left_out, lost });
     }
     if bytes.len() < 20 || (&bytes[..8] != SCENE_MAGIC_FIXED && &bytes[..8] != SCENE_MAGIC_PLACED) {
         return Err(bad());
@@ -1415,7 +1510,7 @@ fn load_fixed(path: &Path) -> Result<SavedScene> {
     if objects.is_empty() || active >= objects.len() {
         return Err(bad());
     }
-    Ok(SavedScene { meshes, objects, active, details: Details::default(), repaired, left_out })
+    Ok(SavedScene { meshes, objects, active, details: Details::default(), repaired, left_out, lost: Lost::default() })
 }
 
 fn nothing_to_export(mesh: &Mesh) -> Result<()> {
@@ -1525,6 +1620,10 @@ fn write_object_of(w: &mut impl Write, mesh: &Mesh, points: &Points, model: Mat4
     }
     // A negative scale mirrors the model and turns every face inside out.
     let mirrored = determinant < 0.0;
+    // A mesh with face groups: each group's faces under a `g` line of its own.
+    if groups::write_obj_faces(w, mesh, mirrored, with_normals, base)? {
+        return Ok(());
+    }
     if let Some(polys) = &mesh.polys {
         // A quad-remeshed mesh goes out as its quads, not as their halves.
         for f in polys.start.windows(2) {
@@ -2095,6 +2194,7 @@ mod tests {
             positions: cube_facets(50.0).concat().iter().map(|p| *p + Vec3::new(30.0, 0.0, 0.0)).collect(),
             indices: (0..36).collect(),
             real_size: false,
+            groups: Vec::new(),
         };
         let at = place_import(&mut obj, Some(Vec3::splat(0.5)));
         let (lo, hi) = bounds_of(&obj.positions);
@@ -2103,7 +2203,7 @@ mod tests {
         assert_close(at, -(lo + hi) * 0.5, 1e-6, "position puts the centre at the origin");
         assert_close(at, Vec3::new(-30.0 * 0.02, 0.0, 0.0), 1e-5, "centre was at x = 30, scaled by 0.02");
         // Nothing to fit to: size is left alone, but it is still centred.
-        let mut alone = RawMesh { positions: vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 4.0, 2.0), Vec3::ZERO], indices: vec![0, 1, 2], real_size: false };
+        let mut alone = RawMesh { positions: vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 4.0, 2.0), Vec3::ZERO], indices: vec![0, 1, 2], real_size: false, groups: Vec::new() };
         assert_close(place_import(&mut alone, None), Vec3::new(-10.0, -2.0, -1.0), 1e-6, "centred only");
         assert_eq!(alone.positions[1], Vec3::new(20.0, 4.0, 2.0));
         // An STL keeps the size it was written at.

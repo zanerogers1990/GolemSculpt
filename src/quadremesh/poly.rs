@@ -2,6 +2,8 @@
 //! the quad remesher produces. The sculpting engine only ever sees triangles
 //! ([`PolyMesh::triangulate`]); the polygons are kept for display and export.
 
+use std::collections::HashSet;
+
 use glam::Vec3;
 use rayon::prelude::*;
 
@@ -92,25 +94,67 @@ impl PolyMesh {
     /// fold across the flatter direction of a non-planar quad and makes
     /// thinner triangles. Larger faces fan from their first corner; the
     /// remesher's rare pentagons are nearly convex, where a fan is fine.
+    ///
+    /// Unless that cut is on a line the mesh already has: a side of some
+    /// face, or the cut made in another. Two faces can share two corners
+    /// that are joined in neither (two quads standing corner to corner across
+    /// the tip of a cone, say), and a cut from one to the other in both would
+    /// leave that line with four triangles on it where a surface has two. So
+    /// the quad is cut the other way, and the fan starts from another corner.
     pub fn triangulate(&self) -> Vec<u32> {
         let p = &self.vertices;
-        let mut tris = Vec::with_capacity(self.face_indices.len() * 3 / 2);
+        let line = |a: u32, b: u32| (a.min(b) as u64) << 32 | a.max(b) as u64;
+        let mut taken: HashSet<u64> = HashSet::with_capacity(self.face_indices.len());
         for f in self.faces() {
-            match f.len() {
+            for k in 0..f.len() {
+                taken.insert(line(f[k], f[(k + 1) % f.len()]));
+            }
+        }
+        // First the quads with no choice, one of whose diagonals is a side
+        // of some face: their cuts are then known to the rest.
+        let mut forced = vec![None; self.face_count()];
+        for (f, corners) in self.faces().enumerate() {
+            if let &[a, b, c, d] = corners {
+                let (ac, bd) = (taken.contains(&line(a, c)), taken.contains(&line(b, d)));
+                if ac != bd {
+                    forced[f] = Some(bd);
+                }
+            }
+        }
+        for (f, corners) in self.faces().enumerate() {
+            if let Some(along_ac) = forced[f] {
+                taken.insert(if along_ac { line(corners[0], corners[2]) } else { line(corners[1], corners[3]) });
+            }
+        }
+
+        let mut tris = Vec::with_capacity(self.face_indices.len() * 3 / 2);
+        for (f, corners) in self.faces().enumerate() {
+            match corners.len() {
                 0..=2 => {}
+                3 => tris.extend_from_slice(corners),
                 4 => {
-                    let [a, b, c, d] = [f[0], f[1], f[2], f[3]];
-                    let ac = p[a as usize].distance_squared(p[c as usize]);
-                    let bd = p[b as usize].distance_squared(p[d as usize]);
-                    if ac <= bd {
+                    let [a, b, c, d] = [corners[0], corners[1], corners[2], corners[3]];
+                    let along_ac = forced[f].unwrap_or_else(|| {
+                        let ac = p[a as usize].distance_squared(p[c as usize]);
+                        let bd = p[b as usize].distance_squared(p[d as usize]);
+                        let (shorter, other) = if ac <= bd { (line(a, c), line(b, d)) } else { (line(b, d), line(a, c)) };
+                        let cut = if taken.contains(&shorter) && !taken.contains(&other) { other } else { shorter };
+                        taken.insert(cut);
+                        cut == line(a, c)
+                    });
+                    if along_ac {
                         tris.extend_from_slice(&[a, b, c, a, c, d]);
                     } else {
                         tris.extend_from_slice(&[a, b, d, b, c, d]);
                     }
                 }
                 n => {
+                    // The cuts of a fan from corner s run to every corner but its neighbours.
+                    let cuts = |s: usize| (2..n - 1).map(move |k| line(corners[s], corners[(s + k) % n]));
+                    let s = (0..n).find(|&s| cuts(s).all(|cut| !taken.contains(&cut))).unwrap_or(0);
+                    taken.extend(cuts(s));
                     for k in 1..n - 1 {
-                        tris.extend_from_slice(&[f[0], f[k], f[k + 1]]);
+                        tris.extend_from_slice(&[corners[s], corners[(s + k) % n], corners[(s + k + 1) % n]]);
                     }
                 }
             }

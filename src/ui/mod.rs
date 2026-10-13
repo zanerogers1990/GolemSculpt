@@ -5,12 +5,20 @@
 //! `panels`); what it alone would have said is then said over the view (see
 //! `status`). The colours are a theme the user picks (see `settings`).
 
+mod alpha;
+pub mod alpha_preview;
 pub mod assets;
 mod brush_size;
+mod brushes;
 mod dyntopo;
 mod falloff;
+pub mod groups;
+mod layers;
+mod levels;
 mod look;
+mod masking;
 mod mirror_copies;
+mod modes;
 mod overlay;
 mod panels;
 mod pose;
@@ -19,6 +27,7 @@ mod scene_graph;
 mod settings;
 mod spheres;
 pub mod status;
+mod stroke;
 mod symmetry;
 pub mod tabs;
 pub mod theme;
@@ -29,7 +38,11 @@ use egui::{Align2, Color32, Id, Order, Pos2, Sense, Vec2, pos2, vec2};
 use crate::doc::{Action, Doc, MaskOp, Tool};
 use crate::sculpt::Brush;
 use assets::Assets;
-pub use overlay::Cursor;
+pub use overlay::{Cursor, brush_wheel_ring, brush_wheel_tile};
+/// The Brush Library card's controls, for the interface's self-check.
+pub mod library_card {
+    pub use super::brushes::{place, watch};
+}
 
 /// Cursor ring colours, for the code that decides which one applies.
 pub mod overlay_colors {
@@ -140,6 +153,7 @@ pub fn build(
                     ui.spacing_mut().item_spacing.x = 14.0;
                     theme::checkbox(ui, &mut doc.opts.flat_shading, "Flat Shading", ACCENT());
                     theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT());
+                    theme::checkbox(ui, &mut doc.opts.groups.colours, "Group Colours", ACCENT());
                 });
             });
         doc.opts.folded = folded;
@@ -154,6 +168,8 @@ pub fn build(
     overlay::toast(&ctx, state, time);
     if doc.opts.clean_view {
         overlay::clean_hint(&ctx, crate::turntable::HINT, doc.turntable.hint_alpha(time));
+        // No panels, so no status line: an error is said all the same.
+        status::clean_view(&ctx, state, doc.opts.tooltips, time);
     }
     crate::turntable::recording_overlay(&ctx, doc);
     actions
@@ -231,7 +247,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
 
     let mut showing = doc.opts.tabs.sculpt;
     tabs::sculpt_strip(ui, &mut showing, tips);
-    if tabs::page(ui, showing == tabs::Sculpt::Brush, "brush", |ui| brush_page(ui, doc, state)) {
+    if tabs::page(ui, showing == tabs::Sculpt::Brush, "brush", |ui| brush_page(ui, doc, state, actions)) {
         showing = tabs::Sculpt::Brush;
     }
     if tabs::page(ui, showing == tabs::Sculpt::Mesh, "mesh", |ui| mesh_page(ui, doc, state, actions)) {
@@ -242,27 +258,42 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
 
 /// The Sculpt panel's Brush tab: the brushes, the settings of the one in
 /// hand, and the stroke.
-fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
+fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
     let tips = doc.opts.tooltips;
     let icon = |name: &str| state.assets.icon(name);
-    let s = &mut doc.sculptor.settings;
+    let (library, s) = (&mut doc.sculptor.library, &mut doc.sculptor.settings);
     let brush = s.brush;
-    let summary = if s.mask_mode { "Mask" } else { brush.name() };
+    // The brush in hand is one of the library's, over that kernel.
+    let in_hand = library.selected(s);
+    let name = library.entries()[in_hand].name.clone();
+    let summary = if s.mask_mode { "Mask" } else { name.as_str() };
     theme::category(ui, "Brushes", theme::lit(ACCENT()), summary, true, |ui| {
-        let w = theme::row_width(ui, 5, 4.0);
+        // However many brushes there are, in rows of six.
+        const PER_ROW: usize = 6;
+        let w = theme::row_width(ui, PER_ROW, 4.0);
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        for row in Brush::ALL.chunks(5) {
+        for row in Brush::ALL.chunks(PER_ROW) {
             ui.horizontal(|ui| {
                 for &b in row {
-                    let active = (b == s.brush && !s.mask_mode).then_some(ACCENT());
-                    let badge = b.hotkey().to_string();
+                    // The thirteen base brushes; the rest are in the card below.
+                    let base = crate::sculpt::library::Library::base(b);
+                    let active = (base == in_hand && !s.mask_mode).then_some(ACCENT());
+                    // A brush with no number key has no badge.
+                    let badge = b.hotkey().map(String::from).unwrap_or_default();
                     let r = theme::tile(ui, vec2(w, 40.0), icon(b.icon()), "", &badge, active);
-                    let text = format!("{} ({})\n{}", b.name(), b.hotkey(), b.description());
+                    // A brush of the library in hand: its kernel's tile is
+                    // ringed, so the grid still shows what kind it is.
+                    if b == brush && base != in_hand && !s.mask_mode {
+                        ui.painter().rect_stroke(r.rect, 5.0, egui::Stroke::new(1.5, ACCENT()), egui::StrokeKind::Inside);
+                    }
+                    let text = match b.hotkey() {
+                        Some(key) => format!("{} ({key})\n{}", b.name(), b.description()),
+                        None => format!("{}\n{}", b.name(), b.description()),
+                    };
                     if tip(r, tips, &text).clicked() {
-                        s.brush = b;
                         // Picking a brush always leaves mask mode, so the
                         // click never looks dead.
-                        s.mask_mode = false;
+                        library.select(base, s);
                     }
                 }
             });
@@ -302,11 +333,16 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
         });
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
         brush_size::slider(ui, s, tips);
+        let strength = if brush == Brush::Move && !s.mask_mode {
+            "How far the surface follows the pen: at 100% it stays under it, lower is a gentler pull. Hold F and drag."
+        } else {
+            "How hard the brush works. Hold F and drag."
+        };
         let bs = s.current_mut();
         tip(
             theme::slider(ui, "Strength", &mut bs.strength, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)),
             tips,
-            "How hard the brush works. Hold F and drag.",
+            strength,
         );
         let mut focal = bs.focal_shift * 100.0;
         if tip(
@@ -321,17 +357,20 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
         brush_size::toggle(ui, s, tips);
     });
 
-    let title = if s.mask_mode { "Mask Settings".to_owned() } else { format!("{} Settings", brush.name()) };
+    brushes::card(ui, library, s, &icon, tips, actions);
+
+    // A name of the user's own can be longer than the header has room for beside its buttons.
+    let title = if s.mask_mode { "Mask Settings".to_owned() } else { format!("{} Settings", brushes::shortened(&name, 16)) };
     // One card whatever brush is in hand: it floats under one name.
     theme::category_as(ui, "Brush Settings", &title, Color32::from_rgb(89, 209, 230), "", true, |ui| {
         if s.mask_mode {
             theme::slider(ui, "Mask Hardness", &mut s.mask_hardness, 0.0..=1.0, |v| format!("{v:.2}"));
+            stroke::pressure_strength(ui, s.current_mut(), tips);
             theme::hint(ui, "Paint to protect. Ctrl or the right button erases.");
             return;
         }
         let bs = s.current_mut();
-        let accumulates =
-            !matches!(brush, Brush::Move | Brush::Pose | Brush::SnakeHook | Brush::Smooth | Brush::Flatten | Brush::Layer);
+        let accumulates = matches!(brush, Brush::Clay | Brush::Crease | Brush::Inflate | Brush::Standard);
         if accumulates {
             let label = if bs.accumulate { "Accumulate" } else { "Accumulate (Off)" };
             tip(
@@ -353,6 +392,8 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
                 "Ignore surface that faces away from the camera, so thin shapes are not hit on the far side.",
             );
         }
+        // Keeps the stroke to the face group it begins on (Mesh tab, Face Groups).
+        groups::stay_in_group(ui, bs, tips);
         match brush {
             Brush::Clay => {
                 theme::slider(ui, "Clay Depth", &mut s.clay_depth, 0.1..=1.5, |v| format!("{v:.2}"));
@@ -364,8 +405,13 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
                 theme::slider(ui, "Depth", &mut s.crease_depth, 0.05..=1.0, |v| format!("{v:.2}"));
             }
             Brush::Flatten => {
-                theme::slider(ui, "Plane Offset (Scrape - Fill)", &mut s.flatten_offset, -0.5..=0.5, |v| format!("{v:.2}"));
+                theme::slider(ui, "Plane Offset (Lower - Higher)", &mut s.flatten_offset, -0.5..=0.5, |v| format!("{v:.2}"));
+                modes::flatten(ui, s.current_mut(), tips);
             }
+            Brush::Smooth => modes::smooth(ui, s.current_mut(), tips),
+            Brush::Pinch => theme::hint(ui, "Draws the surface in to the line of the stroke. Ctrl or the right button spreads it apart."),
+            Brush::Nudge => theme::hint(ui, "Strength is how far the surface follows the pen: at 100% what is under the middle of the ring stays under it."),
+            Brush::EraseLayer => brushes::erase_layer_note(ui, &doc.mesh),
             Brush::Layer => {
                 theme::slider(ui, "Layer Height", &mut s.layer_height, 0.02..=1.0, |v| format!("{v:.2}"));
             }
@@ -375,32 +421,18 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
                     tips,
                     "Grab only the surface joined to the point under the pointer: moving one finger leaves the one next to it alone.",
                 );
+                theme::hint(ui, "Ctrl or the right button pushes the surface in or pulls it out, the way it faces: drag up for out, down for in. At the outline, drag the way it faces.");
             }
             Brush::Pose => pose::settings(ui, s, tips),
             _ => theme::hint(ui, "No extra settings for this brush."),
         }
+        stroke::brush_section(ui, s, tips);
         falloff::section(ui, s, tips);
+        alpha::section(ui, s, tips, actions);
     });
 
-    theme::category(ui, "Stroke", Color32::from_rgb(168, 133, 255), "", false, |ui| {
-        tip(
-            theme::checkbox(ui, &mut s.build_up_on_hold, "Build Up on Hold", ACCENT()),
-            tips,
-            "Keep adding while the pointer rests in one place.",
-        );
-        tip(
-            theme::checkbox(ui, &mut s.lazy_mouse, "Lazy Mouse", ACCENT()),
-            tips,
-            "The brush trails the pointer on a short rope, steadying long curves.",
-        );
-        if s.lazy_mouse {
-            theme::slider(ui, "Lazy Radius", &mut s.lazy_radius, 1.0..=150.0, |v| format!("{v:.0} px"));
-            theme::slider(ui, "Lazy Smoothing", &mut s.lazy_strength, 0.05..=1.0, |v| format!("{v:.2}"));
-        }
-        theme::heading(ui, "Stylus Pressure");
-        theme::slider(ui, "Light-Touch Floor", &mut s.pressure_floor, 0.0..=0.5, |v| format!("{v:.2}"));
-        theme::slider(ui, "Curve", &mut s.pressure_curve, 0.5..=3.0, |v| format!("{v:.2}"));
-    });
+    // What holds for every brush; the brush's own spacing and pen settings are in its card above.
+    theme::category(ui, "Stroke", Color32::from_rgb(168, 133, 255), "", false, |ui| stroke::card(ui, &mut doc.sculptor, tips));
 }
 
 /// The Sculpt panel's Mesh tab: what is done to the whole mesh.
@@ -427,6 +459,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             actions.push(Action::Remesh);
         }
         dyntopo::section(ui, &mut doc.sculptor.dyntopo, tips);
+        levels::dyntopo_note(ui, &doc.mesh);
 
         ui.add_space(6.0);
         theme::hint(ui, "Quad Remesh rebuilds it as even quads that follow the form. Export keeps the quads.");
@@ -451,6 +484,9 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         ui.add_space(6.0);
         decimate(ui, doc, tips, actions);
     });
+    levels::card(ui, doc, actions);
+    layers::card(ui, doc, &state.assets, actions);
+    groups::card(ui, doc, actions);
 
     theme::category(ui, "Masking", theme::MASK, "", false, |ui| {
         theme::hint(ui, "Masked areas are protected from every brush.");
@@ -469,6 +505,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
                 }
             });
         }
+        masking::by_shape(ui, tips, actions);
     });
 
     // Faces switched off on the selected object (the box and lasso hide tools).

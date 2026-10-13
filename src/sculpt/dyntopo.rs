@@ -70,6 +70,9 @@ struct Path {
     waiting: Option<Vec3>,
     splits_this_frame: usize,
     model_size: f32,
+    /// How far off the path the stroke's dabs can land, in brush radii
+    /// (the brush's Scatter): the refined region is that much wider.
+    spread: f32,
 }
 
 /// Dynamic topology as the brush panel sets it, and as a stroke drives it.
@@ -123,8 +126,9 @@ impl DynTopo {
     }
 
     /// A stroke begins. `brush` is the one it uses (Smooth when Shift makes
-    /// it so) and `model_size` the largest side of the model.
-    pub(super) fn begin(&mut self, brush: Brush, mask: bool, model_size: f32) {
+    /// it so), `model_size` the largest side of the model and `spread` how
+    /// far off its path the stroke's dabs can land, in brush radii.
+    pub(super) fn begin(&mut self, brush: Brush, mask: bool, model_size: f32, spread: f32) {
         self.path = self.takes(brush, mask).then(|| Path {
             last: None,
             edge: 0.0,
@@ -132,6 +136,7 @@ impl DynTopo {
             waiting: None,
             splits_this_frame: 0,
             model_size,
+            spread: spread.max(0.0),
         });
         if !self.enabled {
             self.at_limit = false;
@@ -149,12 +154,15 @@ impl DynTopo {
     /// Refines the surface under the brush at `at`, and everywhere it has
     /// travelled since the last refine, before the dabs for that stretch are
     /// placed, so that they land on the new vertices. `radius` is the brush
-    /// radius on the model. `copies` appends every symmetric copy of a point
+    /// radius on the model: the ring's, the largest a dab of the stroke can
+    /// be, whatever the pen's pressure is making of it (a stroke that tapers
+    /// to a point is refined along its whole length as finely as its thick
+    /// end, and no finer). `copies` appends every symmetric copy of a point
     /// (the point itself among them) to a list: each copy of the brush
     /// refines the way its dabs will land.
     pub(super) fn refine(&mut self, mesh: &mut Mesh, at: Vec3, radius: f32, copies: &dyn Fn(Vec3, &mut Vec<Vec3>)) {
         let Some(path) = &mut self.path else { return };
-        let reach = radius * RADIUS_MARGIN;
+        let reach = radius * (RADIUS_MARGIN + path.spread);
         let edge =
             (radius * self.detail.clamp(MIN_DETAIL, MAX_DETAIL)).max(path.model_size * MIN_DETAIL_PER_MODEL_SIZE);
         if let Some(last) = path.last {

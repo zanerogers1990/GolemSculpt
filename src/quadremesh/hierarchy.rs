@@ -40,6 +40,10 @@ pub struct Level {
     pub fine_a: Vec<u32>,
     pub fine_b: Vec<u32>,
 
+    /// Level 0 only (empty above it): the vertices on an open edge of the
+    /// mesh, one with a triangle on one side only. A closed mesh has none.
+    pub open: Vec<bool>,
+
     /// Graph colouring: the vertices of one phase share no edge, so a solver
     /// can update a whole phase in parallel and still be Gauss-Seidel.
     pub phase_start: Vec<u32>,
@@ -99,9 +103,14 @@ fn finest(vertices: &[Vec3], triangles: &[u32]) -> Level {
 
     let edges = Edges::of_triangles(triangles);
     let mut start = vec![0u32; n + 1];
+    let mut open = vec![false; n];
     for e in 0..edges.count() {
         start[edges.a[e] as usize + 1] += 1;
         start[edges.b[e] as usize + 1] += 1;
+        if edges.uses[e] != 2 {
+            open[edges.a[e] as usize] = true;
+            open[edges.b[e] as usize] = true;
+        }
     }
     for v in 0..n {
         start[v + 1] += start[v];
@@ -123,6 +132,7 @@ fn finest(vertices: &[Vec3], triangles: &[u32]) -> Level {
         adj_weight: vec![1.0; adj.len()],
         adj_start: start,
         adj,
+        open,
         ..Level::default()
     }
 }

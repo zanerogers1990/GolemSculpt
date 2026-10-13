@@ -5,7 +5,14 @@
 //! panel is folded away.
 //!
 //! `--demo-ui` takes a list, `key` or `key=value` with commas between:
-//! `size=1.5` (interface size), `brush=Clay`, `mask`, `strength=0.3`,
+//! `size=1.5` (interface size), `brush=Clay` (any brush of the library, by
+//! name), `copy=My Rake` (a brush of the user's own under that name, made
+//! from the one in hand), `pin=Trim` (that brush on the wheel),
+//! `shiftbrush=Relax` (the brush Shift uses), `mask`, `strength=0.3`,
+//! `hover=0.5:0.4` (the pointer over the view, that far across and down
+//! it, so the brush's ring shows; start the run with `--test-keep-pointer`),
+//! `shift` (Shift held), `hand=Clay@2000@140@0.6` (a stroke drawn by hand
+//! on a dense ball and measured: see `ui_demo/hand.rs`),
 //! `wheel` (the brush wheel in the middle of the window; `wheel=low` near
 //! the bottom, where its bar goes above it; `wheel=left` at the left edge),
 //! `fold=left`, `fold=right` or `fold=both` (panels folded away),
@@ -16,7 +23,8 @@
 //! there, in the interface's points; as many as wanted), `status=error`,
 //! `status=ok` or `status=fading` (a long error, a short success, or that
 //! success as it fades, on the status line), `limit` (dynamic topology
-//! stopped at its triangle limit) and `play`.
+//! stopped at its triangle limit), `pen=0.6` or `pen=up` (the Stroke card's
+//! pen readout, as with a pen pressing that hard or lifted) and `play`.
 //!
 //! `play` works the interface the way a pen would, through the same routines
 //! real input goes through, prints a line per check and closes the app. The
@@ -35,6 +43,8 @@ use crate::doc::Tool;
 use crate::sculpt::Brush;
 use crate::ui::{status, tabs};
 use sculpt_toolkit::floating;
+
+mod hand;
 
 /// What `status=error` and `status=ok` write, and `play` with them: made up,
 /// but the length and the kind of thing the app says. Three sentences is as
@@ -56,6 +66,8 @@ pub(super) struct State {
     /// brush size and the camera's distance, and where a window was.
     kept: (f32, f32),
     at: Option<Pos2>,
+    /// The `hand=` word's stroke, drawn the way a hand draws one (`hand.rs`).
+    hand: Option<Box<hand::Hand>>,
 }
 
 /// Where `play` has got to.
@@ -75,19 +87,19 @@ pub(super) fn plays(spec: Option<&str>) -> bool {
 impl Running {
     /// Sets up what `--demo-ui` asked for, once, at start-up.
     pub(super) fn ui_demo(&mut self, spec: &str) {
-        let mut wheel = None;
+        let (mut wheel, mut hover) = (None, None);
         for item in spec.split(',') {
             let (key, value) = item.split_once('=').unwrap_or((item, ""));
             let s = &mut self.doc.sculptor.settings;
             match (key.trim(), value.trim()) {
                 ("size", size) => self.doc.opts.ui_scale = size.parse().unwrap_or(1.0),
-                ("brush", name) => match Brush::ALL.iter().find(|b| b.name().eq_ignore_ascii_case(name)) {
-                    Some(&brush) => s.brush = brush,
-                    None => eprintln!("--demo-ui: no brush is called {name}"),
-                },
+                ("brush" | "copy" | "pin" | "shiftbrush", name) => self.ui_demo_brush(key.trim(), name),
                 ("mask", _) => s.mask_mode = true,
                 ("strength", strength) => s.current_mut().strength = strength.parse().unwrap_or(0.5),
                 ("wheel", place) => wheel = Some(place.to_owned()),
+                ("hover", place) => hover = Some(place.to_owned()),
+                ("hand", stroke) => self.hand_demo(stroke),
+                ("shift", _) => self.input.mods = winit::keyboard::ModifiersState::SHIFT,
                 ("fold", which) => self.doc.opts.folded = [which != "right", which != "left"],
                 ("theme", name) => match sculpt_toolkit::palette::named(name) {
                     Some(theme) => self.doc.opts.theme = theme,
@@ -112,6 +124,13 @@ impl Running {
                 }
                 ("status", _) => self.status(ERROR_SAMPLE, false),
                 ("limit", _) => (self.doc.sculptor.dyntopo.enabled, self.doc.sculptor.dyntopo.at_limit) = (true, true),
+                // The Stroke card's pen readout: a pen down at this pressure, or seen and lifted.
+                ("pen", pressure) => {
+                    self.doc.sculptor.pen_meter.moved(Some(pressure.parse().unwrap_or(0.5)));
+                    if pressure == "up" {
+                        self.doc.sculptor.pen_meter.lifted();
+                    }
+                }
                 ("play", _) => self.ui_demo.play = Some(Play { step: 0, wait: LEAD_IN, failed: 0 }),
                 (other, _) => eprintln!("--demo-ui: unknown item {other}"),
             }
@@ -122,6 +141,17 @@ impl Running {
             Some(_) => self.ui_demo_wheel(Vec2::splat(0.5)),
             None => {}
         }
+        if let Some(place) = hover {
+            self.ui_demo_hover(&place);
+        }
+    }
+
+    /// Puts the pointer over the view, `x:y` of the way across and down it.
+    fn ui_demo_hover(&mut self, place: &str) {
+        let part = |text: &str| text.trim().parse::<f32>().ok();
+        let at = place.split_once(':').and_then(|(x, y)| Some(Vec2::new(part(x)?, part(y)?))).unwrap_or(Vec2::splat(0.5));
+        self.input.inside = true;
+        self.pointer_moved(self.view.origin + self.view.size * at, None);
     }
 
     /// Floats a card: `name@x:y`, the top-left corner of its window.
@@ -133,6 +163,31 @@ impl Running {
         match place {
             Some((name, at)) => floating::float(&self.egui_ctx, name, at),
             None => eprintln!("--demo-ui: float wants a card and a place, as in float=Brushes@300:200"),
+        }
+    }
+
+    /// The words about the brush library: `brush`, `copy`, `pin` and
+    /// `shiftbrush` (see the top of this file).
+    fn ui_demo_brush(&mut self, word: &str, name: &str) {
+        let sculptor = &mut self.doc.sculptor;
+        let (library, s) = (&mut sculptor.library, &mut sculptor.settings);
+        if word == "copy" {
+            let copy = library.duplicate(library.selected(s), s);
+            if let Err(why) = library.rename(copy, name) {
+                eprintln!("--demo-ui: {why}");
+            }
+            return;
+        }
+        if word == "brush" {
+            if !library.select_named(name, s) {
+                eprintln!("--demo-ui: no brush is called {name}");
+            }
+            return;
+        }
+        let Some(brush) = library.named(name) else { return eprintln!("--demo-ui: no brush is called {name}") };
+        match word {
+            "pin" => library.set_pinned(brush, true),
+            _ => drop(library.set_shift(brush, s)),
         }
     }
 
@@ -216,8 +271,9 @@ impl Running {
         // A point of the bar's track: the plate is 12 points wider than the
         // slider at each end, and the track 7 inside that (ui/overlay.rs).
         let on_bar = |t: f32| bar.map(|plate| pos2(plate.left() + 19.0 + (plate.width() - 38.0) * t, plate.center().y));
-        // The tile at the top of the wheel (Move): 104 points out.
-        let top_tile = wheel.map(|rect| rect.center() - vec2(0.0, 104.0));
+        // The tile at the top of the wheel (Move), out on its ring.
+        let ring = crate::ui::brush_wheel_ring(&self.doc.sculptor.library);
+        let top_tile = wheel.map(|rect| rect.center() - vec2(0.0, ring));
         match step {
             0 => {
                 let s = &mut self.doc.sculptor.settings;
@@ -473,8 +529,14 @@ impl Running {
             }
             12 => {
                 expect("left hanging off the corner it is drawn back inside the window", window.is_some_and(|rect| screen.contains_rect(rect.shrink(1.0))));
-                // A place that is on the window now, and off it at twice the size.
-                let place = pos2((screen.width() * 0.65).round(), 300.0);
+                // A place that is on the window now, and off it at twice the
+                // size. No lower than leaves the whole card on the window:
+                // how many points high that is depends on the display's
+                // scaling, and at 150% a card put 300 down hung off the
+                // bottom and was moved up, which this check then took for
+                // the card not going back where it was put.
+                let room = window.map_or(300.0, |rect| screen.height() - rect.height() - 4.0);
+                let place = pos2((screen.width() * 0.65).round(), room.clamp(0.0, 300.0).floor());
                 floating::float(&ctx, "Brushes", place);
                 self.ui_demo.at = Some(place);
                 self.doc.opts.ui_scale = 2.0;
@@ -605,29 +667,39 @@ impl Running {
                 crate::turntable::set_clean_view(&mut self.doc, true);
             }
             13 => {
-                expect("the clean view (Tab) takes it away with the rest", plate.is_none());
-                crate::turntable::set_clean_view(&mut self.doc, false);
-                self.doc.opts.folded = [true, false];
+                // An error is the one thing the clean view does say
+                // (`ui::status::clean_view`): a save that failed there must
+                // not pass without a word. Everything else of the interface
+                // is away.
+                let alone = others.iter().all(Option::is_none);
+                expect("on the clean view (Tab) an error is still said, and nothing else is there", plate.is_some() && alone);
+                self.status(OK_SAMPLE, true);
             }
             14 => {
+                expect("what went well is not: the clean view takes that away with the rest", plate.is_none());
+                crate::turntable::set_clean_view(&mut self.doc, false);
+                self.doc.opts.folded = [true, false];
+                self.status(ERROR_SAMPLE, false);
+            }
+            15 => {
                 expect("with the Scene panel back the message is on its status line, not over the view", plate.is_none() && scene_panel.is_some());
                 let dyntopo = &mut self.doc.sculptor.dyntopo;
                 (dyntopo.enabled, dyntopo.at_limit) = (true, true);
             }
-            15 => {
+            16 => {
                 let said = plate.is_some_and(clear);
                 expect("with the Sculpt panel folded away, dynamic topology stopping at its limit is said over the view", said);
                 if let Some(plate) = plate {
                     self.ui_demo_move(plate.center());
                 }
             }
-            16 => {
+            17 => {
                 expect("that note goes by itself, so the pen goes through it to the model", plate.is_some() && !self.over_ui());
                 let dyntopo = &mut self.doc.sculptor.dyntopo;
                 (dyntopo.enabled, dyntopo.at_limit) = (false, false);
                 self.doc.opts.folded = [false; 2];
             }
-            _ => return self.ui_demo_card_step(step - 17, expect),
+            _ => return self.ui_demo_card_step(step - 18, expect),
         }
         false
     }
@@ -636,10 +708,11 @@ impl Running {
     /// folded away: Measure's, which opens itself when the tool comes up.
     fn ui_demo_card_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
         let ctx = self.egui_ctx.clone();
-        // Whether the Measure & Size card is open in the Scene panel. It
-        // starts closed, so it is among the cards that are not as they start
-        // out exactly when it is open.
-        let open = crate::prefs::cards::snapshot(&ctx).get("Measure & Size") == Some(&true);
+        // Whether the Measure & Size card is open in the Scene panel, as it
+        // was last drawn there. (Not by the settings: a card a hosted tool
+        // draws is not among those they remember, see `ui/theme.rs`, and
+        // this check looked there and so could never pass.)
+        let open = crate::ui::theme::category_is_open(&ctx, "Measure & Size") == Some(true);
         match step {
             0 => {
                 let drawn = floating::button(&ctx, "Measure & Size").is_some();
@@ -705,8 +778,8 @@ impl Running {
         false
     }
 
-    /// The last steps of `play`: the second tap of a double tap on a fold
-    /// tab, which lands on the view once the panel has gone.
+    /// The steps of `play` for the second tap of a double tap on a fold tab,
+    /// which lands on the view once the panel has gone.
     fn ui_demo_echo_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
         let tab = self.ui_demo_area(("panel_tab", "left"), Order::Middle);
         let ppp = self.egui_ctx.pixels_per_point();
@@ -734,6 +807,251 @@ impl Running {
                 expect("a second later, a press in that place is the view's again", matches!(self.input.drag, Drag::Orbit | Drag::Sculpt));
                 self.ui_demo_button(here, false);
                 self.doc.opts.folded = [false; 2];
+            }
+            _ => return self.ui_demo_library_step(step - 5, expect),
+        }
+        false
+    }
+
+    /// The steps of `play` on the Brush Library card and the brush wheel,
+    /// worked with the pen: pick a row, duplicate, rename through the Name
+    /// box, pin, pick the pinned brush's tile on the wheel, mark the brush
+    /// Shift uses, Reset, Delete and Restore Shipped Brushes. (Never Import
+    /// Brush... or Export Brush...: those open file boxes.)
+    ///
+    /// The card floats while this runs, at the interface size the app is
+    /// used at (75%), so that all of it is on a window of any size.
+    fn ui_demo_library_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        use crate::sculpt::library::{Library, Origin};
+        use crate::ui::library_card::{place, watch};
+        let ctx = self.egui_ctx.clone();
+        let screen = ctx.content_rect();
+        let ppp = ctx.pixels_per_point();
+        let here = pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp);
+        // A control of the card, where the pen can get at it.
+        let at = |name: &str| place(&ctx, name).map(|rect| rect.center()).filter(|&at| screen.contains(at));
+        let (library, s) = (&self.doc.sculptor.library, &self.doc.sculptor.settings);
+        let in_hand = library.entries()[library.selected(s)].clone();
+        let found = |name: &str| self.doc.sculptor.library.named(name);
+        let wheel = self.ui_demo_area("radial_menu", Order::Foreground);
+        // Even steps past the first few are the pen coming up where it went down.
+        let presses = |running: &mut Running, name: &str| match at(name) {
+            Some(at) => running.ui_demo_button(at, true),
+            None => println!("     (the control called {name} is not on the window)"),
+        };
+        match step {
+            0 => {
+                self.ui_demo.kept.0 = self.doc.opts.ui_scale;
+                self.doc.opts.ui_scale = 0.75;
+                self.doc.opts.folded = [false; 2];
+                self.set_tool(Tool::Sculpt);
+                let sculptor = &mut self.doc.sculptor;
+                sculptor.library.select(Library::base(Brush::Clay), &mut sculptor.settings);
+                watch(&ctx, true);
+                floating::float(&ctx, "Brush Library", pos2(330.0, 8.0));
+            }
+            1 => {
+                let up = floating::window(&ctx, "Brush Library").is_some_and(|card| screen.contains_rect(card.shrink(1.0)));
+                expect("the Brush Library card floats, all of it on the window", up);
+                expect("with a row for every brush that ships", at("row:Trim").zip(at("row:Spread")).is_some());
+                presses(self, "row:Trim");
+            }
+            3 => {
+                let picked = in_hand.name == "Trim" && s.brush == Brush::Flatten && s.current().flatten_mode == crate::sculpt::FlattenMode::Scrape;
+                expect("a tap on a row takes that brush in hand, with its own settings", picked);
+                presses(self, "Duplicate");
+            }
+            5 => {
+                let copied = in_hand.name == "Trim Copy" && in_hand.origin == Origin::User;
+                expect("Duplicate makes a brush of your own from it and puts that in hand", copied);
+                expect("which has a Name box and a row under Yours", at("Name").zip(at("row:Trim Copy")).is_some());
+                presses(self, "Name");
+            }
+            7 => {
+                // Select what is there, type over it, Enter.
+                let key = |key: egui::Key, pressed: bool, modifiers: egui::Modifiers| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers,
+                };
+                let none = egui::Modifiers::default();
+                let typed = [
+                    key(egui::Key::A, true, egui::Modifiers::COMMAND),
+                    key(egui::Key::A, false, egui::Modifiers::COMMAND),
+                    egui::Event::Text("Knife".to_owned()),
+                    key(egui::Key::Enter, true, none),
+                    key(egui::Key::Enter, false, none),
+                ];
+                self.egui_state.egui_input_mut().events.extend(typed);
+            }
+            8 => {
+                expect("a name typed in the box and Enter renames it", in_hand.name == "Knife" && found("Trim Copy").is_none());
+                expect("and its row goes by the new name", at("row:Knife").is_some());
+                presses(self, "Pin");
+            }
+            10 => {
+                expect("a tap on On the Space Wheel pins it", in_hand.name == "Knife" && in_hand.pinned);
+                presses(self, "row:Clay Tubes");
+            }
+            12 => {
+                expect("another row takes another brush in hand", in_hand.name == "Clay Tubes");
+                // Clear of the card.
+                self.ui_demo_wheel(Vec2::new(0.72, 0.5));
+            }
+            13 => {
+                let tile = found("Knife").and_then(|knife| crate::ui::brush_wheel_tile(&self.doc.sculptor.library, knife));
+                expect("the wheel has a tile for the pinned brush", wheel.zip(tile).is_some());
+                if let Some((wheel, tile)) = wheel.zip(tile) {
+                    self.ui_demo_button(wheel.center() + tile, true);
+                }
+            }
+            15 => {
+                expect("a tap on that tile takes the brush in hand and closes the wheel", in_hand.name == "Knife" && self.ui.radial.is_none());
+                presses(self, "row:Relax");
+            }
+            17 => {
+                expect("a smoothing brush in hand has a Shift tick", in_hand.name == "Relax" && at("Shift").is_some());
+                presses(self, "Shift");
+            }
+            19 => {
+                let marked = found("Relax") == Some(self.doc.sculptor.library.shift());
+                expect("a tap on Shift Uses This Brush marks it as the one Shift smooths with", marked);
+                self.doc.sculptor.settings.current_mut().strength = 0.93;
+                presses(self, "Reset");
+            }
+            21 => {
+                let back = in_hand.name == "Relax" && s.current().strength == in_hand.made().settings.strength;
+                expect("Reset puts the brush in hand back as it shipped", back && s.current().strength != 0.93);
+                presses(self, "row:Knife");
+            }
+            23 => {
+                expect("the brush of your own is in hand again", in_hand.name == "Knife");
+                presses(self, "Delete");
+            }
+            25 => {
+                expect("Delete takes it out, and its kind's base brush is in hand", found("Knife").is_none() && in_hand.name == "Flatten");
+                presses(self, "row:Fill");
+            }
+            27 => {
+                expect("a brush that ships can be picked", in_hand.name == "Fill");
+                presses(self, "Delete");
+            }
+            29 => {
+                let gone = found("Fill").is_none() && self.doc.sculptor.library.removed() == ["Fill".to_owned()];
+                expect("and deleted, which is remembered", gone);
+                expect("and a Restore Shipped Brushes button appears", at("Restore").is_some());
+                presses(self, "Restore");
+            }
+            31 => {
+                let back = found("Fill").is_some() && self.doc.sculptor.library.removed().is_empty();
+                expect("a tap on it brings the brush back", back);
+                // As it was found.
+                let sculptor = &mut self.doc.sculptor;
+                sculptor.library.set_shift(Library::base(Brush::Smooth), &mut sculptor.settings);
+                sculptor.library.select(Library::base(Brush::Clay), &mut sculptor.settings);
+                watch(&ctx, false);
+                floating::dock(&ctx, "Brush Library");
+                self.doc.opts.ui_scale = self.ui_demo.kept.0;
+            }
+            // The pen comes up where it went down.
+            2 | 4 | 6 | 9 | 11 | 14 | 16 | 18 | 20 | 22 | 24 | 26 | 28 | 30 => self.ui_demo_button(here, false),
+            _ => return self.ui_demo_pen_step(step - 32, expect),
+        }
+        false
+    }
+
+    /// The last steps of `play`: a pen, as the window reports one. Touch
+    /// events are made up and handed to the routine the window's own go to
+    /// (`Running::on_touch`), over the model: a tip that lands with no
+    /// pressure to report, pressure arriving after, a second touch landing
+    /// and lifting mid-stroke, the lift, a touch too light to measure once
+    /// a pen has been seen, and a hover. And last, the pen pressed with
+    /// Erase Layer in hand on a model that has no sculpt layers: no stroke,
+    /// no undo step, and the status line saying what to do.
+    fn ui_demo_pen_step(&mut self, step: u32, expect: &mut dyn FnMut(&str, bool)) -> bool {
+        use crate::sculpt::library::Library;
+        use winit::event::{DeviceId, Force, Touch, TouchPhase};
+        const PEN: u64 = 7;
+        const PALM: u64 = 9;
+        // Over the middle of the model, in the window's pixels.
+        let middle = self.view.origin + self.view.size * 0.5;
+        let touch = |phase: TouchPhase, id: u64, offset: Vec2, force: Option<f64>| {
+            let at = middle + offset;
+            let location = winit::dpi::PhysicalPosition::new(at.x as f64, at.y as f64);
+            Touch { device_id: DeviceId::dummy(), phase, location, force: force.map(Force::Normalized), id }
+        };
+        let drawing = self.doc.sculptor.is_active() && self.input.drag == Drag::Sculpt;
+        let meter = self.doc.sculptor.pen_meter;
+        let pointer_off = |running: &Running, offset: Vec2| running.input.pointer.distance(middle + offset);
+        match step {
+            0 => {
+                self.doc.opts.folded = [false; 2];
+                self.set_tool(Tool::Sculpt);
+                let s = &mut self.doc.sculptor.settings;
+                (s.brush, s.mask_mode, s.radius_px) = (Brush::Clay, false, 40.0);
+                // As the session starts: no pen seen.
+                self.doc.sculptor.pen_meter = Default::default();
+                self.ui_demo.kept.0 = self.doc.history.steps().0 as f32;
+                self.on_touch(&touch(TouchPhase::Started, PEN, Vec2::ZERO, None));
+            }
+            1 => {
+                expect("a pen landing with no pressure to report still opens a stroke", drawing && self.input.pen_down);
+                expect("and until one has been seen the readout waits", !meter.seen && meter.now.is_none());
+                self.on_touch(&touch(TouchPhase::Moved, PEN, Vec2::new(30.0, 0.0), Some(0.5)));
+            }
+            2 => {
+                expect("pressure arriving mid-stroke is noted, and the stroke goes on", drawing && meter.seen && meter.now == Some(0.5));
+                // The heel of the hand, well away from the pen.
+                self.on_touch(&touch(TouchPhase::Started, PALM, Vec2::new(200.0, 150.0), Some(1.0)));
+                self.on_touch(&touch(TouchPhase::Moved, PALM, Vec2::new(205.0, 152.0), Some(1.0)));
+            }
+            3 => {
+                let stayed = pointer_off(self, Vec2::new(30.0, 0.0)) < 1.0 && meter.now == Some(0.5);
+                expect("a second touch landing mid-stroke neither moves the brush nor changes its pressure", drawing && stayed);
+                self.on_touch(&touch(TouchPhase::Ended, PALM, Vec2::new(205.0, 152.0), None));
+            }
+            4 => {
+                expect("and its lifting does not end the stroke", drawing && self.input.pen_down);
+                self.on_touch(&touch(TouchPhase::Moved, PEN, Vec2::new(60.0, 0.0), Some(0.8)));
+                self.on_touch(&touch(TouchPhase::Ended, PEN, Vec2::new(60.0, 0.0), None));
+            }
+            5 => {
+                let one_step = self.doc.history.steps().0 as f32 == self.ui_demo.kept.0 + 1.0;
+                expect("the pen's own lift ends it, as one undo step", !self.doc.sculptor.is_active() && one_step);
+                expect("and the readout shows the tip up", meter.seen && meter.now.is_none() && !self.input.pen_down);
+                self.on_touch(&touch(TouchPhase::Started, PEN, Vec2::new(0.0, 60.0), None));
+            }
+            6 => {
+                let light = self.input.pen_pressure == Some(0.0) && meter.now == Some(0.0);
+                expect("once a pen has been seen, a touch too light to measure opens at no pressure, not at full", drawing && light);
+                self.on_touch(&touch(TouchPhase::Ended, PEN, Vec2::new(0.0, 60.0), None));
+            }
+            7 => {
+                expect("and ends with its lift", !self.doc.sculptor.is_active() && self.input.drag == Drag::None);
+                self.on_touch(&touch(TouchPhase::Moved, PEN, Vec2::new(100.0, -80.0), None));
+            }
+            8 => {
+                let hovering = pointer_off(self, Vec2::new(100.0, -80.0)) < 1.0 && !self.input.pen_down;
+                expect("a hovering pen takes the ring with it and draws nothing", hovering && !self.doc.sculptor.is_active());
+                let sculptor = &mut self.doc.sculptor;
+                sculptor.library.select(Library::base(Brush::EraseLayer), &mut sculptor.settings);
+                self.ui_demo.kept.0 = self.doc.history.steps().0 as f32;
+                self.on_touch(&touch(TouchPhase::Started, PEN, Vec2::ZERO, Some(0.6)));
+            }
+            9 => {
+                let said = self.ui.status.0.contains("Erase Layer rubs");
+                let refused = !self.doc.sculptor.is_active() && self.input.drag != Drag::Sculpt;
+                expect("Erase Layer with no layer to rub out begins no stroke, and the status line says what to do", refused && said);
+                self.on_touch(&touch(TouchPhase::Moved, PEN, Vec2::new(40.0, 0.0), Some(0.6)));
+                self.on_touch(&touch(TouchPhase::Ended, PEN, Vec2::new(40.0, 0.0), None));
+            }
+            10 => {
+                let none = self.doc.history.steps().0 as f32 == self.ui_demo.kept.0;
+                expect("and nothing is left to undo", none && !self.doc.sculptor.is_active());
+                let sculptor = &mut self.doc.sculptor;
+                sculptor.library.select(Library::base(Brush::Clay), &mut sculptor.settings);
             }
             _ => return true,
         }

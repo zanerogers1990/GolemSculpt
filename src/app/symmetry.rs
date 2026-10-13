@@ -26,9 +26,27 @@ use crate::sculpt::{Brush, PointerSample, Radial, RadialAxis};
 impl Doc {
     /// Starts a stroke on the active object, under that object's own
     /// symmetry. Returns whether the pointer was over the mesh.
+    ///
+    /// The stroke is worked through as its samples are fed, however long
+    /// that takes, which is what a scripted stroke wants (the same result on
+    /// any machine). The press of a real pointer sets the pace of a stroke
+    /// drawn by hand straight after (`Running::pointer_pressed`).
     pub(crate) fn begin_stroke(&mut self, view: &View, sample: PointerSample, invert: bool, smooth_held: bool) -> bool {
+        self.sculptor.pace = crate::sculpt::Pace::Unpaced;
         self.scene.hand_symmetry_to(&mut self.sculptor.settings);
-        self.sculptor.begin(&mut self.mesh, view, sample, invert, smooth_held)
+        // The shape Reset Shape goes back to is the one before the object's first stroke, whoever
+        // draws it: the pointer, the bridge or a scripted run. (It used to be kept only where the
+        // pointer's press is handled, so after a stroke drawn through the bridge Reset Shape had
+        // nothing to go back to.) Mask strokes move nothing.
+        if !self.sculptor.settings.mask_mode {
+            self.scene.keep_baseline(&self.mesh);
+        }
+        // What the stroke does to sculpt layers it moves the model under: Pose turns them, a push leaves them.
+        self.mesh.layer_ride = crate::app::layers::ride_of(self.sculptor.effective_brush(smooth_held));
+        // Stay in Group: a brush with the tick is kept to the face group the stroke begins on.
+        crate::app::groups::stay(&mut self.mesh, &self.sculptor, view, sample.pos, smooth_held);
+        let began = self.sculptor.begin(&mut self.mesh, view, sample, invert, smooth_held);
+        crate::app::groups::began(&mut self.mesh, began)
     }
 
     /// Changes the selected object's symmetry (and with it that of the
@@ -71,6 +89,9 @@ impl Running {
         }
         if let Some(view) = what.strip_prefix("corner") {
             return self.corner_demo(view == ":front");
+        }
+        if let Some(brush) = what.strip_prefix("even") {
+            return self.evenness_demo(brush.trim_start_matches(':'));
         }
         let shut = ["Brushes", "Clay Settings", "Move Settings"].map(|card| (card.to_owned(), false));
         crate::prefs::cards::restore(&self.egui_ctx, &shut.into_iter().collect());
@@ -259,6 +280,48 @@ impl Running {
             doc.history.push_stroke(delta);
         }
         true
+    }
+
+    /// `SCULPT_DEMO_SYMMETRY=even`: strokes beside one mirror plane, for a
+    /// look at how a stroke and its image share the surface between them.
+    /// The ball with Mirror X on, seen from the front, and five short strokes
+    /// drawn down it one under another, each further from the plane than the
+    /// last: on it, then 0.2, 0.4 and 0.75 of the brush's radius from it, and
+    /// at the bottom 2.5 radii from it, where the stroke and its image do not
+    /// meet at all and each is the stroke as it is with no symmetry.
+    ///
+    /// They should all stand as tall as the last pair: not twice as tall on
+    /// the plane, and with no hard line down the middle where two meet.
+    /// `even:<brush>` draws them with that brush (`even:clay`, `even:layer`,
+    /// `even:inflate`, `even:crease`; Standard without a name), and a number
+    /// after a second colon is the strength (`even:clay:0.2`).
+    fn evenness_demo(&mut self, spec: &str) {
+        let (name, strength) = spec.split_once(':').unwrap_or((spec, ""));
+        let brush = Brush::ALL.into_iter().find(|b| b.name().eq_ignore_ascii_case(name)).unwrap_or(Brush::Standard);
+        let strength = strength.parse::<f32>().unwrap_or(0.5).clamp(0.0, 1.0);
+        self.doc.edit_symmetry(|symmetry| symmetry.mirror = [true, false, false]);
+        let aspect = self.view.size.x / self.view.size.y.max(1.0);
+        let bounds = self.doc.scene.bounds(&self.doc.mesh);
+        self.doc.camera.frame(bounds, aspect, false);
+        (self.doc.camera.yaw, self.doc.camera.pitch) = (0.0, 0.0);
+        self.sync_view();
+
+        let radius = 0.035 * self.view.size.y;
+        let settings = &mut self.doc.sculptor.settings;
+        (settings.brush, settings.mask_mode, settings.radius_px) = (brush, false, radius);
+        settings.per_brush[brush.index()].strength = strength;
+        let middle = self.doc.scene.active().matrix().transform_point3(Vec3::Z * 0.5);
+        let Some(middle) = self.view.project(middle) else { return };
+        // How far from the plane, and how far down the ball, in brush radii.
+        for (from_plane, down) in [(0.0, -5.2), (0.2, -2.9), (0.4, -0.6), (0.75, 1.7), (2.5, 4.0)] {
+            let from = middle + Vec2::new(from_plane, down) * radius;
+            if !self.demo_stroke_between(from, from + Vec2::new(0.0, 1.6) * radius) {
+                eprintln!("demo-symmetry: the stroke {from_plane} radii from the plane missed the ball");
+            }
+        }
+        self.doc.camera.distance /= 1.5;
+        self.input.inside = false;
+        self.sync_view();
     }
 
     /// `SCULPT_DEMO_SYMMETRY=corner`: Layer where two mirror planes cross.

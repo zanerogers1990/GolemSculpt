@@ -1,10 +1,11 @@
 //! Small topology fixes for the extractor's output.
 //!
-//!  - Interior vertices with only two edges are dissolved: such a vertex is a
-//!    kink in an edge shared by two faces and only makes both faces worse.
-//!    Removing it from both faces keeps the mesh consistent (each face loses
-//!    one corner; a face left with two corners is the sliver it formed and
-//!    goes too).
+//!  - Doublets are dissolved: two faces that share both sides of a corner.
+//!    The vertex there is a kink in an edge the two faces share, and it only
+//!    makes both worse: cut into triangles, they can land a cut on the same
+//!    line, which leaves that line with four triangles. Removing the vertex
+//!    from both faces keeps the mesh consistent (each face loses one corner;
+//!    a face left with two corners is the sliver it formed and goes too).
 //!  - Adjacent triangles are paired into quads. Extraction leaves triangles
 //!    at field singularities, and most of them come in side-by-side pairs: a
 //!    quad that was cut in two. Pairs merge best-shape first, and never into
@@ -29,52 +30,73 @@ const MAX_CHORD_LENGTH: usize = 6;
 const CHORD_PASSES: usize = 6;
 const FRAGMENT_MAX_FACES: u32 = 32;
 
-pub fn clean(mut mesh: PolyMesh) -> PolyMesh {
-    for _ in 0..4 {
-        match dissolve_valence_two(&mesh) {
-            Some(next) => mesh = next,
-            None => break,
-        }
-    }
-    mesh = pair_triangles(mesh);
+pub fn clean(mesh: PolyMesh) -> PolyMesh {
+    let mut mesh = settle(mesh);
     for _ in 0..CHORD_PASSES {
         match collapse_triangle_chords(&mesh) {
-            Some(next) => mesh = next,
+            Some(next) => mesh = settle(next),
             None => break,
         }
-        if let Some(next) = dissolve_valence_two(&mesh) {
-            mesh = next;
-        }
-        mesh = pair_triangles(mesh);
     }
     mesh.remove_unused_vertices()
 }
 
-fn dissolve_valence_two(mesh: &PolyMesh) -> Option<PolyMesh> {
-    let edges = Edges::of_poly(mesh);
-    let n = mesh.vertex_count();
-    let mut valence = vec![0u32; n];
-    let mut on_boundary = vec![false; n];
-    for e in 0..edges.count() {
-        let (a, b) = (edges.a[e] as usize, edges.b[e] as usize);
-        valence[a] += 1;
-        valence[b] += 1;
-        if edges.uses[e] != 2 {
-            on_boundary[a] = true;
-            on_boundary[b] = true;
+/// Dissolves doublets and pairs triangles until there is nothing left of
+/// either to do. Each makes work for the other: dissolving a doublet leaves
+/// triangles to pair, and pairing two triangles takes the edge between them
+/// away, which can leave a vertex at one end of it with two edges. It ends,
+/// because every round that does not is one with fewer faces.
+fn settle(mut mesh: PolyMesh) -> PolyMesh {
+    loop {
+        while let Some(next) = dissolve_doublets(&mesh) {
+            mesh = next;
+        }
+        let faces = mesh.face_count();
+        mesh = pair_triangles(mesh);
+        if mesh.face_count() == faces {
+            return mesh;
         }
     }
-    let remove: Vec<bool> = (0..n).map(|v| valence[v] == 2 && !on_boundary[v]).collect();
-    if !remove.contains(&true) {
+}
+
+/// Takes out every corner that two faces have between the same two
+/// neighbours. For a vertex with two edges that is the vertex itself; at a
+/// vertex where the surface pinches, with other faces round it besides, it
+/// is the vertex in those two faces only. None when there is no such corner.
+fn dissolve_doublets(mesh: &PolyMesh) -> Option<PolyMesh> {
+    // Every corner by its vertex and the two it lies between, with where it is.
+    let mut corners: Vec<([u32; 3], u32)> = Vec::with_capacity(mesh.face_indices.len());
+    for f in 0..mesh.face_count() {
+        let (start, face) = (mesh.face_start[f], mesh.face(f));
+        let k = face.len();
+        for j in 0..k {
+            let (prev, next) = (face[(j + k - 1) % k], face[(j + 1) % k]);
+            if prev != next {
+                corners.push(([face[j], prev.min(next), prev.max(next)], start + j as u32));
+            }
+        }
+    }
+    corners.sort_unstable();
+    let mut remove = vec![false; mesh.face_indices.len()];
+    let mut found = false;
+    for pair in corners.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            remove[pair[0].1 as usize] = true;
+            remove[pair[1].1 as usize] = true;
+            found = true;
+        }
+    }
+    if !found {
         return None;
     }
     let mut out = mesh.rebuild();
-    let mut corners: Vec<u32> = Vec::new();
-    for face in mesh.faces() {
-        corners.clear();
-        corners.extend(face.iter().filter(|&&v| !remove[v as usize]));
-        if corners.len() >= 3 {
-            out.add_face(&corners);
+    let mut kept: Vec<u32> = Vec::new();
+    for f in 0..mesh.face_count() {
+        let start = mesh.face_start[f] as usize;
+        kept.clear();
+        kept.extend(mesh.face(f).iter().enumerate().filter(|&(j, _)| !remove[start + j]).map(|(_, &v)| v));
+        if kept.len() >= 3 {
+            out.add_face(&kept);
         }
     }
     Some(out)

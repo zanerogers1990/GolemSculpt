@@ -43,7 +43,13 @@ impl Running {
             false => s.radius_world,
         };
         let under = under.map(|at| (at, radius(at)));
-        doc.sculptor.pose_hover(&doc.mesh, under, self.input.mods.shift_key());
+        let shift = self.input.mods.shift_key();
+        // With Stay in Group the press will bend the group under it alone, and the preview says so.
+        let fenced = under.is_some_and(|(at, _)| super::groups::stay_at(&mut doc.mesh, &doc.sculptor, at, shift));
+        doc.sculptor.pose_hover(&doc.mesh, under, shift);
+        if fenced {
+            doc.mesh.leave_groups();
+        }
         let per_point = self.egui_ctx.pixels_per_point();
         // A chain that runs behind the camera is left out whole.
         let on_screen = |chain: &[Vec3]| {
@@ -458,16 +464,19 @@ mod tests {
         assert_eq!(moved[foot], 0.0, "a foot moved");
     }
 
-    /// 7 is Pose, as in the Unity app, and no two brushes share a key: an
-    /// unknown key falls back to 0, which would hand Snake Hook's key to
-    /// whichever brush came first.
+    /// 7 is Pose, as in the Unity app, and no two brushes share a key. The
+    /// ten number keys are the Unity app's ten brushes; a brush added since
+    /// has no key rather than taking one of theirs.
     #[test]
-    fn every_brush_has_a_number_key_of_its_own() {
-        assert_eq!(brush_key(Brush::Pose), KeyCode::Digit7);
-        assert_eq!(brush_key(Brush::SnakeHook), KeyCode::Digit0);
-        for (i, a) in Brush::ALL.into_iter().enumerate() {
-            for b in &Brush::ALL[..i] {
-                assert_ne!(brush_key(a), brush_key(*b), "{a:?} and {b:?}");
+    fn every_brush_has_a_number_key_of_its_own_or_none() {
+        assert_eq!(brush_key(Brush::Pose), Some(KeyCode::Digit7));
+        assert_eq!(brush_key(Brush::SnakeHook), Some(KeyCode::Digit0));
+        assert_eq!((brush_key(Brush::Pinch), brush_key(Brush::Nudge), brush_key(Brush::EraseLayer)), (None, None, None));
+        let keyed: Vec<Brush> = Brush::ALL.into_iter().filter(|&b| brush_key(b).is_some()).collect();
+        assert_eq!(keyed.len(), 10);
+        for (i, a) in keyed.iter().enumerate() {
+            for b in &keyed[..i] {
+                assert_ne!(brush_key(*a), brush_key(*b), "{a:?} and {b:?}");
             }
         }
     }

@@ -52,6 +52,80 @@ impl PenPressure {
     }
 }
 
+/// The smallest a brush gets under Pressure -> Size, as a share of the ring.
+/// Smaller than this a dab falls between the vertices of most meshes and
+/// does nothing, while the stroke still pays for it: spacing follows the
+/// dab's size, so they would also come ten times as thick.
+pub(super) const MIN_PEN_SIZE: f32 = 0.1;
+
+/// The pen's pressure as the brushes read it, from the filter's smoothed
+/// value: 0 at no pressure and 1 at full. `curve` is the global Curve
+/// setting. An exponent above 1 keeps the response gentle near zero, which
+/// is the noisiest part of a pen's sensor.
+pub(super) fn pen_curve(smoothed: f32, curve: f32) -> f32 {
+    smoothed.clamp(0.0, 1.0).powf(curve)
+}
+
+/// The share of its Strength a brush works at under pen pressure `pen` (0 to
+/// 1, from [`pen_curve`]; a mouse is always 1). `amount` is the brush's
+/// Pressure -> Strength: how much of the strength the lightest touch takes
+/// away. Written so that full pressure, and a mouse, give exactly 1.
+pub(super) fn pen_strength(amount: f32, pen: f32) -> f32 {
+    1.0 - amount * (1.0 - pen)
+}
+
+/// The share of the ring's size a brush works at under pen pressure `pen`.
+/// `amount` is the brush's Pressure -> Size: how much smaller the lightest
+/// touch makes it. Exactly 1 with the setting off, at full pressure and for a
+/// mouse, and never under [`MIN_PEN_SIZE`].
+pub(super) fn pen_size(amount: f32, pen: f32) -> f32 {
+    (1.0 - amount * (1.0 - pen)).max(MIN_PEN_SIZE)
+}
+
+/// What the pen is doing right now, for the panel's readout: pen pressure
+/// has to be seen arriving before any of the pressure settings can be
+/// trusted, and when it is not arriving the fix is in the tablet driver, not
+/// in the app.
+///
+/// Fed by the window's pen events, whether or not they become a stroke (a
+/// press on a panel shows as well). The brushes do not read it: they have
+/// the filter above.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PenMeter {
+    /// A pen has reported pressure at some time in this session.
+    pub seen: bool,
+    /// The pressure it reports now, 0 to 1, while its tip is down.
+    pub now: Option<f32>,
+}
+
+impl PenMeter {
+    /// The pen's tip is on the tablet, reporting `force` (or none). Returns
+    /// the pressure a stroke begun by this touch should open with.
+    ///
+    /// A pen pressed so lightly that the tablet rounds its pressure to
+    /// nothing arrives with no pressure at all, which is also how a mouse
+    /// arrives, and a stroke that opens that way is a mouse's: at full
+    /// strength and full size, a blob at the head of a light stroke. So once
+    /// a pen has shown pressure in this session, a touch without any opens at
+    /// no pressure instead.
+    pub fn down(&mut self, force: Option<f32>) -> Option<f32> {
+        let pressure = force.or(self.seen.then_some(0.0));
+        self.moved(pressure);
+        pressure
+    }
+
+    /// The tip is still down, now reporting `force`.
+    pub fn moved(&mut self, force: Option<f32>) {
+        self.seen |= force.is_some();
+        self.now = force.map(|f| f.clamp(0.0, 1.0)).or(self.now);
+    }
+
+    /// The tip has left the tablet.
+    pub fn lifted(&mut self) {
+        self.now = None;
+    }
+}
+
 /// Lazy Mouse, the stroke stabiliser: while a stroke is drawn the brush
 /// trails the pointer on a taut rope of a set length in screen pixels,
 /// moving only once the pointer has pulled the rope taut, and then only

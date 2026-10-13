@@ -1769,7 +1769,8 @@ fn session(seed: u64, steps: usize) -> (usize, usize, usize, usize) {
                 hidden_steps += usize::from(delta.is_some());
                 delta.map(|delta| history.push_visibility(delta)).is_some()
             } else {
-                let brush = dice.pick(&Brush::ALL);
+                // The twelve that sculpt a plain mesh (Erase Layer, the thirteenth, needs a sculpt layer).
+                let brush = dice.pick(&Brush::ALL[..12]);
                 let mut sculptor = refining_sculptor(brush, dice.between(0.04, 0.12));
                 sculptor.dyntopo.detail = dice.between(0.1, 0.3);
                 sculptor.dyntopo.enabled = dice.roll() < 0.8;

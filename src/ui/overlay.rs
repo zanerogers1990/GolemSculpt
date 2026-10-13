@@ -6,9 +6,11 @@ use egui::{
 };
 use glam::Vec3;
 
+use super::brushes::{initials, shortened, wheel_tiles};
 use super::{UiState, theme};
 use crate::doc::{Action, Doc, Tool};
 use crate::sculpt::Brush;
+use crate::sculpt::library::{Library, Origin};
 
 /// What the brush cursor should look like this frame, in egui points.
 #[derive(Clone, Copy)]
@@ -28,6 +30,9 @@ pub struct Cursor {
     pub tether: Option<Pos2>,
     /// Orbit pivot marker and its opacity.
     pub pivot: Option<(Pos2, f32)>,
+    /// The picture the brush will print, to show inside the ring
+    /// (`alpha_preview.rs`); `None` for a brush with no alpha.
+    pub alpha: Option<super::alpha_preview::Preview>,
 }
 
 pub const ADD: Color32 = Color32::from_rgb(51, 255, 102);
@@ -45,6 +50,10 @@ pub fn cursor(ctx: &egui::Context, c: &Cursor) {
         return;
     }
     let r = c.radius.max(7.0);
+    // Under the ring's own lines, and only where the ring is.
+    if let Some(preview) = &c.alpha {
+        super::alpha_preview::draw(&p, c.center, r, c.tint, preview);
+    }
     if let Some(strength) = c.strength {
         let t = ((strength - 0.01) / 0.99).clamp(0.0, 1.0);
         p.circle_filled(c.center, (r * t).max(2.0), Color32::from_rgba_unmultiplied(255, 77, 77, 115));
@@ -239,6 +248,66 @@ pub fn wheel_center(anchor: Pos2, half: f32, screen: Rect) -> Pos2 {
     )
 }
 
+/// How a wheel of `tiles` tiles is laid out, in points.
+struct WheelLayout {
+    /// How far the wheel reaches each way from its centre, and the radius
+    /// of its disc.
+    half: f32,
+    disc: f32,
+    /// The radius of the ring the tiles sit on.
+    ring: f32,
+    /// A tile's side, and how near its middle the pointer picks it.
+    tile: f32,
+    pick: f32,
+}
+
+impl WheelLayout {
+    /// The SSphere tool's wheel of edit modes: the Unity app's.
+    const SPHERES: WheelLayout = WheelLayout { half: 140.0, disc: 134.0, ring: 92.0, tile: 58.0, pick: 34.0 };
+
+    /// The brush wheel. Up to nine tiles it is as it has been (a little
+    /// wider than the Unity app's eight, so that no two of nine overlap).
+    /// With more, the tiles are smaller and the ring as much wider as keeps
+    /// a gap between each tile and the next, however many there are.
+    fn brushes(tiles: usize) -> WheelLayout {
+        if tiles <= 9 {
+            return WheelLayout { half: 152.0, disc: 146.0, ring: 104.0, tile: 54.0, pick: 31.0 };
+        }
+        const TILE: f32 = 48.0;
+        const GAP: f32 = 6.0;
+        // Neighbours on a ring are a chord apart: the tile and the gap.
+        let ring = ((TILE + GAP) / (2.0 * (std::f32::consts::PI / tiles as f32).sin())).max(104.0).ceil();
+        let half = ring + TILE * 0.5 + 24.0;
+        WheelLayout { half, disc: half - 6.0, ring, tile: TILE, pick: (TILE + GAP) * 0.5 - 1.0 }
+    }
+}
+
+/// The ring the brush wheel's tiles sit on, in points from its centre: the
+/// top tile is that far straight up. The wheel has a tile for each brush
+/// pinned to it (`brushes::wheel_tiles`), so the ring is as wide as they need.
+pub fn brush_wheel_ring(library: &Library) -> f32 {
+    WheelLayout::brushes(wheel_tiles(library).len()).ring
+}
+
+/// Where on the brush wheel the tile of brush `brush` of the library is,
+/// from the wheel's centre, in points; `None` if the brush is not pinned.
+pub fn brush_wheel_tile(library: &Library, brush: usize) -> Option<Vec2> {
+    let tiles = wheel_tiles(library);
+    let i = tiles.iter().position(|&tile| tile == Some(brush))?;
+    let a = i as f32 / tiles.len() as f32 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+    Some(vec2(a.cos(), a.sin()) * WheelLayout::brushes(tiles.len()).ring)
+}
+
+/// What a tile of the brush wheel shows for a brush of the library, or for
+/// the mask tile: its name, its icon and, for a brush that is not one of
+/// the base thirteen, its initials for the corner (the icon is its kernel's,
+/// which it shares).
+fn brush_tile(library: &Library, tile: Option<usize>) -> (&str, &'static str, String) {
+    let Some(entry) = tile.and_then(|i| library.entries().get(i)) else { return ("Mask", "brush_mask", String::new()) };
+    let badge = if entry.origin == Origin::Base { String::new() } else { initials(&entry.name) };
+    (&entry.name, entry.kernel.icon(), badge)
+}
+
 /// Hold-Space wheel: the brushes when sculpting, the edit modes while the
 /// SSphere tool is up. Tiles are clicked; letting go of Space closes it.
 /// Under it is a bar for the one value worth setting from here: the brush's
@@ -248,43 +317,34 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
     let screen = ctx.content_rect();
     let open = ctx.animate_bool_with_time(Id::new("radial_open"), true, 0.11);
     let spheres = doc.tool == Tool::SSpheres;
-    // The wheel's half size, the radius of its disc and of the ring the
-    // tiles sit on, a tile's size and how near the pointer picks it. The
-    // brush wheel has nine tiles where the Unity app's has eight (Pose is
-    // not on that one): on the old ring two of nine would overlap at the
-    // corners, so its ring is a little wider and its tiles a little smaller.
-    let (half, disc, ring, tile_size, pick) =
-        if spheres { (140.0, 134.0, 92.0, 58.0, 34.0) } else { (152.0, 146.0, 104.0, 54.0, 31.0) };
+    // Clockwise from the top: the pinned brushes, by their place in the
+    // library; `None` is the mask tile.
+    let (library, s) = (&doc.sculptor.library, &doc.sculptor.settings);
+    let brushes = wheel_tiles(library);
+    let in_hand = library.selected(s);
+    let WheelLayout { half, disc, ring, tile: tile_size, pick } =
+        if spheres { WheelLayout::SPHERES } else { WheelLayout::brushes(brushes.len()) };
     let center = wheel_center(anchor, half, screen);
-    // Clockwise from the top; `None` is the mask tile.
-    let brushes: [(Option<Brush>, &str, &str); 9] = [
-        (Some(Brush::Move), "Move", "brush_move"),
-        (Some(Brush::Clay), "Clay", "brush_clay"),
-        (Some(Brush::Standard), "Standard", "brush_standard"),
-        (Some(Brush::Smooth), "Smooth", "brush_smooth"),
-        (Some(Brush::Crease), "Crease", "brush_crease"),
-        (None, "Mask", "brush_mask"),
-        (Some(Brush::Inflate), "Inflate", "brush_inflate"),
-        (Some(Brush::Flatten), "Flatten", "brush_flatten"),
-        (Some(Brush::Pose), "Pose", "brush_pose"),
-    ];
-    // Name, icon and whether it is the current choice.
-    let s = &doc.sculptor.settings;
+    // Name, icon and whether it is the current choice; and, for the brush
+    // wheel, what goes in each tile's corner.
+    let mut badges = Vec::new();
     let tiles: Vec<(&str, &str, bool)> = if spheres {
         super::spheres::radial_tiles(doc)
     } else {
-        let lit = |brush: Option<Brush>| match brush {
-            Some(b) => b == s.brush && !s.mask_mode,
+        let lit = |tile: Option<usize>| match tile {
+            Some(i) => i == in_hand && !s.mask_mode,
             None => s.mask_mode,
         };
-        brushes.iter().map(|&(brush, name, icon)| (name, icon, lit(brush))).collect()
+        let shown: Vec<_> = brushes.iter().map(|&tile| (brush_tile(library, tile), lit(tile))).collect();
+        badges = shown.iter().map(|((_, _, badge), _)| badge.clone()).collect();
+        shown.into_iter().map(|((name, icon, _), lit)| (name, icon, lit)).collect()
     };
     let current = if spheres {
         super::spheres::radial_current(doc)
     } else if s.mask_mode {
         "Mask"
     } else {
-        s.brush.name()
+        library.entries()[in_hand].name.as_str()
     };
     let mut clicked = None;
     egui::Area::new(Id::new("radial_menu"))
@@ -314,15 +374,26 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
                     theme::HEADER()
                 };
                 p.rect_filled(tile, 11.0, fade(fill));
+                // The picture and the name under it, in the tile's own
+                // proportions (28 and 10 points on a tile of 54).
+                let k = tile_size / 54.0;
                 if let Some(id) = state.assets.icon(icon) {
                     p.image(
                         id,
-                        Rect::from_center_size(at - vec2(0.0, 7.0), Vec2::splat(28.0)),
+                        Rect::from_center_size(at - vec2(0.0, 7.0 * k), Vec2::splat(28.0 * k)),
                         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                         fade(Color32::WHITE),
                     );
                 }
-                p.text(at + vec2(0.0, 18.0), Align2::CENTER_CENTER, name, theme::bold(10.0), fade(theme::TEXT()));
+                // A long name a size down, and the longest cut short, so it
+                // stays on its own tile (the middle of the wheel has it whole).
+                let letters = if name.len() > 8 { 8.0 } else { 10.0 };
+                let shown = shortened(name, 10);
+                p.text(at + vec2(0.0, 18.0 * k), Align2::CENTER_CENTER, shown, theme::bold(letters * k.max(0.95)), fade(theme::TEXT()));
+                if let Some(badge) = badges.get(i).filter(|badge| !badge.is_empty()) {
+                    let corner = tile.right_top() + vec2(-4.0, 3.0);
+                    p.text(corner, Align2::RIGHT_TOP, badge, theme::bold(9.0 * k.max(0.95)), fade(theme::KEY));
+                }
                 if hovered {
                     hovered_name = Some(name);
                     if response.clicked() {
@@ -337,18 +408,17 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
         // The size of the next sphere, set from under the wheel.
         super::spheres::radial_slider(ctx, doc, center, half, open);
     } else {
-        strength_bar(ctx, &mut doc.sculptor.settings, center, half, open);
+        let name = doc.sculptor.library.entries()[in_hand].name.clone();
+        strength_bar(ctx, &mut doc.sculptor.settings, &name, center, half, open);
     }
     if let Some(i) = clicked {
         if spheres {
             super::spheres::radial_pick(doc, i);
         } else {
-            let s = &mut doc.sculptor.settings;
-            match brushes[i].0 {
-                Some(b) => {
-                    s.brush = b;
-                    s.mask_mode = false;
-                }
+            let (library, s) = (&mut doc.sculptor.library, &mut doc.sculptor.settings);
+            match brushes[i] {
+                // Picking a brush leaves mask painting.
+                Some(brush) => library.select(brush, s),
                 None => s.mask_mode = true,
             }
         }
@@ -426,20 +496,20 @@ const STRENGTH_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
 /// names that brush. Mask painting works at the strength of the brush under
 /// it, so the bar stays up for it. Pose alone makes no use of Strength, and
 /// a control that does nothing is not shown.
-fn strength_bar_label(s: &crate::sculpt::Settings) -> Option<String> {
+fn strength_bar_label(s: &crate::sculpt::Settings, name: &str) -> Option<String> {
     if s.mask_mode {
         Some("Mask Strength".to_owned())
     } else if s.brush == Brush::Pose {
         None
     } else {
-        Some(format!("{} Strength", s.brush.name()))
+        Some(format!("{name} Strength"))
     }
 }
 
 /// The Strength bar under the brush wheel: the Strength of the brush in
-/// hand, the same value the Sculpt panel's slider and F + drag change.
-fn strength_bar(ctx: &egui::Context, s: &mut crate::sculpt::Settings, center: Pos2, radius: f32, open: f32) {
-    let Some(label) = strength_bar_label(s) else { return };
+/// hand (`name`), the same value the Sculpt panel's slider and F + drag change.
+fn strength_bar(ctx: &egui::Context, s: &mut crate::sculpt::Settings, name: &str, center: Pos2, radius: f32, open: f32) {
+    let Some(label) = strength_bar_label(s, name) else { return };
     let strength = &mut s.current_mut().strength;
     let percent = |v: f32| format!("{:.0}%", v * 100.0);
     wheel_bar(ctx, "radial_strength", (center, radius, open), &label, strength, STRENGTH_RANGE, percent);
@@ -500,15 +570,17 @@ mod tests {
     fn the_strength_bar_belongs_to_the_brush_in_hand() {
         let mut s = Settings::default();
         s.brush = Brush::Clay;
-        assert_eq!(strength_bar_label(&s).as_deref(), Some("Clay Strength"));
+        assert_eq!(strength_bar_label(&s, "Clay").as_deref(), Some("Clay Strength"));
+        // A brush of the library over the same kernel goes by its own name.
+        assert_eq!(strength_bar_label(&s, "Clay Strips").as_deref(), Some("Clay Strips Strength"));
         s.brush = Brush::SnakeHook;
-        assert_eq!(strength_bar_label(&s).as_deref(), Some("Snake Hook Strength"));
+        assert_eq!(strength_bar_label(&s, "Snake Hook").as_deref(), Some("Snake Hook Strength"));
         // Pose makes no use of Strength: no bar that does nothing.
         s.brush = Brush::Pose;
-        assert_eq!(strength_bar_label(&s), None);
+        assert_eq!(strength_bar_label(&s, "Pose"), None);
         // Mask painting works at the strength of the brush under it, Pose included.
         s.mask_mode = true;
-        assert_eq!(strength_bar_label(&s).as_deref(), Some("Mask Strength"));
+        assert_eq!(strength_bar_label(&s, "Pose").as_deref(), Some("Mask Strength"));
         // The bar's ends are the ends a settings file is held to.
         let mut kept = crate::prefs::BrushPrefs::of(&s);
         for (written, read) in [(-3.0, *STRENGTH_RANGE.start()), (40.0, *STRENGTH_RANGE.end())] {
@@ -651,5 +723,40 @@ mod tests {
         let pressed = run(vec![Event::PointerMoved(beside), button(beside, true)], &mut value);
         let released = run(vec![button(beside, false)], &mut value);
         assert!(!pressed && !released && value == 1.0);
+    }
+
+    /// Every base brush but Erase Layer starts on the wheel once, with the
+    /// mask tile, Move at the top; and however many tiles a wheel has, no two of them
+    /// overlap, each is picked from its own middle only, and all of it is
+    /// inside the wheel's own square.
+    #[test]
+    fn the_brush_wheel_has_room_for_every_brush_however_many_there_are() {
+        let library = Library::default();
+        let tiles = wheel_tiles(&library);
+        assert_eq!(tiles.len(), Brush::ALL.len());
+        assert_eq!(tiles[0], Some(Library::base(Brush::Move)));
+        assert_eq!(tiles.iter().filter(|tile| tile.is_none()).count(), 1);
+        for brush in Brush::ALL {
+            let on_it = tiles.iter().filter(|&&tile| tile == Some(Library::base(brush))).count();
+            assert_eq!(on_it, usize::from(brush.starts_on_wheel()), "{brush:?}");
+        }
+        assert_eq!(brush_wheel_ring(&library), WheelLayout::brushes(13).ring);
+        // A base brush's tile has no initials in its corner; another brush's has.
+        assert_eq!(brush_tile(&library, Some(Library::base(Brush::SnakeHook))), ("Snake Hook", "brush_snakehook", String::new()));
+        let strips = library.named("Clay Strips");
+        assert_eq!(brush_tile(&library, strips), ("Clay Strips", "brush_clay", "CS".to_owned()));
+        assert_eq!(brush_tile(&library, None), ("Mask", "brush_mask", String::new()));
+        // The wheel as it was while there were nine tiles or fewer.
+        let nine = WheelLayout::brushes(9);
+        assert_eq!((nine.half, nine.disc, nine.ring, nine.tile, nine.pick), (152.0, 146.0, 104.0, 54.0, 31.0));
+        for count in [1usize, 2, 9, 10, 13, 20, 40] {
+            let wheel = WheelLayout::brushes(count);
+            // Neighbours on the ring are a chord apart.
+            let apart = if count > 1 { 2.0 * wheel.ring * (std::f32::consts::PI / count as f32).sin() } else { f32::MAX };
+            assert!(count <= 2 || apart >= wheel.tile + 1.0, "{count} tiles of {} are {apart} apart", wheel.tile);
+            assert!(count <= 2 || wheel.pick * 2.0 <= apart, "{count} tiles: two are picked at once");
+            // The tiles grow a tenth under the pointer.
+            assert!(wheel.ring + wheel.tile * 0.55 <= wheel.disc && wheel.disc < wheel.half, "{count} tiles spill off the wheel");
+        }
     }
 }

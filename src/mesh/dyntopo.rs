@@ -232,6 +232,9 @@ pub struct TopologyDelta {
     new_mask: Vec<f32>,
     new_parents: Vec<[u32; 2]>,
     new_indices: Vec<u32>,
+    /// The face group of each triangle the stroke added; none for a mesh
+    /// that had no groups.
+    new_groups: Vec<u16>,
     /// How many leaves there were before, the last one's runs then, and the
     /// runs of that leaf and every later one after the stroke.
     leaves: u32,
@@ -251,6 +254,7 @@ impl TopologyDelta {
         self.slots.len() * 28
             + self.new_positions.len() * 24
             + self.new_indices.len() * 4
+            + self.new_groups.len() * 2
             + self.leaves_after.len() * 16
             + self.polys.as_ref().map_or(0, |p| (p.start.len() + p.indices.len()) * 4)
     }
@@ -412,6 +416,11 @@ impl Mesh {
     ) -> RefineStats {
         let mut stats = RefineStats::default();
         if sites.is_empty() || !(radius > 0.0) || !(max_edge > 0.0) || self.indices.is_empty() {
+            return stats;
+        }
+        // A mesh with subdivision levels keeps its triangles as they are:
+        // a split here would leave its levels numbering another mesh (levels.rs).
+        if self.levels.is_some() {
             return stats;
         }
         if self.triangle_count() + 2 > triangle_limit {
@@ -711,9 +720,9 @@ impl Mesh {
         }
 
         let m = self.add_split_vertex(a, b, self.curved_split_point(a, b));
-        let t3 = self.add_triangle([m, b, c]);
+        let t3 = self.add_triangle([m, b, c], t1);
         self.set_triangle(t1, [a, m, c]);
-        let t4 = self.add_triangle([m, a, d]);
+        let t4 = self.add_triangle([m, a, d], t2);
         self.set_triangle(t2, [b, m, d]);
 
         self.vv.replace(a as usize, b, m);
@@ -750,7 +759,7 @@ impl Mesh {
 
         let middle = (self.positions[a as usize] + self.positions[b as usize]) * 0.5;
         let m = self.add_split_vertex(a, b, middle);
-        let t3 = self.add_triangle([m, b, c]);
+        let t3 = self.add_triangle([m, b, c], t1);
         self.set_triangle(t1, [a, m, c]);
 
         self.vv.replace(a as usize, b, m);
@@ -828,10 +837,16 @@ impl Mesh {
             self.topo.born_from = m;
         }
         self.topo.parents.push([a, b]);
+        // Each sculpt layer's offset there, as the mask above: between the two ends (layers.rs).
+        if let Some(layers) = &mut self.layers {
+            layers.split(a, b);
+        }
         m
     }
 
-    fn add_triangle(&mut self, corners: [u32; 3]) -> u32 {
+    /// Appends a triangle split from triangle `from`, whose face group it is in.
+    fn add_triangle(&mut self, corners: [u32; 3], from: u32) -> u32 {
+        self.groups.born(from);
         self.indices.extend_from_slice(&corners);
         (self.indices.len() / 3 - 1) as u32
     }
@@ -984,6 +999,11 @@ impl Mesh {
         }
         // Frozen by the mask, the same rule the splits follow.
         if self.frozen(a, b) {
+            return false;
+        }
+        // The border of two face groups stays where it is: a flip would hand
+        // a sliver of each to the other.
+        if self.groups.border(t1, t2) {
             return false;
         }
 
@@ -1259,6 +1279,7 @@ impl Mesh {
         let vertex = |v: u32| if (v as usize) < v0 { v } else { v0 as u32 + vertex_to[v as usize - v0] };
         let triangle = |t: u32| if (t as usize) < t0 { t } else { t0 as u32 + triangle_to[t as usize - t0] };
         self.indices[t0 * 3..].copy_from_slice(&corners);
+        self.groups.reorder(t0, &triangle_to);
         for &t in &self.topo.changed {
             for corner in &mut self.indices[t as usize * 3..t as usize * 3 + 3] {
                 *corner = vertex(*corner);
@@ -1272,6 +1293,9 @@ impl Mesh {
         permute(&mut self.orig_nrm[v0..], &vertex_to);
         permute(&mut self.orig_mask[v0..], &vertex_to);
         permute(&mut self.stamp[v0..], &vertex_to);
+        if let Some(layers) = &mut self.layers {
+            layers.reorder(|offsets| permute(&mut offsets[v0..], &vertex_to));
+        }
         if self.curv_on {
             permute(&mut self.curv[v0..], &vertex_to);
             permute(&mut self.curv_raw[v0..], &vertex_to);
@@ -1318,6 +1342,7 @@ impl Mesh {
             new_mask: self.mask[v0..].to_vec(),
             new_parents: self.topo.parents[born..].to_vec(),
             new_indices: self.indices[t0 * 3..].to_vec(),
+            new_groups: self.groups.from(t0),
             leaves: record.leaves,
             tail_before: record.tail,
             leaves_after: self.bvh.leaves[record.leaves as usize - 1..].iter().map(Leaf::runs).collect(),
@@ -1356,6 +1381,8 @@ impl Mesh {
         for (&t, corners) in delta.slots.iter().zip(slots) {
             self.indices[t as usize * 3..t as usize * 3 + 3].copy_from_slice(corners);
         }
+        let added: &[u16] = if undo { &[] } else { &delta.new_groups };
+        self.groups.resize(t0, added, self.indices.len() / 3);
         for (&v, &p) in verts.iter().zip(positions) {
             self.positions[v as usize] = p;
         }

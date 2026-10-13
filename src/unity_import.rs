@@ -711,7 +711,7 @@ fn convert(header: Header, raw: Vec<RawObject>) -> Imported {
     let meshes = raw.into_par_iter().map(RawObject::build).collect();
     Imported {
         // Nothing is mended or left out here: a damaged Unity sculpt is refused (`read_object`).
-        scene: SavedScene { meshes, objects: rows, active, details, repaired: 0, left_out: 0 },
+        scene: SavedScene { meshes, objects: rows, active, details, repaired: 0, left_out: 0, lost: Default::default() },
         extras: Extras {
             objects: extras,
             brush: header.brush,

@@ -21,6 +21,7 @@ sculpt-geom = { path = "crates/geom" }
 sculpt-keys = { path = "crates/keys" }
 sculpt-lathe = { path = "crates/lathe" }
 sculpt-measure = { path = "crates/measure" }
+sculpt-multires = { path = "crates/multires" }
 sculpt-region = { path = "crates/region" }
 sculpt-symmetry = { path = "crates/symmetry" }
 sculpt-toolkit = { path = "crates/toolkit" }
@@ -75,6 +76,7 @@ members = [
     "crates/tube",
     "crates/keys",
     "crates/region",
+    "crates/multires",
 ]
 
 [workspace.dependencies]

@@ -2470,6 +2470,7 @@ dependencies = [
  "sculpt-keys",
  "sculpt-lathe",
  "sculpt-measure",
+ "sculpt-multires",
  "sculpt-region",
  "sculpt-symmetry",
  "sculpt-toolkit",
@@ -2541,6 +2542,15 @@ dependencies = [
  "glam",
  "sculpt-geom",
  "sculpt-toolkit",
+]
+
+[[package]]
+name = "sculpt-multires"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "rayon",
+ "sculpt-geom",
 ]
 
 [[package]]

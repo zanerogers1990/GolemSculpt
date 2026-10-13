@@ -12,6 +12,7 @@
 //! mesh near the axis, where their footprints overlap, are handed different
 //! work (see `radial.rs`).
 
+mod erase_layer;
 mod layer_corner;
 
 use glam::{Vec2, Vec3};
@@ -264,8 +265,9 @@ impl Tolerance {
     /// No brush but Clay has such a step, and that floor is several percent
     /// of what Smooth or Flatten move at all, as much as copies applied one
     /// after another would leave between sectors. The others are held to a
-    /// two-thousandth of the stroke. (Inflate through the pole uses half of
-    /// that: it follows the normals, which carry rounding from frame to frame.)
+    /// two-thousandth of the stroke. (Inflate is the one that tries it: it
+    /// follows the normals, which carry rounding from frame to frame. See
+    /// [`Tip::sculptor`] for the strength it is tested at.)
     const OTHERS: Tolerance = Tolerance { relative: 5e-4, floor: 2e-6 };
     /// With Front Facing Only each copy is judged from its own turned
     /// viewpoint, and the gate's ramp is steep: the Unity tests allow 2%.
@@ -585,9 +587,29 @@ impl Tip {
         }
     }
 
+    /// Inflate at the strength the app starts every brush with, a fifth of
+    /// the others' here. Each dab it pushes a vertex along its normal, and a
+    /// normal is made of the neighbours' positions, so whatever rounding
+    /// lies between two sectors grows with every dab, by more the further a
+    /// dab moves a vertex against the length of the edges round it. The
+    /// ball's triangles are finest at the pole. While the copies of a dab
+    /// that met there were shared out by the overlap of their discs, a
+    /// stroke through the pole was half as strong as anywhere else (see
+    /// `coincident_copies_at_the_pole_act_as_one_dab`), and at 0.5 it stayed
+    /// under this: twelve repeats left 2.4e-4 of the stroke between sectors,
+    /// against the 5e-4 allowed, though eight repeats at 0.4 already left
+    /// 6.8e-4. A stroke there is as strong as anywhere now, and at 0.5 it
+    /// moves the pole's triangles further each dab than they are wide: what
+    /// is left between sectors is then anything from 1e-5 to 5e-3 of the
+    /// stroke, from one strength to the next, with twelve repeats or with
+    /// eight. That is Inflate's doing, with symmetry or without; what these
+    /// tests are for is that the copies are handed the same work.
     fn sculptor(self) -> Sculptor {
         let mut sculptor = sculptor_with(self.brush());
         sculptor.settings.current_mut().accumulate = matches!(self, Tip::ClayAccumulate | Tip::Inflate);
+        if self == Tip::Inflate {
+            sculptor.settings.current_mut().strength = Settings::default().current().strength;
+        }
         sculptor
     }
 }
@@ -711,6 +733,10 @@ fn coincident_copies_at_the_pole_act_as_one_dab() {
     for tip in [Tip::Clay, Tip::ClayAccumulate, Tip::Crease, Tip::Inflate] {
         let mut displacement = |symmetry: Option<Symmetry>| {
             let mut sculptor = tip.sculptor();
+            // Inflate at the others' strength here: how far the stroke
+            // moves the pole is the question, not what is left between
+            // sectors (see `Tip::sculptor`).
+            sculptor.settings.current_mut().strength = 0.5;
             if let Some(symmetry) = symmetry {
                 symmetry.set(&mut sculptor.settings);
             }
@@ -831,6 +857,12 @@ fn furthest_moved(ball: &mut Ball, view: &View, mut sculptor: Sculptor, symmetry
 /// copy covers the middle of the ring they make. (Shared out by their overlap
 /// alone, the middle came up to 1.45 times the height, and Layer never takes
 /// anything back down.)
+///
+/// Each copy raises along the normal of its own footprint, and a vertex goes
+/// as far as the copy that asked most of it, so on a surface as bumpy as the
+/// ball's the ring comes out up to 4% taller than one dab: what copies
+/// standing on different slopes leave between them however they are laid
+/// (`layer_corner::IN_TURN`).
 #[test]
 fn layer_keeps_to_its_height_near_the_axis() {
     let mut ball = Ball::new();
@@ -853,30 +885,34 @@ fn layer_keeps_to_its_height_near_the_axis() {
                     repeated / alone
                 );
                 println!("{report}");
-                assert!((0.9..=1.03).contains(&(repeated / alone)), "{report}");
+                assert!((0.9..=1.06).contains(&(repeated / alone)), "{report}");
             }
         }
     }
 }
 
-/// Copies that only partly overlap are shared out by the one number for the
-/// whole set, taken from the brush's own radius.
+/// Copies that only partly overlap are shared out by one number for the
+/// whole set, counted from what the copies did (`share.rs`).
 ///
-/// Two copies half a radius either side of the axis count as 1.391 dabs, so
-/// a vertex only one of them reaches moves by 1 / 1.391 of what the dab alone
-/// would have moved it. And copies whose rings do not touch are not shared
-/// out at all, however far each one's sweep makes it look for its vertices:
-/// Clay, whose tip is swept from one dab to the next, is exactly as strong
-/// with its copy 2.6 radii away as with none.
+/// Two copies of an Inflate dab half a radius either side of the axis: every
+/// vertex is moved the same share of what the two did to it between them,
+/// more than half of it (they are not on one spot) and less than all (they
+/// overlap), and under the pen the dab is as strong as it is alone, give or
+/// take a tenth. (Shared out by the overlap of their discs, it was 1 / 1.391
+/// of the sum everywhere, which under the pen is seven tenths.) And copies
+/// whose rings do not touch are not shared out at all, however far each
+/// one's sweep makes it look for its vertices: Clay, whose tip is swept from
+/// one dab to the next, is exactly as strong with its copy 2.6 radii away as
+/// with none.
 #[test]
-fn partly_overlapping_copies_are_shared_out_by_the_brush_radius() {
+fn partly_overlapping_copies_are_shared_out_by_what_they_did() {
     let mut ball = Ball::new();
     let view = view_from_above(&ball.mesh);
     let two = Symmetry { mirror: [false; 3], repeats: 2 };
+    let twin = ball.partners_under(&two.group()).into_iter().find(|(op, _)| !op.is_identity()).expect("a half turn").1;
 
     // One Inflate dab half a radius from the axis, alone and with its copy.
     let at = stroke_points(0.5 * BRUSH_RADIUS, STROKE_FRAMES)[STROKE_FRAMES / 2];
-    let copy = Vec3::new(-at.x, at.y, -at.z);
     let mut dab = |symmetry: Option<Symmetry>| {
         let mut sculptor = sculptor_with(Brush::Inflate);
         if let Some(symmetry) = symmetry {
@@ -891,17 +927,26 @@ fn partly_overlapping_copies_are_shared_out_by_the_brush_radius() {
     };
     let (alone, shared) = (dab(None), dab(Some(two)));
     let most = alone.iter().fold(0.0f32, |a, &b| a.max(b));
-    let (mut checked, mut worst) = (0, 0.0f32);
-    for (v, &start) in ball.start.iter().enumerate() {
-        // Well inside the dab, and out of its copy's reach.
-        if alone[v] > 0.3 * most && start.distance(copy) > 1.05 * BRUSH_RADIUS {
-            worst = worst.max((shared[v] / alone[v] - 1.0 / 1.391).abs());
+    let pen = (0..alone.len()).max_by(|&a, &b| alone[a].total_cmp(&alone[b])).unwrap();
+    // The share of what the two did between them that each vertex was moved:
+    // Inflate pushes along the vertex's own normal, so the two add up plainly.
+    let (mut checked, mut least, mut greatest) = (0, f32::MAX, 0.0f32);
+    for v in 0..alone.len() {
+        let both = alone[v] + alone[twin[v] as usize];
+        // Well inside the pair, and short of where an overlap is eased off.
+        if both > 0.3 * most && shared[v] < 0.98 * most {
+            (least, greatest) = (least.min(shared[v] / both), greatest.max(shared[v] / both));
             checked += 1;
         }
     }
-    println!("{checked} vertices only one copy reaches: off 1 / 1.391 by {worst:.2e} at most");
-    assert!(checked > 30, "only {checked} vertices to judge by");
-    assert!(worst < 0.01, "a vertex one copy reaches is off its share by {worst:.3}");
+    let under_the_pen = shared[pen] / alone[pen];
+    println!("{checked} vertices: moved {least:.4} to {greatest:.4} of what the two did; under the pen {under_the_pen:.3} of the dab alone");
+    assert!(checked > 60, "only {checked} vertices to judge by");
+    assert!(greatest - least < 0.01, "not one share for the whole set: {least} to {greatest}");
+    assert!(least > 0.5 && greatest < 1.0, "{least} to {greatest}");
+    assert!((0.9..=1.1).contains(&under_the_pen), "under the pen the dab is {under_the_pen} of itself");
+    let tallest = shared.iter().fold(0.0f32, |a, &b| a.max(b));
+    assert!(tallest <= 1.1 * most, "the overlap stands {:.3} of the dab alone", tallest / most);
 
     // A short Clay stroke round the axis, 1.1 radii out: its copy is always
     // 2.2 radii away, more than a diameter, and less than the two swept tips
@@ -961,7 +1006,7 @@ fn a_stroke_through_the_axis_neither_piles_up_nor_tears() {
     let mut ball = Ball::new();
     let view = view_from_above(&ball.mesh);
     let points = stroke_points(0.0, STROKE_FRAMES);
-    let tips: [(&str, Brush, bool); 8] = [
+    let tips: [(&str, Brush, bool); 9] = [
         ("Clay", Brush::Clay, false),
         ("Clay, accumulating", Brush::Clay, true),
         ("Crease", Brush::Crease, false),
@@ -970,6 +1015,7 @@ fn a_stroke_through_the_axis_neither_piles_up_nor_tears() {
         ("Layer", Brush::Layer, false),
         ("Flatten", Brush::Flatten, false),
         ("Smooth", Brush::Smooth, false),
+        ("Pinch", Brush::Pinch, false),
     ];
     for (name, brush, accumulate) in tips {
         for symmetry in [RADIAL_12, Symmetry { mirror: [true, false, false], repeats: 32 }] {
@@ -1176,7 +1222,8 @@ fn every_brush_stays_symmetric_under_radial_symmetry() {
         let partners = ball.partners_under(&symmetry.group());
         for from_axis in [0.6, 6.0] {
             let points = stroke_points(from_axis * BRUSH_RADIUS, STROKE_FRAMES);
-            for brush in Brush::ALL {
+            // (Erase Layer needs a layer to rub out: its strokes are in `erase_layer.rs`.)
+            for brush in Brush::ALL.into_iter().filter(|&brush| brush != Brush::EraseLayer) {
                 let mut sculptor = sculptor_with(brush);
                 symmetry.set(&mut sculptor.settings);
                 let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
@@ -1525,5 +1572,127 @@ fn a_custom_axis_tilted_against_a_mirror_plane_still_sculpts_every_copy() {
         let image = op.apply(centre);
         let raised = mesh.positions.iter().filter(|p| p.distance(image) < BRUSH_RADIUS && p.length() > 0.502).count();
         assert!(raised > 5, "nothing was raised round the copy at {image}");
+    }
+}
+
+// --------------------------------------------- Pinch and Nudge at the axis
+
+/// A path toward the axis along a meridian, from `from` to `to` brush radii
+/// away from it, one point per frame.
+fn toward_the_axis(from: f32, to: f32) -> Vec<Vec3> {
+    (0..=STROKE_FRAMES)
+        .map(|f| {
+            let away = (from + (to - from) * f as f32 / STROKE_FRAMES as f32) * BRUSH_RADIUS;
+            let polar = (away / BALL_RADIUS).asin();
+            point_on_ball(Vec3::new(polar.sin() * STROKE_AZIMUTH.cos(), polar.cos(), polar.sin() * STROKE_AZIMUTH.sin()))
+        })
+        .collect()
+}
+
+/// A path round the axis, `away` brush radii from it, through `turn` radians.
+fn round_the_axis(away: f32, turn: f32) -> Vec<Vec3> {
+    let polar = (away * BRUSH_RADIUS / BALL_RADIUS).asin();
+    (0..=STROKE_FRAMES)
+        .map(|f| {
+            let a = STROKE_AZIMUTH + turn * f as f32 / STROKE_FRAMES as f32;
+            point_on_ball(Vec3::new(polar.sin() * a.cos(), polar.cos(), polar.sin() * a.sin()))
+        })
+        .collect()
+}
+
+/// How far a stroke of `brush` along `points` moves the ball at most, under
+/// `symmetry` or with none.
+fn moved_along(ball: &mut Ball, view: &View, brush: Brush, symmetry: Option<Symmetry>, points: &[Vec3]) -> f32 {
+    let mut sculptor = sculptor_with(brush);
+    if let Some(symmetry) = symmetry {
+        symmetry.set(&mut sculptor.settings);
+    }
+    let delta = stroke_through(&mut ball.mesh, &mut sculptor, view, points);
+    let moved = ball.displacement();
+    assert!(ball.mesh.positions.iter().all(|p| p.is_finite()), "{brush:?}: a vertex went to infinity");
+    ball.undo(delta);
+    moved
+}
+
+/// Pinch and Nudge are as strong beside the axis as away from it. Where the
+/// copies of the brush do not reach one another a repeated stroke is the
+/// stroke alone, exactly. Where they overlap they share what they do
+/// (`share.rs`), so the copies do not pile up: the surface is moved as far
+/// as one dab moves it, less what copies heading different ways take from
+/// one another. That is at most a fifth for Nudge, whose copies carry the
+/// surface each its own way, and a little more for Pinch right at the
+/// axis, where twelve strokes draw it toward twelve lines at once.
+#[test]
+fn pinch_and_nudge_are_as_strong_beside_the_axis_as_away_from_it() {
+    let mut ball = Ball::new();
+    let view = view_from_above(&ball.mesh);
+    // The path, and the least and most of the stroke alone that it may come to.
+    let paths: [(&str, Vec<Vec3>, f32, f32); 6] = [
+        ("toward the axis, 4 to 2 radii off", toward_the_axis(4.0, 2.0), 0.98, 1.02),
+        ("toward the axis, 3 radii to 1", toward_the_axis(3.0, 1.0), 0.85, 1.05),
+        ("toward the axis, 2 radii to a third", toward_the_axis(2.0, 0.3), 0.65, 1.1),
+        ("round the axis, 3 radii off", round_the_axis(3.0, 0.5), 0.98, 1.05),
+        ("round the axis, 1.5 radii off", round_the_axis(1.5, 0.8), 0.95, 1.2),
+        ("round the axis, 0.6 of a radius off", round_the_axis(0.6, 1.5), 0.75, 1.15),
+    ];
+    for brush in [Brush::Pinch, Brush::Nudge] {
+        for (name, points, least, most) in &paths {
+            for symmetry in [RADIAL_6, RADIAL_12] {
+                let alone = moved_along(&mut ball, &view, brush, None, points);
+                let repeated = moved_along(&mut ball, &view, brush, Some(symmetry), points);
+                let report = format!(
+                    "{brush:?} {name}, x{}: {alone:.3e} alone and {repeated:.3e} repeated ({:.2}x)",
+                    symmetry.repeats,
+                    repeated / alone
+                );
+                println!("{report}");
+                assert!(alone > 5e-3, "{report}: the stroke barely moved the ball");
+                assert!((*least..=*most).contains(&(repeated / alone)), "{report}");
+            }
+        }
+    }
+}
+
+/// A Nudge stroke straight through the axis. Its copies carry the surface
+/// in toward the axis from every side and then out again, and at the axis
+/// itself they pull every way at once: the one thing every copy can agree
+/// on is that the axis stays where it is. So the pole does not go sideways
+/// (alone, the same stroke carries it off with the pen), the surface is
+/// not torn, and nothing is piled up.
+#[test]
+fn a_nudge_through_the_axis_leaves_the_axis_where_it_is() {
+    let mut ball = Ball::new();
+    let view = view_from_above(&ball.mesh);
+    let points = stroke_points(0.0, STROKE_FRAMES);
+    let off_axis = |p: Vec3| Vec2::new(p.x, p.z).length();
+    // The vertex on the axis, at the top of the ball.
+    let on_top = |v: &usize| ball.start[*v].y > 0.0;
+    let pole = (0..ball.start.len()).filter(on_top).min_by(|&a, &b| off_axis(ball.start[a]).total_cmp(&off_axis(ball.start[b]))).unwrap();
+    println!("the pole is vertex {pole}, {:.2e} off the axis", off_axis(ball.start[pole]));
+    assert!(off_axis(ball.start[pole]) < 1e-6, "there is a vertex on the axis");
+    // How unevenly the stroke alone moves the surface: the yardstick for a tear.
+    let mut alone_rough = 0.0;
+    for symmetry in [None, Some(RADIAL_6), Some(RADIAL_12), Some(Symmetry { mirror: [true, false, false], repeats: 32 })] {
+        let mut sculptor = sculptor_with(Brush::Nudge);
+        if let Some(symmetry) = symmetry {
+            symmetry.set(&mut sculptor.settings);
+        }
+        let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
+        let (carried, moved, rough) = (off_axis(ball.mesh.positions[pole]), ball.displacement(), roughest_edge(&ball));
+        let report = format!("Nudge through the axis, {symmetry:?}: pole {carried:.2e} off the axis, moved {moved:.3e}");
+        println!("{report}, roughest edge {rough:.2e}");
+        assert!(ball.mesh.positions.iter().all(|p| p.is_finite()), "{report}");
+        match symmetry {
+            None => {
+                assert!(carried > 0.01, "{report}: alone, the pole goes with the pen");
+                alone_rough = rough;
+            }
+            Some(_) => {
+                assert!(carried < 2e-5, "{report}");
+                assert!(moved < 0.01, "{report}: the copies piled up");
+                assert!(rough <= alone_rough, "{report}: the surface is torn ({rough:.2e} against {alone_rough:.2e} alone)");
+            }
+        }
+        ball.undo(delta);
     }
 }

@@ -9,17 +9,21 @@ Double-click `Sculpt.bat`. The first run builds the app (a minute or two);
 after that it starts instantly. The program itself is
 `target\release\sculpt.exe`.
 
-For pen pressure, tick **Enable Windows Ink** in the Huion driver. Lifting the
-pen does not add a last, harder bit to the stroke: it ends at the pressure the
-pen last had (a mouse has no pressure and always sculpts at full strength).
+For pen pressure, tick **Enable Windows Ink** in the Huion driver. The
+**Stroke** card (Brush tab) shows whether pressure is arriving: a live bar
+while the pen is down, and a line saying so if none has been seen since the
+app opened. Lifting the pen does not add a last, harder bit to the stroke: it
+ends at the pressure the pen last had (a mouse has no pressure and always
+sculpts at full strength and full size).
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
 | Left drag on the model | Sculpt |
-| Ctrl + drag, or right drag | Sculpt inverted (Pose: twist the limb, or slide it) |
+| Ctrl + drag, or right drag | Sculpt inverted (Move: push the surface in or pull it out; Pose: twist the limb, or slide it) |
 | Shift + drag | Smooth |
+| Ctrl + Shift + click on the model | Isolate the face group under the pointer: the rest of the object is hidden (again, or on the background: show everything) |
 | Left drag on the background | Orbit |
 | Alt + drag | Orbit |
 | Middle drag, or Alt + Shift + drag | Pan |
@@ -32,17 +36,20 @@ pen last had (a mouse has no pressure and always sculpts at full strength).
 | H / Shift + H / Alt + H | Hide the selection / hide everything else / show everything |
 | / | Local View: only the selection, framed; again to bring the rest and the view back |
 | Delete | Delete the selected object (asks first) |
-| 1 2 3 4 5 6 7 8 9 0 | Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook |
+| 1 2 3 4 5 6 7 8 9 0 | The base brushes Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook (Pinch, Nudge and Erase Layer have no key, nor has any other brush of the library: pick them in the panel or on the wheel) |
 | S / F / D + drag | Brush size / strength / focal shift |
-| Space (hold) | Brush wheel, with the brush's Strength on a bar under it |
+| Space (hold) | Brush wheel: the brushes pinned to it, with the Strength of the brush in hand on a bar under it |
 | M | Mask painting |
 | X | Mirror X |
 | R | Voxel remesh |
+| Ctrl + D | Subdivide: add a finer level of the selected object and go to it |
+| Page Up / Page Down | One subdivision level finer / coarser |
 | G | Transform gizmo on / off |
 | L | Measure tool on / off |
 | Y | Array tool on / off |
 | (Lathe button) | Lathe tool on / off: the Unity app gives it no key; Enter creates, Esc puts it away |
 | T | Tube tool on / off: Enter fuses the tubes into the model, Esc puts it away |
+| B | Muscle tool on / off: Enter fuses the muscles into the model, Esc puts it away |
 | N | Mask tool: on (box), again for lasso, again for off |
 | (Hide button) | Hide tool: a box or lasso hides part of the selected object; it has no key, as H hides whole objects |
 | K | Split tool: on (line), again for lasso, box, then off |
@@ -68,8 +75,11 @@ back.
 
 ## Brushes
 
-Each brush keeps its own Strength, Focal Shift and falloff; Size is shared by
-them all.
+There are any number of brushes: the thirteen base ones, the ones that come
+with the app, and your own (see Brush library, below). Each keeps its own
+Strength, Focal Shift and falloff, its own spacing and pen settings (see
+Stroke and pen, below) and the rest of what is in its settings card; Size is
+shared by them all.
 
 - **Focal Shift** moves a brush's soft edge toward its centre (softer,
   pointier) or toward its rim (harder). The cursor's inner ring shows where
@@ -84,10 +94,289 @@ them all.
   same size on screen as you zoom. Off, the brush keeps one size on the model;
   the Size slider, S + drag and the scroll wheel then set that size, over a
   range that follows how big the model is.
+- **Strength** on Move is how far the surface follows the pen: at 100% the
+  grabbed point stays under it, at 50% (where it starts) it goes half as far,
+  for a gentler pull that is easier to place.
+- **Ctrl + drag** with Move (or a right drag) pushes the surface in or pulls
+  it out along the way it faces, instead of sliding it across the screen:
+  the one direction a plain Move cannot go without turning the camera. Where
+  the surface faces you, drag up to pull it out and down to push it in. At
+  the outline, where you see it from the side, drag the way it faces. The
+  whole grab goes one way, by the brush's falloff and Strength.
 - **Connected Only** (Move) grabs only the piece of surface under the pointer,
   so moving one finger leaves the finger next to it alone.
 - Mask painting has **Mask Hardness** for its edge; the selected brush's
   falloff and Front Facing Only do not apply to it.
+- **Pinch** draws the surface in toward the line of the stroke, from both
+  sides, without digging in: a soft ridge or fold gets sharper, an edge gets
+  tighter. Ctrl + drag (or the right button) spreads the surface away from
+  the line instead. A press that never sets off pinches toward its own
+  point. It has no number key.
+- **Nudge** pushes the surface sideways along the stroke, like sliding clay
+  with a thumb: whatever is under the ring is carried along and left behind
+  as the brush moves on, staying on the surface. Its Strength is how far the
+  surface follows the pen (at 100% what is under the middle of the ring
+  stays under it; it starts at 50%). Unlike Move it works on what is under
+  the ring now, all along the stroke. It leaves stretched triangles behind,
+  which Smooth's Relax evens out. It has no number key.
+- **Erase Layer** rubs a sculpt layer out under the ring: the layer's
+  wrinkles or pores go where you draw and stay everywhere else, and the
+  model underneath and the other layers are not touched. It works on the
+  layer that is recording (see Sculpt layers, below, which has the rest).
+  It has no number key and starts off the Space wheel.
+
+**Smooth** (and Shift + drag with any brush, which is Smooth) has four modes
+and one slider:
+
+- **All** is plain smoothing: bumps go down, pits come up.
+- **Peaks** only lowers what stands up: it knocks bumps off and leaves the
+  creases beside them as deep as they were.
+- **Valleys** only fills what lies low: pits and creases come up and the
+  peaks are left standing.
+- **Relax** slides the mesh within the surface until its triangles are even,
+  without changing the shape. Use it on a patch that Move, Snake Hook or
+  Nudge has stretched.
+- **Keep Volume** (All only) gives back what smoothing takes away. Plain
+  smoothing makes a form a little thinner every stroke: a finger, the edge
+  of a fin, a small ball. At 100% the form keeps its thickness and its bumps
+  still go; at 0%, where it starts, it shrinks as it always has.
+
+**Flatten** has three modes and a lock:
+
+- **Both** levels to the plane under the ring: high parts come down and low
+  parts come up. **Scrape** only brings down what stands above the plane,
+  like scraping with a flat tool. **Fill** only raises what lies below it.
+  Ctrl + drag with Scrape fills, and with Fill scrapes; with Both it pushes
+  the high and low further apart, as before.
+- **Lock Plane** fixes the plane where the stroke begins, and the whole
+  stroke levels to that one plane: scrub over a patch to cut a true flat
+  facet. It works on what lies within half the brush's size of the plane
+  and leaves the rest alone, so a stroke that wanders off round the form
+  does not drag the surface after it.
+- **Plane Offset** moves the plane lower or higher, as before.
+
+### Brush library
+
+A brush here is what it is in ZBrush or Nomad: a name over a set of settings.
+Thirteen of them are the **base brushes** (Move, Clay, Smooth, Crease,
+Inflate, Flatten, Pose, Standard, Layer, Snake Hook, Pinch, Nudge, Erase
+Layer), one for each kind of stroke the app can make. Every other brush is one of those kinds with its
+own settings: Dam Standard is a Crease that tapers with the pen, Trim is a
+Flatten that only scrapes, Rake is a Standard with the Rake alpha.
+
+**Picking a brush.** The base thirteen are the tiles at the top of the Brush
+tab, with their number keys. The rest are in the **Brush Library** card under
+it, each a row with its kind's icon and its name: the ones that came with the
+app first, then **Yours**. Click a row and that brush is in hand; its name is
+in the card's header and on its settings card, and the tile of its kind is
+ringed in the grid above.
+
+**Every brush keeps its own settings**, and a change sticks as you make it:
+there is no save button. What a brush keeps is everything in its settings
+card (Strength, Add or Sub, Accumulate, Build-Up, Focal Shift, Front Facing,
+the falloff curve, the alpha and how it is laid, Spacing, Scatter, Size
+Jitter, the two pen pressure settings, Smooth's and Flatten's modes, and the
+numbers of its kind: Clay Depth, Crease's Pinch and Depth, Layer Height and so
+on). Picking one brush never changes another, even another of the same kind:
+set Clay Strips up one way and Clay another and each is as you left it when
+you come back. What is NOT a brush's own: the size of the ring (one size for
+every brush, so changing brush never resizes it), Lazy Mouse, Build Up on
+Hold, the pen's Pressure Curve, symmetry and dynamic topology.
+
+**Under the list**, for the brush in hand:
+
+- **Duplicate** makes a brush of your own that starts as this one is now, and
+  puts it in hand. This is how to make a brush: duplicate the nearest one,
+  name it, change it.
+- **Name** (your own brushes only): type a new name and press Enter. The
+  brushes that came with the app keep their names.
+- **Reset** puts the brush back as it came with the app or, for one of your
+  own, as it was when you made it.
+- **Delete** takes it out of the library. The thirteen base brushes stay. A
+  brush of your own that is deleted is not destroyed: its file is moved to a
+  `deleted` folder inside the brushes folder, and Import Brush brings it
+  back. A deleted brush that came with the app comes back with **Restore
+  Shipped Brushes**, which appears once one is gone.
+- **On the Space Wheel** puts the brush on the wheel that opens while Space
+  is held, or takes it off. The base brushes start on it, all but Erase
+  Layer (turn this on for it if you use it often). A dot on a row marks a
+  brush that is on the wheel.
+- **Shift Uses This Brush** (smoothing brushes only): holding Shift with any
+  brush smooths with the one brush that has this on, marked with an S in the
+  list. It starts on Smooth. Turn it on for Relax, say, and Shift relaxes.
+- **Import Brush...** brings in a brush from a file, and **Export Brush...**
+  writes the brush in hand to one, to keep or to give to someone. A brush
+  that uses an alpha the other computer does not have comes in with no
+  alpha, and the status line says which one it wanted.
+
+**The brushes that come with the app**, and what each is for:
+
+| Brush | Kind | What it does |
+| --- | --- | --- |
+| Clay Strips | Clay | Flat-topped, square-ended strips that lay over each other: blocking in |
+| Clay Tubes | Clay | A rounded bead, like a rolled coil pressed on |
+| Dam Standard | Crease | A clean sharp cut whose width follows the pen, thinning to nothing as it lifts |
+| Trim | Flatten | Shaves off what stands above the surface, hard-edged, and leaves hollows alone |
+| Fill | Flatten | Fills hollows up to the surface around them and leaves what stands proud |
+| Planar | Flatten | Levels the whole stroke to the plane it started on: one flat facet |
+| Polish | Flatten | A gentle flatten for evening a surface out |
+| Smooth Peaks | Smooth | Smooths only what sticks out |
+| Smooth Valleys | Smooth | Smooths only the hollows |
+| Relax | Smooth | Evens out the triangles without changing the shape |
+| Keep Volume | Smooth | Smooths without thinning |
+| Rake | Standard | Light parallel scratches that follow the stroke |
+| Surface Noise | Standard | Roughens the surface with scattered, turned prints of a noise picture |
+| Scales | Layer | Press and drag out one print of scales |
+| Spread | Pinch | Pinch turned round: opens a crease up |
+
+Each was set up by drawing with it and looking, on a finely remeshed ball.
+They are starting points: change one and it stays changed, and Reset gives
+you the original back.
+
+**Where brushes are kept.** The thirteen base brushes are in the settings file,
+as they always were, so settings from an older version come straight in as
+the base brushes' settings. Your own brushes are one small file each in
+`%APPDATA%\Sculpt\brushes` (plain JSON; the file Export Brush writes is the
+same kind), and so is a shipped brush you have changed. A file in that folder
+that is not a brush, or one damaged by a hand edit, is skipped with a line on
+the status bar and left exactly as it is.
+
+### Stroke and pen
+
+A stroke is a run of dabs laid along the pen's path. How a brush lays them is
+that brush's own, under **Dabs** and **Pen Pressure** in its settings card
+(Clay Settings, Crease Settings and so on); what holds for every brush is in
+the **Stroke** card below it. Move, Pose and Snake Hook lay no dabs and have
+none of the per-brush ones.
+
+- **Spacing** is how far apart the dabs are, as a share of the brush's size:
+  2% to 250%. It starts at 20% (10% for Crease). Lower is a smoother stroke
+  and more work for the machine; higher shows the dabs. It changes how smooth
+  the stroke is, not how much it builds: at any spacing up to 100% a stroke
+  builds at the same rate. From about 100% the dabs stand apart as separate
+  prints, each as tall as the stroke would have been, which is how to lay an
+  alpha down as a row of prints. Clay stops sweeping its tip from dab to dab
+  above 50%, so its dabs show too.
+- **Scatter** throws each dab off the line of the stroke, any way along the
+  surface, by a random distance up to that share of the brush's size.
+- **Size Jitter** makes each dab smaller than the brush by a random amount,
+  up to that much.
+- **Pressure → Size** makes the brush smaller the more lightly you press, so
+  a stroke can swell and taper: at 100% the lightest touch is a fine point (a
+  tenth of the ring) and full pressure is the ring's size. It starts at 0,
+  which is off. The ring shrinks and grows with the pen while you draw. The
+  dabs stay as close together for their size all the way along.
+- **Pressure → Strength** makes the brush weaker the more lightly you press:
+  at 100% a feather touch does next to nothing, at 0% pressure does not
+  change the strength. It starts at 88%, which is how every brush has always
+  felt (it takes the place of the one Light-Touch Floor there used to be for
+  all brushes; a setting of that from before is carried over into every
+  brush). A brush with Accumulate on takes half as much notice of pressure.
+  Mask painting uses the selected brush's Strength and this with it, and
+  none of that brush's other stroke settings.
+- Random does not mean different every time: the same stroke on the same
+  surface always comes out the same, and mirrored and radial copies of a
+  scattered stroke are still exact copies of each other.
+
+In the **Stroke** card, for every brush: **Build Up on Hold**, **Lazy Mouse**
+(the brush trails the pointer on a short rope), the pen's **Pressure Curve**
+(how the pen answers your hand: higher needs a firmer press before pressure
+counts) and the pen readout.
+
+**Checking the pen** (once, with the tablet; it takes a minute):
+
+1. Open the **Stroke** card and press the pen on the tablet without drawing.
+   The line that says no pressure has arrived should turn into a bar that
+   moves as you press harder and softer. If it stays a line, the pen is
+   working as a mouse: tick **Enable Windows Ink** in the Huion driver.
+2. Lift the pen: the bar goes, and the readout says the pen is up. Hover it
+   over the model without touching: the ring follows and nothing is drawn.
+3. Pick **Dam Standard** (its **Pressure → Size** is on). Draw one stroke
+   that starts light, presses hard in the middle and ends light: it should be
+   a hair at both ends and a wide cut in the middle, and the ring should
+   shrink and swell as you go.
+4. Draw two strokes side by side with **Standard**, one as lightly as you can
+   and one pressing hard: the light one should be much the fainter, with no
+   blob where it began. (Only the very first touch after the app opens may
+   begin heavy: until a pen has been seen, a touch that reports no pressure
+   is taken for a mouse.)
+5. With the pen down and drawing, rest your other hand on the display: the
+   stroke should carry on under the pen and not jump to the hand or stop.
+
+A fast stroke with a big brush on a dense model can be more than the machine
+can lay as fast as the pen moves. The stroke then falls behind the pen and
+catches up, and lifting the pen finishes it: nothing along the path is left
+out, where before such a stroke came out as a row of separate dabs. Only if
+it gets more than about a second behind are its dabs laid further apart (each
+doing as much more), so it gets coarser rather than later.
+
+On this machine that takes some doing. With a ring of up to 250 pixels on two
+million triangles, and with rings of ordinary size on eight million, a
+stroke drawn across the model in half a second kept up at sixty frames a
+second. It fell behind only with a ring bigger than the whole of an
+eight-million-triangle ball, every dab reworking the model's whole front:
+there the frames took 70 ms, the brush trailed the pen by up to four fifths
+of the ring, and after a second of scribbling it caught up about a second
+after the pen stopped (a lift at that moment held the app for a second).
+
+### Alphas
+
+An alpha is a greyscale picture the brush prints with instead of its plain
+round tip: white prints the most and black not at all. Standard, Clay,
+Inflate and Layer take one, each its own, under **Alpha** at the bottom of
+the brush's settings. This app's own; the Unity app had five for Clay only.
+
+- Seven come with the app: **Square**, **Rake**, **Noise**, **Bumps**,
+  **Scales**, **Cracks** and **Weave**. **Import Alpha...** adds a picture of
+  your own (.png or .jpg), copied into `assets/alphas/Imported`; pictures put
+  in `assets/alphas` by hand show up after **Rescan Folder**. A picture that
+  is not square is centred with black round it, and a big one is kept at 512
+  samples a side.
+- **Alpha Size** is the picture's size against the brush ring (at 100% it
+  fills the square the ring sits in), and **Alpha Rotation** turns it.
+- **Random Rotation** turns each print by a random angle, up to that many
+  degrees either way (at 180° a print may face any way at all), so a row of
+  prints does not look stamped by a machine. Set the brush's **Spacing** to
+  100% or more to lay the prints apart. A Drag to Place print gets one random
+  turn, and keeps it while you drag.
+- **Turn With Stroke** points the top of the picture the way the stroke is
+  going, so a rake's lines follow the hand; off, the top points up the
+  screen. The first dab waits for the stroke to set off, so it faces the
+  right way too.
+- **The picture shows under the cursor.** While a brush with an alpha is in
+  hand and the pointer is over the model, the picture is drawn faintly inside
+  the ring, the size it will be and turned as it will be (and, once a stroke
+  with Turn With Stroke is moving, the way the stroke is going), so a print
+  can be aimed before it is made. It lies flat on the screen: on a surface
+  seen at a slant the print itself is foreshortened and the preview is not.
+  It goes wherever the ring goes, so the clean view has neither.
+- **Repeat** tiles the picture past its edges: with a small Alpha Size it
+  covers the brush in a fine pattern. All but Square repeat without a seam.
+- **Invert** swaps black and white: bumps become pits.
+- **Drag to Place** makes one stroke one print (ZBrush's DragRect): press
+  where its middle goes, drag outward to size it, and lift to leave it. Until
+  the lift the surface is put back and the print made again each frame, so it
+  can be dragged smaller as well as bigger. Strength sets how tall it stands
+  for its size (at 100%, half its radius). A tap that does not drag prints
+  nothing. Without Drag to Place a stroke lays the picture down dab after dab
+  and smears it along itself, which suits a rake or a rough texture and
+  nothing with a shape of its own.
+
+The brush's own falloff still fades the picture toward the ring, as in
+ZBrush: slide Focal Shift toward Hard to print more of it. Mirror and radial
+copies print mirrored and turned pictures. Clay's Surface Relax is left out
+of a stroke with an alpha, since it would smooth the print away. A print
+cannot be finer than the mesh under it: remesh finer, or turn Dynamic
+Topology's Detail down, before printing small. Drag to Place does not add
+triangles itself.
+
+A Clay stroke with an alpha lays its strip from where the pen lands, rising
+over one print's length at the start as it falls away over one at the end.
+(It used to stamp one whole print where it landed as well, which left a line
+across every strip, one print in.) A press that does not go anywhere still
+prints once: when it lifts, or after a quarter of a second held still.
+
+Not here yet: alphas for mask painting.
 
 ### Pose
 
@@ -169,13 +458,29 @@ across Z keeps both, with nothing to re-tick on the way from one to the other.
   repeat and its mirror image, twelve strokes in all; a mirror that the
   repeats already make (Z on top of X with an even count about Y) is not
   made twice.
-- Where copies of a stroke land on top of each other, on a mirror plane or
-  close to the radial axis, they are shared out rather than stacked: a stroke
-  straight through the axis builds up about as much as the same stroke with
-  no symmetry, however many repeats there are, and a Move there slides along
-  the axis instead of being pulled every way at once. Layer does not go
-  past its Layer Height there either: close to the radial axis, and where two
-  or three mirror planes cross, the step is no taller than anywhere else.
+- **A brush is as strong beside a mirror plane, on it, and at the radial
+  axis, as it is anywhere else.** Where copies of a stroke land on top of
+  each other they are shared out rather than stacked. A stroke drawn down
+  the centre line of a mirrored model builds up as much as the same stroke
+  drawn beside it (it used to build up twice as fast, with every brush), and
+  one drawn a little to one side runs together with its image into one
+  smooth ridge of the same height, with no line down the middle. Where two
+  planes cross it is the same (a dab half a brush radius from both used to
+  be half as strong as it should be). Measured with every brush, a dab or a
+  stroke by a plane now moves the surface between 0.9 and 1.1 times as far
+  as the same one with no symmetry. A Move at the axis slides along it
+  instead of being pulled every way at once, and a Move on a mirror plane
+  holds the surface with the same soft edge as anywhere else (it used to
+  hold everything inside half the ring as firmly as its centre).
+- Strokes that cross still build up where they cross, as they do with no
+  symmetry at all: a stroke drawn across a mirror plane meets its image
+  coming the other way, and the arms of a radial stroke all meet at the
+  axis, so the middle comes up about half as tall again as the arms.
+- Layer does not go past its Layer Height on a plane, where planes cross or
+  at the axis: the step is no taller than anywhere else. The same goes for
+  Standard, Crease and Inflate with Accumulate off, and for Flatten and
+  Smooth, which each work toward a place and stop there: where copies meet,
+  the surface goes as far as the one that asks most, and no further.
 - Every brush follows the selected object's symmetry, mask painting included,
   and so do the Mask, Hide, Trim and Split tools. The Tube tool follows the
   symmetry of the object a tube is drawn on (it draws a tube for each copy).
@@ -318,6 +623,314 @@ else. It starts off, and the app remembers how you left it.
   shows triangles, and OBJ export writes triangles.
 - **Reset Shape** still goes back to the shape before sculpting, with the
   added triangles lying on it.
+- It is off for an object that has subdivision levels (below), and the card
+  says so: the levels need the object's triangles to stay as they are.
+  Subdivide is how such an object gets more detail.
+
+## Subdivision levels
+
+The **Subdivision** card, on the Sculpt panel's Mesh tab, keeps one model at
+several levels of fineness. Shape the big forms on a low level, where there
+are few triangles and a stroke moves a lot of clay; add the detail on a high
+one; and go back down whenever a big form needs changing. What you sculpt on
+one level is kept on the others.
+
+- **Subdivide** (Ctrl + D) adds a level above the finest one, with four times
+  the triangles, and moves the object to it. The line under the button says
+  what it will make ("77k to 307k triangles"). The model is rounded a little
+  as it is divided, as clay is when it is smoothed. Tick **Flat** to cut each
+  face into four and move nothing, for hard-edged shapes that must keep flat
+  faces and sharp corners (the app remembers the tick). The most a level can
+  have is 25 million triangles; past that the button is greyed and the line
+  says why.
+- The card lists the levels with the triangles each has, the one you are on
+  lit. Press a row to go to that level, or use **Lower** (Page Down) and
+  **Higher** (Page Up) to go one at a time. Subdivide works from the finest
+  level only, and says so from any other.
+- **Going down**, the coarse level is the sculpt itself with fewer points, not
+  a cage round it: its points sit on the surface you sculpted. Going straight
+  back up changes nothing at all.
+- **Going up after changing a low level**, the finer detail goes with the
+  surface under it: bend an arm on level 1 and the wrinkles sculpted on level
+  4 come round the bend with it, the same depth, still standing straight out
+  of the skin. Only what the change reaches is touched.
+- One thing to know. A big, broad change made on a low level comes back up
+  very nearly as you made it. **One point pulled out by itself** on a low
+  level comes back up as a softer, lower swelling, about half as high, and
+  stepping down again shows the point on that swelling. The finer levels
+  round a lone spike off; pull a few neighbouring points together if you
+  want the full height.
+- **Delete Lower** throws away the levels below the one you are on, which
+  becomes the coarsest. **Delete Higher** throws away the levels above it,
+  and the detail sculpted on them. Neither changes the model on screen.
+- A model from **Quad Remesh** subdivides into quads and stays quads on every
+  level, so Quad Remesh then Subdivide is the clean way to a model whose
+  faces follow its form. Any other model subdivides as triangles.
+- **Everything works on the level you are on**: brushes, the mask, hiding
+  parts, Check for Printing, a measure, Send to Blender, and export (OBJ, FBX
+  and STL write that level, quads included). Go to the finest level before
+  exporting the finished piece.
+- The **mask** and **hidden parts** follow you between levels. Going down, a
+  face is hidden only if everything made from it was: nothing that showed
+  goes out of sight. Coming back up, a hidden patch is as you left it. Face
+  groups follow too (see Face groups).
+- **Reset Shape** on an object with levels goes back to the shape the object
+  had when it arrived on the level it is on: a step to another level is where
+  the shape is counted from afresh, as a remesh is.
+- Every step between levels, every Subdivide and every delete is **one undo
+  step**, and undo puts back the levels, the model, the mask and the hidden
+  parts exactly. Instances share their levels; Clone and Make Unique copy
+  them.
+- **Anything that rebuilds the object's mesh drops its levels**: Remesh, Quad
+  Remesh, Decimate, Cut & Mirror, Join, the booleans, Trim, Split, a tube or
+  muscle fused in, Keys, a mesh that comes back changed from Blender. They
+  work on the level you are on, nothing is asked, the status line says the
+  levels were dropped, and Undo (Z) brings them back. Strokes, the mask,
+  Reset Shape, Set Origin to Mesh and moving the object do not touch them.
+- Levels are saved in the `.sclp` file, and in the copies kept in case of a
+  crash, and a file opens on the level it was saved on. The card says how
+  much memory the levels take (about 35 MB for each million triangles of the
+  finest level, beside the model itself). If that part of a file cannot be
+  read, the model still opens, as the level it was saved on, and the status
+  line says its levels could not be read.
+- A step to a very fine level takes a moment, because the model is rebuilt
+  for the brushes each time: about a second for five million triangles.
+
+## Sculpt layers
+
+The **Layers** card, under Subdivision on the Sculpt panel's Mesh tab, keeps
+passes of sculpting apart from the model: a layer of pores, a layer of
+wrinkles, a scar, another expression. Each can be turned down, hidden or
+deleted without touching the rest, and nothing is lost by trying.
+
+- **New Layer** adds an empty layer and starts recording on it. From then on
+  what you sculpt goes into that layer, with any brush and with symmetry, and
+  the model underneath stays as it was.
+- Each layer is a row: the **red dot** (lit on the layer that records), its
+  name (double-click to rename), the **eye**, the bin, its **Strength**
+  slider and **Bake**.
+- **One layer records at a time, or none.** Click a dot to record on that
+  layer; click the lit one to stop. With no dot lit you are sculpting the
+  model underneath, and the layers ride on it (see below).
+- **Strength** runs from 0% (none of the layer) to 100% (as it was sculpted),
+  and the **eye** takes the layer out of the shape and puts it back. Neither
+  loses anything: back at 100% the model is the one you sculpted, to within
+  the last digit the computer keeps (about a ten-millionth of its size).
+- **Delete** (the bin) takes the layer and what it added away. **Bake** makes
+  what the layer adds, as it shows now, part of the model underneath, and
+  takes the layer off the list: the shape does not change. A layer at 40% is
+  baked at 40%, and a hidden one adds nothing. **Bake All** does that for
+  every layer.
+- **A layer that records but does not show takes no stroke.** If the layer
+  with the lit dot is hidden or at 0%, sculpting is refused and the status
+  line says why: there would be nothing on screen to see the stroke by. Show
+  it, or click its dot to sculpt the model underneath. Painting a mask is
+  never refused.
+- **Recording below 100%.** What you sculpt looks exactly as you sculpt it,
+  whatever the layer's strength, and is kept that much stronger: sculpt at
+  50% and the layer holds the stroke twice as deep, so raising the slider to
+  100% afterwards doubles it. The card says so while a layer records below
+  100%. The most a stroke can be magnified is a hundred times, at 1%.
+- **Sculpting the model underneath** (no dot lit) leaves the layers on it.
+  A brush that pushes the surface about (every brush but Pose) takes what
+  stands on it along as it stands, so a layer hidden afterwards leaves the
+  model as the stroke would have left it bare. After a hard pull with the
+  Move brush under a layer of deep creases, a faint trace of the creases can
+  remain where the pull was hardest (about a quarter of their depth at the
+  worst point in the test that measures it; in a picture it is barely
+  visible). The **Pose** brush and the **gizmo** turn what they move, and the
+  layers turn with the limb, or grow with it when the gizmo scales it.
+- **Smooth, Flatten and Clay on the model underneath work on what they see**,
+  which is the model with its layers. Smoothing away a wrinkle that belongs
+  to a layer, with no layer recording, puts the opposite of the wrinkle into
+  the model underneath: hide the layer and a dent is left. To smooth a
+  layer's own work, record on that layer.
+- **The Erase Layer brush rubs a layer out locally.** Pick it on the Brush
+  tab (the last tile), light the dot of the layer to erase, and draw: under
+  the ring that layer's work is taken away, back to the model underneath
+  with the other layers still on it. Wrinkles come off an eyelid and stay on
+  the rest of the face.
+  - **Strength** is how much one pass takes, by the brush's falloff: at
+    100% (where it starts) the middle of the ring is rubbed right out and
+    the edge fades; lower, or a lighter touch of the pen, takes part of it,
+    and going over the same place again takes more. It stops at the model
+    underneath and never goes past it, however often you go over.
+  - What is rubbed out is gone from the layer, not just hidden: turn the
+    layer down, hide it, show it again, raise it back to 100%, and the patch
+    is still clean. If the layer was at 40% when you erased, raising it to
+    100% afterwards does not bring the patch back. (What is left is the
+    rounding of the last digit the computer keeps: a ten-millionth of the
+    model's size or so, and a few millionths if the layer was down at 1%
+    when it was erased.) **Undo (Z)** is how you get it back: one stroke is
+    one step.
+  - **Ctrl and the right button erase too.** There is no opposite stroke:
+    once rubbed out, the detail is in no layer for a brush to bring back.
+  - **It needs a layer that is recording and shows.** With no dot lit, or on
+    an object with no layers, the stroke is refused and the status line says
+    to pick a layer; nothing is added to undo. With the recording layer
+    hidden or at 0% it is refused as every stroke is.
+  - Masked and hidden parts are left alone, Front Facing Only and symmetry
+    work as for any brush, and it adds no triangles with dynamic topology
+    on. With an **alpha** it erases through the picture (rub pores out in a
+    broken pattern rather than a clean patch); Drag to Place erases one
+    print of it.
+  - **On a lower subdivision level** it rubs out that level's share of the
+    layer: the layer's broad form goes, and the fine detail that only the
+    finer levels hold stays. To take the fine detail off, erase on the
+    finest level.
+- **Every change is one undo step**, and undo puts back every point exactly:
+  a stroke on a layer, a drag of a Strength slider (one step however far it
+  went), the eye, a rename, a new layer, Delete, Bake, and which layer
+  records.
+- **Dynamic topology** works with layers. A stroke that adds triangles is
+  recorded on the layer, new points and all, and hiding the layer leaves the
+  added points lying on the smooth model underneath.
+- **Subdivision levels** carry the layers with the model. Subdivide takes
+  every layer up to the new level. Stepping down and back up with nothing
+  changed gives back every layer exactly. A layer can record on any level,
+  and a change of form made on a low level comes back up with the layers
+  riding on it: hide a detail layer after reshaping the model on level 1 and
+  the detail is gone cleanly. **On a lower level, Strength, the eye and
+  Delete wait for the finest level** (Page Up), where a layer's detail is;
+  the card says so. A new layer, recording, renaming and Bake work on any
+  level.
+- **Reset Shape** puts the model underneath back to the shape it had before
+  sculpting and leaves the layers on it, standing as they stood.
+- **Anything that rebuilds the object's mesh merges its layers into the
+  model**: Remesh, Quad Remesh, Decimate, Cut & Mirror, Join, the booleans,
+  Trim, Split, a tube or muscle fused in, Keys, a mesh that comes back
+  changed from Blender. The new mesh is built from the shape as it shows,
+  nothing is asked, the status line says the layers were merged, and Undo (Z)
+  brings them back. Set Origin to Mesh, Clone and Make Unique keep them, and
+  instances share them.
+- Export, Send to Blender, Check for Printing and a measure all see the shape
+  as it shows, layers in.
+- Layers are saved in the `.sclp` file and in the copies kept in case of a
+  crash. A file saved before there were layers opens as it always did. If the
+  layers in a file cannot be read, the model opens with the shape it was
+  saved with, what the layers added now part of it, and the status line says
+  so.
+- **Memory**: a layer takes 12 bytes for each vertex of the object, so about
+  6 MB for each million triangles; the card gives the figure for the layers
+  it shows. An object can have 24 layers.
+
+Not here yet: reordering the list (the order does not change the shape), and
+merging two layers into one.
+
+## Face groups
+
+The **Face Groups** card, under Layers on the Sculpt panel's Mesh tab, splits
+an object's surface into regions, each with a colour of its own, so that one
+can be hidden, masked or sculpted while the rest is left alone (ZBrush calls
+them polygroups). A group is simply a set of the object's faces; a face is in
+one group or in none.
+
+**Making them**
+
+- **Group Masked**: the masked surface becomes a new group and the mask is
+  cleared (tick **Keep the mask** to leave it on). Mask a part with the mask
+  brush or the Mask tool, then press it. The group's edge runs where the mask
+  is at half strength.
+- **Group Visible**: everything that shows becomes a new group. Hide what
+  should stay out first; with nothing hidden the whole object becomes one
+  group.
+- **Auto Groups**: each separate part of the object becomes a group of its
+  own: the parts a Join brought together, or shells that pass through each
+  other without being one surface. One connected piece is one group.
+- **Groups by Angle**: the object is split along its sharp edges, wherever
+  the surface turns by more than the **Angle** below the button. Made for
+  hard shapes (each flat side of a block becomes a group); on a soft sculpt
+  it follows the creases, and a low angle makes a great many small groups.
+- **Merge Into...**: with a group picked, press it and click another group on
+  the model: the first becomes part of the second.
+- **Clear Groups** takes them all off.
+
+Every one of these changes only what shows, as a brush does: a hidden part
+keeps the groups it has. Each is one undo step, and undo puts back exactly
+the groups there were (and the mask, for Group Masked).
+
+**Seeing them**
+
+- **Show Group Colours** (on the card, and beside Wireframe at the bottom of
+  the view) tints every face with its group's colour, over whatever material,
+  matcap or shading is showing; surface in no group keeps the material's own
+  colour. It is off until the first group is made on an object, which
+  switches it on. Off, it costs nothing at all.
+- A group keeps its colour for good: through undo, a save and a reopen, a
+  remesh. A new group is given a colour that is not close to those of the
+  groups it touches.
+
+**Using them**
+
+- **Ctrl + Shift + click a group on the model** isolates it: the rest of the
+  object is hidden, so the group can be worked on alone. The same click
+  again, or on the background, shows everything. The group clicked is also
+  the group **picked**, which the card shows as a swatch of its colour with
+  its size, and which the card's buttons work on.
+- While a tool is up (Mask, Hide, Trim, Split, Measure, Tube and the rest),
+  Ctrl and Shift are that tool's own keys, so there the click is made with
+  the card instead: press **Pick**, then click the group. That is also the
+  way with a pen and no keyboard in reach.
+- **Isolate** does what the click does, for the group picked; **Hide Group**
+  hides it; **Show All** brings back every hidden face. These are the same
+  hiding as the Hide tool's, and each is an undo step.
+- **Mask Group** masks the group picked and unmasks everything else, so
+  brushes leave it alone; **Mask All But** does the opposite, so brushes work
+  on it alone. Either mask can then be blurred for a soft edge.
+- **Stay in Group** is a tick on the Brush tab, under Front Facing Only, kept
+  with each brush like its other settings (off unless you tick it). With it
+  on, a stroke changes only the group it begins on and stops dead at the
+  group's border, whatever the brush: Move, Snake Hook, Pose and Erase Layer
+  are held to it like the rest, and so is mask painting. The Pose brush's
+  white line, before the press, shows the bend the kept stroke will make. The
+  points along a border belong to both groups, so the border itself can be
+  sculpted from either side. With mirror or radial symmetry on, the stroke is
+  kept to the groups its sides begin on, the left side's and the right
+  side's, or each repeat's; where two of those groups lie within a brush's
+  width of each other, a side can reach a little way into its neighbour's.
+  Shift smooths with the Smooth brush's own tick, not the tick of the brush
+  in hand. On an object without groups it does nothing.
+
+**What happens to them**
+
+- **Dynamic topology** keeps them: a face split from another is in its
+  group, and the border between two groups stays where it is.
+- **Subdivision levels** carry them. Subdivide gives each new face its
+  parent's group; a step down gives each coarse face the group most of it is
+  in; and stepping down and back up with nothing changed gives back exactly
+  the groups that were there, to the face. Groups can be made and changed on
+  any level; the other levels then take theirs from that one.
+- **Sculpt layers** and groups do not touch each other.
+- **Everything that rebuilds the object's mesh keeps the groups**, by giving
+  each new face the group of the old surface nearest to it: Remesh, Quad
+  Remesh, Decimate, the booleans, a Join with a remesh, a mesh that comes
+  back changed from Blender. The borders come back where they were to within
+  a face of the new mesh. Cut & Mirror gives the rebuilt side the mirror
+  image of the kept side's groups. A plain Join keeps every object's groups,
+  and where two objects used the same group the joined object has two
+  groups, not one (the object joined into keeps its colours). Trim, Split
+  and Keys keep the groups on the surface that is left, and the new surface
+  over a cut is in no group. A mesh that comes back from Blender as another
+  shape altogether starts without groups, and the status line says so.
+- Reset Shape, Set Origin to Mesh, Clone, Make Unique and a live mirror made
+  real keep them exactly, and instances share them. An array made real, as
+  one object or as separate ones, gives every copy the object's groups.
+- Groups are saved in the `.sclp` file and in the copies kept in case of a
+  crash. A file saved before there were groups opens as it always did. If
+  the groups in a file cannot be read, the model opens whole without them and
+  the status line says so.
+- **OBJ export** writes each group as a `g` group (`Group_3`), quads as quads,
+  which is how ZBrush writes its polygroups and most programs write theirs;
+  **OBJ import** reads `g` groups back as face groups. A file whose faces are
+  all in one group is read as having none. STL and FBX carry no groups.
+
+An object can have 65,535 groups, far more than the colours can tell apart;
+a few dozen is the practical limit for working by eye. The card never lists
+them: a group is found by clicking it on the model. Groups take 2 bytes for
+each triangle.
+
+Not here: groups are not sent to Blender (they are put back on the model
+when it returns).
 
 ## Decimate
 
@@ -764,6 +1377,79 @@ gives the tubes back live, with the tool brought up if it was put away, and
 Shift + Z fuses them again. A tube thinner than the model's own detail comes
 out thicker than drawn: undo, remesh the model finer, and merge again.
 
+## Muscle
+
+Press **B** (or the Muscle button) to block out a body: draw a line on the
+model and a muscle lies along it, thin at both ends, full at its belly, wider
+than it is deep, and sunk into the form. It is the Tube tool with another shape
+in hand: a muscle stays live the same way, is shaped by the same points with
+the same gestures, has the same undo, and is finished by the same Merge and
+Keep Separate. The two tools keep their own shapes: a tube is the Tube tool's,
+a muscle the Muscle tool's. This tool is this app's own; the Unity app has no
+muscles.
+
+What is different from a tube:
+
+- **It lies on the model all the way along**, not only at its points. A
+  straight line drawn over a shoulder is two points, and the muscle between
+  them follows the shoulder. It reads the surface at its own size, so on a
+  finely detailed model it rests over the ridges and takes the lie of the form,
+  not of every groove under it.
+- **A rough line is enough.** The stroke is judged as you drew it on screen:
+  wobbles smaller than a quarter of the muscle's width are dropped, so a shaky line
+  gives the same clean muscle as a careful one, with few points to edit.
+- **A stroke that starts just off the model is pulled onto it**, to the
+  nearest place on its outline, as is one that strays over the edge on the way.
+  Further out than that a drag orbits, as everywhere.
+- **The same stroke on the same model gives the same muscle**, every time.
+- **It follows the model.** Move, turn or scale the object and the muscle goes
+  with it. Sculpt the model under a live muscle and it is laid on the new
+  shape the next time the tool is brought up (and straight away after an undo
+  or a redo of the scene, a remesh or a merge); its points are shown where the
+  surface is now.
+
+The panel shapes the selected muscle, and the next one you draw:
+
+| Setting | What it does |
+| --- | --- |
+| **On Surface** / **Free** | Where new points go, and where a dragged point goes: on the model, or floating. See below. |
+| **Width** | How wide the muscle is at its belly (S + move sideways does the same). |
+| **Swell** | How full it is: low is a lean spindle, high stays wide almost to its ends. |
+| **Belly** | Where along it the widest part sits: 50% is the middle. |
+| **Taper** | How thin the two ends are: 0 is as wide as the belly, 100% comes to a point. |
+| **Thickness** | How deep it is for its width: low is a flat strap, 100% is round. |
+| **Depth** | How far it is sunk into the model, from resting on top to grown out of it. |
+| **Smoothness** | How loosely it flows between its points. |
+| **Blend** | How soft the join is when merged, against how far the muscle stands off the model. |
+
+Each point can still be made thicker or thinner than the muscle's own width
+there, by its square handle or the wheel: a point in the middle of a muscle,
+made thicker, is a second belly.
+
+**On the surface and floating are not two kinds of muscle.** Each point is one
+or the other, and a muscle can have both: its two ends on the model and its
+middle lifted clear, bridging a hollow. With **On Surface** a dragged point
+slides over the model, and a floating point dragged onto the model sticks to
+it. With **Free** a stroke is drawn on a plane facing you, just in front of
+everything it passes over (so none of it is hidden inside the model), or
+anywhere at all with Ctrl + drag; and a dragged point lifts off the surface
+and floats. A floating muscle is as flat as **Thickness** says, turned to face
+the view it was drawn from; a point lifted off the surface keeps the way it
+was turned. **Depth** only acts where a muscle lies on the surface.
+
+**Merge** is sized for muscles. A tube's soft join is measured against its
+radius; a muscle is wide and low, and a join that size swallowed it, so a
+muscle's **Blend** is measured against how far it stands off the model, and
+starts low (0.2). On a finely detailed model keep it low or at 0: a soft join
+there draws the detail up the sides of the muscle, and is most of the time a
+merge takes. For blocking a figure, **Keep Separate** costs nothing and leaves
+the model untouched: each muscle becomes an object named Muscle.
+
+The keys and gestures are the Tube tool's (see the table above), with B in
+place of T. Live muscles, like live tubes, are a scaffold: not saved in
+`.sclp` files, drawn only while the tool is up, and the app asks before it
+closes over them.
+
 ## Mask, Hide, Trim, Split and Extract
 
 Four tools act on what a shape drawn over the viewport covers, front and
@@ -783,6 +1469,25 @@ piece of its own:
   strap). A see-through shell shows what you will get while you set its
   thickness, offset and smoothing; **Accept** (Enter) makes it an object, Esc
   cancels.
+
+**A mask from the surface's own shape.** In the **Masking** card (Mesh tab),
+under **From the Surface**:
+
+- **Mask Recesses** masks what lies in creases and pits: wrinkles, cuts, the
+  foot of every bump. **Mask Peaks** masks what stands proud: ridges, the
+  tops of bumps, edges. Either takes the place of the mask there was, and is
+  one undo step.
+- **Amount** is how much of the surface the next press takes: low for only
+  the sharpest creases or ridges, high for anything that lies low or stands
+  up at all. It starts at 70%. Move it and press the button again.
+- To **sculpt only in the wrinkles**, press Mask Recesses and then
+  **Invert**: everything but the recesses is now protected. To **polish only
+  the high spots**, Mask Peaks and Invert, then Smooth or Flatten.
+- A flat face, a plain ball and any evenly curved surface are neither and
+  are left alone. The same model twice as big masks the same places, and so,
+  near enough, does the same shape with more or fewer triangles (a wrinkle
+  only two triangles wide is shallower in the mesh itself, and reads so).
+  Hidden parts keep the mask they had.
 
 | Input (Mask, Hide, Trim or Split up) | Action |
 | --- | --- |
@@ -927,7 +1632,8 @@ pair; after that they can be moved apart and the joints stay on them.
   app starts with a new sphere.
 - **Open** asks how the file should come in: in place of the scene, or with
   its objects added to it. Either is one undo step (undoing an Open brings back
-  the scene as it was, live arrays included; see Array). If the scene has changes
+  the scene as it was, live arrays included, lit, coloured and framed as it
+  was; see Array). If the scene has changes
   that are not saved it says so, and offers to save first. So does closing the
   app (the File card's Exit, the window's close button, Alt + F4 or Ctrl + Q);
   with nothing to lose it just closes. "Unsaved" means the scene is not what
@@ -959,8 +1665,8 @@ pair; after that they can be moved apart and the joints stay on them.
   belongs to its object and comes back with it on Undo.
   **What stays as it is:** the look (material, finish, lighting, backdrop),
   the brush and its settings, the tool that is up, and the settings. The app
-  itself starts with the default look, but Undo brings back objects, not a
-  look, so New Scene does not take the one on screen away.
+  itself starts with the default look, but the one on screen was chosen for
+  working in, so New Scene does not take it away.
   **When it waits:** in the middle of a stroke or a gizmo drag it does
   nothing, like every other command. While a background job is working (a
   tube merge, a trim) it is refused with a line saying which job; let it
@@ -1002,6 +1708,13 @@ pair; after that they can be moved apart and the joints stay on them.
   preset or joints the tool laid out by itself, not spheres already made into
   a skin, and never rulers, which a drag brings back. Import adds to the
   scene, loses nothing and asks nothing.
+- **Undo of an Open brings the look and the view back.** A file is opened
+  with the material, lighting, backdrop and view it was saved with. Undo of
+  the Open gives the scene from before its own back, and Redo the file's, as
+  often as the step is crossed. (It used to bring back the objects only, so
+  the old scene stood under the opened file's lighting and was framed as that
+  file was.) A new scene and a restored recovery copy are the same kind of
+  step: Undo of either puts the view back where it was.
 - **Undo of an Open brings the file name back too.** The scene from before
   returns with the file it had (the File card shows its name again, or
   "Unsaved" if it never had one), so Save writes it where it always went, or
@@ -1066,9 +1779,12 @@ pair; after that they can be moved apart and the joints stay on them.
 - **The app remembers how you left it**: interface size, the theme, tooltips
   on or off, which cards are open, which float over the view and where, which
   panels are folded away and which tab each is on, fullscreen, millimetres or inches, the remesh settings,
-  Decimate's target, dynamic topology and every brush's tuning. They are kept in
+  Decimate's target, dynamic topology, every brush's tuning, the brush in hand,
+  the brushes on the wheel and the one Shift uses. They are kept in
   `%APPDATA%\Sculpt\settings.json`, with the recent files; deleting that file
-  puts everything back to how the app first starts.
+  puts everything back to how the app first starts. Brushes of your own are
+  files in `%APPDATA%\Sculpt\brushes` (see Brush library) and are not touched
+  by that.
 - **A crash does not take the session with it.** While the scene has changes
   that are not saved, the app writes a recovery copy of it every three
   minutes, in a pause between strokes (about a tenth of a second for four to
@@ -1237,12 +1953,17 @@ file a slicer gets is the whole model.
   "One of the objects had holes..."). Where the surface was torn, doubled or
   inside out, so that no flat cap fits, they say that what is solid there is
   a best guess and to look that area over.
-- **Quad Remesh does not always give a closed model back closed.** It keeps
-  the openings a model has, and now and then leaves a five-sided hole of its
-  own, or two quads whose diagonals lie on one edge. Its line counts them
-  ("5 open edges (1 hole)") and says what to do: another number of quads, or
-  undo. Measured over the six closed test models at seven sizes each, 10 of
-  the 42 results were not closed; the sphere and the cube always were.
+- **Quad Remesh gives a closed model back closed, and keeps the openings an
+  open one has.** It does not close a model (Remesh does), so a sleeve or a
+  mask comes back with each opening still an opening, and its line counts
+  them ("68 open edges (1 hole)"). A closed model used to come back, about
+  one time in four, with a five-sided hole or with two quads cut along the
+  same line; over the six closed test models at seven sizes each, all 42
+  results are closed now, and so were 99 more at other sizes and on three
+  further models. If one ever is not, its line still says so and what to do:
+  another number of quads, or undo. A model with openings used to lose some
+  of them at low quad counts (a ball with its top cut off came back a whole
+  ball at 100 and 300 quads); those are kept now.
 
 Only holes and crowded edges are looked for. Surfaces that pass through each
 other (a plain Join of overlapping parts), walls too thin for the printer and
@@ -1547,12 +2268,20 @@ Windows comes with).
 
 ## The wheel, the panels and their cards
 
+**The wheel shows the brushes pinned to it**, with Mask at the bottom. It
+starts with twelve of the base brushes (all but Erase Layer); **On the Space Wheel** in the Brush
+Library card puts any other brush on it or takes one off, and the wheel makes
+room for however many there are. Brushes of one kind sit together. A brush
+that is not one of the base thirteen has its initials in the corner of its
+tile, since it shares its kind's picture, and a long name is cut short on the
+tile and shown whole in the middle of the wheel when the pen is over it.
+
 **The brush wheel has a Strength bar under it.** Hold Space and the wheel
 comes up with a bar beneath it (above it, when the wheel is at the bottom of
 the window), the same as the size bar under the SSphere wheel. Press anywhere
 on the bar and drag along it: it sets the Strength of the brush in hand, the
 same Strength as the slider in the Sculpt panel and F + drag, remembered with
-that brush. The bar is named after the brush it belongs to ("Clay Strength"),
+that brush. The bar is named after the brush it belongs to ("Clay Strips Strength"),
 and that is always the brush in hand, never the tile the pen happens to be
 over. A drag that starts on the bar never picks a tile, wherever it ends, and
 letting go of Space over the bar only closes the wheel. While painting a mask
@@ -1571,7 +2300,7 @@ long scroll away.
 - The **Sculpt** panel keeps Undo, Redo and the tools at its top. Under them
   are two tabs: **Brush** (the brushes, the settings of the one in hand, the
   stroke) and **Mesh** (Symmetry, Remesh with Dynamic Topology, Quad Remesh
-  and Decimate, Masking, Hidden Parts). A tool with a panel of its own
+  and Decimate, Subdivision, Masking, Hidden Parts). A tool with a panel of its own
   (SSpheres, Tube, Lathe...) shows that in place of the tabs while it is up.
 - The **Scene** panel has four tabs along its top, which stay put however far
   the cards under them are scrolled: **Scene** (the objects, and Measure &
@@ -1646,7 +2375,11 @@ and beside the view gizmo; a long message wraps onto several lines.
   holds (it is there too while the panel is up but on its Brush tab), and the
   SSphere tool's one-off results. They go by themselves, so a
   plate with only those on it lets the pen through to the model.
-- The clean view (Tab) hides the plate with everything else.
+- The clean view (Tab) hides the plate with everything else, except for an
+  error. Ctrl + S works there, and a save that failed must not look like one
+  that worked: the red line comes up at the top as it does over a folded
+  panel, and stays until it is tapped away or the panels come back. What
+  went well is not said there.
 
 Background work (a merge, a cut, Make Real) shows its progress and its Cancel
 at the bottom of the view whatever is folded, and the question a Delete or an
@@ -1700,13 +2433,16 @@ Ported from the Unity app, each described in its own section above:
   on Blender's rather than the Unity app's), mask painting and mask
   operations, mirror symmetry on X / Y / Z and radial symmetry, dynamic
   topology, voxel remesh, quad remesh, hidden parts, and undo / redo.
-  Decimate, Set Origin to Mesh and the buttons for Cut & Mirror are this
-  app's own.
+  Decimate, Set Origin to Mesh, the buttons for Cut & Mirror, brush
+  alphas with Drag to Place, the Pinch, Nudge and Erase Layer brushes and the brush
+  library (named brushes, your own and the ones that ship) are this app's own,
+  as are subdivision levels, sculpt layers and face groups.
 - **Objects**: the scene graph (add shapes, show / hide, rename, clone,
   instance, reorder), join and the booleans, live mirror copies, and the
   transform gizmo and view gizmo.
 - **Tools**: SSpheres (with the gizmo's arrows on a sphere), Measure, Array,
-  Lathe, Tube, Keys, and Mask, Hide, Trim, Split and Extract.
+  Lathe, Tube, Keys, and Mask, Hide, Trim, Split and Extract. The Muscle tool
+  is this app's own.
 - **Look**: matcaps, the lit materials and finishes, glow, lighting presets,
   HDRI lighting, backdrops and the post effects, cavity included.
 - **Files and recording**: `.sclp` files, OBJ and STL import and export,
@@ -1743,9 +2479,9 @@ cargo test -p sculpt-geom --release timing_of_decimation -- --ignored --nocaptur
 cargo test --release timing_of_a_decimate -- --ignored --nocapture                  # Decimate as the app runs it, sculpt mesh included, at 200k and 1M triangles; prints the status lines
 cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
-sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first)
+sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first; spacing=150, scatter=50 and jitter=40 set every brush's Spacing, Scatter and Size Jitter in percent, and alpha=scales+random180 an alpha with Random Rotation)
 SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
-sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut presses Cut & Mirror on a copy of a lumpy model, then Undo and Redo, and shows the model before and after in wireframe, printing the status line and a line per check, and cut:alone shows the result by itself (add --demo-ui "float=Symmetry@640:20" to see the whole card, buttons and all); corner presses Layer once where Mirror X and Y cross and once clear of the crossing, seen from the side, where both steps should be one height, and corner:front shows the same from where the dabs were made)
+sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut presses Cut & Mirror on a copy of a lumpy model, then Undo and Redo, and shows the model before and after in wireframe, printing the status line and a line per check, and cut:alone shows the result by itself (add --demo-ui "float=Symmetry@640:20" to see the whole card, buttons and all); corner presses Layer once where Mirror X and Y cross and once clear of the crossing, seen from the side, where both steps should be one height, and corner:front shows the same from where the dabs were made; even draws five short strokes down a ball with Mirror X, on the plane, 0.2, 0.4 and 0.75 of a brush radius from it and well clear of it, which should all stand as tall with no hard line down the middle, and even:clay or even:inflate:0.3 draws them with that brush at that strength)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo --decimate 8000 --look "wire=on"   # the scripted sculpt decimated to that many triangles by the routine under the Decimate button (it waits for the job), status line printed; add --demo-ui "float=Remesh@440:20" to see the card
 sculpt.exe --screenshot out.png --demo --demo-decimate   # Decimate worked through its button, its question about symmetry, Undo, Redo, Cancel and a model edited under it; prints the status lines and a line per check (SCULPT_DEMO_DECIMATE=ask stops at the question, for a picture of it)
@@ -1781,13 +2517,17 @@ sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-exit   
 sculpt.exe --screenshot out.png --demo-spheres attached --demo-tool tube --demo-files ask-exit:saved   # the same with the scene taken for saved: only what is in no file is left to ask about
 sculpt.exe --screenshot out.png --demo-files ask-exit:mirror   # a change that is saved without an undo step, made first: mirror (the X key) | hide (H) | local (/)
 sculpt.exe --screenshot out.png --demo-files lost   # what closing and opening would lose, worked through the keys and every tool; prints a line per check
-sculpt.exe --screenshot out.png --demo --demo-files open-undo   # Open, Undo, Redo and Save in every order, looking at what is in the files after each; prints a line per check (name a .sclp or .sculpt to start from that file; open-undo:opened and open-undo:undone stop after an Open, and after its Undo, for a picture of the File card)
+sculpt.exe --screenshot out.png --demo --demo-files open-undo   # Open, Undo, Redo and Save in every order, looking at what is in the files after each, and at the look and the view the scene is seen with; prints a line per check (name a .sclp or .sculpt to start from that file; open-undo:opened and open-undo:undone stop after an Open, and after its Undo, for a picture of the File card)
 sculpt.exe --screenshot out.png --demo --demo-files new         # New Scene and Exit through the routines the buttons run: unsaved work, a saved sculpt, Save and Undo in every order (looking at what is in the files), an array, a tube, spheres, a job at work, a stroke in progress; prints a line per check (new:fresh and new:undone stop after New Scene on a saved sculpt, and after its Undo, for a picture of the File card)
 sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-new   # the question New Scene would ask of the scene the other options left (ask-new:saved, ask-new:mirror as for ask-exit)
+sculpt.exe --screenshot out.png --demo-levels play          # works the Subdivision card, everything that drops levels, undo, saving and export, and prints a line per check; or a picture: base | fine | down | bent | up | card | quads (add --demo-ui "float=Subdivision@330:40" to see the card)
+sculpt.exe --screenshot out.png --demo-layers play          # works the Layers card, every brush on a layer, the model underneath, everything that merges layers, levels, the bridge, saving and a damaged file, and prints a line per check; or a picture: card | full | half | off | under | under-off | dyntopo | dyntopo-off | levels | levels-off | levels-low (add --demo-ui "float=Layers@330:60" to see the card)
+sculpt.exe --screenshot out.png --demo-groups play          # works the Face Groups card, the click on the model, Stay in Group for each kind of brush, everything that rebuilds a mesh, levels, saving, a damaged file, OBJ and the bridge, and prints a line per check and some timings; or a picture: parts | figure | figure-wire | figure-flat | figure-lit | isolate | stay | stay-off | quads | card (add --demo-ui "float=Face Groups@370:60" to see the card)
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
-cargo test --release a_closed_model_comes_out_closed -- --ignored --nocapture       # quad remesh on six closed models at seven sizes: which results are not closed (fails while any is not)
-sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | wheel=left (at the left edge) | brush=<name> | mask | strength=<0..1> | size=<interface size, 1.5> | fold=left / right / both (panels folded away) | float=<card>@<x>:<y> (that card floating, its corner there in the interface's points; as many as wanted) | status=error / status=ok / status=fading (a made-up long error, a short success, or that success part-way through fading, on the status line) | limit (dynamic topology at its triangle limit)
+cargo test --release a_closed_model_comes_out_closed -- --nocapture                 # quad remesh on six closed models at seven sizes, a line a run: every result must be closed
+cargo test --release a_model_with_openings_keeps_them -- --nocapture                # quad remesh on five models with one or two openings at six sizes: each opening must still be one
+sculpt.exe --screenshot out.png --demo --demo-ui "brush=Clay,strength=0.35,wheel"   # the brush wheel with its strength bar; a list of: wheel | wheel=low (at the bottom, the bar above it) | wheel=left (at the left edge) | brush=<name of any brush of the library> | copy=<name> (a brush of the user's own, made from the one in hand) | pin=<name> (that brush on the wheel) | shiftbrush=<name> (the brush Shift uses) | hover=<x>:<y> (the pointer over the view, that far across and down it, so the ring and the alpha under it show; add --test-keep-pointer) | shift (Shift held) | hand=<brush>@<thousands of triangles>@<ring px>@<seconds>[@<spacing %>][:x<crossings>][:lift] (a stroke drawn by hand on a dense ball and measured; it waits for the bridge's `command hand_stroke`, and `command hand_report` gives the numbers) | mask | strength=<0..1> | size=<interface size, 1.5> | fold=left / right / both (panels folded away) | float=<card>@<x>:<y> (that card floating, its corner there in the interface's points; as many as wanted) | status=error / status=ok / status=fading (a made-up long error, a short success, or that success part-way through fading, on the status line) | limit (dynamic topology at its triangle limit) | pen=<0..1> / pen=up (the Stroke card's pen readout with a pen pressing that hard, or lifted; without it, the line that says no pressure has arrived)
 sculpt.exe --screenshot out.png --demo --demo-ui "fold=right,status=error"   # the status line over the view while the Scene panel is folded away (fold=both,status=error,limit for both panels' notes; --size 1600x330 with wheel for the bar beside the wheel)
 sculpt.exe --screenshot out.png --demo --demo-ui "fold=both,float=Brushes@60:40,float=Objects@700:60"   # two cards floating with both panels folded away (add --size 700x420 to see them follow a small window in)
 sculpt.exe --demo --demo-ui play                        # works the interface with a scripted pen (the bar under the wheel, the panels' fold tabs, a card pulled out, dragged, kept through folded panels and put back, the status line over the view with a panel folded, a card asked to open while folded away, the wheel on a short window, a double tap on a fold tab), prints a line per check (ok / FAIL) and closes; keep the real pointer off its window, and give it an empty SCULPT_SETTINGS_DIR (it changes the interface size as it goes)
@@ -1862,6 +2602,41 @@ Claude Code sessions opened in this folder get a `sculpt` MCP server (set up in
 it, read its state, take screenshots, set the brush, draw strokes, move the
 camera, manage objects, and open, save and export files. Everything it changes
 is an ordinary undo step.
+
+`set_brush` works on the brush library (see Brush library): `brush` picks any
+brush by name, base, shipped or the user's own; `list: true` returns every
+brush with its kind and where it came from; `duplicate_as`, `rename`, `reset`,
+`delete`, `pinned` and `shift_uses` do what the buttons under the list do; and
+every value of a brush's record can be set (its kind's own numbers, such as
+`clay_depth`, are refused on a brush of another kind rather than silently
+doing nothing). `import_file` and `export_file` take a full path to a `.json`
+brush file, held to the same rule about paths as `open_file`; the bridge never
+opens a file box. `stroke` answers with the name of the brush it drew with.
+`command` has `mask_recesses` and `mask_peaks` (with `amount`, 0 to 1) beside
+the other mask commands.
+
+`command` also works subdivision levels and sculpt layers on the active
+object: `subdivide` (with `flat`), `level` (with `level`, 1 for the
+coarsest), `level_up`, `level_down`, `delete_lower_levels` and
+`delete_higher_levels`; and `layer_new`, `layer_record`, `layer_strength`
+(with `percent`), `layer_show`, `layer_hide`, `layer_rename` (with
+`new_name`), `layer_delete`, `layer_bake` and `layer_bake_all`, where `layer`
+is a layer's name or its id. `get_state` gives each object's `levels` (which
+one it is on, and the triangles of each) and its `layers` (id, name, whether
+it shows, its strength and which records). A stroke is refused, with the
+reason, while the layer that records is hidden or at 0%.
+
+And face groups: `group_masked` (with `keep_mask`), `group_visible`,
+`auto_groups`, `groups_by_angle` (with `angle`) and `clear_groups` make and
+clear them; `pick_group`, `isolate_group`, `hide_group`, `mask_group` and
+`mask_all_but_group` work on one group, given as `x` and `y` (a window
+position on the active object, as `pick` takes), as `group` (its number), or
+with neither the group picked last; `merge_groups` also takes `into_x` and
+`into_y`, or `into_group`; `show_all_faces` shows every hidden face and
+`show_group_colours` (with `on`) switches the colours. `get_state` gives each
+object's `groups` (how many, whether the colours show, and the group picked),
+`pick` gives the `group` under a window position (0 for none), and
+`set_brush` takes `stay_in_group`.
 
 There are two halves. The app listens on `127.0.0.1:47823` (`src/app/bridge.rs`;
 this machine only, and only the first copy of the app if several are open).

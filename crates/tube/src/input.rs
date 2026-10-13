@@ -15,7 +15,7 @@ use crate::curve;
 use crate::live::LiveTube;
 use crate::spine::SURFACE_LIFT;
 use crate::tool::{COALESCE_SECONDS, TubeTool, pixels_for};
-use crate::types::{TubePoint, TubeSettings};
+use crate::types::{Kind, TubePoint, TubeSettings};
 
 /// Pick distances and thresholds, in interface points.
 const HANDLE_PICK: f32 = 11.0;
@@ -26,6 +26,11 @@ const STROKE_SPACING: f32 = 3.0;
 /// can be told from the point however thin the tube is there.
 const RING_HANDLE_MIN: f32 = 18.0;
 const RESIZE_PER_DOUBLING: f32 = 160.0;
+
+/// A muscle stroke this close to the model's outline, but off it, is pulled onto the model.
+const SNAP_REACH: f32 = 40.0;
+const SNAP_STEP: f32 = 4.0;
+const SNAP_DIRECTIONS: usize = 16;
 
 const DOUBLE_CLICK_SECONDS: f64 = 0.3;
 const MAX_STROKE_POINTS: usize = 40;
@@ -104,6 +109,16 @@ pub(crate) struct Stroke {
     last_px: Vec2,
     pub world: Vec<Vec3>,
     normal: Vec<Vec3>,
+    /// Where each sample was on screen.
+    px: Vec<Vec2>,
+    /// A muscle stroke: it is pulled onto the model from just off it, and its floating points face
+    /// the view it was drawn in.
+    muscle: bool,
+    toward_viewer: Vec3,
+    /// A muscle drawn free: the place nearest the viewer of everything the stroke has passed over. The
+    /// muscle is drawn on the plane facing the view just in front of it, so none of it is inside what
+    /// it was drawn over.
+    over: Option<Vec3>,
 }
 
 #[derive(Default)]
@@ -155,6 +170,46 @@ fn raycast_anchor(scene: &dyn Scene, anchor: Option<ObjectId>, ray: &Ray) -> Opt
         return None;
     }
     scene.raycast_object(anchor, ray)
+}
+
+/// The model's surface nearest a pixel that is just off the model: the place a stroke that started
+/// beside the outline, or strayed over it, is pulled back to. Rings of rays outward from the pixel
+/// find the model, then each that did is walked back to the outline, and the nearest one wins. The
+/// same pixel on the same model always gives the same place.
+fn snap_to_model(cx: &Ctx, anchor: Option<ObjectId>, px: Vec2) -> Option<Hit> {
+    let scene = cx.scene();
+    let cast = |at: Vec2| match anchor {
+        Some(_) => raycast_anchor(scene, anchor, &cx.view.ray(at)),
+        None => cx.pick(at),
+    };
+    let scale = cx.view.pixels_per_point;
+    let mut radius = SNAP_STEP * scale;
+    while radius <= SNAP_REACH * scale {
+        let mut best: Option<(f32, Hit)> = None;
+        for k in 0..SNAP_DIRECTIONS {
+            let angle = k as f32 / SNAP_DIRECTIONS as f32 * std::f32::consts::TAU;
+            let toward = Vec2::new(angle.cos(), angle.sin());
+            let Some(mut hit) = cast(px + toward * radius) else { continue };
+            let (mut off, mut on) = (0.0, radius);
+            for _ in 0..6 {
+                let middle = 0.5 * (off + on);
+                match cast(px + toward * middle) {
+                    Some(found) => (on, hit) = (middle, found),
+                    None => off = middle,
+                }
+            }
+            // A step inside the outline, where the surface is not seen edge on.
+            let inside = cast(px + toward * (on + 2.0 * scale));
+            if best.is_none_or(|(nearest, _)| on < nearest) {
+                best = Some((on, inside.unwrap_or(hit)));
+            }
+        }
+        if let Some((_, hit)) = best {
+            return Some(hit);
+        }
+        radius += SNAP_STEP * scale;
+    }
+    None
 }
 
 impl TubeTool {
@@ -303,7 +358,8 @@ impl TubeTool {
         if let Some(hit) = self.pick_curve(&view, px) {
             if Some(hit.tube) != self.active {
                 self.select_tube(hit.tube, None);
-                self.say("Tube selected. Click its curve to add a point, drag a point to move it.");
+                let title = self.kind().title();
+                self.say(format!("{title} selected. Click its curve to add a point, drag a point to move it."));
                 self.pointer.drag = Drag::Idle;
             } else {
                 self.insert_point(cx, hit, px);
@@ -328,14 +384,15 @@ impl TubeTool {
         let count = self.point_count(hit.tube);
         if extend && (hit.point == 0 || hit.point + 1 == count) {
             // A second point on top of the end, dragged away from it.
-            self.begin_edit("Extend Tube", 0.0);
+            let label = self.label("Extend Tube", "Extend Muscle");
+            self.begin_edit(label, 0.0);
             let index = if hit.point == 0 { 0 } else { count };
             let end = self.tubes[hit.tube].state.points[hit.point];
             self.tubes[hit.tube].state.points.insert(index, end);
             self.touch();
             self.refresh(cx, false);
             self.select_tube(hit.tube, Some(index));
-            self.begin_point_drag(cx, hit.tube, hit.copy, index, px, "Extend Tube");
+            self.begin_point_drag(cx, hit.tube, hit.copy, index, px, label);
             return;
         }
         self.begin_point_drag(cx, hit.tube, hit.copy, hit.point, px, "Move Point");
@@ -406,7 +463,11 @@ impl TubeTool {
 
         let op = live.copies[drag.copy].op;
         let at = px + drag.grab_offset;
-        let on_model = if drag.start.is_on_surface() || self.defaults.on_surface {
+        // A tube's point on the surface stays on it wherever points are being placed. A muscle's goes
+        // by the placement: with Free it lifts off and floats, which is how a muscle on the model is
+        // made to bridge a hollow or is taken off the model altogether.
+        let stays = drag.start.is_on_surface() && self.kind() == Kind::Tube;
+        let on_model = if stays || self.defaults.on_surface {
             raycast_anchor(cx.scene(), live.state.anchor, &cx.view.ray(at))
         } else {
             None
@@ -421,7 +482,11 @@ impl TubeTool {
                 None => return,
             },
         };
-        let placed = live.frame.to_tube_point(&op, world, normal, drag.start.size, drag.start.sharp);
+        let mut placed = live.frame.to_tube_point(&op, world, normal, drag.start.size, drag.start.sharp);
+        if !placed.is_on_surface() {
+            // Off the surface a muscle stays turned the way it was.
+            placed.facing = drag.start.up();
+        }
         self.tubes[drag.tube].state.points[drag.point] = placed;
         self.touch();
     }
@@ -448,7 +513,27 @@ impl TubeTool {
         let mut world_normal = Vec3::ZERO;
         let size = a.size + (b.size - a.size) * hit.t;
 
-        if a.is_on_surface() && b.is_on_surface() {
+        let muscle = live.state.settings.kind == Kind::Muscle;
+        let mut facing = Vec3::ZERO;
+        if muscle {
+            // A muscle's points are on the surface themselves, and so is the place pressed: the
+            // station there, with its lift taken off again.
+            let nearest = copy.samples.iter().min_by(|x, y| {
+                let d = |s: &crate::types::Sample| (s.segment as f32 + s.segment_t - segment as f32 - hit.t).abs();
+                d(x).total_cmp(&d(y))
+            });
+            if let Some(station) = nearest {
+                let settings = &live.state.settings;
+                let ground = station.center - station.up * crate::muscle::lift(settings, station.radius, station.flat);
+                let frame_to_world = live.frame.frame_to_world();
+                world = frame_to_world.transform_point3(ground);
+                if a.is_on_surface() && b.is_on_surface() {
+                    world_normal = frame_to_world.transform_vector3(station.up).normalize_or_zero();
+                } else {
+                    facing = a.up().lerp(b.up(), hit.t).normalize_or_zero();
+                }
+            }
+        } else if a.is_on_surface() && b.is_on_surface() {
             // Between two surface points the new one is dropped back onto
             // the surface (un-lifted along the neighbours' blended normal),
             // so it stays a surface point; and snapped onto the model when
@@ -468,7 +553,8 @@ impl TubeTool {
             }
         }
 
-        let inserted = live.frame.to_tube_point(&copy.op, world, world_normal, size, false);
+        let mut inserted = live.frame.to_tube_point(&copy.op, world, world_normal, size, false);
+        inserted.facing = facing;
         self.begin_edit("Add Point", 0.0);
         self.tubes[hit.tube].state.points.insert(segment + 1, inserted);
         self.touch();
@@ -560,7 +646,9 @@ impl TubeTool {
     /// depth of the selected object, and is then anchored to that.
     fn begin_draw(&mut self, cx: &Ctx, px: Vec2, mid_air: bool) -> bool {
         let scene = cx.scene();
-        let hit = cx.pick(px);
+        let muscle = self.defaults.kind == Kind::Muscle;
+        // A muscle that starts just off the model starts on it.
+        let hit = cx.pick(px).or_else(|| snap_to_model(cx, None, px).filter(|_| muscle && self.defaults.on_surface && !mid_air));
         if hit.is_none() && !mid_air {
             return false;
         }
@@ -573,6 +661,10 @@ impl TubeTool {
             last_px: px,
             world: Vec::new(),
             normal: Vec::new(),
+            px: Vec::new(),
+            muscle,
+            toward_viewer: -cx.view.forward,
+            over: None,
         };
         self.pointer.drag = Drag::Draw;
         self.add_stroke_sample(cx, px);
@@ -588,7 +680,11 @@ impl TubeTool {
         }
         self.pointer.stroke.last_px = px;
         if self.add_stroke_sample(cx, px) {
-            let kept = self.simplify_stroke(self.defaults.radius * 0.12, 400);
+            let kept = if self.pointer.stroke.muscle {
+                self.simplify_muscle_stroke(cx, MAX_STROKE_POINTS)
+            } else {
+                self.simplify_stroke(self.defaults.radius * 0.12, 400)
+            };
             self.fill_draft(cx, &kept);
         }
     }
@@ -598,16 +694,26 @@ impl TubeTool {
     /// view at the stroke's depth.
     fn add_stroke_sample(&mut self, cx: &Ctx, px: Vec2) -> bool {
         let stroke = &mut self.pointer.stroke;
-        let on_model = if stroke.on_surface { raycast_anchor(cx.scene(), stroke.anchor, &cx.view.ray(px)) } else { None };
+        let mut on_model = if stroke.on_surface { raycast_anchor(cx.scene(), stroke.anchor, &cx.view.ray(px)) } else { None };
+        if on_model.is_none() && stroke.on_surface && stroke.muscle {
+            on_model = snap_to_model(cx, stroke.anchor, px);
+        }
         if let Some(hit) = on_model {
             stroke.world.push(hit.position);
             stroke.normal.push(hit.normal);
+            stroke.px.push(px);
             stroke.plane_point = hit.position;
             return true;
         }
         let Some(on_plane) = cx.view.on_facing_plane(px, stroke.plane_point) else { return false };
+        if stroke.muscle && !stroke.on_surface {
+            let under = cx.pick(px).map(|hit| hit.position);
+            let nearer = |p: Vec3| stroke.over.is_none_or(|over| cx.view.depth_of(p) < cx.view.depth_of(over));
+            stroke.over = under.filter(|&p| nearer(p)).or(stroke.over);
+        }
         stroke.world.push(on_plane);
         stroke.normal.push(Vec3::ZERO);
+        stroke.px.push(px);
         true
     }
 
@@ -621,15 +727,46 @@ impl TubeTool {
         kept
     }
 
+    /// A muscle's points from its stroke. The line is judged as it was drawn, on screen, not in space:
+    /// a muscle is laid on the surface between its points whatever they are, so a straight line over
+    /// a shoulder is two points, where a tube's stroke needs a point for every turn of the surface
+    /// under it. The tolerance is half the muscle's radius, which takes a shaky line as a clean one.
+    fn simplify_muscle_stroke(&self, cx: &Ctx, max_points: usize) -> Vec<usize> {
+        let stroke = &self.pointer.stroke;
+        let flat: Vec<Vec3> = stroke.px.iter().map(|p| p.extend(0.0)).collect();
+        let Some(&middle) = stroke.world.get(stroke.world.len() / 2) else { return Vec::new() };
+        let mut tolerance = (pixels_for(&cx.view, middle, self.defaults.radius) * 0.5).max(2.0);
+        let mut kept = curve::simplify(&flat, tolerance);
+        while kept.len() > max_points {
+            tolerance *= 1.4;
+            kept = curve::simplify(&flat, tolerance);
+        }
+        kept
+    }
+
     /// The draft tube's points from the stroke samples worth keeping.
     fn fill_draft(&mut self, cx: &Ctx, kept: &[usize]) {
         let Some(draft) = &mut self.pointer.draft else { return };
         let info = draft.state.anchor.and_then(|a| cx.scene().info(a));
         let frame = info.map_or(crate::live::Frame::WORLD, |info| crate::live::Frame { placement: info.placement });
         let stroke = &self.pointer.stroke;
+        let facing = if stroke.muscle { frame.to_tube_direction(&SymmetryOp::IDENTITY, stroke.toward_viewer) } else { Vec3::ZERO };
+        // A tube drawn free grows out of the spot it was started on. A muscle drawn free floats: on
+        // the plane facing the view that clears everything it was drawn over by its own depth. On the
+        // plane through where it started it would be half inside the model there, and out of sight
+        // wherever the model bulges toward the viewer.
+        let clear = draft.state.settings.thin_radius() * 1.25;
+        let afloat = stroke.over.map(|over| over + stroke.toward_viewer * clear);
+        let place = |i: usize| afloat.and_then(|plane| cx.view.on_facing_plane(stroke.px[i], plane)).unwrap_or(stroke.world[i]);
         draft.state.points = kept
             .iter()
-            .map(|&i| frame.to_tube_point(&SymmetryOp::IDENTITY, stroke.world[i], stroke.normal[i], 1.0, false))
+            .map(|&i| {
+                let mut point = frame.to_tube_point(&SymmetryOp::IDENTITY, place(i), stroke.normal[i], 1.0, false);
+                if !point.is_on_surface() {
+                    point.facing = facing;
+                }
+                point
+            })
             .collect();
     }
 
@@ -647,27 +784,32 @@ impl TubeTool {
         if world.len() < 2 || length < radius * 0.75 {
             self.pointer.draft = None;
             self.pointer.stroke = Stroke::default();
-            self.say("Drag further to draw a tube.");
+            self.say(format!("Drag further to draw a {}.", self.kind().one()));
             return;
         }
         // Tolerance in proportion to the tube's thickness: a wobble a
         // fraction of the radius wide is not something the tube can show
         // anyway.
-        let kept = self.simplify_stroke((radius * 0.3).max(length * 0.004), MAX_STROKE_POINTS);
+        let kept = if self.pointer.stroke.muscle {
+            self.simplify_muscle_stroke(cx, MAX_STROKE_POINTS)
+        } else {
+            self.simplify_stroke((radius * 0.3).max(length * 0.004), MAX_STROKE_POINTS)
+        };
         self.fill_draft(cx, &kept);
         self.pointer.stroke = Stroke::default();
         let Some(draft) = self.pointer.draft.take() else { return };
 
         let on = draft.state.anchor.and_then(|a| cx.scene().info(a)).map(|info| info.name.to_owned());
         let points = draft.state.points.len();
-        self.begin_edit("Draw Tube", 0.0);
+        self.begin_edit(self.label("Draw Tube", "Draw Muscle"), 0.0);
         self.tubes.push(draft);
         self.touch();
         self.commit_edit();
         self.select_tube(self.tubes.len() - 1, None);
+        let title = self.kind().title();
         self.say(match on {
-            Some(name) => format!("Tube drawn on {name}: {points} points. Drag them to refine; Enter merges."),
-            None => format!("Tube drawn in space: {points} points. Keep Separate makes it an object."),
+            Some(name) => format!("{title} drawn on {name}: {points} points. Drag them to refine; Enter merges."),
+            None => format!("{title} drawn in space: {points} points. Keep Separate makes it an object."),
         });
     }
 

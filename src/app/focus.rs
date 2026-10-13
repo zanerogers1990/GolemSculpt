@@ -60,6 +60,8 @@ pub(super) fn let_go(input: &mut Input, doc: &mut Doc, local: &View) -> Vec<KeyC
     input.mods = ModifiersState::empty();
     input.pen_down = false;
     input.pen_pressure = None;
+    input.pen_touch = None;
+    doc.sculptor.pen_meter.lifted();
     input.gauge = None;
     std::mem::take(&mut input.held)
 }
@@ -265,6 +267,7 @@ mod tests {
         input.mods = ModifiersState::ALT | ModifiersState::SHIFT;
         input.pen_down = true;
         input.pen_pressure = Some(0.7);
+        input.pen_touch = Some(3);
         for code in [KeyCode::KeyS, KeyCode::Space] {
             input.note_key(code, true);
         }
@@ -280,6 +283,7 @@ mod tests {
         assert!(input.samples.is_empty());
         assert!(input.mods.is_empty(), "a modifier is still held");
         assert!(!input.pen_down && input.pen_pressure.is_none(), "the pen is still down");
+        assert!(input.pen_touch.is_none(), "and its touch still has the pointer: the next touch would be ignored");
         assert!(input.gauge.is_none());
         assert!(input.held.is_empty());
         assert_eq!(keys, [KeyCode::KeyS, KeyCode::Space], "the held keys are handed back to be released");

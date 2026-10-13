@@ -11,7 +11,7 @@ use sculpt_toolkit::{Ctx, Draw, Shape, Style, View};
 use crate::finish::Finishing;
 use crate::input::{Drag, Pointer};
 use crate::live::{Frame, LiveTube, Symmetry, TubeState};
-use crate::types::{CapStyle, TubeSettings};
+use crate::types::{CapStyle, Kind, TubeSettings};
 
 const MAX_UNDO_STEPS: usize = 128;
 /// Streamed edits (a slider, the wheel) closer together than this are one
@@ -70,10 +70,15 @@ pub struct TubeTool {
     pub(crate) pointer: Pointer,
     pub(crate) finish: Finishing,
 
+    /// A scripted picture is being taken of the shapes alone: no handles.
+    pub(crate) bare: bool,
     /// The last message, for the panel.
     pub(crate) status: String,
     /// A message not yet passed to the app's status line.
     outgoing: Option<(String, bool)>,
+    /// The scene has just been handed an undo or a redo this tool did not take: the models may have
+    /// changed shape under the muscles.
+    pub(crate) scene_stepped: bool,
 }
 
 impl Default for TubeTool {
@@ -92,8 +97,10 @@ impl Default for TubeTool {
             edit_version: 0,
             pointer: Pointer::default(),
             finish: Finishing::default(),
+            bare: false,
             status: String::new(),
             outgoing: None,
+            scene_stepped: false,
         }
     }
 }
@@ -122,6 +129,17 @@ fn circle(draw: &mut Draw, centre: Vec2, radius: f32, width: f32, color: Color32
 }
 
 impl TubeTool {
+    /// The Muscle tool: the same tool, drawing muscles. Its shapes are its own; the Tube tool's are
+    /// the Tube tool's.
+    pub fn muscle() -> TubeTool {
+        TubeTool { defaults: TubeSettings::default().muscle(), ..TubeTool::default() }
+    }
+
+    /// What this tool draws.
+    pub fn kind(&self) -> Kind {
+        self.defaults.kind
+    }
+
     // ---- reading -------------------------------------------------------------
 
     pub fn tube_count(&self) -> usize {
@@ -255,6 +273,34 @@ impl TubeTool {
         }
     }
 
+    pub fn set_swell(&mut self, value: f32) {
+        let v = value.clamp(0.0, 1.0);
+        if !approximately(v, self.settings().swell) {
+            self.edit_settings("Swell", |s| s.swell = v);
+        }
+    }
+
+    pub fn set_belly(&mut self, value: f32) {
+        let v = value.clamp(0.1, 0.9);
+        if !approximately(v, self.settings().belly) {
+            self.edit_settings("Belly", |s| s.belly = v);
+        }
+    }
+
+    pub fn set_flatten(&mut self, value: f32) {
+        let v = value.clamp(TubeSettings::MIN_FLATTEN, 1.0);
+        if !approximately(v, self.settings().flatten) {
+            self.edit_settings("Thickness", |s| s.flatten = v);
+        }
+    }
+
+    pub fn set_depth(&mut self, value: f32) {
+        let v = value.clamp(0.0, TubeSettings::MAX_DEPTH);
+        if !approximately(v, self.settings().depth) {
+            self.edit_settings("Depth", |s| s.depth = v);
+        }
+    }
+
     /// Fillet size where a merged tube meets the model, as a multiple of the
     /// tube's radius.
     pub fn set_blend(&mut self, value: f32) {
@@ -302,12 +348,11 @@ impl TubeTool {
         if !self.defaults_sized {
             self.size_defaults_to_scene(cx);
         }
+        // Whatever was done to the models while the tool was away, the muscles lie on them as they
+        // are now.
+        self.tubes.iter_mut().for_each(LiveTube::lay_again);
         if self.tubes.is_empty() {
-            self.say(if self.on_surface() {
-                "Drag across the model to lay a tube on its surface."
-            } else {
-                "Drag from the model to grow a tube out of it."
-            });
+            self.say(self.invitation());
         }
         self.flush(cx);
     }
@@ -320,6 +365,21 @@ impl TubeTool {
         self.flush(cx);
     }
 
+    /// What to do first, for the status line and the panel.
+    pub(crate) fn invitation(&self) -> &'static str {
+        match (self.kind(), self.on_surface()) {
+            (Kind::Muscle, true) => "Drag across the model to lay a muscle on it.",
+            (Kind::Muscle, false) => "Drag from the model to draw a muscle floating in front of it.",
+            (Kind::Tube, true) => "Drag across the model to lay a tube on its surface.",
+            (Kind::Tube, false) => "Drag from the model to grow a tube out of it.",
+        }
+    }
+
+    /// The name of an undo step that is about a whole shape.
+    pub(crate) fn label(&self, tube: &'static str, muscle: &'static str) -> &'static str {
+        if self.kind() == Kind::Muscle { muscle } else { tube }
+    }
+
     /// A starting radius in proportion to what is in the scene, so the first
     /// tube is neither a thread nor a trunk.
     fn size_defaults_to_scene(&mut self, cx: &Ctx) {
@@ -329,7 +389,9 @@ impl TubeTool {
         }
         self.defaults_sized = true;
         let half = bounds.size() * 0.5;
-        let radius = (half.x + half.y + half.z) / 3.0 * 0.12;
+        // A muscle is one of many on a body, where a tube is a limb of it.
+        let share = if self.kind() == Kind::Muscle { 0.09 } else { 0.12 };
+        let radius = (half.x + half.y + half.z) / 3.0 * share;
         self.defaults.radius = radius.clamp(TubeSettings::MIN_RADIUS, TubeSettings::MAX_RADIUS);
     }
 
@@ -389,7 +451,11 @@ impl TubeTool {
         let symmetry_of =
             |tube: &LiveTube| tube.state.anchor.map_or(Symmetry::NONE, |anchor| Symmetry::of(cx.symmetry_of(anchor)));
         for tube in self.tubes.iter_mut().chain(self.pointer.draft.as_mut()) {
-            tube.build(frame_of(tube), symmetry_of(tube));
+            let anchor = tube.state.anchor;
+            let cast = |ray: &sculpt_toolkit::Ray| anchor.and_then(|a| scene.raycast_object(a, ray));
+            let cast: Option<crate::live::Cast> = if anchor.is_some() { Some(&cast) } else { None };
+            let ground = anchor.and_then(|a| scene.info(a)).map(|info| (info.mesh, info.vertices));
+            tube.build(frame_of(tube), symmetry_of(tube), cast, ground);
             if previews {
                 tube.build_preview();
             }
@@ -401,7 +467,7 @@ impl TubeTool {
     pub fn toggle_selected_sharp(&mut self) {
         match self.active_tube().zip(self.selected_point()) {
             Some((tube, point)) => self.toggle_sharp(tube, point),
-            None => self.say("Click a tube point to select it first."),
+            None => self.say(format!("Click a {} point to select it first.", self.kind().one())),
         }
     }
 
@@ -412,13 +478,14 @@ impl TubeTool {
         let sharp = p.sharp;
         self.touch();
         self.commit_edit();
-        self.say(if sharp { "Sharp point: the tube turns a corner here." } else { "Smooth point." });
+        let turns = format!("Sharp point: the {} turns a corner here.", self.kind().one());
+        self.say(if sharp { turns } else { "Smooth point.".to_owned() });
     }
 
     pub fn delete_selected_point(&mut self) {
         match self.active_tube().zip(self.selected_point()) {
             Some((tube, point)) => self.delete_point(tube, point),
-            None => self.say("Click a tube point to select it first."),
+            None => self.say(format!("Click a {} point to select it first.", self.kind().one())),
         }
     }
 
@@ -432,7 +499,7 @@ impl TubeTool {
         self.tubes[tube].state.points.remove(point);
         if self.tubes[tube].state.points.len() < 2 {
             self.remove_tube_at(tube);
-            self.say("Tube deleted.");
+            self.say(format!("{} deleted.", self.kind().title()));
         } else {
             self.active = Some(tube);
             self.selected_point = None;
@@ -443,15 +510,15 @@ impl TubeTool {
 
     pub fn delete_active_tube(&mut self) {
         let Some(active) = self.active_tube() else {
-            self.say("Click a tube to select it first.");
+            self.say(format!("Click a {} to select it first.", self.kind().one()));
             return;
         };
         self.cancel_gesture();
-        self.begin_edit("Delete Tube", 0.0);
+        self.begin_edit(self.label("Delete Tube", "Delete Muscle"), 0.0);
         self.remove_tube_at(active);
         self.touch();
         self.commit_edit();
-        self.say("Tube deleted.");
+        self.say(format!("{} deleted.", self.kind().title()));
     }
 
     pub(crate) fn remove_tube_at(&mut self, index: usize) {
@@ -597,11 +664,15 @@ impl TubeTool {
         }
         self.tick_pending_edit();
         self.follow_resize(cx.pointer);
+        // By the frame after a step of the scene's history, the scene has taken it.
+        if std::mem::take(&mut self.scene_stepped) {
+            self.tubes.iter_mut().for_each(LiveTube::lay_again);
+        }
         self.refresh(cx, true);
         for tube in self.tubes.iter().chain(self.pointer.draft.as_ref()) {
             draw.mesh(&tube.preview, Style::solid(CLAY));
         }
-        if cx.clean_view {
+        if cx.clean_view || self.bare {
             self.pointer.clear_hover();
         } else {
             self.update_hover(cx);

@@ -50,6 +50,8 @@ const SETTINGS_CHECK: Duration = Duration::from_secs(1);
 
 pub(super) struct State {
     home: Home,
+    /// The brush folder beside the settings file (see `app/brushes.rs`).
+    pub(super) brushes: crate::brush_files::Shelf,
     /// The settings as last written or read, to tell when they have changed.
     kept: Prefs,
     next_check: Instant,
@@ -66,6 +68,15 @@ pub(super) struct State {
     repaired_on_open: usize,
     /// How many triangles that file held that could not be used, and were left out.
     left_out_on_open: usize,
+    /// How many of that file's meshes had subdivision levels or sculpt layers that could not be read.
+    lost_on_open: io::Lost,
+}
+
+/// Everything there is to say about damage found as a file was read, as one
+/// piece for a status line: see `Running::opened_damage`.
+fn damage_notes(repaired: usize, left_out: usize, lost: io::Lost) -> Option<String> {
+    let notes: Vec<String> = io::notes_opened(repaired, left_out).into_iter().chain(lost.note()).collect();
+    (!notes.is_empty()).then(|| notes.join(" "))
 }
 
 impl State {
@@ -76,7 +87,26 @@ impl State {
         // `clean` is set once the scene the app starts with is in place (`mark_saved`).
         let (quit, unasked, clean) = (false, false, None);
         let (mended_on_save, repaired_on_open, left_out_on_open) = (0, 0, 0);
-        State { home, kept, next_check, clean, quit, unasked, mended_on_save, repaired_on_open, left_out_on_open }
+        let lost_on_open = io::Lost::default();
+        State {
+            brushes: crate::brush_files::Shelf::new(home.folder(), home.writable()),
+            home,
+            kept,
+            next_check,
+            clean,
+            quit,
+            unasked,
+            mended_on_save,
+            repaired_on_open,
+            left_out_on_open,
+            lost_on_open,
+        }
+    }
+
+    /// The Starting Detail the settings remember: how many triangles the
+    /// sphere the app starts with is made of.
+    pub(super) fn starting_detail(&self) -> f32 {
+        self.kept.starting_detail()
     }
 }
 
@@ -199,11 +229,12 @@ impl Running {
         opts.remesh_resolution = kept.remesh_resolution();
         opts.quad_target = kept.quad_target();
         opts.decimate_target = kept.decimate_target();
+        opts.subdivide_flat = kept.subdivide_flat;
         opts.new_shape_tris = kept.starting_detail();
         self.doc.sculptor.dyntopo.enabled = kept.dynamic_topology;
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
         self.doc.tools.unit = kept.length_unit();
-        kept.brush.apply(&mut self.doc.sculptor.settings);
+        self.brushes_restore(kept);
         prefs::cards::restore(&self.egui_ctx, &kept.cards);
         sculpt_toolkit::floating::restore(&self.egui_ctx, &kept.floating_cards);
         self.ui.recent.restore(kept.recent.clone(), self.files.home.pictures());
@@ -216,6 +247,7 @@ impl Running {
     /// The settings as they are right now.
     pub(super) fn prefs_now(&self) -> Prefs {
         let opts = &self.doc.opts;
+        let (library, settings) = (&self.doc.sculptor.library, &self.doc.sculptor.settings);
         Prefs {
             interface_size: opts.ui_scale,
             tooltips: opts.tooltips,
@@ -228,10 +260,14 @@ impl Running {
             scene_tab: opts.tabs.scene.name().to_owned(),
             theme: crate::ui::theme::THEMES[opts.theme.min(crate::ui::theme::THEMES.len() - 1)].name.to_owned(),
             floating_cards: sculpt_toolkit::floating::snapshot(&self.egui_ctx),
-            brush: BrushPrefs::of(&self.doc.sculptor.settings),
+            // The file keeps the thirteen base brushes here, whichever
+            // brushes are in hand; the others are files of their own.
+            brush: BrushPrefs::of(&library.base_image(settings)),
+            library: crate::brush_files::Kept::of(library, settings),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
             decimate_target: opts.decimate_target,
+            subdivide_flat: opts.subdivide_flat,
             starting_detail: opts.new_shape_tris,
             dynamic_topology: self.doc.sculptor.dyntopo.enabled,
             dynamic_topology_detail: self.doc.sculptor.dyntopo.detail,
@@ -242,6 +278,7 @@ impl Running {
     /// Writes the settings if they have changed since they were last written.
     /// Called now and then while the app runs, and as it closes.
     pub(super) fn save_prefs(&mut self) {
+        self.brushes_keep();
         let now = self.prefs_now();
         if now == self.files.kept {
             return;
@@ -327,6 +364,7 @@ impl Running {
     /// back. `was_saved` is whether the scene had nothing unsaved before the
     /// step.
     pub(super) fn file_stepped(&mut self, undo: bool, was_saved: bool) {
+        self.seen_stepped(undo);
         let now = self.history_mark();
         if !self.file().stepped(undo, was_saved, now) {
             return;
@@ -340,6 +378,22 @@ impl Running {
             None => "Back to the scene from before, which has no file.".into(),
         };
         self.status(text, true);
+    }
+
+    /// Undo (`undo`) or Redo has just taken a step: if it put one scene in
+    /// place of another, the scene now on screen is seen as it was when it
+    /// was last on screen, with its own look and from its own view, and the
+    /// step keeps those of the scene just left for the way back. An opened
+    /// file brings a look and a view with it, and without this Undo of the
+    /// Open left the scene from before lit, coloured and framed as the file.
+    fn seen_stepped(&mut self, undo: bool) {
+        if !self.doc.history.keeps_seen(undo) {
+            return;
+        }
+        let here = self.seen();
+        if let Some(there) = self.doc.history.cross_seen(undo, here.clone()) {
+            self.see(&there, Some(&here));
+        }
     }
 
     /// Whether this is still the scene the app started with, untouched and
@@ -504,8 +558,21 @@ impl Running {
     }
 
     /// What the file keeps besides the objects: see `io::Details`. A new
-    /// part is one more `set` here and one more `get` in `apply_details`.
+    /// part is one more `set` here (or in `seen`, if it is part of how the
+    /// scene looks) and one more `get` in `apply_details` (or in `see`).
     pub(super) fn details(&self) -> io::Details {
+        let mut details = self.seen();
+        self.doc.scene.keep_mirrors(&mut details);
+        self.doc.scene.keep_symmetry(&mut details);
+        self.doc.tools.keep_in_file(&self.doc.scene, &mut details);
+        details
+    }
+
+    /// How the scene is seen, as a file keeps it: the shading, the look,
+    /// whether the mirror guides show, and the view. A file keeps these with
+    /// its objects, and so does the undo step of a scene put in place of
+    /// another (`put_in_place`).
+    pub(super) fn seen(&self) -> io::Details {
         let opts = &self.doc.opts;
         let matcap = self.ui.assets.matcaps.get(opts.matcap).map_or(String::new(), |m| format!("{}/{}", m.category, m.name));
         let mut details = io::Details::default();
@@ -519,9 +586,6 @@ impl Running {
         let selected = self.doc.scene.active_symmetry();
         let [x, y, z] = selected.mirror;
         details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides, radial: selected.radial });
-        self.doc.scene.keep_mirrors(&mut details);
-        self.doc.scene.keep_symmetry(&mut details);
-        self.doc.tools.keep_in_file(&self.doc.scene, &mut details);
         details
     }
 
@@ -536,7 +600,19 @@ impl Running {
         // The file's objects are the scene's now, row for row: the tools get what they kept for them.
         let rows = Tools::rows_of(&self.doc.scene);
         self.doc.tools.restore_from_file(&rows, details, Arrival::Replaced);
-        if let Some(shading) = details.get_over(io::slot::SHADING, &io::Shading::default()) {
+        unity_import::restore_dynamic_topology(details, &mut self.doc.sculptor.dyntopo);
+        self.see(details, None);
+    }
+
+    /// Puts a look and a view in place: an opened file's, or across an Open
+    /// on Undo or Redo those of the scene come back to (`seen_stepped`). A
+    /// part `details` does not have leaves the app as it is; with no view in
+    /// it, the model is framed instead. `now` is what is in place already,
+    /// where that is known: a part that is the same in both is left alone,
+    /// so that a lighting picture is not read from the disk again for nothing.
+    fn see(&mut self, details: &io::Details, now: Option<&io::Details>) {
+        let changes = |slot: &str| now.is_none_or(|now| !now.same(details, slot));
+        if let Some(shading) = details.get_over(io::slot::SHADING, &io::Shading::default()).filter(|_| changes(io::slot::SHADING)) {
             shading.apply(&mut self.doc.opts);
             // The picture is looked up by name: the list differs between
             // computers. One that is not here leaves the matcap alone.
@@ -551,15 +627,14 @@ impl Running {
                 self.doc.opts.matcap_on = shading.matcap_on;
             }
         }
-        if let Some(look) = details.get_over(io::slot::LOOK, &Look::default()) {
+        if let Some(look) = details.get_over(io::slot::LOOK, &Look::default()).filter(|_| changes(io::slot::LOOK)) {
             self.set_look(look);
         }
-        // The guides are the scene's; the axes kept beside them went to the
-        // objects above.
+        // The guides are the scene's; the axes kept beside them are the
+        // objects' own (`apply_details`).
         if let Some(mirror) = details.get_over(io::slot::MIRROR, &io::Mirror::default()) {
             self.doc.opts.symmetry_guides = mirror.guides;
         }
-        unity_import::restore_dynamic_topology(details, &mut self.doc.sculptor.dyntopo);
         let view = details.get::<SavedView>(io::slot::CAMERA);
         if !view.is_some_and(|view| self.doc.camera.restore_view(&view)) {
             self.frame_view();
@@ -819,10 +894,12 @@ impl Running {
 
     /// What there is to say about damage found in the file that was last
     /// put in place of the scene (an Open, a restored recovery copy): the
-    /// points that were mended and the triangles that were left out. `None`
+    /// points that were mended, the triangles that were left out, and the
+    /// subdivision levels or sculpt layers that could not be read. `None`
     /// for a sound file.
     pub(super) fn opened_damage(&self) -> Option<String> {
-        io::notes_opened(self.files.repaired_on_open, self.files.left_out_on_open)
+        let files = &self.files;
+        damage_notes(files.repaired_on_open, files.left_out_on_open, files.lost_on_open)
     }
 
     /// [`Running::opened_damage`] as a sentence to follow what a status line
@@ -864,15 +941,18 @@ impl Running {
         self.recovery_before_replacing();
         let count = saved.objects.len();
         (self.files.repaired_on_open, self.files.left_out_on_open) = (saved.repaired, saved.left_out);
+        self.files.lost_on_open = saved.lost;
         let before = self.history_mark();
         let before = self.file().state(before);
+        let seen_before = self.seen();
         let mut details = io::Details::default();
         self.edit_scene(|scene, slot| {
             details = install(scene, slot, saved);
             true
         });
-        // Straight away: it is the step just recorded that keeps it.
+        // Straight away: it is the step just recorded that keeps them.
         self.doc.history.keep_file(before);
+        self.doc.history.keep_seen(seen_before);
         self.doc.mesh_replaced = true;
         self.sync_view();
         if file.restored.is_some() {
@@ -895,7 +975,7 @@ impl Running {
         };
         let count = saved.objects.len();
         let note = unity_import::status_note(&saved.details, false).map_or(String::new(), |note| format!(". {note}"));
-        let damage = io::notes_opened(saved.repaired, saved.left_out);
+        let damage = damage_notes(saved.repaired, saved.left_out, saved.lost);
         let note = note + &damage.map_or(String::new(), |note| format!(". {note}"));
         let (details, mut rows) = (saved.details.clone(), Vec::new());
         self.edit_scene(|scene, slot| {

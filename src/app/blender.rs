@@ -675,6 +675,8 @@ impl Running {
             let mut new: Vec<u64> = Vec::new();
             self.edit_scene(|scene, slot| {
                 for (id, name, mesh, mark) in replaced {
+                    // The same model back from Blender keeps its face groups.
+                    let mesh = super::groups::taking_over(scene, slot, id, mesh);
                     scene.replace_mesh_of(id, mesh, slot);
                     names.0.push(name);
                     arrived.push((id, mark));

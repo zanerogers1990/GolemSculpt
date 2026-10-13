@@ -238,7 +238,6 @@ fn closed_models() -> Vec<(&'static str, Mesh)> {
 /// Quad-remeshes `mesh` and returns what the report says of its edges beside
 /// what the mesh that came out really has, counted afresh from its triangles.
 fn reported_and_real(name: &str, mesh: &Mesh, target: usize) -> (Report, EdgeCensus) {
-    assert!(crate::printable::census(mesh).is_closed(), "{name} was meant to be closed to begin with");
     let (out, report) = super::quad_remesh_mesh(mesh, target).unwrap();
     let real = crate::printable::census(&out);
     println!(
@@ -250,66 +249,121 @@ fn reported_and_real(name: &str, mesh: &Mesh, target: usize) -> (Report, EdgeCen
     (report, real)
 }
 
-/// A quad remesh does not always give back a closed model (see the ignored
-/// test below), so what matters is that it never says it did when it did
-/// not: the report's counts are the real ones, on the triangles that are
-/// sculpted and exported, and they are in the line the status area shows.
+/// A quad remesh says what it made: the report's counts are the real ones,
+/// on the triangles that are sculpted and exported, and whatever is not
+/// closed is in the line the status area shows.
 ///
 /// The capsule at 2000 and the figure at 100 are the cases the report used to
 /// get wrong: every face edge had two faces, so it counted nothing, while
 /// the diagonals of two quads lay on one edge and gave it four triangles.
+/// (They come out closed now: see the test below.) The bowl is here for a
+/// result that has something to report.
 #[test]
 fn the_report_counts_the_open_and_crowded_edges_the_mesh_really_has() {
     let models = closed_models();
     let model = |name: &str| &models.iter().find(|(n, _)| *n == name).unwrap().1;
-    let cases =
-        [("sphere", 800), ("cube", 2000), ("capsule", 2000), ("cylinder", 6000), ("figure", 800), ("figure", 100)];
-    let mut not_closed = 0;
-    for (name, target) in cases {
-        let (report, real) = reported_and_real(name, model(name), target);
+    let bowl = open_models().remove(1).1;
+    let cases = [
+        ("sphere", 800, model("sphere")),
+        ("cube", 2000, model("cube")),
+        ("capsule", 2000, model("capsule")),
+        ("cylinder", 6000, model("cylinder")),
+        ("figure", 800, model("figure")),
+        ("figure", 100, model("figure")),
+        ("bowl", 800, &bowl),
+    ];
+    for (name, target, mesh) in cases {
+        let (report, real) = reported_and_real(name, mesh, target);
         assert_eq!(report.census(), real, "{name} at {target}");
         assert_eq!((report.boundary_edges, report.non_manifold_edges), (real.open, real.crowded), "{name} at {target}");
         match crate::printable::faults(&real) {
-            Some(faults) => {
-                not_closed += 1;
-                assert!(report.summary().contains(&faults), "{name} at {target}: {}", report.summary());
-            }
+            Some(faults) => assert!(report.summary().contains(&faults), "{name} at {target}: {}", report.summary()),
             None => assert!(!report.summary().contains("edge"), "{name} at {target}: {}", report.summary()),
         }
+        assert_eq!(real.is_closed(), name != "bowl", "{name} at {target}");
     }
-    // The sphere and the cube close at every target tried; if the others all
-    // do too one day, the ignored test below can be let run.
-    println!("{not_closed} of {} came out not closed", cases.len());
 }
 
-/// What a quad remesh should do and does not yet: give a closed model back
-/// closed. It is not a hole-repair tool's job to make this pass, and none
-/// was written; the remesh reports the holes instead (the test above).
+/// A closed model comes out closed: no hole in it, and no edge with more
+/// than two triangles.
 ///
-/// Measured on 2026-10-10 over these six models at seven targets each (42
-/// runs): 7 came out with five open edges round one hole (cylinder at 6000,
-/// cone at 60000, capsule at 6000 and 20000, figure at 800, 2000 and 60000),
-/// and 4 with two to six edges shared by four triangles (capsule at 2000,
-/// figure at 100 and 300, cone at 60000, which had both): 10 of the 42. The
-/// sphere and the cube closed every time. Every one of the holes went with
-/// "left out 1 faces": it is a five-sided loop that `extract::emit_face` read
-/// as the outside of an opening and dropped. Every crowded edge is the
-/// diagonal a quad is cut along landing between two corners that other faces
-/// already join, by an edge of their own (capsule at 2000) or by the diagonal
-/// another quad is cut along (cone at 60000). Run with `--ignored
-/// --nocapture` for a line a run.
+/// It did not always. Measured on 2026-10-10 over these six models at seven
+/// targets each, 10 of the 42 runs were not closed, of two kinds:
+///
+///  - Five open edges round one hole (7 runs: cylinder at 6000, capsule at
+///    6000, figure at 800, and others). A five-sided face with a needle-thin
+///    corner had that corner read as 360 degrees for 0, which put its angles
+///    halfway to those of the trace round an opening, and it was dropped for
+///    one. Only a loop by an open edge of the input is asked that now
+///    (`extract::is_opening`).
+///  - Two to six edges shared by four triangles (4 runs: capsule at 2000,
+///    figure at 100 and 300, cone at 60000). Two faces that shared both
+///    sides of a corner were each cut along the line between that corner's
+///    neighbours (`cleanup::dissolve_doublets` takes the corner out), or two
+///    quads standing corner to corner were cut along the same diagonal
+///    (`PolyMesh::triangulate` cuts one of them the other way).
+///
+/// Run with `--nocapture` for a line a run.
 #[test]
-#[ignore = "quad remesh leaves holes in some closed models; it reports them (see the note above)"]
 fn a_closed_model_comes_out_closed() {
     let mut open = Vec::new();
     for (name, mesh) in &closed_models() {
+        assert!(crate::printable::census(mesh).is_closed(), "{name} was meant to be closed to begin with");
         for target in [100, 300, 800, 2000, 6000, 20_000, 60_000] {
             let (report, real) = reported_and_real(name, mesh, target);
             assert_eq!(report.census(), real, "{name} at {target}");
+            assert_eq!(report.left_out_faces, 0, "{name} at {target}: a closed model has no rim to leave out");
             if !real.is_closed() {
                 open.push(format!("{name} at {target}: {}", crate::printable::faults(&real).unwrap()));
             }
         }
     }
     assert!(open.is_empty(), "{} of 42 runs did not come out closed: {}", open.len(), open.join("; "));
+}
+
+/// What is left of `mesh` with the triangles whose centre `cut` picks taken away.
+fn without(mesh: &Mesh, cut: impl Fn(Vec3) -> bool) -> Mesh {
+    let centre = |t: &[u32]| t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0;
+    let indices: Vec<u32> = mesh.indices.chunks_exact(3).filter(|t| !cut(centre(t))).flatten().copied().collect();
+    Mesh::new(mesh.positions.clone(), indices, None)
+}
+
+/// Models with openings, and how many each has. Between them the rims are
+/// of every kind the corner angles tell apart, and of the kinds they do not:
+/// a hole in a sheet (the sphere with its top off) reads as a face, the rim
+/// of a patch (the cap) as the outside of one, and the rim of a bowl or of a
+/// tube's end as halfway between.
+fn open_models() -> Vec<(&'static str, Mesh, usize)> {
+    let sphere = primitives::build(Primitive::Sphere, 200_000, 0.5);
+    let cylinder = primitives::build(Primitive::Cylinder, 200_000, 0.5);
+    let (r, top) = (sphere.bounds().max.y, cylinder.bounds().max.y);
+    vec![
+        ("sphere with its top off", without(&sphere, |c| c.y > 0.6 * r), 1),
+        ("bowl", without(&sphere, |c| c.y > 0.0), 1),
+        ("cap", without(&sphere, |c| c.y < 0.6 * r), 1),
+        ("sphere with two holes", without(&sphere, |c| c.y.abs() > 0.8 * r), 2),
+        ("tube", without(&cylinder, |c| c.y.abs() > top - 1e-4), 2),
+    ]
+}
+
+/// A model with openings keeps them, each one opening still: a quad remesh
+/// is not the tool that closes a model (Remesh is), and a sleeve or a mask
+/// that came back with its openings capped would be a different model.
+///
+/// Before 2026-10-12 a rim was told from a face by its corner angles alone,
+/// which a hole in a sheet passes as a face: the sphere with its top off
+/// came back a closed ball at 100 and 300 quads, and the tube with one end
+/// or both capped at every target up to 2000.
+#[test]
+fn a_model_with_openings_keeps_them() {
+    for (name, mesh, openings) in &open_models() {
+        assert_eq!(crate::printable::census(mesh).holes, Some(*openings), "{name} to begin with");
+        for target in [100, 300, 800, 2000, 6000, 20_000] {
+            let (out, report) = super::quad_remesh_mesh(mesh, target).unwrap();
+            let real = crate::printable::census(&out);
+            println!("{name} at {target}: {} | left out {} faces", report.summary(), report.left_out_faces);
+            assert_eq!(report.census(), real, "{name} at {target}");
+            assert_eq!((real.holes, real.crowded), (Some(*openings), 0), "{name} at {target}: {}", report.summary());
+        }
+    }
 }

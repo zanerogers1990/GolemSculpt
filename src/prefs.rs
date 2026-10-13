@@ -28,8 +28,9 @@ use std::path::{Path, PathBuf};
 use sculpt_geom::LengthUnit;
 use serde::{Deserialize, Serialize};
 
+use crate::sculpt::alpha::AlphaSettings;
 use crate::sculpt::dyntopo::{self, DynTopo};
-use crate::sculpt::{Brush, FalloffCurve, PoseMode, PoseSettings, Settings};
+use crate::sculpt::{Brush, BrushSettings, FalloffCurve, FlattenMode, PoseMode, PoseSettings, Settings, SmoothMode};
 
 const FILE_NAME: &str = "settings.json";
 
@@ -171,17 +172,38 @@ pub struct BrushTuning {
     pub positive: bool,
     pub focal_shift: f32,
     pub front_facing: bool,
+    pub stay_in_group: bool,
+    /// The distance between dabs, and how far each is scattered off the
+    /// stroke's path, as fractions of the brush's radius.
+    pub spacing: f32,
+    pub scatter: f32,
+    /// How much smaller than the brush a dab may come out, at random.
+    pub size_jitter: f32,
+    /// How much of its size, and of its strength, the brush loses at the
+    /// pen's lightest touch.
+    pub pressure_size: f32,
+    pub pressure_strength: f32,
+    /// For a brush that smooths: what it evens out, and how much of the
+    /// shrinkage it gives back.
+    pub smooth_mode: SmoothMode,
+    pub keep_volume: f32,
+    /// For a brush that flattens: which side of its plane it works on, and
+    /// whether the plane is fixed where the stroke begins.
+    pub flatten_mode: FlattenMode,
+    pub lock_plane: bool,
 }
 
 impl Default for BrushTuning {
     fn default() -> Self {
-        let base = Settings::default().per_brush[0];
+        // A brush with nothing of its own about it (Move, the first, has
+        // a Strength of its own).
+        let base = Settings::default().per_brush[Brush::Smooth.index()];
         Self::of(&base)
     }
 }
 
 impl BrushTuning {
-    fn of(b: &crate::sculpt::BrushSettings) -> Self {
+    pub(crate) fn of(b: &crate::sculpt::BrushSettings) -> Self {
         Self {
             strength: b.strength,
             accumulate: b.accumulate,
@@ -189,6 +211,70 @@ impl BrushTuning {
             positive: b.positive,
             focal_shift: b.focal_shift,
             front_facing: b.front_facing,
+            stay_in_group: b.stay_in_group,
+            spacing: b.spacing,
+            scatter: b.scatter,
+            size_jitter: b.size_jitter,
+            pressure_size: b.pressure_size,
+            pressure_strength: b.pressure_strength,
+            smooth_mode: b.smooth_mode,
+            keep_volume: b.keep_volume,
+            flatten_mode: b.flatten_mode,
+            lock_plane: b.lock_plane,
+        }
+    }
+}
+
+/// One brush's alpha: `sculpt::alpha::AlphaSettings`, as the file keeps it.
+/// The picture goes by its name in the alpha list; a brush with none is not
+/// in the file at all.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlphaKept {
+    pub name: String,
+    pub rotation: f32,
+    pub scale: f32,
+    pub invert: bool,
+    pub tile: bool,
+    pub follow: bool,
+    pub drag: bool,
+    pub random_rotation: f32,
+}
+
+impl Default for AlphaKept {
+    fn default() -> Self {
+        Self::of(&AlphaSettings::default())
+    }
+}
+
+impl AlphaKept {
+    pub(crate) fn of(a: &AlphaSettings) -> Self {
+        Self {
+            name: a.image.map(|image| image.name.clone()).unwrap_or_default(),
+            rotation: a.rotation,
+            scale: a.scale,
+            invert: a.invert,
+            tile: a.tile,
+            follow: a.follow,
+            drag: a.drag,
+            random_rotation: a.random_rotation,
+        }
+    }
+
+    /// The live setting. A picture that is no longer in the alpha folder
+    /// leaves the brush with its plain round tip.
+    pub(crate) fn restored(&self) -> AlphaSettings {
+        let d = AlphaSettings::default();
+        let (scale, random) = (AlphaSettings::SCALE, AlphaSettings::RANDOM_ROTATION);
+        AlphaSettings {
+            image: crate::sculpt::alpha::find(&self.name),
+            rotation: fit(self.rotation, 0.0, 360.0, d.rotation),
+            scale: fit(self.scale, *scale.start(), *scale.end(), d.scale),
+            invert: self.invert,
+            tile: self.tile,
+            follow: self.follow,
+            drag: self.drag,
+            random_rotation: fit(self.random_rotation, *random.start(), *random.end(), d.random_rotation),
         }
     }
 }
@@ -218,8 +304,17 @@ pub struct BrushPrefs {
     /// (distance from the centre, weight). A brush that is not here keeps
     /// its own built-in falloff.
     pub falloff: BTreeMap<String, Vec<[f32; 2]>>,
+    /// The alphas, by brush name. A brush that is not here has none.
+    pub alpha: BTreeMap<String, AlphaKept>,
     /// Move: grab only what is connected to the point under the pointer.
     pub move_connected: bool,
+    /// Move's Strength: how much of the pen's travel the surface follows.
+    /// Kept here, and read from here, because the number under Move in
+    /// `brushes` means nothing in a file from before Move had a Strength:
+    /// the slider was there and did nothing, so it holds whatever it was
+    /// left at. Such a file has no `move_strength`, and Move starts at its
+    /// own.
+    pub move_strength: f32,
     /// Pose: what a drag does, by name (Bend, Resize or Stretch), how many
     /// joints a bend has, how far past the brush ring the first one sits and
     /// how sharply a joint bends.
@@ -235,7 +330,13 @@ pub struct BrushPrefs {
     pub crease_depth: f32,
     pub flatten_offset: f32,
     pub layer_height: f32,
-    pub pressure_floor: f32,
+    /// The Light-Touch Floor of versions before each brush had a
+    /// Pressure -> Strength of its own: the share of its strength every
+    /// brush kept at the pen's lightest touch. This version never writes
+    /// it. A file that has it is one of theirs, and has nothing to say of
+    /// its own about what pressure does to each brush, so the floor is
+    /// carried over into every brush (see `apply`).
+    pub pressure_floor: Option<f32>,
     pub pressure_curve: f32,
     pub lazy_mouse: bool,
     pub lazy_radius: f32,
@@ -270,7 +371,13 @@ impl BrushPrefs {
                     Some((b.name().to_owned(), curve.points.iter().map(|p| p.to_array()).collect()))
                 })
                 .collect(),
+            alpha: Brush::ALL
+                .iter()
+                .filter(|b| s.alpha[b.index()].image.is_some())
+                .map(|b| (b.name().to_owned(), AlphaKept::of(&s.alpha[b.index()])))
+                .collect(),
             move_connected: s.move_connected,
+            move_strength: s.per_brush[Brush::Move.index()].strength,
             pose_mode: s.pose.mode.name().to_owned(),
             pose_joints: s.pose.joints,
             pose_offset: s.pose.offset,
@@ -283,7 +390,7 @@ impl BrushPrefs {
             crease_depth: s.crease_depth,
             flatten_offset: s.flatten_offset,
             layer_height: s.layer_height,
-            pressure_floor: s.pressure_floor,
+            pressure_floor: None,
             pressure_curve: s.pressure_curve,
             lazy_mouse: s.lazy_mouse,
             lazy_radius: s.lazy_radius,
@@ -326,6 +433,9 @@ impl BrushPrefs {
             });
         }
         for &brush in &Brush::ALL {
+            s.alpha[brush.index()] = self.alpha.get(brush.name()).map(AlphaKept::restored).unwrap_or_default();
+        }
+        for &brush in &Brush::ALL {
             let Some(kept) = self.brushes.get(brush.name()) else { continue };
             let (slot, was) = (&mut s.per_brush[brush.index()], d.per_brush[brush.index()]);
             slot.strength = fit(kept.strength, 0.01, 1.0, was.strength);
@@ -334,7 +444,27 @@ impl BrushPrefs {
             slot.positive = kept.positive;
             slot.focal_shift = fit(kept.focal_shift, -1.0, 1.0, was.focal_shift);
             slot.front_facing = kept.front_facing;
+            slot.stay_in_group = kept.stay_in_group;
+            let within = |value: f32, range: std::ops::RangeInclusive<f32>, was: f32| {
+                fit(value, *range.start(), *range.end(), was)
+            };
+            slot.spacing = within(kept.spacing, BrushSettings::SPACING, was.spacing);
+            slot.scatter = within(kept.scatter, BrushSettings::SCATTER, was.scatter);
+            slot.size_jitter = within(kept.size_jitter, BrushSettings::SIZE_JITTER, was.size_jitter);
+            slot.pressure_size = within(kept.pressure_size, BrushSettings::PRESSURE, was.pressure_size);
+            slot.pressure_strength = within(kept.pressure_strength, BrushSettings::PRESSURE, was.pressure_strength);
+            (slot.smooth_mode, slot.flatten_mode, slot.lock_plane) = (kept.smooth_mode, kept.flatten_mode, kept.lock_plane);
+            slot.keep_volume = fit(kept.keep_volume, 0.0, 1.0, was.keep_volume);
         }
+        // A file from before brushes had their own: its one floor, in the
+        // range its slider had, becomes every brush's Pressure -> Strength.
+        if let Some(floor) = self.pressure_floor.filter(|floor| floor.is_finite()) {
+            for slot in &mut s.per_brush {
+                slot.pressure_strength = 1.0 - floor.clamp(0.0, 0.5);
+            }
+        }
+        let was = d.per_brush[Brush::Move.index()].strength;
+        s.per_brush[Brush::Move.index()].strength = fit(self.move_strength, 0.01, 1.0, was);
         s.mask_hardness = fit(self.mask_hardness, 0.0, 1.0, d.mask_hardness);
         s.clay_depth = fit(self.clay_depth, 0.1, 1.5, d.clay_depth);
         s.clay_softness = fit(self.clay_softness, 0.05, 1.0, d.clay_softness);
@@ -343,7 +473,6 @@ impl BrushPrefs {
         s.crease_depth = fit(self.crease_depth, 0.05, 1.0, d.crease_depth);
         s.flatten_offset = fit(self.flatten_offset, -0.5, 0.5, d.flatten_offset);
         s.layer_height = fit(self.layer_height, 0.02, 1.0, d.layer_height);
-        s.pressure_floor = fit(self.pressure_floor, 0.0, 0.5, d.pressure_floor);
         s.pressure_curve = fit(self.pressure_curve, 0.5, 3.0, d.pressure_curve);
         s.lazy_mouse = self.lazy_mouse;
         s.lazy_radius = fit(self.lazy_radius, 1.0, 150.0, d.lazy_radius);
@@ -380,13 +509,20 @@ pub struct Prefs {
     /// the left and top of each one's window, in the interface's points. A
     /// card that is not here is in its panel (see `sculpt_toolkit::floating`).
     pub floating_cards: BTreeMap<String, [f32; 2]>,
+    /// The thirteen base brushes' settings, and what every brush shares.
     pub brush: BrushPrefs,
+    /// The brush library: which brush is in hand, which one Shift uses, the
+    /// pins and the shipped brushes deleted. The user's own brushes are
+    /// files of their own (see `brush_files.rs`).
+    pub library: crate::brush_files::Kept,
     /// Voxels along the longest side for a voxel remesh.
     pub remesh_resolution: f32,
     /// Quads a quad remesh aims for.
     pub quad_target: f32,
     /// Triangles Decimate brings an object down to.
     pub decimate_target: f32,
+    /// The Subdivision card's Flat tick: Subdivide cuts faces and moves nothing.
+    pub subdivide_flat: bool,
     /// Triangle count of a new shape (Starting Detail).
     pub starting_detail: f32,
     /// Dynamic topology: whether brushes add detail as they go, and the
@@ -414,9 +550,11 @@ impl Default for Prefs {
             theme: crate::ui::theme::THEMES[opts.theme].name.to_owned(),
             floating_cards: BTreeMap::new(),
             brush: BrushPrefs::default(),
+            library: crate::brush_files::Kept::default(),
             remesh_resolution: opts.remesh_resolution,
             quad_target: opts.quad_target,
             decimate_target: opts.decimate_target,
+            subdivide_flat: opts.subdivide_flat,
             starting_detail: opts.new_shape_tris,
             dynamic_topology: dyntopo.enabled,
             dynamic_topology_detail: dyntopo.detail,
@@ -845,7 +983,10 @@ mod tests {
         for key in ["pose_mode", "pose_joints", "pose_offset", "pose_rigidity"] {
             assert!(brush.remove(key).is_some(), "{key} is in the file");
         }
-        assert!(brush["brushes"].as_object_mut().unwrap().remove("Pose").is_some());
+        // Nor about the brushes added after it.
+        for later in ["Pose", "Pinch", "Nudge", "Erase Layer"] {
+            assert!(brush["brushes"].as_object_mut().unwrap().remove(later).is_some());
+        }
         brush["brush"] = "Snake Hook".into();
         brush["brushes"]["Snake Hook"]["strength"] = 0.77.into();
         brush["falloff"]["Layer"] = serde_json::json!([[0.0, 1.0], [1.0, 0.0]]);
@@ -858,8 +999,14 @@ mod tests {
         assert_eq!(settings.per_brush[Brush::SnakeHook.index()].strength, 0.77);
         assert!(settings.falloff[Brush::Layer.index()].is_some());
         assert_eq!(settings.pose, PoseSettings::default());
-        let pose = (settings.per_brush[Brush::Pose.index()], Settings::default().per_brush[Brush::Pose.index()]);
-        assert_eq!(BrushTuning::of(&pose.0), BrushTuning::of(&pose.1));
+        for later in [Brush::Pose, Brush::Pinch, Brush::Nudge, Brush::EraseLayer] {
+            let (now, first_run) = (settings.per_brush[later.index()], Settings::default().per_brush[later.index()]);
+            assert_eq!(BrushTuning::of(&now), BrushTuning::of(&first_run), "{later:?}");
+        }
+        // Nudge starts following half the pen's travel, as Move does: not at the 10% of a brush with none of its own.
+        assert_eq!(settings.per_brush[Brush::Nudge.index()].strength, 0.5);
+        // And Erase Layer as a whole eraser, which the pen's pressure makes gentle.
+        assert_eq!(settings.per_brush[Brush::EraseLayer.index()].strength, 1.0);
 
         // And what this version writes names the Pose brush and its settings.
         settings.brush = Brush::Pose;
@@ -868,6 +1015,31 @@ mod tests {
         assert_eq!(written["brush"], "Pose");
         assert_eq!(written["pose_joints"], 3);
         assert!(written["brushes"]["Pose"].is_object());
+    }
+
+    /// A settings file from before Move's Strength did anything: the number
+    /// it has for it was never felt, so Move starts at its own. What is set
+    /// from then on is kept.
+    #[test]
+    fn a_move_strength_from_before_it_did_anything_is_not_kept() {
+        let own = Settings::default().per_brush[Brush::Move.index()].strength;
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        let brush = older["brush"].as_object_mut().unwrap();
+        assert!(brush.remove("move_strength").is_some(), "move_strength is in the file");
+        brush["brushes"]["Move"]["strength"] = 0.1.into();
+        brush["brushes"]["Clay"]["strength"] = 0.2.into();
+        let mut settings = Settings::default();
+        Prefs::parse(&older.to_string()).brush.apply(&mut settings);
+        assert_eq!(settings.per_brush[Brush::Move.index()].strength, own);
+        assert_eq!(settings.per_brush[Brush::Clay.index()].strength, 0.2, "the other brushes keep theirs");
+
+        settings.per_brush[Brush::Move.index()].strength = 0.3;
+        let kept = serde_json::to_string(&BrushPrefs::of(&settings)).unwrap();
+        let mut back = Settings::default();
+        serde_json::from_str::<BrushPrefs>(&kept).unwrap().apply(&mut back);
+        assert_eq!(back.per_brush[Brush::Move.index()].strength, 0.3);
+        // A brush the file says nothing of starts as any brush does, not as Move.
+        assert_eq!(BrushTuning::default().strength, Settings::default().per_brush[Brush::Clay.index()].strength);
     }
 
     /// The number of joints has a lowest value as well as a highest (house
@@ -928,5 +1100,165 @@ mod tests {
         let tidied = back.falloff[Brush::Layer.index()].clone().unwrap();
         assert_eq!((tidied.points[0].x, tidied.points.last().unwrap().x), (0.0, 1.0));
         assert!(tidied.points.iter().all(|p| (0.0..=1.0).contains(&p.x) && (0.0..=1.0).contains(&p.y)));
+    }
+
+    /// Each brush's own stroke settings (spacing, scatter, size jitter and
+    /// what the pen's pressure does to its size and strength) are kept by
+    /// brush, come back inside what their sliders allow, and a file that
+    /// says nothing of them leaves every brush as it starts.
+    #[test]
+    fn each_brushs_stroke_settings_are_kept_and_brought_into_range() {
+        let stroke = |b: &BrushSettings| (b.spacing, b.scatter, b.size_jitter, b.pressure_size, b.pressure_strength);
+        let mut settings = Settings::default();
+        let clay = &mut settings.per_brush[Brush::Clay.index()];
+        (clay.spacing, clay.scatter, clay.size_jitter, clay.pressure_size, clay.pressure_strength) = (1.5, 0.4, 0.3, 0.7, 0.25);
+        let written = serde_json::to_string(&BrushPrefs::of(&settings)).unwrap();
+        let mut back = Settings::default();
+        serde_json::from_str::<BrushPrefs>(&written).unwrap().apply(&mut back);
+        assert_eq!(stroke(&back.per_brush[Brush::Clay.index()]), (1.5, 0.4, 0.3, 0.7, 0.25));
+        for brush in Brush::ALL.into_iter().filter(|&b| b != Brush::Clay) {
+            assert_eq!(stroke(&back.per_brush[brush.index()]), (brush.default_spacing(), 0.0, 0.0, 0.0, 0.88), "{brush:?}");
+        }
+
+        // A file from before any of this: every brush as it starts, Crease
+        // with its own closer spacing.
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        for (_, tuning) in older["brush"]["brushes"].as_object_mut().unwrap() {
+            for key in ["spacing", "scatter", "size_jitter", "pressure_size", "pressure_strength"] {
+                assert!(tuning.as_object_mut().unwrap().remove(key).is_some(), "{key} is in the file");
+            }
+        }
+        assert!(older["brush"].as_object_mut().unwrap().remove("pressure_floor").is_some());
+        older["brush"]["brushes"]["Clay"]["strength"] = 0.2.into();
+        let mut old = Settings::default();
+        old.per_brush[Brush::Crease.index()].spacing = 2.0;
+        Prefs::parse(&older.to_string()).brush.apply(&mut old);
+        for brush in Brush::ALL {
+            assert_eq!(stroke(&old.per_brush[brush.index()]), (brush.default_spacing(), 0.0, 0.0, 0.0, 0.88), "{brush:?}");
+        }
+        assert_eq!(old.per_brush[Brush::Clay.index()].strength, 0.2, "what the file does say is kept");
+
+        // Numbers no slider could have set, at the lowest end and the highest.
+        let mut prefs = Prefs::default();
+        let tuning = prefs.brush.brushes.get_mut("Layer").unwrap();
+        (tuning.spacing, tuning.scatter, tuning.size_jitter) = (0.0, 99.0, 5.0);
+        (tuning.pressure_size, tuning.pressure_strength) = (-1.0, f32::NAN);
+        let tuning = prefs.brush.brushes.get_mut("Crease").unwrap();
+        (tuning.spacing, tuning.scatter, tuning.size_jitter) = (f32::INFINITY, -3.0, f32::NAN);
+        (tuning.pressure_size, tuning.pressure_strength) = (4.0, 4.0);
+        prefs.brush.apply(&mut back);
+        assert_eq!(stroke(&back.per_brush[Brush::Layer.index()]), (0.02, 2.0, 0.9, 0.0, 0.88), "never no spacing: dabs are laid by it");
+        assert_eq!(stroke(&back.per_brush[Brush::Crease.index()]), (0.1, 0.0, 0.0, 1.0, 1.0));
+    }
+
+    /// Versions before each brush had a Pressure -> Strength of its own
+    /// kept one Light-Touch Floor for all of them. Such a file's floor is
+    /// carried into every brush on its first load; this version writes none,
+    /// so what is set per brush afterwards is what is read back; and the
+    /// older version still reads a file this one wrote.
+    #[test]
+    fn an_older_files_light_touch_floor_carries_over_into_every_brush() {
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        for (_, tuning) in older["brush"]["brushes"].as_object_mut().unwrap() {
+            tuning.as_object_mut().unwrap().remove("pressure_strength");
+        }
+        assert!(older["brush"]["pressure_floor"].is_null(), "this version writes no floor");
+        older["brush"]["pressure_floor"] = 0.3.into();
+        let mut settings = Settings::default();
+        Prefs::parse(&older.to_string()).brush.apply(&mut settings);
+        for brush in Brush::ALL {
+            let kept = settings.per_brush[brush.index()].pressure_strength;
+            assert!((kept - 0.7).abs() < 1e-6, "{brush:?}: {kept}");
+        }
+        // The floor every such file had unless it was changed is today's feel.
+        older["brush"]["pressure_floor"] = 0.12.into();
+        Prefs::parse(&older.to_string()).brush.apply(&mut settings);
+        assert!(settings.per_brush.iter().all(|b| (b.pressure_strength - 0.88).abs() < 1e-6));
+        // Its slider went from 0 to 0.5.
+        for (floor, strength) in [(-2.0, 1.0), (0.0, 1.0), (0.5, 0.5), (9.0, 0.5)] {
+            older["brush"]["pressure_floor"] = floor.into();
+            Prefs::parse(&older.to_string()).brush.apply(&mut settings);
+            assert!(settings.per_brush.iter().all(|b| b.pressure_strength == strength), "a floor of {floor}");
+        }
+        // A floor that is not a number costs only itself.
+        older["brush"]["pressure_floor"] = "low".into();
+        older["brush"]["radius_px"] = 77.0.into();
+        let mut odd = Settings::default();
+        Prefs::parse(&older.to_string()).brush.apply(&mut odd);
+        assert_eq!((odd.radius_px, odd.per_brush[0].pressure_strength), (77.0, 0.88));
+
+        // Saved from here on, the floor is gone and each brush has its own.
+        settings.per_brush[Brush::Clay.index()].pressure_strength = 0.4;
+        let written = serde_json::to_value(BrushPrefs::of(&settings)).unwrap();
+        assert!(written["pressure_floor"].is_null());
+        let mut back = Settings::default();
+        Prefs::parse(&serde_json::json!({ "brush": written }).to_string()).brush.apply(&mut back);
+        assert_eq!(back.per_brush[Brush::Clay.index()].pressure_strength, 0.4);
+        assert_eq!(back.per_brush[Brush::Layer.index()].pressure_strength, 0.5);
+
+        // The version before reads that file: its one floor stays as it starts.
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(default)]
+        struct Before {
+            radius_px: f32,
+            pressure_floor: f32,
+            pressure_curve: f32,
+        }
+        impl Default for Before {
+            fn default() -> Self {
+                Before { radius_px: 60.0, pressure_floor: 0.12, pressure_curve: 1.6 }
+            }
+        }
+        settings.radius_px = 91.0;
+        let written = serde_json::to_value(BrushPrefs::of(&settings)).unwrap();
+        let read = crate::io::read_over(&Before::default(), &written).expect("the older version reads it");
+        assert_eq!(read, Before { radius_px: 91.0, pressure_floor: 0.12, pressure_curve: 1.6 });
+    }
+
+    /// The options of the Smooth and Flatten kernels are each brush's own:
+    /// kept by name, left as they start by a file that says nothing of them,
+    /// and a mode this version has never heard of costs only itself.
+    #[test]
+    fn each_brushs_kernel_options_are_kept_by_name() {
+        let options = |b: &BrushSettings| (b.smooth_mode, b.keep_volume, b.flatten_mode, b.lock_plane);
+        let first_run = (SmoothMode::All, 0.0, FlattenMode::Both, false);
+        let mut settings = Settings::default();
+        let smooth = &mut settings.per_brush[Brush::Smooth.index()];
+        (smooth.smooth_mode, smooth.keep_volume) = (SmoothMode::Peaks, 0.75);
+        let flatten = &mut settings.per_brush[Brush::Flatten.index()];
+        (flatten.flatten_mode, flatten.lock_plane) = (FlattenMode::Scrape, true);
+        let written = serde_json::to_value(BrushPrefs::of(&settings)).unwrap();
+        assert_eq!(written["brushes"]["Smooth"]["smooth_mode"], "peaks");
+        assert_eq!(written["brushes"]["Flatten"]["flatten_mode"], "scrape");
+        let mut back = Settings::default();
+        Prefs::parse(&serde_json::json!({ "brush": written }).to_string()).brush.apply(&mut back);
+        assert_eq!(options(&back.per_brush[Brush::Smooth.index()]), (SmoothMode::Peaks, 0.75, FlattenMode::Both, false));
+        assert_eq!(options(&back.per_brush[Brush::Flatten.index()]), (SmoothMode::All, 0.0, FlattenMode::Scrape, true));
+        assert_eq!(options(&back.per_brush[Brush::Clay.index()]), first_run);
+
+        // A file from before: every brush as it starts.
+        let mut older = serde_json::to_value(Prefs::default()).unwrap();
+        for (_, tuning) in older["brush"]["brushes"].as_object_mut().unwrap() {
+            for key in ["smooth_mode", "keep_volume", "flatten_mode", "lock_plane"] {
+                assert!(tuning.as_object_mut().unwrap().remove(key).is_some(), "{key} is in the file");
+            }
+        }
+        older["brush"]["brushes"]["Smooth"]["strength"] = 0.4.into();
+        Prefs::parse(&older.to_string()).brush.apply(&mut back);
+        assert!(back.per_brush.iter().all(|b| options(b) == first_run));
+        assert_eq!(back.per_brush[Brush::Smooth.index()].strength, 0.4);
+
+        // A mode from some later version, and numbers no slider could set.
+        let odd = serde_json::json!({ "brush": { "brushes": {
+            "Smooth": { "smooth_mode": "polish", "keep_volume": 7.0, "strength": 0.6 },
+            "Flatten": { "flatten_mode": 3, "lock_plane": "yes", "keep_volume": -1.0, "strength": 0.7 },
+            "Layer": { "smooth_mode": "RELAX", "keep_volume": "lots" },
+        } } });
+        let mut back = Settings::default();
+        Prefs::parse(&odd.to_string()).brush.apply(&mut back);
+        let (smooth, flatten) = (back.per_brush[Brush::Smooth.index()], back.per_brush[Brush::Flatten.index()]);
+        assert_eq!((options(&smooth), smooth.strength), ((SmoothMode::All, 1.0, FlattenMode::Both, false), 0.6));
+        assert_eq!((options(&flatten), flatten.strength), ((SmoothMode::All, 0.0, FlattenMode::Both, false), 0.7));
+        assert_eq!(options(&back.per_brush[Brush::Layer.index()]), first_run, "names are kept in lower case");
     }
 }

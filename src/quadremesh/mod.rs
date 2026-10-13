@@ -63,8 +63,9 @@ pub struct Report {
     pub non_manifold_edges: usize,
     /// The separate rims the open edges form: holes (see `EdgeCensus`).
     pub holes: Option<usize>,
-    /// Loops the extraction traced and left out (see `extract::extract`). On
-    /// a closed model each one is a hole.
+    /// Loops the extraction traced and left out (see `extract::extract`): the
+    /// trace round each opening of the model, a long one counted in
+    /// stretches. A closed model has none.
     pub left_out_faces: usize,
     /// Pieces left out altogether: parts of the model with less area than
     /// one quad, and stray scraps of the result.

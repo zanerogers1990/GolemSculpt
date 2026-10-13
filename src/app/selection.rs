@@ -86,7 +86,9 @@ pub(super) fn boolean(
     let built = sculpt_volume::boolean_with(&target, &solids, op, settings)
         .map_err(|e| format!("Nothing changed. {}", remesh::named(e, &scene.active().name)))?;
     let notes = Notes::of(&built);
-    let mesh = Mesh::new(built.mesh.positions, built.mesh.indices, None);
+    let mut mesh = Mesh::new(built.mesh.positions, built.mesh.indices, None);
+    // Each face of the result is in the face group of the surface it came from, whichever object's that was.
+    super::groups::of_selection(scene, slot, &mut mesh, crate::mesh::groups::Fit::Whole);
     let triangles = mesh.triangle_count();
     let before = scene.state();
     let count = scene.install_combined(mesh, others, slot);
@@ -138,6 +140,8 @@ pub(super) fn join(
             Err(e) => remesh_failed = Some(e),
         }
     }
+    // The joined object keeps every part's face groups, each object's apart from the others'.
+    super::groups::of_joined(scene, slot, &mut mesh, rebuild.is_some() && remesh_failed.is_none());
     let triangles = mesh.triangle_count();
     let before = scene.state();
     let count = scene.install_joined(mesh, slot);

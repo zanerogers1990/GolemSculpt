@@ -43,6 +43,10 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::io::Details;
+use crate::mesh::groups::GroupsStep;
+use crate::mesh::layers::LayersStep;
+use crate::mesh::levels::MeshLevels;
 use crate::mesh::{Mesh, StrokeDelta, VisibilityDelta};
 use crate::scene::{Object, Scene, SceneState};
 
@@ -57,6 +61,18 @@ pub enum Edit {
     Visibility(VisibilityDelta),
     /// The mesh that was current on the other side of this step.
     Replace(Box<Mesh>),
+    /// The mesh's subdivision levels on the other side of this step: levels
+    /// were deleted and the mesh itself is the same (see mesh/levels.rs). A
+    /// change of level, which is another mesh, is a `Replace`.
+    Levels(Option<Box<MeshLevels>>),
+    /// The mesh's sculpt layers on the other side of this step, and its
+    /// positions where the two sides differ: a layer made, renamed, turned
+    /// up or down, switched, deleted or baked (see mesh/layers.rs). A stroke
+    /// on a layer is a `Stroke`.
+    Layers(Box<LayersStep>),
+    /// The mesh's face groups on the other side of this step, with what the
+    /// same command did to the mask or to the hidden faces (see mesh/groups.rs).
+    Groups(Box<GroupsStep>),
     /// The object list on the other side of this step.
     Scene(Box<SceneState>),
 }
@@ -117,6 +133,9 @@ struct Step {
     /// Only on a step that changed which file the scene belongs to: the file
     /// on its other side (see `keep_file`).
     file: Option<FileState>,
+    /// Only on a step that put another scene in place of the one that was
+    /// open: how the scene on its other side was seen (see `keep_seen`).
+    seen: Option<Box<Details>>,
 }
 
 /// What the next undo or redo step will touch.
@@ -133,6 +152,9 @@ impl Edit {
             Edit::Stroke(d) => d.bytes(),
             Edit::Visibility(d) => d.bytes(),
             Edit::Replace(m) => m.memory_bytes(),
+            Edit::Levels(levels) => levels.as_ref().map_or(0, |levels| levels.bytes()),
+            Edit::Layers(step) => step.bytes(),
+            Edit::Groups(step) => step.bytes(),
             // The list alone. Its meshes are the scene's: `History::bytes`
             // adds the ones that are kept only for undo.
             Edit::Scene(s) => s.objects.len() * std::mem::size_of::<Object>(),
@@ -339,7 +361,7 @@ impl History {
         crate::timelapse::activity::edited();
         self.edits += 1;
         let ended = std::mem::take(&mut self.redo);
-        self.undo.push_back(Step { edit, mesh: self.target, file: None });
+        self.undo.push_back(Step { edit, mesh: self.target, file: None, seen: None });
         self.gone(&ended);
         self.trim();
     }
@@ -385,8 +407,8 @@ impl History {
             return false;
         }
         let step = if undo { self.undo.pop_back() } else { self.redo.pop() };
-        let Some(Step { edit: Edit::Scene(state), mesh, file }) = step else { return false };
-        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh, file };
+        let Some(Step { edit: Edit::Scene(state), mesh, file, seen }) = step else { return false };
+        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh, file, seen };
         if undo { self.redo.push(step) } else { self.undo.push_back(step) }
         true
     }
@@ -409,6 +431,32 @@ impl History {
         Some(std::mem::replace(kept, here()))
     }
 
+    /// Says that the step just recorded put another scene in place of the
+    /// one that was open; `before` is how that one was seen: its look and
+    /// its view, as a file keeps them. An opened file brings its own, and
+    /// Undo of the Open must not leave the scene from before under them.
+    pub fn keep_seen(&mut self, before: Details) {
+        if let Some(step) = self.undo.back_mut() {
+            step.seen = Some(Box::new(before));
+        }
+    }
+
+    /// Whether the step just taken, back (`undo`) or forward, keeps how the
+    /// scene now arrived at was seen.
+    pub fn keeps_seen(&self, undo: bool) -> bool {
+        let taken = if undo { self.redo.last() } else { self.undo.back() };
+        taken.is_some_and(|step| step.seen.is_some())
+    }
+
+    /// Call after a step back (`undo`) or forward that [`keeps_seen`]
+    /// (Self::keeps_seen). Gives back how the scene now arrived at was seen,
+    /// and keeps `here`, how the scene just left was, for the way back.
+    pub fn cross_seen(&mut self, undo: bool, here: Details) -> Option<Details> {
+        let taken = if undo { self.redo.last_mut() } else { self.undo.back_mut() };
+        let kept = taken?.seen.as_mut()?;
+        Some(std::mem::replace(&mut **kept, here))
+    }
+
     /// The files kept for the scenes that undo and redo can still reach
     /// across such steps. A save looks through them: a file that has just
     /// been written no longer holds any scene but the one that was saved.
@@ -419,6 +467,24 @@ impl History {
     /// Records that the whole mesh was replaced; `previous` is the old one.
     pub fn push_replace(&mut self, previous: Mesh) {
         self.push(Edit::Replace(Box::new(previous)));
+    }
+
+    /// Records that the mesh's subdivision levels were changed and nothing
+    /// else of it (levels deleted); `previous` is what they were.
+    pub fn push_levels(&mut self, previous: Option<Box<MeshLevels>>) {
+        self.push(Edit::Levels(previous));
+    }
+
+    /// Records a change to the mesh's sculpt layers; `previous` is what the
+    /// change itself hands back, the layers and positions as they were.
+    pub fn push_layers(&mut self, previous: LayersStep) {
+        self.push(Edit::Layers(Box::new(previous)));
+    }
+
+    /// Records a change to the mesh's face groups; `previous` is what the
+    /// change itself hands back.
+    pub fn push_groups(&mut self, previous: GroupsStep) {
+        self.push(Edit::Groups(Box::new(previous)));
     }
 
     pub fn clear(&mut self) {
@@ -437,7 +503,7 @@ impl History {
         }
         let step = self.undo.pop_back()?;
         let (edit, replaced) = Self::flip(step.edit, mesh, true);
-        self.redo.push(Step { edit, mesh: step.mesh, file: step.file });
+        self.redo.push(Step { edit, mesh: step.mesh, file: step.file, seen: step.seen });
         Some(replaced)
     }
 
@@ -447,7 +513,7 @@ impl History {
         }
         let step = self.redo.pop()?;
         let (edit, replaced) = Self::flip(step.edit, mesh, false);
-        self.undo.push_back(Step { edit, mesh: step.mesh, file: step.file });
+        self.undo.push_back(Step { edit, mesh: step.mesh, file: step.file, seen: step.seen });
         Some(replaced)
     }
 
@@ -466,6 +532,21 @@ impl History {
             Edit::Replace(mut other) => {
                 std::mem::swap(mesh, &mut *other);
                 (Edit::Replace(other), true)
+            }
+            Edit::Levels(mut other) => {
+                // The mesh stays, and nothing drawn changes with its levels.
+                std::mem::swap(&mut mesh.levels, &mut other);
+                (Edit::Levels(other), false)
+            }
+            Edit::Layers(mut step) => {
+                // The mesh stays; the vertices that move are patched like a stroke's.
+                step.swap(mesh);
+                (Edit::Layers(step), false)
+            }
+            Edit::Groups(mut step) => {
+                // The mesh stays; the renderer sees the versions that moved.
+                step.swap(mesh);
+                (Edit::Groups(step), false)
             }
             Edit::Scene(state) => (Edit::Scene(state), false),
         }
@@ -574,6 +655,54 @@ mod tests {
     /// Which of `meshes` are still in memory.
     fn parked(scene: &Scene, slot: &Mesh, meshes: &[u64]) -> Vec<bool> {
         meshes.iter().map(|&m| scene.mesh(m, slot).is_some()).collect()
+    }
+
+    /// A view from `yaw` degrees round, as a file keeps one.
+    fn seen_from(yaw: f32) -> Details {
+        let mut seen = Details::default();
+        seen.set(crate::io::slot::CAMERA, &crate::camera::SavedView { yaw, ..Default::default() });
+        seen
+    }
+
+    fn yaw_of(seen: Option<Details>) -> Option<f32> {
+        seen?.get::<crate::camera::SavedView>(crate::io::slot::CAMERA).map(|view| view.yaw)
+    }
+
+    /// An Open keeps how the scene it replaced was seen, and each time Undo
+    /// or Redo crosses it the two change places, however often: the scene
+    /// arrived at gets its own look and view back, and the step keeps those
+    /// of the scene just left. Steps on either side of it keep nothing.
+    #[test]
+    fn a_scene_put_in_place_of_another_keeps_how_that_one_was_seen() {
+        let (mut scene, mut slot, mut history) = (Scene::new("Sphere"), ball(), History::default());
+        rename(&mut scene, &mut slot, &mut history, "Head");
+        open(&mut scene, &mut slot, &mut history);
+        history.keep_seen(seen_from(10.0));
+        rename(&mut scene, &mut slot, &mut history, "Opened");
+
+        // The rename after it is an ordinary step.
+        assert!(history.step_scene(true, &mut scene, &mut slot));
+        assert!(!history.keeps_seen(true));
+        assert_eq!(yaw_of(history.cross_seen(true, seen_from(99.0))), None);
+
+        // Back across the Open: the old scene's view, and the opened one's kept.
+        for round in 0..3 {
+            assert!(history.step_scene(true, &mut scene, &mut slot));
+            assert!(history.keeps_seen(true), "round {round}");
+            assert_eq!(yaw_of(history.cross_seen(true, seen_from(20.0))), Some(10.0), "round {round}");
+            assert_eq!(scene.objects[0].name, "Head");
+            // Forward again: the opened scene's, and the old one's kept as it was left.
+            assert!(history.step_scene(false, &mut scene, &mut slot));
+            assert!(history.keeps_seen(false), "round {round}");
+            assert_eq!(yaw_of(history.cross_seen(false, seen_from(10.0))), Some(20.0), "round {round}");
+            assert_eq!(scene.objects.len(), 2);
+        }
+
+        // The rename before it is an ordinary step too.
+        assert!(history.step_scene(true, &mut scene, &mut slot));
+        assert!(history.step_scene(true, &mut scene, &mut slot));
+        assert!(!history.keeps_seen(true));
+        assert_eq!(scene.objects[0].name, "Sphere");
     }
 
     #[test]

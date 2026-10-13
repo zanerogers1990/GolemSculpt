@@ -159,6 +159,7 @@ pub fn category_as(
         }
         paint_card_header(ui, rect, &header, Corner::Chevron(open), &response, &button);
         button.on_hover_text("Float this card over the view. Drag it by its title; the same button puts it back.");
+        note_open(ui.ctx(), title, open);
         if open {
             card_body(ui, body);
         }
@@ -313,6 +314,28 @@ fn opening<R>(ctx: &egui::Context, f: impl FnOnce(&mut std::collections::BTreeSe
 /// this is called: call it only where the card is about to be drawn.
 fn asked_open(ctx: &egui::Context, title: &str) -> bool {
     opening(ctx, |titles| titles.remove(title))
+}
+
+/// How each card was when it was last drawn in its panel, by title: open
+/// (true) or closed.
+#[derive(Clone, Default)]
+struct Drawn(std::collections::BTreeMap<String, bool>);
+
+fn note_open(ctx: &egui::Context, title: &str, open: bool) {
+    ctx.data_mut(|d| {
+        let drawn = &mut d.get_temp_mut_or_default::<Drawn>(egui::Id::new("categories_drawn")).0;
+        if drawn.get(title) != Some(&open) {
+            drawn.insert(title.to_owned(), open);
+        }
+    });
+}
+
+/// Whether the card titled `title` was open when it was last drawn in its
+/// panel, or `None` if it has not been drawn there. The card's own state is
+/// kept under an id only the panel can make, so this is how anything else
+/// finds out: a check of the interface, for one.
+pub fn category_is_open(ctx: &egui::Context, title: &str) -> Option<bool> {
+    ctx.data(|d| d.get_temp::<Drawn>(egui::Id::new("categories_drawn"))).and_then(|drawn| drawn.0.get(title).copied())
 }
 
 /// Sub-heading inside a category.

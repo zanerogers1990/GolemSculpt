@@ -37,6 +37,9 @@ pub struct Options {
     pub quad_target: f32,
     /// Triangles Decimate brings the selected object down to.
     pub decimate_target: f32,
+    /// Subdivide only cuts faces up, moving nothing, instead of smoothing.
+    /// Not kept between runs: smooth is what is nearly always wanted.
+    pub subdivide_flat: bool,
     /// Triangle count for new shapes.
     pub new_shape_tris: f32,
     /// Tab: hide every panel.
@@ -53,6 +56,8 @@ pub struct Options {
     pub gizmo_axes: crate::gizmo::Orientation,
     /// Finishes, lighting, environment and post effects.
     pub look: Look,
+    /// The Face Groups card: whether group colours show, and the group picked (see ui/groups.rs).
+    pub groups: crate::ui::groups::Card,
 }
 
 impl Default for Options {
@@ -77,6 +82,7 @@ impl Default for Options {
             remesh_resolution: 128.0,
             quad_target: 5000.0,
             decimate_target: 200_000.0,
+            subdivide_flat: false,
             new_shape_tris: 200_000.0,
             clean_view: false,
             folded: [false; 2],
@@ -84,6 +90,7 @@ impl Default for Options {
             theme: 0,
             gizmo_axes: Default::default(),
             look: Look::default(),
+            groups: Default::default(),
         }
     }
 }
@@ -182,6 +189,32 @@ pub enum Recover {
     Discard,
 }
 
+/// What the Layers card can ask for. A layer is named by its number
+/// (`mesh::layers::LayerRow::id`), which no other layer of the mesh ever has.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LayerAction {
+    /// A new, empty layer at the bottom of the list, recording: under this
+    /// name, or "Layer 1" or the next such name that is free.
+    New(Option<String>),
+    Rename(u32, String),
+    /// Record strokes on this layer, or with `None` on none: strokes then
+    /// change the model underneath.
+    Record(Option<u32>),
+    /// The Strength slider is held at this many percent. Sent every frame it
+    /// is held; the whole drag is one undo step, closed by `StrengthDone`.
+    Strength(u32, u8),
+    /// The Strength slider was let go.
+    StrengthDone,
+    /// The eye: show the layer in the shape, or leave it out.
+    Show(u32, bool),
+    /// Take the layer and what it added away.
+    Delete(u32),
+    /// Make what the layer adds, as it shows now, part of the model, and
+    /// forget the layer.
+    Bake(u32),
+    BakeAll,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Undo,
@@ -253,11 +286,30 @@ pub enum Action {
     Decimate,
     /// The answer "Decimate Anyway" to that question: straight to the work.
     DecimateAnyway,
+    /// Add a subdivision level above the active object's finest and go to
+    /// it (see app/levels.rs).
+    Subdivide,
+    /// Go to this subdivision level of the active object; 0 is the coarsest.
+    Level(usize),
+    /// Go this many levels finer, or coarser if negative.
+    LevelBy(i32),
+    /// Delete the active object's subdivision levels below the one it is on
+    /// (`lower`), or above it.
+    DeleteLevels { lower: bool },
+    /// A command of the Layers card, for the active object's sculpt layers
+    /// (see app/layers.rs).
+    Layer(LayerAction),
+    /// A command of the Face Groups card, for the active object's face
+    /// groups (see app/groups.rs).
+    Groups(crate::ui::groups::Ask),
     /// Cut the active object at one of its own planes and rebuild the other
     /// side as the mirror image of the side kept: the positive side when
     /// `from_positive` (see app/cut_mirror.rs).
     CutAndMirror { axis: sculpt_symmetry::Axis, from_positive: bool },
     Mask(MaskOp),
+    /// Mask the active object's recesses or its peaks, this much of them
+    /// (0 to 1): a mask made from the surface's own shape (sculpt/cavity.rs).
+    MaskShape(crate::sculpt::cavity::Shape, f32),
     /// Hide these triangles of the active object, or with `hide` false show
     /// them again: what a box or lasso hide gesture asks for.
     HideFaces { triangles: Vec<u32>, hide: bool },
@@ -270,6 +322,14 @@ pub enum Action {
     ImportMatcap,
     /// Look through the matcap folder again for pictures added by hand.
     RescanMatcaps,
+    /// Pick a picture, copy it into the alpha folder and give it to the
+    /// brush in hand (see app/alpha.rs).
+    ImportAlpha,
+    /// Something asked of the brush library: duplicate, rename, delete,
+    /// Import Brush and the rest (see app/brushes.rs).
+    Brush(crate::sculpt::library::Ask),
+    /// Look through the alpha folder again for pictures added by hand.
+    RescanAlphas,
     /// Pick an HDRI picture to light the scene with.
     LoadHdri,
     ClearHdri,

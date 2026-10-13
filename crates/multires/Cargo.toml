@@ -1,0 +1,10 @@
+[package]
+name = "sculpt-multires"
+version = "0.1.0"
+edition = "2024"
+description = "Subdivision levels: a mesh subdivided, sculpted at any level, with the finer detail kept."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+sculpt-geom = { path = "../geom" }

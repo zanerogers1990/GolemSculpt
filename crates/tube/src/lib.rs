@@ -37,16 +37,31 @@
 //! everywhere in the app; in the Unity tool it drew a tube in mid-air, which
 //! is now Ctrl + drag.
 //!
+//! # The Muscle tool
+//!
+//! The same tool with another shape in hand, on its own button (B): [`muscle()`]. A muscle is thin at
+//! both ends and full at its belly, wider than it is deep, and where its points are on the model it
+//! lies on the model along its whole length, sunk in as far as Depth says (see `muscle`). Everything
+//! above holds for it, with three differences. A stroke that starts just off the model's outline is
+//! pulled onto the model. A rough stroke is taken as the clean line it meant: a straight line is two
+//! points however the surface curves under it. And with Free placement a stroke started on the
+//! model floats in front of it rather than growing out of it.
+//!
+//! The two tools keep their own shapes, settings and undo steps: a tube is the Tube tool's, a muscle
+//! the Muscle tool's.
+//!
 //! The geometry is plain data and stands on its own: [`curve`] and [`spine`]
 //! turn points into a centre line, [`field`] is the tube as a distance field
 //! and its mesh, [`merge`] fuses that into a model.
 
 pub mod curve;
+mod demo;
 pub mod field;
 mod finish;
 mod input;
 mod live;
 pub mod merge;
+pub mod muscle;
 mod panel;
 pub mod spine;
 mod tool;
@@ -58,15 +73,30 @@ use sculpt_toolkit::{Arrival, Button, Ctx, Draw, Event, Info, Key, Loss, ObjectI
 pub use field::TubeField;
 pub use live::{Symmetry, TubeState};
 pub use tool::TubeTool;
-pub use types::{CapStyle, ControlPoint, Sample, TubePoint, TubeSettings};
+pub use types::{CapStyle, ControlPoint, Kind, Sample, TubePoint, TubeSettings};
 
 /// The tool, ready to register with the app.
 pub fn tool() -> Box<dyn Tool> {
     Box::new(TubeTool::default())
 }
 
+/// The Muscle tool, ready to register with the app.
+pub fn muscle() -> Box<dyn Tool> {
+    Box::new(TubeTool::muscle())
+}
+
 impl Tool for TubeTool {
     fn info(&self) -> Info {
+        if self.kind() == Kind::Muscle {
+            return Info {
+                id: "muscle",
+                name: "Muscle",
+                icon: "tool_muscle",
+                tip: "Draw muscles on the model to block out a body: each lies on the surface, full at its belly and thin at \
+                      its ends. Shape them by their points, then fuse them into the model (B).",
+                hotkey: Some(Key::B),
+            };
+        }
         Info {
             id: "tube",
             name: "Tube",
@@ -113,6 +143,8 @@ impl Tool for TubeTool {
             Event::Redo => !self.is_merging() && self.can_redo() && self.redo(),
             _ => false,
         };
+        // A step of the scene's history can put a model back the way it was, under the muscles on it.
+        self.scene_stepped |= !taken && matches!(event, Event::Undo | Event::Redo);
         // Whatever changed, the handles are where the points now are.
         self.refresh(cx, false);
         self.flush(cx);
@@ -134,10 +166,11 @@ impl Tool for TubeTool {
     /// Live tubes are in no file. Every one was drawn by hand, so every one
     /// counts; see [`TubeTool::unmerged`] for which a new scene costs.
     fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
+        let kind = self.kind();
         match self.unmerged(loss) {
             0 => None,
-            1 => Some("1 unmerged tube (Merge or Keep Separate first)".to_owned()),
-            count => Some(format!("{count} unmerged tubes (Merge or Keep Separate first)")),
+            1 => Some(format!("1 unmerged {} (Merge or Keep Separate first)", kind.one())),
+            count => Some(format!("{count} unmerged {} (Merge or Keep Separate first)", kind.many())),
         }
     }
 
@@ -158,6 +191,9 @@ impl Tool for TubeTool {
     /// `object` goes on to Keep Separate and `merged` to Merge (`radial-merged`
     /// the six repeats of `radial`).
     fn demo(&mut self, cx: &mut Ctx, what: &str) {
+        if self.kind() == Kind::Muscle {
+            return self.demo_muscle(cx, what);
+        }
         let scene = cx.scene();
         let bounds = scene.bounds(scene.active());
         if bounds.is_empty() {

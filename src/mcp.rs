@@ -428,6 +428,54 @@ pub fn start_and_leave(args: &[String]) {
     }
 }
 
+/// The properties of `set_brush` that are the brush library's and the rest
+/// of a brush's record. Apart from the others only because one `json!` can
+/// hold so many fields and no more.
+fn brush_library_properties() -> Value {
+    let number = |description: &str| json!({ "type": "number", "description": description });
+    let boolean = |description: &str| json!({ "type": "boolean", "description": description });
+    let string = |description: &str| json!({ "type": "string", "description": description });
+    json!({
+        "list": boolean("Also return brushes: every brush of the library with its kernel, where it came from (base, shipped or yours), whether it is on the Space wheel, and what a shipped one is for."),
+        "duplicate_as": string("Make a brush of the user's own under this name that starts as the brush in hand is now (after brush, if both are given), and take it in hand. What else this call sets is set on the copy."),
+        "rename": string("A new name for the brush in hand. Only the user's own brushes can be renamed."),
+        "reset": boolean("true puts the brush in hand back as it shipped or, one of the user's own, as it was made."),
+        "delete": boolean("true takes the brush in hand out of the library once the rest of this call is done. The thirteen base brushes stay. A deleted brush of the user's own is kept as a file in the brushes folder, under deleted."),
+        "pinned": boolean("Whether the brush in hand has a tile on the wheel that opens while Space is held."),
+        "shift_uses": boolean("true makes the brush in hand the one that smooth: true strokes (Shift in the app) smooth with. It must be a Smooth-kernel brush. false hands that back to the base Smooth."),
+        "import_file": string("The full path of a brush file (.json) to bring into the library as one of the user's own; it is then the brush in hand. A brush that names an alpha this computer does not have comes in with none."),
+        "export_file": string("The full path (ending in .json) to write the brush in hand to, as it is once the rest of this call is done."),
+        "build_up": number("0.1 to 3: how fast Clay, Crease, Inflate, Standard and Layer build. The app's default is 1."),
+        "front_facing": boolean("Leave alone the surface that faces away from the camera, so a thin shape is not hit on its far side."),
+        "stay_in_group": boolean("Stay in Group: a stroke of this brush changes only the face group it began on (see the Face Groups commands). Off by default."),
+        "falloff": {
+            "description": "The brush's falloff curve: \"default\" for its kernel's own, \"smooth\", \"sharp\", \"plateau\" or \"linear\" for a starting shape, or a list of [distance, weight] points, each 0 to 1, distance 0 being the brush's centre.",
+        },
+        "clay_depth": number("Clay brushes: 0.1 to 1.5, how thick a strip is against the brush radius. Default 0.3."),
+        "clay_softness": number("Clay brushes: 0.05 to 1, the tip from flat-topped to domed. Default 0.6."),
+        "clay_relax": number("Clay brushes: 0 to 1, how much the strip's surface is evened out as it is laid. Default 0.35."),
+        "crease_pinch": number("Crease brushes: 0 to 1, how much the edges of the cut are drawn together. Default 0.6."),
+        "crease_depth": number("Crease brushes: 0.05 to 1, how deep the cut is against the brush radius. Default 0.35."),
+        "flatten_offset": number("Flatten brushes: -0.5 to 0.5, the plane lower or higher than the surface's average, in brush radii. Default 0."),
+        "layer_height": number("Layer brushes: 0.02 to 1, the height of the step against the brush radius. Default 0.15."),
+        "move_connected": boolean("Move brushes: grab only the surface joined to the point under the pointer."),
+        "alpha_size": number("0.1 to 3: the picture's size against the brush ring. At 1 it fills the square the ring sits in."),
+        "alpha_rotation": number("0 to 360 degrees: the picture turned, anticlockwise."),
+        "alpha_invert": boolean("Black prints and white does not."),
+        "alpha_repeat": boolean("The picture repeats past its edges."),
+        "alpha_turn_with_stroke": boolean("The picture's top points the way the stroke is going instead of up the screen."),
+        "alpha_drag_to_place": boolean("One stroke is one print: the first point is its middle and the drag out from there sizes and turns it."),
+    })
+}
+
+/// One set of properties made of two.
+fn with_properties(mut properties: Value, more: Value) -> Value {
+    if let (Some(all), Value::Object(more)) = (properties.as_object_mut(), more) {
+        all.extend(more);
+    }
+    properties
+}
+
 fn tools() -> Value {
     let tool = |name: &str, description: &str, properties: Value, required: &[&str]| {
         json!({
@@ -499,21 +547,69 @@ fn tools() -> Value {
         tool(
             "set_brush",
             "Choose the brush and its settings. Only what is given changes. Returns the brush as it now is. \
-             The symmetry settings (mirror_x, mirror_y, mirror_z, radial, radial_axis, radial_custom_axis, \
+             A brush is a named record of settings over one of thirteen kernels, kept in the app's brush library: \
+             the thirteen base brushes (one per kernel), the ones that ship with the app (Clay Strips, Dam Standard, \
+             Trim and so on) and the user's own. Each keeps its own settings, so what is set here is set on the \
+             brush in hand and stays with it. The reply's library lists every brush's name; list: true adds what \
+             each one is, and said holds anything the app had to say (a brush imported without its alpha, where \
+             a deleted brush's file was kept). The symmetry settings (mirror_x, mirror_y, mirror_z, radial, radial_axis, radial_custom_axis, \
              symmetry_space) are not the brush's: each object has its own, and these set the active object's. \
              Select another object and its own symmetry is what strokes are made under.",
-            json!({
-                "brush": choice(
-                    &["Move", "Clay", "Smooth", "Crease", "Inflate", "Flatten", "Pose", "Standard", "Layer", "Snake Hook"],
-                    "The brush. Choosing one turns mask painting off. Pose bends a limb: a stroke with it presses on \
+            with_properties(brush_library_properties(), json!({
+                "brush": string(
+                    "The brush, by its name in the library: a base brush (Move, Clay, Smooth, Crease, Inflate, \
+                     Flatten, Pose, Standard, Layer, Snake Hook, Pinch, Nudge, Erase Layer), a shipped one or one of \
+                     the user's \
+                     own. Choosing one turns mask painting off. Pose bends a limb: a stroke with it presses on \
                      the limb and drags, and the limb turns about a joint the brush finds one brush radius back \
-                     along it, toward the body. Size the brush to put the joint where the bend should be.",
+                     along it, toward the body. Size the brush to put the joint where the bend should be. Pinch \
+                     draws the surface in to the stroke's line (inverted, spreads it apart). Nudge slides the \
+                     surface along the stroke, within the surface; its strength is how much of the travel the \
+                     surface follows. Erase Layer rubs the object's recording sculpt layer out under the brush, \
+                     back toward the model underneath (strength 1 takes all of it at the middle of the ring; \
+                     it has no inverse, and invert changes nothing). A stroke with it is refused, with the \
+                     reason, unless a layer is recording and shows: see the layer commands.",
                 ),
-                "radius": number("Brush radius as a fraction of the window height, e.g. 0.05."),
-                "strength": number("0.01 to 1. The app's default is 0.1."),
+                "radius": number("Brush radius as a fraction of the window height, e.g. 0.05. One size for every brush: it is not part of a brush's record."),
+                "strength": number("0.01 to 1. The app's default is 0.1. For Move it is how much of the drag the surface follows (default 0.5; 1 keeps the grabbed point under the pointer)."),
                 "focal_shift": number("-1 to 1: where the falloff sits between the centre and the rim."),
                 "direction": choice(&["add", "subtract"], "Whether the brush builds up or digs in."),
                 "accumulate": boolean("Whether passing over the same place again keeps adding."),
+                "spacing": number(
+                    "This brush's distance between dabs as a fraction of its radius, 0.02 to 2.5. The app's default is \
+                     0.2 (0.1 for Crease). It changes how smooth a stroke is, not how much it builds; from about 1 \
+                     the dabs stand apart as separate prints. Move, Pose and Snake Hook lay no dabs and ignore it.",
+                ),
+                "scatter": number("0 to 2: each dab is thrown off the stroke's path, along the surface, by a random distance up to this fraction of its radius. 0 is off."),
+                "size_jitter": number("0 to 0.9: each dab is smaller than the brush by a random share of its size up to this. 0 is off."),
+                "pressure_size": number(
+                    "0 to 1: how much smaller this brush is at the lightest pen pressure (1: a tenth of the ring). \
+                     Full pressure is the ring's size. 0, the default, is off. Only strokes whose points carry \
+                     pressure are affected.",
+                ),
+                "pressure_strength": number(
+                    "0 to 1: how much of its strength this brush loses at the lightest pen pressure. The app's \
+                     default is 0.88. 0: pressure does not change the strength.",
+                ),
+                "smooth_mode": choice(
+                    &["all", "peaks", "valleys", "relax"],
+                    "Smooth (and smooth: true strokes with any brush): all evens everything out; peaks only lowers \
+                     what stands above its neighbours; valleys only fills what lies below them; relax slides the \
+                     mesh within the surface to even out its triangles without changing the shape.",
+                ),
+                "keep_volume": number("Smooth, mode all: 0 to 1, how much of the shrinkage smoothing causes is given back. 0, the default, shrinks as plain smoothing does."),
+                "flatten_mode": choice(
+                    &["both", "scrape", "fill"],
+                    "Flatten: both levels to the plane under the brush; scrape only brings down what is above it; \
+                     fill only raises what is below it. An inverted stroke swaps scrape and fill (and with both, \
+                     pushes the surface away from the plane).",
+                ),
+                "lock_plane": boolean("Flatten: the whole stroke levels to the plane its first dab found, for a true flat facet. It works on what lies within half a brush radius of that plane."),
+                "alpha": string(
+                    "The picture this brush prints, by its name in the app's alpha list, or \"none\" for the plain \
+                     round tip. Standard, Clay, Inflate and Layer take one.",
+                ),
+                "alpha_random_rotation": number("0 to 180 degrees: each print of the alpha is turned by a random angle up to this far either way. 0 is off."),
                 "pose_mode": choice(
                     &["bend", "resize", "stretch"],
                     "Pose: what a drag does. bend turns the limb about the joint (an inverted stroke twists it \
@@ -538,7 +634,7 @@ fn tools() -> Value {
                 "radial_axis": choice(&["x", "y", "z"], "The axis radial symmetry goes round, through the active object's centre. The app starts with y."),
                 "radial_custom_axis": xyz("Any other axis for it, as a direction in the active object's own space (the world's, with symmetry_space world)."),
                 "symmetry_space": choice(&["local", "world"], "Where the active object's mirror planes and radial axis sit: local is through the object's own centre along its own axes, moving with it; world is through the world's centre along the world's axes, staying put while the object moves through them. The app starts with local."),
-            }),
+            })),
             &[],
         ),
         tool(
@@ -554,7 +650,8 @@ fn tools() -> Value {
                     "description": "[x, y] or [x, y, pressure] each, all from 0 to 1. Without pressure the stroke is at full pressure, like a mouse.",
                 },
                 "invert": boolean(
-                    "Flip the brush's direction for this stroke (like holding Ctrl). With Pose: twist instead of \
+                    "Flip the brush's direction for this stroke (like holding Ctrl). With Move: push the surface in or pull it out along the way it faces \
+                     (drag up for out; at the outline, drag the way it faces). With Pose: twist instead of \
                      bend, slide instead of resize.",
                 ),
                 "smooth": boolean("Smooth instead, whatever the brush (like holding Shift)."),
@@ -579,8 +676,8 @@ fn tools() -> Value {
         ),
         tool(
             "pick",
-            "What is under a window position: the object, and the point and surface normal there. \
-             Use it to check that a stroke will start on the model.",
+            "What is under a window position: the object, the point and surface normal there, and the face \
+             group the surface is in (0 for none). Use it to check that a stroke will start on the model.",
             json!({ "x": number("0 (left) to 1 (right)."), "y": number("0 (top) to 1 (bottom).") }),
             &["x", "y"],
         ),
@@ -591,14 +688,63 @@ fn tools() -> Value {
                 "name": choice(
                     &[
                         "undo", "redo", "remesh", "mask_invert", "mask_clear", "mask_blur", "mask_sharpen",
-                        "mask_grow", "mask_shrink", "clone", "instance", "make_unique", "set_origin_to_mesh",
+                        "mask_grow", "mask_shrink", "mask_recesses", "mask_peaks", "clone", "instance", "make_unique",
+                        "set_origin_to_mesh",
+                        "subdivide", "level", "level_up", "level_down", "delete_lower_levels", "delete_higher_levels",
+                        "layer_new", "layer_record", "layer_strength", "layer_show", "layer_hide", "layer_rename",
+                        "layer_delete", "layer_bake", "layer_bake_all",
+                        "group_masked", "group_visible", "auto_groups", "groups_by_angle", "clear_groups",
+                        "pick_group", "isolate_group", "hide_group", "show_all_faces", "mask_group",
+                        "mask_all_but_group", "merge_groups", "show_group_colours",
                     ],
                     "remesh rebuilds the mesh from voxels, evening out the triangles. clone adds an independent \
                      copy; instance adds a linked copy that shares the mesh; make_unique unlinks an instance. \
                      set_origin_to_mesh moves the object's centre (its pivot, and its own mirror planes) to the \
-                     middle of its mesh without moving the object.",
+                     middle of its mesh without moving the object. \
+                     mask_recesses masks what lies in creases and pits, and mask_peaks what stands proud, in place \
+                     of the mask there is; follow either with mask_invert to sculpt only there. \
+                     Subdivision levels (get_state gives each object's levels): subdivide adds a level with four \
+                     times the triangles above the finest and goes to it; level goes to the level given; level_up \
+                     and level_down step one; delete_lower_levels and delete_higher_levels drop the levels below \
+                     or above the one the object is on. What is sculpted on one level is kept on the others. \
+                     Sculpt layers (get_state gives each object's layers): layer_new adds an empty layer and \
+                     starts recording on it, so strokes go into the layer and leave the model underneath alone; \
+                     layer_record makes the named layer the one that records, or with no layer stops recording, \
+                     so strokes change the model underneath; layer_strength sets how much of a layer is in the \
+                     shape; layer_hide and layer_show take it out and put it back; layer_delete removes it and \
+                     what it added; layer_bake makes it part of the model as it shows; layer_bake_all does that \
+                     for every layer. A stroke is refused while the layer that records is hidden or at 0%. \
+                     remesh and the other commands that rebuild a mesh drop its levels and merge its layers \
+                     into it, and say so. \
+                     Face groups (get_state gives each object's count; pick gives the group under a point): \
+                     group_masked makes a new group of the masked surface and clears the mask; group_visible \
+                     makes one of everything that shows; auto_groups gives each connected part its own; \
+                     groups_by_angle splits at sharp edges; clear_groups removes them all. The commands on one \
+                     group take it as x and y (a window position on the active object, as pick takes) or as \
+                     group (its number), or with neither use the group picked last: pick_group picks it; \
+                     isolate_group hides everything else of the object (again: shows everything); hide_group \
+                     hides it; show_all_faces shows every hidden face; mask_group masks it and unmasks the \
+                     rest; mask_all_but_group the other way about; merge_groups makes it part of the group at \
+                     into_x and into_y, or into_group. show_group_colours tints each face with its group's \
+                     colour. A brush with stay_in_group set (set_brush) changes only the group its stroke \
+                     begins on. Groups follow a remesh and the other rebuilds by the nearest old face.",
                 ),
                 "resolution": number("For remesh: voxels along the longest side, 4 to 1024. Default: the app's setting."),
+                "amount": number("For mask_recesses and mask_peaks: 0 to 1, how much of the surface is taken. 0 is only the sharpest creases or ridges, 1 anything that lies low or stands up at all. Default 0.7."),
+                "flat": boolean("For subdivide: true cuts each face into four and moves nothing; false rounds the model as it divides. Default: the app's setting."),
+                "level": number("For level: the level to go to, 1 for the coarsest."),
+                "layer": json!({ "type": ["integer", "string"], "description": "For the layer commands: the layer's name or id, from get_state. For layer_new: a name for the new layer. For layer_record: leave out to stop recording." }),
+                "percent": number("For layer_strength: 0 (none of the layer) to 100 (as it was sculpted)."),
+                "new_name": string("For layer_rename: the layer's new name."),
+                "x": number("For the commands on one face group: 0 (left) to 1 (right) of the window, with y, a point on the group."),
+                "y": number("For the commands on one face group: 0 (top) to 1 (bottom) of the window."),
+                "group": number("For the commands on one face group: the group's number, from pick, instead of x and y."),
+                "into_x": number("For merge_groups: with into_y, a window position on the group to merge into."),
+                "into_y": number("For merge_groups: with into_x, a window position on the group to merge into."),
+                "into_group": number("For merge_groups: the number of the group to merge into, instead of into_x and into_y."),
+                "angle": number("For groups_by_angle: degrees, 1 to 180. Edges where the surface turns by more than this split the groups. Default: the card's setting (35)."),
+                "keep_mask": boolean("For group_masked: true leaves the mask as it is; false (the default) clears it."),
+                "on": boolean("For show_group_colours: true shows them, false hides them. Default true."),
             }),
             &["name"],
         ),

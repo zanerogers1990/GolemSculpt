@@ -20,6 +20,7 @@ use rayon::prelude::*;
 use super::lists::Lists;
 
 mod grow;
+pub mod nearest;
 pub use grow::LeafRuns;
 
 pub const LEAF_MAX_TRIS: usize = 64;

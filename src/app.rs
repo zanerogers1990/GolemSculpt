@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use egui::Color32;
 use glam::{Vec2, Vec3};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
@@ -30,8 +30,10 @@ use crate::sculpt::{Brush, PointerSample, Sculptor};
 use crate::ui::{self, Cursor, UiState, theme};
 use crate::{io, remesh};
 
+mod alpha;
 mod blender;
 mod bridge;
+mod brushes;
 mod cut_mirror;
 mod decimate;
 mod dyntopo;
@@ -43,11 +45,16 @@ mod file_arrays;
 mod file_undo;
 mod files;
 mod focus;
+mod groups;
+mod layers;
+mod levels;
 mod live_copies;
+mod mask_shape;
 mod masked;
 mod mirror_copies;
 mod new_scene;
 mod origin;
+mod pen;
 mod pose;
 mod print_check;
 mod recovery;
@@ -150,6 +157,15 @@ pub struct Args {
     /// Work the Blender link without Blender, or with one that has no window:
     /// `play` or `round` (see app/blender.rs).
     pub demo_blender: Option<String>,
+    /// Subdivision levels: `play` works them and prints a line per check;
+    /// the other words set up a picture (see app/levels.rs).
+    pub demo_levels: Option<String>,
+    /// Sculpt layers: `play` works them and prints a line per check; the
+    /// other words set up a picture (see app/layers.rs).
+    pub demo_layers: Option<String>,
+    /// Face groups: `play` works them and prints a line per check; the other
+    /// words set up a picture (see app/groups/play.rs).
+    pub demo_groups: Option<String>,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -207,6 +223,10 @@ struct Input {
     samples: Vec<PointerSample>,
     pen_down: bool,
     pen_pressure: Option<f32>,
+    /// The touch that has the pointer, from when it lands to when it lifts:
+    /// the pen's tip. What any other touch does meanwhile is not the
+    /// stroke's business (app/pen.rs).
+    pen_touch: Option<u64>,
     last_click: Option<(Instant, Vec2)>,
     /// Where the press under way began, if that was on an interface
     /// control, and the last tap on one: a press on the view straight after
@@ -444,8 +464,13 @@ impl Running {
             egui_wgpu::Renderer::new(&gpu.device, gpu.format, egui_wgpu::RendererOptions::default());
         let ui = UiState::new(&egui_ctx);
 
+        // The settings are read before the scene is made: the sphere the app
+        // starts with is at the Starting Detail they remember, as the one a
+        // New Scene makes is. (The rest of them go in place in `files_start`.)
+        let files = files::State::new(args.screenshot.is_some());
         let mut opts = Options::default();
         opts.matcap = ui.assets.default_matcap_index();
+        opts.new_shape_tris = files.starting_detail();
         let renderer = Renderer::new(&gpu, &ui::assets::default_matcap());
 
         let mut mesh = new_scene::starting_mesh(opts.new_shape_tris);
@@ -520,6 +545,7 @@ impl Running {
                 samples: Vec::new(),
                 pen_down: false,
                 pen_pressure: None,
+                pen_touch: None,
                 last_click: None,
                 on_control: None,
                 ui_tap: None,
@@ -545,7 +571,7 @@ impl Running {
             transform: Default::default(),
             flash: Default::default(),
             recording: Default::default(),
-            files: files::State::new(args.screenshot.is_some()),
+            files,
             recovery,
             ui_demo: Default::default(),
             blender: blender::State::new(args.screenshot.is_some()),
@@ -631,6 +657,15 @@ impl Running {
         }
         if let Some(what) = running.args.demo_blender.clone() {
             running.blender_demo(&what);
+        }
+        if let Some(what) = running.args.demo_levels.clone() {
+            running.levels_demo(&what);
+        }
+        if let Some(what) = running.args.demo_layers.clone() {
+            running.layers_demo(&what);
+        }
+        if let Some(what) = running.args.demo_groups.clone() {
+            running.groups_demo(&what);
         }
         if let Some((yaw, pitch)) = running.args.view {
             // Every object in the picture, from the side asked for.
@@ -747,31 +782,8 @@ impl Running {
                     ElementState::Released => self.pointer_released(button),
                 }
             }
-            WindowEvent::Touch(touch) => {
-                // A pen arrives as touch events carrying pressure; while it
-                // only hovers they are plain moves.
-                let pos = Vec2::new(touch.location.x as f32, touch.location.y as f32);
-                let pressure = touch.force.map(|f| f.normalized() as f32);
-                self.input.inside = true;
-                match touch.phase {
-                    TouchPhase::Started => {
-                        self.input.pointer = pos;
-                        self.input.pen_down = true;
-                        self.input.pen_pressure = pressure;
-                        self.pointer_pressed(MouseButton::Left, pressure);
-                    }
-                    TouchPhase::Moved => {
-                        self.input.pen_pressure = pressure;
-                        let p = if self.input.pen_down { pressure } else { None };
-                        self.pointer_moved(pos, p);
-                    }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        self.pointer_moved(pos, None);
-                        self.pointer_released(MouseButton::Left);
-                        self.input.pen_down = false;
-                    }
-                }
-            }
+            // A pen arrives as touch events carrying pressure (app/pen.rs).
+            WindowEvent::Touch(touch) => self.on_touch(&touch),
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
@@ -874,6 +886,8 @@ impl Running {
             MouseButton::Left | MouseButton::Right if self.doc.opts.clean_view => {
                 if button == MouseButton::Left { Drag::Orbit } else { Drag::Ui }
             }
+            // A click for the Face Groups card: Ctrl + Shift + click on a group, or one the card armed.
+            MouseButton::Left if self.groups_takes_press() => self.groups_pressed(),
             MouseButton::Left | MouseButton::Right if self.tools_active() => self.tools_pressed(button, pressure),
             MouseButton::Left | MouseButton::Right if self.spheres_active() => self.spheres_pressed(button),
             MouseButton::Left | MouseButton::Right if self.transform_active() => self.transform_pressed(button),
@@ -886,11 +900,18 @@ impl Running {
                 let placed = self.pick_placed(pos);
                 let picked = placed.map(|(id, _)| id);
                 let on_active = self.press_on_active(placed, pos);
-                if on_active {
+                // A layer that records but does not show takes no stroke, and the status line says why.
+                // Nor does Erase Layer begin one with no layer to rub out.
+                let refused = on_active && (self.layer_refuses_stroke() || self.erase_refuses_stroke(mods.shift_key()));
+                if on_active && !refused {
                     self.stroke_baseline(mods.shift_key());
                 }
                 let doc = &mut self.doc;
-                if on_active && doc.begin_stroke(&self.local, sample, invert, mods.shift_key()) {
+                if refused {
+                    Drag::Ui
+                } else if on_active && doc.begin_stroke(&self.local, sample, invert, mods.shift_key()) {
+                    // Drawn by hand: it may fall behind the pen rather than hold the frames up (sculpt/pace.rs).
+                    doc.sculptor.pace = crate::sculpt::Pace::LIVE;
                     self.input.samples.clear();
                     Drag::Sculpt
                 } else if button == MouseButton::Left {
@@ -981,10 +1002,11 @@ impl Running {
         if self.spheres_key_pressed(code) || self.tools_key_pressed(code) {
             return;
         }
-        if let Some(&b) = Brush::ALL.iter().find(|&&b| brush_key(b) == code) {
+        if let Some(&b) = Brush::ALL.iter().find(|&&b| brush_key(b) == Some(code)) {
             if idle && !ctrl {
-                self.doc.sculptor.settings.brush = b;
-                self.doc.sculptor.settings.mask_mode = false;
+                // The number keys are the base brushes' (the first ten of them: `Brush::hotkey`).
+                let sculptor = &mut self.doc.sculptor;
+                sculptor.library.select(crate::sculpt::library::Library::base(b), &mut sculptor.settings);
                 self.toast(b.name());
             }
             return;
@@ -1022,6 +1044,14 @@ impl Running {
                         Some(gauge(GaugeKind::Strength, self.doc.sculptor.settings.current().strength));
                 }
             }
+            // Subdivision levels (app/levels.rs). Ctrl + D before plain D, which is the focal shift.
+            KeyCode::KeyD if ctrl => {
+                if idle {
+                    self.act(Action::Subdivide);
+                }
+            }
+            KeyCode::PageUp if idle => self.act(Action::LevelBy(1)),
+            KeyCode::PageDown if idle => self.act(Action::LevelBy(-1)),
             KeyCode::KeyD if idle => {
                 self.input.gauge =
                     Some(gauge(GaugeKind::Focal, self.doc.sculptor.settings.current().focal_shift));
@@ -1139,7 +1169,12 @@ impl Running {
     }
 
     /// Replaces the mesh, keeping the old one on the undo stack.
-    fn replace_mesh(&mut self, mesh: Mesh, undoable: bool) {
+    fn replace_mesh(&mut self, mut mesh: Mesh, undoable: bool) {
+        // The same shape built again keeps its face groups (app/groups.rs). A mesh that is
+        // not an undo step is a new model put in for a check, and starts with none.
+        if undoable {
+            groups::follow(&self.doc.mesh, &mut mesh, crate::mesh::groups::Fit::Whole);
+        }
         let old = std::mem::replace(&mut self.doc.mesh, mesh);
         if undoable {
             self.doc.history.push_replace(old);
@@ -1156,6 +1191,8 @@ impl Running {
             return;
         }
         self.redraw = true;
+        // A Strength slider of the Layers card that is still held is let go first.
+        self.layers_before(&action);
         // While the SSphere tool is up, Z steps its rig first.
         if matches!(action, Action::Undo | Action::Redo)
             && (self.spheres_undo(action == Action::Redo) || self.tools_undo(action == Action::Redo))
@@ -1294,6 +1331,13 @@ impl Running {
                 }
             }
             Action::CutAndMirror { axis, from_positive } => self.cut_and_mirror(axis, from_positive),
+            // Subdivision levels are in app/levels.rs.
+            Action::Subdivide => self.subdivide(),
+            Action::Level(level) => self.level_to(level),
+            Action::LevelBy(by) => self.level_by(by),
+            Action::DeleteLevels { lower } => self.delete_levels(lower),
+            Action::Layer(action) => self.layer_act(action),
+            Action::Groups(ask) => self.groups_act(ask),
             Action::Decimate => self.decimate_asking(),
             Action::DecimateAnyway => self.decimate_start(),
             Action::Mask(op) => {
@@ -1311,6 +1355,7 @@ impl Running {
                     self.doc.history.push_stroke(delta);
                 }
             }
+            Action::MaskShape(shape, amount) => self.mask_shape(shape, amount),
             Action::HideFaces { triangles, hide } => {
                 self.hide_faces(&triangles, hide);
             }
@@ -1346,6 +1391,9 @@ impl Running {
                 self.doc.opts.matcap_on = on;
                 self.status(message, true);
             }
+            Action::ImportAlpha => self.pick_alpha(),
+            Action::Brush(ask) => self.brush_ask(ask),
+            Action::RescanAlphas => self.rescan_alphas(),
             Action::LoadHdri => {
                 let picked = rfd::FileDialog::new()
                     .set_title("Choose an HDRI")
@@ -1523,7 +1571,10 @@ impl Running {
         let s = &self.doc.sculptor.settings;
         let mods = self.input.mods;
         let brush = self.doc.sculptor.effective_brush(mods.shift_key());
-        let bs = s.per_brush[brush.index()];
+        // With Shift held the ring is the brush Shift smooths with, which
+        // need not be the Smooth brush last in hand.
+        let shift = mods.shift_key() && !s.mask_mode;
+        let (bs, _) = s.in_use(brush, shift);
         let mut negative = !bs.positive && brush.has_polarity();
         if (mods.control_key() || self.input.button == Some(MouseButton::Right))
             && (brush.has_polarity() || s.mask_mode)
@@ -1604,7 +1655,7 @@ impl Running {
         let inner = if s.mask_mode {
             s.mask_hardness + (1.0 - s.mask_hardness) * 0.5
         } else {
-            s.half_weight_radius(brush)
+            s.half_weight_radius_in_use(brush, shift)
         };
         let gauge = self.input.gauge.map(|g| g.kind);
         Cursor {
@@ -1618,6 +1669,7 @@ impl Running {
             strength: (gauge == Some(GaugeKind::Strength)).then_some(bs.strength),
             tether,
             pivot,
+            alpha: self.alpha_under_cursor(brush),
         }
     }
 
@@ -1706,6 +1758,10 @@ impl Running {
         }
         self.recording_step(dt);
         self.sync_view();
+        // Says so when something has just replaced a mesh that had subdivision levels or sculpt layers.
+        self.levels_watch();
+        self.layers_watch();
+        self.groups_watch();
         // The selected object's symmetry is the sculptor's: what the Pose
         // brush's preview goes by between strokes (a stroke asks again).
         if !self.doc.sculptor.is_active() {
@@ -1714,6 +1770,7 @@ impl Running {
 
         // Sculpt: every pointer sample since the last frame, in order.
         self.dyntopo_demo_frame();
+        self.hand_demo_frame();
         let sculpt_start = Instant::now();
         if self.doc.sculptor.is_active() {
             let doc = &mut self.doc;
@@ -1799,6 +1856,7 @@ impl Running {
         let doc = &mut self.doc;
         self.renderer.want_curvature = doc.opts.look.needs_curvature(doc.opts.matcap_on);
         self.renderer.wire.enabled = doc.opts.wireframe;
+        self.renderer.groups.enabled = doc.opts.groups.colours;
         if doc.opts.look.animated() {
             // A glow that moves needs every frame.
             self.redraw = true;
@@ -2030,9 +2088,9 @@ impl Running {
     }
 }
 
-/// The number key that picks a brush.
-fn brush_key(brush: Brush) -> KeyCode {
-    match brush.hotkey() {
+/// The number key that picks a brush, for the brushes that have one.
+fn brush_key(brush: Brush) -> Option<KeyCode> {
+    Some(match brush.hotkey()? {
         '1' => KeyCode::Digit1,
         '2' => KeyCode::Digit2,
         '3' => KeyCode::Digit3,
@@ -2042,8 +2100,9 @@ fn brush_key(brush: Brush) -> KeyCode {
         '7' => KeyCode::Digit7,
         '8' => KeyCode::Digit8,
         '9' => KeyCode::Digit9,
-        _ => KeyCode::Digit0,
-    }
+        '0' => KeyCode::Digit0,
+        _ => return None,
+    })
 }
 
 /// Whether `path` is a whole scene: this app's `.sclp`, or a `.sculpt` from
@@ -2064,7 +2123,7 @@ fn stem(path: &std::path::Path) -> String {
 fn import_mesh(path: &std::path::Path, first_half_size: Option<Vec3>) -> io::Result<(Mesh, Vec3)> {
     let mut raw = io::import(path)?;
     let at = io::place_import(&mut raw, first_half_size);
-    Ok((Mesh::new(raw.positions, raw.indices, None), at))
+    Ok((io::imported_mesh(raw), at))
 }
 
 /// Puts a loaded file's objects in place of the scene's. Gives back what
