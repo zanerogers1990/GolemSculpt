@@ -2461,6 +2461,7 @@ dependencies = [
  "glam",
  "image",
  "log",
+ "naga",
  "pollster 1.0.1",
  "rayon",
  "rfd",

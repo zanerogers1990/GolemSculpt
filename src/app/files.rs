@@ -52,6 +52,8 @@ pub(super) struct State {
     home: Home,
     /// The brush folder beside the settings file (see `app/brushes.rs`).
     pub(super) brushes: crate::brush_files::Shelf,
+    /// The materials folder beside it (see `app/materials.rs`).
+    pub(super) materials: crate::materials::files::Shelf,
     /// The settings as last written or read, to tell when they have changed.
     kept: Prefs,
     next_check: Instant,
@@ -90,6 +92,7 @@ impl State {
         let lost_on_open = io::Lost::default();
         State {
             brushes: crate::brush_files::Shelf::new(home.folder(), home.writable()),
+            materials: crate::materials::files::Shelf::new(home.folder(), home.writable()),
             home,
             kept,
             next_check,
@@ -235,6 +238,7 @@ impl Running {
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
         self.doc.tools.unit = kept.length_unit();
         self.brushes_restore(kept);
+        self.materials_restore();
         prefs::cards::restore(&self.egui_ctx, &kept.cards);
         sculpt_toolkit::floating::restore(&self.egui_ctx, &kept.floating_cards);
         self.ui.recent.restore(kept.recent.clone(), self.files.home.pictures());
@@ -279,6 +283,7 @@ impl Running {
     /// Called now and then while the app runs, and as it closes.
     pub(super) fn save_prefs(&mut self) {
         self.brushes_keep();
+        self.materials_keep();
         let now = self.prefs_now();
         if now == self.files.kept {
             return;

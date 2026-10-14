@@ -73,6 +73,9 @@ pub struct Options {
     /// Export FBX also writes each painted object's material weights into
     /// its UV sets, for game shaders (see io/fbx/paint.rs). Not kept between runs.
     pub fbx_material_weights: bool,
+    /// The material library and the custom shaders, which the Materials card
+    /// edits (see materials/mod.rs). Not part of the scene.
+    pub materials: crate::materials::State,
 }
 
 impl Default for Options {
@@ -111,6 +114,7 @@ impl Default for Options {
             deform: Default::default(),
             paint: Default::default(),
             fbx_material_weights: false,
+            materials: Default::default(),
         }
     }
 }
@@ -360,6 +364,9 @@ pub enum Action {
     /// Something asked of the brush library: duplicate, rename, delete,
     /// Import Brush and the rest (see app/brushes.rs).
     Brush(crate::sculpt::library::Ask),
+    /// Something asked of the material library or the scene's palette (see
+    /// app/materials.rs).
+    Material(crate::materials::Ask),
     /// Look through the alpha folder again for pictures added by hand.
     RescanAlphas,
     /// Pick an HDRI picture to light the scene with.

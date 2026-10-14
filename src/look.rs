@@ -1035,7 +1035,7 @@ pub enum Tonemap {
 // frozen when a preset is picked so the pattern does not crawl while
 // sculpting; 0 means "measure it".
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LureSettings {
     #[serde(with = "crate::io::preset::lure")]
     pub preset: usize,
@@ -1047,7 +1047,7 @@ pub struct LureSettings {
     pub reference: f32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MetalSettings {
     #[serde(with = "crate::io::preset::metal")]
     pub preset: usize,
@@ -1061,7 +1061,7 @@ pub struct MetalSettings {
     pub reference: f32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClaySettings {
     #[serde(with = "crate::io::preset::clay")]
     pub preset: usize,
@@ -1074,7 +1074,7 @@ pub struct ClaySettings {
     pub reference: f32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WoodSettings {
     #[serde(with = "crate::io::preset::wood")]
     pub preset: usize,
@@ -1091,7 +1091,7 @@ pub struct WoodSettings {
     pub reference: f32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GlowSettings {
     pub on: bool,
     #[serde(with = "crate::io::preset::glow")]

@@ -980,6 +980,7 @@ impl Running {
             other => {
                 let own = self.levels_command(other, args).or_else(|| self.layers_command(other, args));
                 let own = own.or_else(|| self.groups_command(other, args));
+                let own = own.or_else(|| self.materials_command(other, args));
                 // A scripted run's stroke drawn by hand answers for its two (app/ui_demo/hand.rs).
                 let own = own.or_else(|| self.hand_demo_command(other));
                 return own.unwrap_or_else(|| Err(format!("There is no command \"{name}\".")));

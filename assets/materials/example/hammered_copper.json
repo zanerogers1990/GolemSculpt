@@ -1,0 +1,20 @@
+{
+  "name": "Hammered Copper",
+  "description": "Beaten copper: shallow hammer dents, with green patina in the recesses.",
+  "needs": ["curvature"],
+  "swatch": [0.78, 0.45, 0.28],
+  "params": [
+    { "name": "Copper", "kind": "colour", "default": [0.86, 0.52, 0.34], "at": [0, 0],
+      "description": "The colour of the bare metal." },
+    { "name": "Patina", "kind": "colour", "default": [0.30, 0.62, 0.50], "at": [1, 0],
+      "description": "The colour of the green coat in the recesses." },
+    { "name": "Dent Size", "kind": "number", "min": 0.005, "max": 0.2, "default": 0.035, "at": [2, 0], "scale": "size",
+      "description": "How big each hammer mark is, as a fraction of the model." },
+    { "name": "Dent Depth", "kind": "number", "min": 0.0, "max": 1.5, "default": 0.7, "at": [2, 1],
+      "description": "How deep the hammer marks look." },
+    { "name": "Patina Amount", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.5, "at": [2, 2],
+      "description": "How much green coat there is." },
+    { "name": "Polish", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.75, "at": [2, 3],
+      "description": "How glossy the bare copper is." }
+  ]
+}

@@ -6,7 +6,10 @@
 //!   draws everything afresh each frame, and "cursor only", where nothing in
 //!   the picture changes (what a pointer move over the model asks for), under
 //!   the default lit look, each finish and the matcap; then, lit, with half
-//!   the model off the screen and with a third of its faces hidden. Each
+//!   the model off the screen and with a third of its faces hidden; then the
+//!   same sphere fully painted with four materials and a band of colour
+//!   ("painted lit", "painted matcap", and "painted off" with both Show
+//!   switches off, which is that mesh through the unpainted pipelines). Each
 //!   frame is waited for (`device.poll`), so a time is the whole frame's, the
 //!   graphics card's included. Prints a table, and a `RESULT` line per cell
 //!   for `--bench-render-ab`.
@@ -89,7 +92,7 @@ fn srgb_to_linear(c: [f32; 3]) -> [f32; 3] {
 
 /// The frame's shared shader inputs, as `App::globals` makes them, with the
 /// active object's X mirror guide showing when `guides` is set.
-fn globals(view: &View, opts: &Options, guides: bool) -> Globals {
+pub(crate) fn globals(view: &View, opts: &Options, guides: bool) -> Globals {
     let lin4 = |c: [f32; 3]| {
         let c = srgb_to_linear(c);
         [c[0], c[1], c[2], 0.0]
@@ -156,6 +159,8 @@ struct Stage {
     target: wgpu::Texture,
     view_target: wgpu::TextureView,
     guides: bool,
+    /// The palette painted meshes are drawn with, if any are.
+    palette: Option<crate::materials::rows::Upload>,
 }
 
 impl Stage {
@@ -181,6 +186,7 @@ impl Stage {
             target,
             view_target,
             guides: false,
+            palette: None,
         }
     }
 
@@ -211,7 +217,12 @@ impl Stage {
 
     /// Sends every mesh's changes to the graphics card, as a frame does.
     fn sync(&mut self, gpu: &Gpu) {
-        self.renderer.want_curvature = self.opts.look.needs_curvature(self.opts.matcap_on);
+        let mut painted_curvature = false;
+        if let Some(palette) = &self.palette {
+            self.renderer.painted.set_palette(gpu, palette);
+            painted_curvature = !self.opts.matcap_on && self.opts.paint.show_materials && palette.any_curvature();
+        }
+        self.renderer.want_curvature = self.opts.look.needs_curvature(self.opts.matcap_on) || painted_curvature;
         self.renderer.wire.enabled = self.opts.wireframe;
         for (id, mesh) in &mut self.meshes {
             self.renderer.sync_mesh(gpu, *id, mesh, false);
@@ -381,10 +392,65 @@ pub fn run(sizes: &[usize]) {
             hidden.meshes.push(half.meshes.pop().unwrap());
             hidden.objects.push((1, Mat4::IDENTITY));
             row(&mut hidden, "lit hidden", "matcap=off", &[Motion::Orbit]);
+            drop(hidden);
+            painted_rows(gpu, n);
         }
     });
     if let Err(e) = result {
         eprintln!("{e}");
+    }
+}
+
+/// The materials the painted rows are painted with: one of each finish
+/// that is not plain, the costliest first.
+const PAINTED_WITH: [&str; 4] = ["Lure - Blue Flake", "Metal - Rust", "Wood - Golden Oak", "Clay - Terracotta"];
+
+/// The painted rows for a sphere of `n` triangles: all of it painted with
+/// four materials in soft-edged wedges and a band of colour, through the
+/// paint data's own layer commands (`materials::demo`); drawn painted, with
+/// both Show switches off (the same mesh through the unpainted pipelines),
+/// and under the matcap.
+fn painted_rows(gpu: &Gpu, n: usize) {
+    use crate::materials::{Library, custom::Shaders, palette, rows};
+    let started = Instant::now();
+    let mut mesh = primitives::build(Primitive::Sphere, n, 1.0);
+    let tris = mesh.triangle_count();
+    let library = Library::default();
+    let shaders = Shaders::default();
+    let mut paint = crate::mesh::paint::palette::ScenePaint::default();
+    let slots: Vec<u8> = PAINTED_WITH
+        .iter()
+        .filter_map(|name| library.named(name))
+        .filter_map(|i| palette::ensure_in_palette(&mut paint, &library.entries()[i].material, 2.0, &shaders).ok())
+        .collect();
+    if let Err(why) = crate::materials::demo::paint_bands(&mut mesh, &slots, Some([205, 70, 45]), false) {
+        eprintln!("could not paint the bench mesh: {why}");
+        return;
+    }
+    eprintln!("painted {tris} triangles in {:.1} s", started.elapsed().as_secs_f32());
+    let mut stage = Stage::new(gpu, BENCH_SIZE);
+    stage.meshes.push((1, mesh));
+    stage.objects.push((1, Mat4::IDENTITY));
+    stage.palette = Some(rows::upload(&paint, 2.0, &shaders));
+    let cases: [(&str, &str, bool, &[Motion]); 3] = [
+        ("painted lit", "matcap=off", true, &[Motion::Orbit, Motion::Cursor]),
+        ("painted off", "matcap=off", false, &[Motion::Orbit]),
+        ("painted matcap", "matcap=on", true, &[Motion::Orbit]),
+    ];
+    for (name, spec, shown, motions) in cases {
+        let mut cells = Vec::new();
+        for &motion in motions {
+            stage.opts = Options::default();
+            look::apply_spec(&mut stage.opts, spec, 2.0);
+            stage.opts.paint.palette = paint.palette.clone();
+            (stage.opts.paint.show_polypaint, stage.opts.paint.show_materials) = (shown, shown);
+            stage.frame_camera(30.0, -15.0);
+            let ms = time_frames(gpu, &mut stage, motion);
+            println!("RESULT	{tris}	{name}	{}	{ms:.3}", motion.name());
+            cells.push(ms);
+        }
+        let cell = |i: usize| cells.get(i).map_or("-".to_string(), |ms| format!("{ms:.2}"));
+        println!("{tris:>10}  {name:<16} {:>9} {:>9}", cell(0), cell(1));
     }
 }
 

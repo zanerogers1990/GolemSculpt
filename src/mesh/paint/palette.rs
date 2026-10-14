@@ -21,11 +21,15 @@ pub struct ScenePaint {
     pub show_polypaint: bool,
     /// Show the painted materials.
     pub show_materials: bool,
+    /// The palette slot paint strokes lay as their material, picked in the
+    /// Materials card; `None` paints colour only. Kept with the scene: a slot
+    /// means something only in its own palette.
+    pub active_material: Option<u8>,
 }
 
 impl Default for ScenePaint {
     fn default() -> Self {
-        ScenePaint { palette: Vec::new(), show_polypaint: true, show_materials: true }
+        ScenePaint { palette: Vec::new(), show_polypaint: true, show_materials: true, active_material: None }
     }
 }
 
@@ -59,6 +63,10 @@ impl ScenePaint {
             seen[e.slot as usize] = true;
             fresh
         });
+        // A material to paint with that the palette does not have is none.
+        if paint.active_material.is_some_and(|slot| !seen[slot as usize] || slot == 0) {
+            paint.active_material = None;
+        }
         Some(paint)
     }
 
