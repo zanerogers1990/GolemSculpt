@@ -403,7 +403,10 @@ fn a_mesh_is_charged_for_its_share_of_its_levels() {
     let own_lists = |mesh: &Mesh| (mesh.vertex_count() + mesh.triangle_count()) * 4;
     let shared = alone - own_lists(&top);
     let both = levels(&top).bytes() + levels(&low).bytes();
-    let expected = shared + kept + own_lists(&top) + own_lists(&low);
+    // And the low mesh keeps what the finest level's mesh was built into, for the way back up.
+    let top_mesh = levels(&low).top_mesh.as_ref().map_or(0, |top| top.bytes());
+    assert!(top_mesh > top.triangle_count() * 40, "{top_mesh}");
+    let expected = shared + kept + own_lists(&top) + own_lists(&low) + top_mesh;
     assert!(both.abs_diff(expected) < 64, "{both} against {expected}");
     assert!(levels(&low).whole_bytes() >= shared + kept);
 }

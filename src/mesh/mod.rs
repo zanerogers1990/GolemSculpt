@@ -263,14 +263,25 @@ impl Mesh {
             }
         }
 
-        let leaf_count = built.bvh.leaves.len();
-        let mut mesh = Mesh {
+        let mut mesh = Mesh::assembled(built.positions, new_mask, built.indices, built.bvh);
+        mesh.build_adjacency();
+        mesh.recompute_all_normals();
+        (mesh, built.vert_remap, built.tri_order)
+    }
+
+    /// A mesh of `positions`, `mask` and `indices` in the order `bvh` was
+    /// built for, with everything else new: no adjacency yet, and every
+    /// normal straight up until they are worked out.
+    fn assembled(positions: Vec<Vec3>, mask: Vec<f32>, indices: Vec<u32>, bvh: Bvh) -> Mesh {
+        let n = positions.len();
+        let leaf_count = bvh.leaves.len();
+        Mesh {
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            positions: built.positions,
+            positions,
             normals: vec![Vec3::Y; n],
-            mask: new_mask,
+            mask,
             curv: Vec::new(),
-            indices: built.indices,
+            indices,
             polys: None,
             curv_raw: Vec::new(),
             curv_mean: 0.0,
@@ -278,7 +289,7 @@ impl Mesh {
             curv_on: false,
             vt: Lists::default(),
             vv: Lists::default(),
-            bvh: built.bvh,
+            bvh,
             hidden: Default::default(),
             orig_pos: vec![Vec3::ZERO; n],
             orig_nrm: vec![Vec3::ZERO; n],
@@ -298,10 +309,7 @@ impl Mesh {
             layers: None,
             layer_ride: layers::Ride::default(),
             groups: groups::Groups::default(),
-        };
-        mesh.build_adjacency();
-        mesh.recompute_all_normals();
-        (mesh, built.vert_remap, built.tri_order)
+        }
     }
 
     pub fn vertex_count(&self) -> usize {

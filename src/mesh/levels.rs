@@ -45,6 +45,10 @@
 //!
 //! **Dynamic topology** splits triangles in place, which a level's numbering
 //! does not survive, so a mesh with levels is never refined (`Mesh::refine`).
+//!
+//! **The way back up is quick.** A mesh below its finest level keeps what
+//! the finest level's mesh was built into (`levels/cached.rs`), so stepping
+//! up to it again does not build a ten-million-triangle mesh from nothing.
 
 use std::sync::Arc;
 
@@ -55,6 +59,7 @@ use sculpt_multires::{LevelMesh, Levels, LevelsParts, Scheme, Split};
 use super::layers::Layers;
 use super::{Mesh, Polys, sound};
 
+mod cached;
 mod grouped;
 mod layered;
 
@@ -91,6 +96,13 @@ pub struct MeshLevels {
     finest: layered::Finest,
     /// The face groups of the other levels (see `grouped.rs`).
     groups: grouped::Kept,
+    /// Below the finest level: what the finest level's mesh was built into,
+    /// for the way back up (see `cached.rs`). Shared with every mesh kept
+    /// for undo since the step down.
+    top_mesh: Option<Arc<cached::TopMesh>>,
+    /// How tight this mesh's spatial index was when it was built
+    /// (`cached::spread`); 0 when not known.
+    spread: f64,
 }
 
 /// A mesh's levels as a file keeps them: the stack as plain lists, and the
@@ -258,7 +270,8 @@ impl MeshLevels {
     pub fn bytes(&self) -> usize {
         let remembered: usize = self.hidden.iter().flatten().map(|flags| flags.len()).sum();
         let lists = (self.vertex.len() + self.triangle.len()) * 4;
-        self.stack.owned_bytes() + lists + remembered + self.layer_bytes() + self.groups.bytes()
+        let top_mesh = self.top_mesh.as_ref().map_or(0, |top| top.bytes() / Arc::strong_count(top));
+        self.stack.owned_bytes() + lists + remembered + self.layer_bytes() + self.groups.bytes() + top_mesh
     }
 
     /// What the finest copies of the sculpt layers take while the mesh is on
@@ -392,7 +405,8 @@ impl MeshLevels {
         // The mesh has its own groups back already; the other levels' are good for those.
         let now = mesh.has_groups().then(|| placed(mesh.group_ids(), &triangle).into());
         let groups = grouped::Kept::restored(groups, &stack, now);
-        let levels = MeshLevels { stack, vertex, triangle, hidden, finest, groups };
+        let spread = cached::spread(&mesh.bvh);
+        let levels = MeshLevels { stack, vertex, triangle, hidden, finest, groups, top_mesh: None, spread };
         levels.fits(mesh).then(|| Box::new(levels))
     }
 
@@ -416,25 +430,47 @@ impl MeshLevels {
     pub fn renumbered(&self, copy: &Mesh, numbering: &Numbering) -> Option<Box<MeshLevels>> {
         let (vertex, triangle) = through(numbering, &self.vertex, &self.triangle)?;
         let (stack, hidden, finest) = (self.stack.clone(), self.hidden.clone(), self.finest.clone());
-        let levels = MeshLevels { stack, vertex, triangle, hidden, finest, groups: self.groups.clone() };
+        // The finest level's mesh is the stack's, not this mesh's: the copy can step up to it as well.
+        let (top_mesh, spread) = (self.top_mesh.clone(), cached::spread(&copy.bvh));
+        let groups = self.groups.clone();
+        let levels = MeshLevels { stack, vertex, triangle, hidden, finest, groups, top_mesh, spread };
         let same_size = copy.vertex_count() == self.vertex.len() && copy.triangle_count() == self.triangle.len();
         (same_size && levels.fits(copy)).then(|| Box::new(levels))
     }
 }
 
-/// The mesh of a level as the stack handed it over, carrying the stack and
-/// the mesh's sculpt layers as they are on that level.
+/// The mesh of the level `stack` is on, as the stack handed it over (its
+/// positions and mask, and its faces if they were handed over too), carrying
+/// the stack and the mesh's sculpt layers as they are on that level.
+/// `top_mesh` is what the finest level's mesh was built into, if that is
+/// known: it makes the finest level quicker to build, and goes with a
+/// coarser one.
+#[allow(clippy::too_many_arguments)]
 fn built(
     stack: Levels,
-    level: LevelMesh,
+    (positions, mask, faces): (Vec<Vec3>, Vec<f32>, Option<(Vec<u32>, Option<sculpt_multires::Polys>)>),
     hidden: &[bool],
     remembered: Remembered,
     riding: Option<layered::Riding>,
     (groups, mut kept): (Vec<u16>, grouped::Kept),
+    top_mesh: Option<Arc<cached::TopMesh>>,
 ) -> Result<Mesh, String> {
-    let LevelMesh { positions, mask, triangles, polys } = level;
-    let (vertices, count) = (positions.len(), triangles.len() / 3);
-    let (mut mesh, numbering) = Mesh::new_numbered(positions, triangles, Some(mask), hidden);
+    let level = stack.current();
+    let (vertices, count) = (positions.len(), stack.triangle_count(level));
+    let on_top = level == stack.top();
+    let reused = top_mesh.as_ref().filter(|_| on_top).and_then(|top| top.mesh(&positions, &mask, hidden));
+    let (mut mesh, numbering, spread, polys) = match reused {
+        Some((mesh, numbering, spread)) => {
+            let polys = faces.map_or_else(|| stack.polys(level), |(_, polys)| polys);
+            (mesh, numbering, spread, polys)
+        }
+        None => {
+            let (triangles, polys) = faces.unwrap_or_else(|| stack.faces(level));
+            let (mesh, numbering) = Mesh::new_numbered(positions, triangles, Some(mask), hidden);
+            let spread = cached::spread(&mesh.bvh);
+            (mesh, numbering, spread, polys)
+        }
+    };
     // A level has no vertex that no face uses and no face that is not one:
     // if a build left something out, the two numberings cannot be matched.
     if mesh.vertex_count() != vertices || mesh.triangle_count() != count {
@@ -462,6 +498,8 @@ fn built(
         hidden: remembered,
         finest,
         groups: kept,
+        top_mesh: top_mesh.filter(|_| !on_top),
+        spread,
     }));
     Ok(mesh)
 }
@@ -480,6 +518,8 @@ fn first_levels(mesh: &Mesh, quads: bool) -> Result<MeshLevels, String> {
         hidden: vec![None],
         finest: Vec::new(),
         groups: grouped::Kept::default(),
+        top_mesh: None,
+        spread: cached::spread(&mesh.bvh),
     })
 }
 
@@ -538,7 +578,10 @@ pub fn subdivided(mesh: &Mesh, split: Split) -> Result<(Mesh, Subdivided), Strin
     let (hidden, remembered) = hidden_on(&stack, &levels.hidden, from, from + 1, levels.level_hidden(mesh));
     let riding = layered::subdivided(mesh, levels, &stack);
     let groups = levels.groups.step(&stack, from, from + 1, levels.level_groups(mesh));
-    Ok((built(stack, level, &hidden, remembered, riding, groups)?, note))
+    let LevelMesh { positions, mask, triangles, polys } = level;
+    let lists = (positions, mask, Some((triangles, polys)));
+    // A new finest level: whatever was kept of the old one is no use now.
+    Ok((built(stack, lists, &hidden, remembered, riding, groups, None)?, note))
 }
 
 /// `mesh` stepped to level `to`, as a new mesh, and whether anything
@@ -549,12 +592,18 @@ pub fn stepped(mesh: &Mesh, to: usize) -> Result<(Mesh, bool), String> {
     let from = levels.current();
     let (positions, mask) = levels.level_arrays(mesh);
     let mut stack = levels.stack.clone();
-    let step = stack.step_to(to, &positions, &mask)?;
-    let carried = step.undo.carried_an_edit();
+    let (arrived, arrived_mask, undo) = stack.step_lists(to, &positions, &mask)?;
+    let carried = undo.carried_an_edit();
     let (hidden, remembered) = hidden_on(&stack, &levels.hidden, from, to, levels.level_hidden(mesh));
-    let riding = layered::stepped(mesh, levels, &positions, &mask, to, &stack, &step.mesh.positions);
+    let riding = layered::stepped(mesh, levels, &positions, &mask, to, &stack, &arrived);
     let groups = levels.groups.step(&stack, from, to, levels.level_groups(mesh));
-    Ok((built(stack, step.mesh, &hidden, remembered, riding, groups)?, carried))
+    // Leaving the finest level, what its mesh was built into is kept for the way back.
+    let top_mesh = match from == levels.top() {
+        true => Some(Arc::new(cached::TopMesh::of(mesh, levels))),
+        false => levels.top_mesh.clone(),
+    };
+    let lists = (arrived, arrived_mask, None);
+    Ok((built(stack, lists, &hidden, remembered, riding, groups, top_mesh)?, carried))
 }
 
 /// The levels `mesh` would have with every level below its own dropped
@@ -576,9 +625,12 @@ pub fn without(mesh: &Mesh, lower: bool) -> Option<Box<MeshLevels>> {
         finest.clear();
     }
     let groups = levels.groups.without(level, lower);
+    // Dropping the levels below leaves the finest level as it was, numbering
+    // and all; dropping those above makes this one the finest.
+    let top_mesh = levels.top_mesh.clone().filter(|_| lower);
     (stack.level_count() > 1).then(|| {
         let (vertex, triangle) = (levels.vertex.clone(), levels.triangle.clone());
-        Box::new(MeshLevels { stack, vertex, triangle, hidden, finest, groups })
+        Box::new(MeshLevels { stack, vertex, triangle, hidden, finest, groups, top_mesh, spread: levels.spread })
     })
 }
 
