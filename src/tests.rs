@@ -75,7 +75,7 @@ fn moved_count(delta: &Option<StrokeDelta>) -> usize {
             verts.len()
         }
         // These meshes have no sculpt layers.
-        Some(StrokeDelta::Layered { .. }) | None => 0,
+        Some(StrokeDelta::Layered { .. } | StrokeDelta::Paint(_) | StrokeDelta::Painted { .. }) | None => 0,
     }
 }
 

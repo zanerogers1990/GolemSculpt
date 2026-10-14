@@ -565,6 +565,7 @@ impl Running {
         self.doc.scene.keep_mirrors(&mut details);
         self.doc.scene.keep_symmetry(&mut details);
         self.doc.tools.keep_in_file(&self.doc.scene, &mut details);
+        self.doc.opts.paint.keep(&mut details);
         details
     }
 
@@ -601,6 +602,8 @@ impl Running {
         let rows = Tools::rows_of(&self.doc.scene);
         self.doc.tools.restore_from_file(&rows, details, Arrival::Replaced);
         unity_import::restore_dynamic_topology(details, &mut self.doc.sculptor.dyntopo);
+        // The palette the file's paint names its materials by; a file without one has none.
+        self.doc.opts.paint = crate::mesh::paint::palette::ScenePaint::read(details).unwrap_or_default();
         self.see(details, None);
     }
 

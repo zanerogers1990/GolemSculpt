@@ -67,7 +67,8 @@ fn stroke(mesh: &mut Mesh, sculptor: &mut Sculptor, from: Vec2, to: Vec2, smooth
         match delta {
             StrokeDelta::Positions { verts, .. } => verts,
             StrokeDelta::Layered { stroke, .. } => moved(*stroke),
-            StrokeDelta::Mask { .. } => Vec::new(),
+            StrokeDelta::Painted { shape, .. } => moved(*shape),
+            StrokeDelta::Mask { .. } | StrokeDelta::Paint(_) => Vec::new(),
         }
     }
     delta.map_or(Vec::new(), moved)

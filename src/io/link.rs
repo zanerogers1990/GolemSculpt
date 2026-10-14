@@ -116,8 +116,8 @@ impl LinkObject {
             indices.chunks_exact_mut(3).for_each(|t| t.swap(1, 2));
         }
         let polys = self.polys.filter(|_| !flipped);
-        let (levels, layers, groups, lost) = (None, None, None, [false; 3]);
-        let loaded = LoadedMesh { positions, indices, mask: None, polys, hidden: None, levels, layers, groups, lost };
+        let (levels, layers, groups, paint, lost) = (None, None, None, None, [false; 4]);
+        let loaded = LoadedMesh { positions, indices, mask: None, polys, hidden: None, levels, layers, groups, paint, lost };
         let (mesh, repaired, _) = loaded.build();
         (mesh, repaired)
     }

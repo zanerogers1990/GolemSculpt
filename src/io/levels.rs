@@ -271,8 +271,8 @@ pub(super) fn read(r: &mut impl Read, length: u64) -> Option<SavedLevels> {
 /// flags all follow the same renumbering. Levels, layers or groups that turn
 /// out not to be this mesh's are left off, and the second value says which
 /// were: the shape is whole without any of them.
-pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 3]) {
-    let LoadedMesh { positions, indices, mask, polys, hidden, levels, layers, groups, lost } = loaded;
+pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 4]) {
+    let LoadedMesh { positions, indices, mask, polys, hidden, levels, layers, groups, paint, lost } = loaded;
     let verts = positions.len();
     let (mut mesh, numbering) = Mesh::new_numbered(positions, indices, mask, &hidden.unwrap_or_default());
     let went = |v: u32| numbering.vertex.get(v as usize).copied().unwrap_or(u32::MAX);
@@ -288,7 +288,7 @@ pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 3]) {
             mesh.polys = Some(Polys { start: polys.start, indices: corners });
         }
     }
-    let [mut lost_levels, mut lost_layers, lost_groups] = lost;
+    let [mut lost_levels, mut lost_layers, lost_groups, mut lost_paint] = lost;
     // The groups go on first: the levels keep the other levels' groups, and
     // those are good only for the groups this mesh has.
     let mut level_groups = Vec::new();
@@ -305,6 +305,13 @@ pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 3]) {
         mesh.layers = Layers::restored(saved, mesh.vertex_count(), Some(&numbering.vertex));
         lost_layers |= mesh.layers.is_none();
     }
+    if let Some(stack) = paint {
+        // After the levels: the finest copies are good only with the levels they were made on.
+        lost_paint |= !crate::mesh::paint::restore(&mut mesh, stack, &numbering.vertex);
+    }
+    if lost_paint {
+        log::warn!("the paint saved with a mesh could not be put back on it, and it opened without it");
+    }
     if lost_levels {
         log::warn!("the subdivision levels saved with a mesh could not be put back on it, and were left off");
     }
@@ -314,7 +321,7 @@ pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 3]) {
     if lost_groups {
         log::warn!("the face groups saved with a mesh could not be read, and it opened without them");
     }
-    (mesh, [lost_levels, lost_layers, lost_groups])
+    (mesh, [lost_levels, lost_layers, lost_groups, lost_paint])
 }
 
 #[cfg(test)]

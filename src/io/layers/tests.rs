@@ -178,7 +178,7 @@ fn a_layers_block_that_cannot_be_read_costs_the_layers_and_never_the_shape() {
         let mut back = opened.meshes.remove(0);
         assert!(back.layers.is_none(), "{what}: the layers are left off");
         assert_eq!(shape(&back), shape(&mesh), "{what}: the shape is the one saved, with the layers in it");
-        assert_eq!(opened.lost, Lost { levels: 0, layers: 1, groups: 0 }, "{what}");
+        assert_eq!(opened.lost, Lost { levels: 0, layers: 1, groups: 0, paint: 0 }, "{what}");
         assert!(back.levels.is_some(), "{what}: the levels are another block, and came back");
         // The mesh is whole and works: it steps up to what the saved one steps up to...
         let up = stepped(&back, 1).unwrap_or_else(|why| panic!("{what}: {why}")).0;
@@ -188,9 +188,9 @@ fn a_layers_block_that_cannot_be_read_costs_the_layers_and_never_the_shape() {
         let up = stepped(&back, 1).unwrap().0;
         assert!(up.layer_rows().len() == 1 && shape(&up) == shape(&stepped(&mesh, 1).unwrap().0), "{what}");
     }
-    let said = Lost { levels: 0, layers: 1, groups: 0 }.note().unwrap();
+    let said = Lost { levels: 0, layers: 1, groups: 0, paint: 0 }.note().unwrap();
     assert!(said.starts_with("The sculpt layers saved with 1 object could not be read") && said.contains("the shape is as it was saved"));
-    let both = Lost { levels: 2, layers: 1, groups: 0 }.note().unwrap();
+    let both = Lost { levels: 2, layers: 1, groups: 0, paint: 0 }.note().unwrap();
     assert!(both.starts_with("The subdivision levels saved with 2 objects") && both.contains(" The sculpt layers saved with 1 object"));
     // Untouched, it opens with its layers: the damage above is what cost them.
     let sound = load_scene(&file).unwrap();
