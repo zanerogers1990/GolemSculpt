@@ -2515,6 +2515,8 @@ cargo test -p sculpt-geom --release timing_of_decimation -- --ignored --nocaptur
 cargo test --release timing_of_a_decimate -- --ignored --nocapture                  # Decimate as the app runs it, sculpt mesh included, at 200k and 1M triangles; prints the status lines
 cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
+SCULPT_BENCH_ROWS="Clay,Smooth,Clay|" sculpt.exe --bench 1000000   # only those rows (as labelled; rows ending in | run beside the mirror plane)
+sculpt.exe --brush-hash       # scripted strokes of every brush, symmetry, mask, hidden faces, layers and dynamic topology, with a hash of the mesh after each: a speed change must leave every line the same
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first; spacing=150, scatter=50 and jitter=40 set every brush's Spacing, Scatter and Size Jitter in percent, and alpha=scales+random180 an alpha with Random Rotation)
 SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
 SCULPT_DEMO_SYMMETRY=repair sculpt.exe --screenshot out.png --demo-symmetry --demo-ui "float=Symmetry@640:20"   # Check Symmetry, Make Symmetric and Symmetry Cleanup pressed in turn on a model made lopsided for them, each undone and redone; prints the status lines and a line per check (ok / FAIL)
