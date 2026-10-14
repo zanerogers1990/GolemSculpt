@@ -565,6 +565,7 @@ impl Mesh {
         }
         self.touched.clear();
         self.stroke_leaves.clear();
+        self.bvh.begin_stroke();
         self.in_stroke = true;
     }
 

@@ -21,6 +21,8 @@ use super::lists::Lists;
 
 mod grow;
 pub mod nearest;
+#[cfg(test)]
+mod refit_tests;
 pub use grow::LeafRuns;
 
 pub const LEAF_MAX_TRIS: usize = 64;
@@ -147,6 +149,17 @@ pub struct Bvh {
     stamp: Vec<u32>,
     generation: u32,
     scratch: Vec<u32>,
+    /// During a stroke, what each leaf's box has to go on holding besides
+    /// the live surface: its box as the stroke found it, and whatever
+    /// dynamic topology has had it take in since (see [`Self::refit_leaves`]).
+    /// Taken the first time the stroke refits the leaf; `kept_in[leaf]` is
+    /// the stroke it was taken in.
+    kept: Vec<Aabb>,
+    kept_in: Vec<u32>,
+    /// The stroke under way, counted from 1; 0 is none yet.
+    stroke: u32,
+    /// The live box of each leaf a refit is working on.
+    live: Vec<Aabb>,
 }
 
 /// Result of building: the reordered mesh arrays.
@@ -294,8 +307,20 @@ impl Bvh {
         let nbr = Lists::from_offsets(&nbr_off, pairs.iter().map(|&(_, o)| o).collect());
 
         let stamp = vec![0u32; nodes.len()];
-        let mut bvh =
-            Bvh { nodes, leaves, nbr, vert_leaf, loose: false, stamp, generation: 0, scratch: Vec::new() };
+        let mut bvh = Bvh {
+            nodes,
+            leaves,
+            nbr,
+            vert_leaf,
+            loose: false,
+            stamp,
+            generation: 0,
+            scratch: Vec::new(),
+            kept: Vec::new(),
+            kept_in: Vec::new(),
+            stroke: 0,
+            live: Vec::new(),
+        };
         let all: Vec<u32> = (0..bvh.leaves.len() as u32).collect();
         bvh.refit_leaves(&all, &new_positions, &new_indices, false);
         Built { bvh, positions: new_positions, indices: new_indices, vert_remap, tri_order: ids }
@@ -315,7 +340,19 @@ impl Bvh {
         std::mem::size_of_val(self.nodes.as_slice())
             + std::mem::size_of_val(self.leaves.as_slice())
             + self.nbr.bytes()
-            + (self.vert_leaf.len() + self.stamp.len() + self.scratch.len()) * 4
+            + (self.vert_leaf.len() + self.stamp.len() + self.scratch.len() + self.kept_in.len()) * 4
+            + std::mem::size_of_val(self.kept.as_slice())
+            + std::mem::size_of_val(self.live.as_slice())
+    }
+
+    /// A stroke begins: each leaf's box as it stands now is what the stroke
+    /// found, the first time the stroke refits it.
+    pub fn begin_stroke(&mut self) {
+        self.stroke = self.stroke.wrapping_add(1);
+        if self.stroke == 0 {
+            self.kept_in.fill(0);
+            self.stroke = 1;
+        }
     }
 
     fn leaf_bounds(leaf: &Leaf, positions: &[Vec3], indices: &[u32], loose: bool) -> Aabb {
@@ -333,24 +370,44 @@ impl Bvh {
 
     /// Recomputes the bounds of `leaves` and of every ancestor above them.
     ///
-    /// With `grow`, bounds only ever expand. Strokes use that so the tree keeps
-    /// enclosing the stroke-start surface as well as the live one, which lets
-    /// brushes raycast and gather against either without a second index.
+    /// `in_stroke` is for strokes: the tree has to go on enclosing the
+    /// stroke-start surface as well as the live one, which lets brushes
+    /// raycast and gather against either without a second index. A leaf's box
+    /// is then its live box together with the box it had when the stroke
+    /// first refitted it (which holds the stroke-start surface) and whatever
+    /// dynamic topology has had it take in since ([`Self::enclose`]). It used
+    /// to take in its previous box every time instead, which held all of that
+    /// too but also every place the surface had passed through on the way: a
+    /// long Move or Snake Hook stroke left boxes many times the size of what
+    /// was in them, and every dab and raycast after it had to open them.
     pub fn refit_leaves(
         &mut self,
         leaves: &[u32],
         positions: &[Vec3],
         indices: &[u32],
-        grow: bool,
+        in_stroke: bool,
     ) {
         if leaves.is_empty() {
             return;
         }
-        let bounds: Vec<Aabb> = leaves
+        let mut live = std::mem::take(&mut self.live);
+        leaves
             .par_iter()
             .with_min_len(64)
             .map(|&l| Self::leaf_bounds(&self.leaves[l as usize], positions, indices, self.loose))
-            .collect();
+            .collect_into_vec(&mut live);
+        if in_stroke {
+            self.kept.resize(self.leaves.len(), Aabb::EMPTY);
+            self.kept_in.resize(self.leaves.len(), 0);
+            for (&l, b) in leaves.iter().zip(live.iter_mut()) {
+                let l = l as usize;
+                if self.kept_in[l] != self.stroke {
+                    self.kept_in[l] = self.stroke;
+                    self.kept[l] = self.nodes[self.leaves[l].node as usize].bounds;
+                }
+                *b = Aabb::union(self.kept[l], *b);
+            }
+        }
 
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
@@ -360,10 +417,9 @@ impl Bvh {
         let generation = self.generation;
         let mut ancestors = std::mem::take(&mut self.scratch);
         ancestors.clear();
-        for (&l, b) in leaves.iter().zip(bounds) {
+        for (&l, &b) in leaves.iter().zip(&live) {
             let node = self.leaves[l as usize].node as usize;
-            self.nodes[node].bounds =
-                if grow { Aabb::union(self.nodes[node].bounds, b) } else { b };
+            self.nodes[node].bounds = b;
             let mut p = self.nodes[node].parent;
             while p != NO_PARENT && self.stamp[p as usize] != generation {
                 self.stamp[p as usize] = generation;
@@ -376,10 +432,10 @@ impl Bvh {
         ancestors.sort_unstable_by(|a, b| b.cmp(a));
         for &i in &ancestors {
             let n = self.nodes[i as usize];
-            let b = Aabb::union(self.nodes[n.a as usize].bounds, self.nodes[n.b as usize].bounds);
-            self.nodes[i as usize].bounds = if grow { Aabb::union(n.bounds, b) } else { b };
+            self.nodes[i as usize].bounds = Aabb::union(self.nodes[n.a as usize].bounds, self.nodes[n.b as usize].bounds);
         }
         self.scratch = ancestors;
+        self.live = live;
     }
 
     /// Nearest intersection of a ray with the mesh. `pos` supplies vertex
