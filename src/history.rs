@@ -46,6 +46,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::io::Details;
 use crate::mesh::groups::GroupsStep;
 use crate::mesh::layers::LayersStep;
+use crate::mesh::paint::PaintStep;
 use crate::mesh::levels::MeshLevels;
 use crate::mesh::{Mesh, StrokeDelta, VisibilityDelta};
 use crate::scene::{Object, Scene, SceneState};
@@ -73,6 +74,11 @@ pub enum Edit {
     /// The mesh's face groups on the other side of this step, with what the
     /// same command did to the mask or to the hidden faces (see mesh/groups.rs).
     Groups(Box<GroupsStep>),
+    /// The mesh's paint layers on the other side of this step: a layer made,
+    /// deleted, merged, filled, cleared or changed (see mesh/paint.rs). A
+    /// paint stroke is a `Stroke`.
+    #[allow(dead_code)] // recorded by the Paint Layers card
+    Paint(Box<PaintStep>),
     /// The object list on the other side of this step.
     Scene(Box<SceneState>),
 }
@@ -158,6 +164,7 @@ impl Edit {
             Edit::Levels(levels) => levels.as_ref().map_or(0, |levels| levels.bytes()),
             Edit::Layers(step) => step.bytes(),
             Edit::Groups(step) => step.bytes(),
+            Edit::Paint(step) => step.bytes(),
             // The list alone. Its meshes are the scene's: `History::bytes`
             // adds the ones that are kept only for undo.
             Edit::Scene(s) => s.objects.len() * std::mem::size_of::<Object>(),
@@ -514,6 +521,13 @@ impl History {
         self.push(Edit::Groups(Box::new(previous)));
     }
 
+    /// Records a change to the mesh's paint layers; `previous` is what the
+    /// change itself hands back.
+    #[allow(dead_code)] // for the Paint Layers card
+    pub fn push_paint(&mut self, previous: PaintStep) {
+        self.push(Edit::Paint(Box::new(previous)));
+    }
+
     pub fn clear(&mut self) {
         self.edits += 1;
         let gone: Vec<Step> = self.undo.drain(..).chain(self.redo.drain(..)).collect();
@@ -574,6 +588,11 @@ impl History {
                 // The mesh stays; the renderer sees the versions that moved.
                 step.swap(mesh);
                 (Edit::Groups(step), false)
+            }
+            Edit::Paint(mut step) => {
+                // The mesh stays; its paint composite is worked out again.
+                step.swap(mesh);
+                (Edit::Paint(step), false)
             }
             Edit::Scene(state) => (Edit::Scene(state), false),
         }

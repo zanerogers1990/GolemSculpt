@@ -10,6 +10,10 @@ pub mod levels;
 mod lists;
 #[cfg(test)]
 mod normals_tests;
+// Polypaint's data core: the painting brush, the renderer and the exporters that call the
+// rest of it are being built on top of it (PHASE5-DESIGN.md, B.10 chunks 2-5).
+#[allow(dead_code, unused_imports)]
+pub mod paint;
 pub mod primitives;
 pub mod visibility;
 
@@ -103,6 +107,9 @@ pub struct Mesh {
 
     /// The mesh's face groups: which group each triangle is in (see groups.rs).
     groups: groups::Groups,
+
+    /// The mesh's paint layers, when it has any (see paint.rs).
+    pub paint: Option<Box<paint::Paint>>,
 }
 
 /// Polygon faces over a mesh's own vertices: face `f`'s corners are
@@ -203,6 +210,23 @@ pub enum StrokeDelta {
     /// carried when it moved the model underneath (see layers.rs). A stroke
     /// that changed nothing of the layers is a plain `Positions`.
     Layered { stroke: Box<StrokeDelta>, layers: Box<layers::StrokeLayers> },
+    /// A paint stroke: the texels it changed on one paint layer (paint.rs).
+    Paint(Box<paint::PaintDelta>),
+    /// A stroke that painted and also moved or masked the surface (paint
+    /// with a sculpting brush along, Zadd): both, undone together.
+    Painted { paint: Box<paint::PaintDelta>, shape: Box<StrokeDelta> },
+}
+
+/// What kind of stroke is ending, for [`Mesh::end_stroke_kind`].
+#[allow(dead_code)] // for the painting brush
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrokeKind {
+    /// It moved the surface.
+    Shape,
+    /// It painted the sculpt mask.
+    Mask,
+    /// It painted on a paint layer (and may have moved the surface too).
+    Paint,
 }
 
 impl StrokeDelta {
@@ -213,6 +237,8 @@ impl StrokeDelta {
             }
             StrokeDelta::Mask { verts, .. } => verts.len() * 12,
             StrokeDelta::Layered { stroke, layers } => stroke.bytes() + layers.bytes(),
+            StrokeDelta::Paint(paint) => paint.bytes(),
+            StrokeDelta::Painted { paint, shape } => paint.bytes() + shape.bytes(),
         }
     }
 }
@@ -226,6 +252,9 @@ pub struct DirtyRanges {
     /// Triangles (not corners) whose corners changed or that are new, when
     /// `Mesh::topology_version` has moved since the last call.
     pub triangles: Vec<Range<u32>>,
+    /// Vertices whose paint composite changed (`Mesh::paint_stream`).
+    #[allow(dead_code)] // for the renderer's paint stream
+    pub paint: Vec<Range<u32>>,
 }
 
 /// Whether an input triangle is kept when a mesh is built: three different
@@ -314,6 +343,7 @@ impl Mesh {
             layers: None,
             layer_ride: layers::Ride::default(),
             groups: groups::Groups::default(),
+            paint: None,
         }
     }
 
@@ -820,6 +850,13 @@ impl Mesh {
         self.end_stroke_as(mask_stroke, None)
     }
 
+    #[allow(dead_code)] // for the painting brush
+    /// [`Self::end_stroke`] by kind. Whatever the kind, paint the stroke
+    /// wrote is in the record too (see paint.rs).
+    pub fn end_stroke_kind(&mut self, kind: StrokeKind) -> Option<StrokeDelta> {
+        self.end_stroke_as(kind == StrokeKind::Mask, None)
+    }
+
     /// [`Self::end_stroke`] for a stroke that moved the surface by a matrix
     /// (the gizmo, reshaping what is not masked): the matrix's turn and
     /// stretch, in the mesh's own space, so that sculpt layers can be carried
@@ -842,16 +879,32 @@ impl Mesh {
 
         // What dynamic topology added during the stroke, if it ran.
         let topology = self.end_stroke_topology();
+        // What the stroke painted, if it painted (paint.rs).
+        let painted = self.paint_stroke_record().map(Box::new);
         if self.touched.is_empty() && topology.is_none() {
-            return None;
+            return painted.map(StrokeDelta::Paint);
         }
+        let shape = self.end_shape_record(mask_stroke, linear, topology);
+        Some(match painted {
+            Some(paint) => StrokeDelta::Painted { paint, shape: Box::new(shape) },
+            None => shape,
+        })
+    }
+
+    /// The record of what a stroke moved or masked: the rest of [`Self::end_stroke_as`].
+    fn end_shape_record(
+        &mut self,
+        mask_stroke: bool,
+        linear: Option<glam::Mat3>,
+        topology: Option<Box<dyntopo::TopologyDelta>>,
+    ) -> StrokeDelta {
         let mut verts = std::mem::take(&mut self.touched);
         if let Some(topology) = &topology {
             // The vertices the stroke made go when it is undone; only those
             // from before it have somewhere to go back to.
             verts.retain(|&v| v < topology.vertices_before());
         }
-        Some(if mask_stroke {
+        if mask_stroke {
             debug_assert!(topology.is_none(), "mask painting never refines");
             StrokeDelta::Mask {
                 before: verts.iter().map(|&v| self.orig_mask[v as usize]).collect(),
@@ -867,7 +920,7 @@ impl Mesh {
             };
             // What the stroke means for the sculpt layers, if there are any.
             self.settle_layers(delta, linear)
-        })
+        }
     }
 
     /// Tells the mesh that vertices inside these leaves moved. Leaves must
@@ -981,12 +1034,15 @@ impl Mesh {
     /// Vertex ranges whose GPU copies are stale. Clears the dirty state.
     pub fn take_dirty(&mut self) -> DirtyRanges {
         self.flush_normals();
+        // Before the mask's dirty leaves are cleared: layers masked by it read them.
+        let paint = if self.paint.is_some() { self.paint_take_dirty(&self.dirty_mask.clone()) } else { Vec::new() };
         let out = DirtyRanges {
             positions: self.ranges(&self.dirty_pos),
             normals: self.ranges(&self.dirty_nrm),
             mask: self.ranges(&self.dirty_mask),
             curv: self.ranges(&self.dirty_curv),
             triangles: self.topo.take_unsent((self.indices.len() / 3) as u32),
+            paint,
         };
         self.dirty_curv.clear();
         self.dirty_pos.clear();
@@ -1063,6 +1119,11 @@ impl Mesh {
                 self.apply_delta(stroke, undo);
                 self.apply_stroke_layers(layers, undo);
             }
+            StrokeDelta::Paint(paint) => self.apply_paint_delta(paint, undo),
+            StrokeDelta::Painted { paint, shape } => {
+                self.apply_delta(shape, undo);
+                self.apply_paint_delta(paint, undo);
+            }
         }
     }
 
@@ -1121,5 +1182,6 @@ impl Mesh {
             + self.levels.as_ref().map_or(0, |levels| levels.bytes())
             + self.layers.as_ref().map_or(0, |layers| layers.bytes())
             + self.groups.bytes()
+            + self.paint.as_ref().map_or(0, |paint| paint.bytes())
     }
 }

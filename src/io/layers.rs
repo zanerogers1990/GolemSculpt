@@ -41,13 +41,14 @@ const HEAD: usize = 4 + 4 + 3 * 4 + 8;
 const ROW: usize = 4 + 1 + 1 + 2;
 
 /// What a file held for its meshes that could not be put back on them: how
-/// many meshes lost their subdivision levels, how many their layers and how
-/// many their face groups.
+/// many meshes lost their subdivision levels, how many their layers, how
+/// many their face groups and how many their paint.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Lost {
     pub levels: usize,
     pub layers: usize,
     pub groups: usize,
+    pub paint: usize,
 }
 
 impl Lost {
@@ -77,7 +78,13 @@ impl Lost {
                 objects(self.groups)
             )
         });
-        let notes: Vec<String> = levels.into_iter().chain(layers).chain(groups).collect();
+        let paint = (self.paint > 0).then(|| {
+            format!(
+                "The paint saved with {} could not be read (the file is damaged there): the model is as it was                  saved, without its paint.",
+                objects(self.paint)
+            )
+        });
+        let notes: Vec<String> = levels.into_iter().chain(layers).chain(groups).chain(paint).collect();
         (!notes.is_empty()).then(|| notes.join(" "))
     }
 }

@@ -63,3 +63,34 @@ cp tests/blender_link/answer_and_quit.py $BLENDER_USER_SCRIPTS/startup/zz_answer
 $W/release/sculpt.exe --demo-scene --demo-blender live --screenshot $W/live.png
 cat $GOLEMSCULPT_LINK_DIR/answer.log
 ```
+
+## Paint
+
+No window. The app's own code writes a package with paint and says what it
+holds (`expect.json`); Blender's side reads it, checks every byte of every
+colour and weight, takes it into a scene, checks the attributes it made,
+sends it back unchanged (it says it is the same), paints ten points yellow,
+sends it again, and leaves that answer; the app's code takes the answer in
+as the app does (its layers carried, a "From Blender" layer on the ten
+points). With `OLD_LINK_SCRIPT`, the script from before paint reads the
+package too (its shapes whole, the paint passed over), and an old package
+reads with the new one.
+
+```
+export GOLEMSCULPT_PAINT_CHECK=$W/paintcheck GOLEMSCULPT_LINK_DIR=$W/link
+git show 5968b86:assets/blender/golemsculpt_link.py > $W/old_link.py
+export OLD_LINK_SCRIPT=$W/old_link.py
+cargo test --offline --target-dir $W -- --ignored blender_paint_check_package
+"$BLENDER" --background --factory-startup --python tests/blender_link/check_paint.py
+cargo test --offline --target-dir $W -- --ignored blender_paint_check_answer
+```
+
+The exports, read by Blender's own importers: an FBX of a painted ball and
+its mirror copy (the colour set, each face's material, the weights in the UV
+sets), and an OBJ and a PLY (each point's colour).
+
+```
+cargo test --offline --target-dir $W -- --ignored blender_fbx_check_file blender_obj_ply_check_files
+"$BLENDER" --background --factory-startup --python tests/blender_link/check_fbx_paint.py
+"$BLENDER" --background --factory-startup --python tests/blender_link/check_obj_ply_paint.py
+```

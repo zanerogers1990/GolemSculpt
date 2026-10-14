@@ -175,6 +175,8 @@ fn duplicate_placed(mesh: &Mesh, positions: Vec<Vec3>) -> (Mesh, Vec<u32>) {
     copy.layers = mesh.layers_renumbered(&numbering.vertex);
     // And its face groups, each face in the group it was in.
     copy.set_group_ids(crate::mesh::groups::renumbered(mesh.group_ids(), &numbering.triangle));
+    // And its paint, each vertex's texels with it.
+    copy.paint = mesh.paint_renumbered(&numbering.vertex, copy.vertex_count());
     let moved = numbering.vertex;
     if let Some(polys) = &mesh.polys {
         let corners: Vec<u32> =
@@ -646,7 +648,12 @@ impl Scene {
             mask.extend_from_slice(&m.mask);
         }
         debug_assert_eq!(mask.len(), joined.mesh.positions.len());
-        Some(Mesh::new(joined.mesh.positions, joined.mesh.indices, Some(mask)))
+        let (mut mesh, vertex) = Mesh::new_mapped(joined.mesh.positions, joined.mesh.indices, Some(mask));
+        // The paint comes across the same way, vertex for vertex.
+        let parts: Vec<&Mesh> = sources.iter().map(|(_, m)| *m).collect();
+        let count = mesh.vertex_count();
+        mesh.set_paint(crate::mesh::paint::transfer::joined(&parts, &vertex, count));
+        Some(mesh)
     }
 
     /// Puts `mesh` (see `joined_mesh`) in place of the selection: the active

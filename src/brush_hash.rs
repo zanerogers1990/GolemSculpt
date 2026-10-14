@@ -83,6 +83,9 @@ fn delta_entries(delta: &StrokeDelta, out: &mut Vec<(u32, [u32; 3], [u32; 3])>) 
             }
         }
         StrokeDelta::Layered { stroke, .. } => delta_entries(stroke, out),
+        // Paint strokes leave the shape alone; a painted sculpt stroke's shape is hashed.
+        StrokeDelta::Painted { shape, .. } => delta_entries(shape, out),
+        StrokeDelta::Paint(_) => {}
     }
 }
 

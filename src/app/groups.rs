@@ -33,7 +33,10 @@
 //!   where two of the groups come within a brush width of each other.
 //! - **Whatever puts a new mesh in an object's place takes the groups
 //!   across** by the nearest old face ([`follow`]), unless the routine that
-//!   built the mesh carried them itself (a change of level, a copy).
+//!   built the mesh carried them itself (a change of level, a copy). The
+//!   paint goes the same way, by the nearest old point
+//!   (`mesh/paint/transfer.rs`): every function below that carries groups
+//!   carries paint too.
 //!
 //! The scripted run of all of it is `--demo-groups play` (`groups/play.rs`).
 
@@ -46,6 +49,7 @@ use crate::camera::View;
 use crate::doc::Action;
 use crate::mesh::Mesh;
 use crate::mesh::groups::{self, Carried, Fit, GroupsStep, Made, Source};
+use crate::mesh::paint::transfer as paint;
 use crate::scene::Scene;
 use crate::sculpt::Sculptor;
 use crate::ui::groups::{Armed, Ask, Picked, counted};
@@ -58,11 +62,16 @@ pub(super) use bridge::{group_at, state_of};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod paint_tests;
+
 thread_local! {
     /// A mesh took another's place and could not take its groups: said on
     /// the status line by the next frame's look (`groups_watch`). Kept here
     /// and not in `Running`, like the levels' own note: nothing else reads it.
     static LEFT_BEHIND: Cell<bool> = const { Cell::new(false) };
+    /// The same for paint.
+    static PAINT_LEFT_BEHIND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// A count with its thousands set apart: 100,444.
@@ -152,12 +161,22 @@ pub(crate) fn follow(old: &Mesh, new: &mut Mesh, fit: Fit) {
     if old.has_groups() && !new.has_groups() {
         noted(groups::carry(new, &[Source::of(old)], fit));
     }
+    if old.has_paint() && !new.has_paint() {
+        noted_paint(paint::carry(new, &[Source::of(old)], fit));
+    }
 }
 
 /// Remembers a mesh that could not take its groups, for the status line.
 fn noted(carried: Carried) {
     if carried == Carried::Dropped {
         LEFT_BEHIND.with(|left| left.set(true));
+    }
+}
+
+/// Remembers a mesh that could not take its paint, for the status line.
+fn noted_paint(carried: paint::Carried) {
+    if carried == paint::Carried::Dropped {
+        PAINT_LEFT_BEHIND.with(|left| left.set(true));
     }
 }
 
@@ -179,13 +198,18 @@ pub(crate) fn taking_over(scene: &Scene, slot: &Mesh, id: u64, mut mesh: Mesh) -
 /// where it stands, it is looked for there.
 pub(crate) fn piece_of(scene: &Scene, slot: &Mesh, from: u64, model: Mat4, mesh: &mut Mesh) {
     let Some((object, old)) = scene.get(from).and_then(|o| Some((o, scene.mesh(o.mesh, slot)?))) else { return };
-    if !old.has_groups() || mesh.has_groups() {
-        return;
-    }
     let place = Affine3A::from_mat4(object.matrix().inverse() * model);
-    let in_scene = Source { place, ..Source::of(old) };
-    if groups::carry(mesh, &[in_scene], Fit::Part) == Carried::Nothing {
-        groups::carry(mesh, &[Source::of(old)], Fit::Part);
+    if old.has_groups() && !mesh.has_groups() {
+        let in_scene = Source { place, ..Source::of(old) };
+        if groups::carry(mesh, &[in_scene], Fit::Part) == Carried::Nothing {
+            groups::carry(mesh, &[Source::of(old)], Fit::Part);
+        }
+    }
+    if old.has_paint() && !mesh.has_paint() {
+        let in_scene = Source { place, ..Source::of(old) };
+        if paint::carry(mesh, &[in_scene], Fit::Part) == paint::Carried::Nothing {
+            paint::carry(mesh, &[Source::of(old)], Fit::Part);
+        }
     }
 }
 
@@ -195,13 +219,16 @@ pub(crate) fn piece_of(scene: &Scene, slot: &Mesh, from: u64, model: Mat4, mesh:
 pub(crate) struct Handed {
     pub mesh: Mesh,
     triangle: Vec<u32>,
+    /// Where each vertex handed over went: what tells an array made real
+    /// which vertex is a copy of which, for its paint (`paint::copies`).
+    vertex: Vec<u32>,
 }
 
 impl Handed {
     /// [`Mesh::new`], keeping the order the triangles came in.
     pub(crate) fn built(positions: Vec<glam::Vec3>, indices: Vec<u32>, mask: Option<Vec<f32>>) -> Handed {
         let (mesh, numbering) = Mesh::new_numbered(positions, indices, mask, &[]);
-        Handed { mesh, triangle: numbering.triangle }
+        Handed { mesh, triangle: numbering.triangle, vertex: numbering.vertex }
     }
 }
 
@@ -210,15 +237,16 @@ impl Handed {
 /// out several times, and every copy keeps the groups; anything else (what
 /// a cut leaves) keeps them on the old surface it still is ([`piece_of`]).
 pub(crate) fn replacing(scene: &Scene, slot: &Mesh, id: u64, handed: Handed) -> Mesh {
-    let Handed { mut mesh, triangle } = handed;
+    let Handed { mut mesh, triangle, vertex } = handed;
     let Some((object, old)) = scene.get(id).and_then(|o| Some((o, scene.mesh(o.mesh, slot)?))) else { return mesh };
-    if !old.has_groups() {
-        return mesh;
+    if old.has_paint() {
+        paint::copies(old, &mut mesh, &vertex);
     }
-    match groups::copies(old, &mesh, &triangle) {
-        Some(ids) => _ = mesh.set_group_ids(ids),
-        None => piece_of(scene, slot, id, object.matrix(), &mut mesh),
+    if let Some(ids) = old.has_groups().then(|| groups::copies(old, &mesh, &triangle)).flatten() {
+        mesh.set_group_ids(ids);
     }
+    // What is not a copy keeps what lies on the old surface (each of the two only if it has none yet).
+    piece_of(scene, slot, id, object.matrix(), &mut mesh);
     mesh
 }
 
@@ -232,6 +260,18 @@ pub(crate) fn of_selection(scene: &Scene, slot: &Mesh, mesh: &mut Mesh, fit: Fit
     let objects: Vec<_> =
         std::iter::once(active).chain(others).filter_map(|o| Some((o, scene.mesh(o.mesh, slot)?))).collect();
     let meshes: Vec<&Mesh> = objects.iter().map(|(_, mesh)| *mesh).collect();
+    if meshes.iter().any(|mesh| mesh.has_paint()) && !mesh.has_paint() {
+        let sources: Vec<Source> = objects
+            .iter()
+            .map(|(object, old)| Source {
+                mesh: old,
+                ids: (&[][..]).into(),
+                place: Affine3A::from_mat4(object.matrix().inverse() * active.matrix()),
+                fold: None,
+            })
+            .collect();
+        noted_paint(paint::carry(mesh, &sources, fit));
+    }
     if meshes.iter().all(|mesh| !mesh.has_groups()) {
         return;
     }
@@ -265,6 +305,10 @@ pub(crate) fn mirrored(old: &Mesh, new: &mut Mesh, axis: usize, positive: bool) 
     if old.has_groups() {
         let source = Source { fold: Some((axis, positive)), ..Source::of(old) };
         groups::carry(new, &[source], Fit::Part);
+    }
+    if old.has_paint() {
+        let source = Source { fold: Some((axis, positive)), ..Source::of(old) };
+        paint::carry(new, &[source], Fit::Part);
     }
 }
 
@@ -614,6 +658,9 @@ impl Running {
         }
         if LEFT_BEHIND.with(|left| left.replace(false)) && !self.ui.status.0.is_empty() {
             self.ui.status.0 += " Its face groups were left behind: the new shape is not the shape they were on.";
+        }
+        if PAINT_LEFT_BEHIND.with(|left| left.replace(false)) && !self.ui.status.0.is_empty() {
+            self.ui.status.0 += " Its paint was left behind: the new shape is not the shape it was on.";
         }
     }
 }

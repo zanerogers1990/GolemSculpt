@@ -40,6 +40,7 @@ mod deform;
 mod dyntopo;
 mod echo;
 mod export_fbx;
+mod exports;
 mod recording;
 mod faces;
 mod file_arrays;
@@ -1471,21 +1472,9 @@ impl Running {
             Action::Exit => self.exit_action(),
             Action::Quit { save } => self.quit(save),
             Action::Recover(answer) => self.recover(answer),
-            Action::ExportObj => {
-                let name = self.doc.scene.active().name.clone();
-                let file = io::export_file_name(&name, "obj");
-                let pick = rfd::FileDialog::new().add_filter("Wavefront OBJ", &["obj"]).set_file_name(file).save_file();
-                if let Some(path) = pick {
-                    // The active object's own place, so an instance exports as its own copy,
-                    // and its live mirror copies, which are part of the model on screen.
-                    let places = self.export_places();
-                    let places: Vec<(&str, glam::Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
-                    let result = io::export_obj_placed(&self.doc.mesh, &places, &path);
-                    let (result, mended) = Self::split_mended(result);
-                    let note = self.export_note();
-                    self.report(result, format!("Exported \"{name}\"{note} to {}{mended}", path.display()));
-                }
-            }
+            // Export OBJ and PLY are in app/exports.rs.
+            Action::ExportObj => self.export_obj_action(),
+            Action::ExportPly => self.export_ply_action(),
             Action::ExportFbx => self.export_fbx_action(),
             // The Blender link is in app/blender.rs.
             Action::SendToBlender => self.send_to_blender(),
@@ -1502,13 +1491,6 @@ impl Running {
         let mended = result.as_ref().map_or(0, |&count| count);
         let note = io::note_saved(mended).map_or(String::new(), |note| format!(". {note}"));
         (result.map(|_| ()), note)
-    }
-
-    fn report(&mut self, result: io::Result<()>, ok: String) {
-        match result {
-            Ok(()) => self.status(ok, true),
-            Err(e) => self.status(e, false),
-        }
     }
 
     /// Rebuilds the per-frame view from the camera (and measures the distance

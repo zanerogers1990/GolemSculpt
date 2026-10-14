@@ -21,6 +21,23 @@
 #         cut into triangles:
 #             their sizes   polys x u32
 #             their corners poly_corners x u32
+#     then, only if some object of the header has "paint":
+#         "GSPAINT1"        8 bytes
+#         for each object that has "paint", in order:
+#             the composite      vertices x 4 x u8   (sRGB red, green, blue, alpha)
+#             each layer listed  vertices x 4 x u8   (sRGB red, green, blue, coverage)
+#             each material      vertices x f32      (its weight, 0 to 1)
+#
+# The paint rides at the end, after every object, where a copy of this script
+# from before paint (which reads its objects and stops) never looks, so the
+# format is still 1. An object's "paint" in the header names the attributes:
+# {"composite": "GolemSculpt Paint", "layers": [{"name", "attribute",
+# "visible", "opacity"}], "materials": [{"name", "attribute", "slot"}]}. Here
+# each becomes an attribute on the points: the composite and each layer a
+# colour attribute (the composite is the active one, which the viewport's
+# Attribute colour shows), each material a number attribute (an Attribute
+# node of its name reads it in a shader). Going back, only the composite goes:
+# "GolemSculpt Paint" if the object has it, else its active colour attribute.
 #
 # Everything in a package is in GolemSculpt's own terms whichever way it is
 # going: Y up, right-handed, 1 unit = 1 cm, and every point where it stands in
@@ -46,7 +63,7 @@
 bl_info = {
     "name": "GolemSculpt Link",
     "author": "GolemSculpt",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (3, 6, 0),
     "location": "3D Viewport > Sidebar > GolemSculpt",
     "description": "Send objects to GolemSculpt and take them back, at their real size",
@@ -68,10 +85,14 @@ import numpy as np
 from mathutils import Matrix
 
 # What this copy of the script is; GolemSculpt replaces an older one.
-LINK_VERSION = 1
+LINK_VERSION = 2
 MODULE = "golemsculpt_link"
 MAGIC = b"GSLINK01"
 FORMAT = 1
+# What begins the paint at the end of a package.
+PAINT_MAGIC = b"GSPAINT1"
+# The colour attribute that is the paint as GolemSculpt shows it.
+COMPOSITE = "GolemSculpt Paint"
 ENDING = ".gslink"
 # A package nobody took in this long was meant for a session that has gone.
 STALE_SECONDS = 600.0
@@ -191,28 +212,50 @@ class Entry:
         self.triangles = np.zeros((0, 3), np.uint32)
         self.poly_sizes = None
         self.poly_corners = None
+        # Its paint: {"composite": name, "colours": (vertices, 4) uint8, "layers": [{"name",
+        # "attribute", "visible", "opacity", "colours"}], "materials": [{"name", "attribute",
+        # "slot", "weights": (vertices,) float32}]}, or None.
+        self.paint = None
+
+
+def _paint_fits(paint, count):
+    """Whether every list of an object's paint has one entry per point."""
+    if not paint:
+        return False
+    sound = len(paint["colours"]) == count
+    sound = sound and all(len(layer["colours"]) == count for layer in paint.get("layers", []))
+    return sound and all(len(m["weights"]) == count for m in paint.get("materials", []))
 
 
 def write_package(path, sender, entries, smooth=True):
     objects = []
-    for e in entries:
+    # Paint that does not fit its object is not written at all: the header and the end must agree.
+    painted = [e.paint if _paint_fits(e.paint, len(e.points)) else None for e in entries]
+    for e, paint in zip(entries, painted):
         polys = 0 if e.poly_sizes is None else len(e.poly_sizes)
-        objects.append(
-            {
-                "name": e.name,
-                "ref": e.ref,
-                "sent_as": e.sent_as,
-                "copy": bool(e.copy),
-                "origin": [float(v) for v in e.origin],
-                "mark": e.mark,
-                "same_as": e.same_as,
-                "was": e.was,
-                "vertices": int(len(e.points)),
-                "triangles": int(len(e.triangles)),
-                "polys": int(polys),
-                "poly_corners": int(len(e.poly_corners)) if polys else 0,
+        o = {
+            "name": e.name,
+            "ref": e.ref,
+            "sent_as": e.sent_as,
+            "copy": bool(e.copy),
+            "origin": [float(v) for v in e.origin],
+            "mark": e.mark,
+            "same_as": e.same_as,
+            "was": e.was,
+            "vertices": int(len(e.points)),
+            "triangles": int(len(e.triangles)),
+            "polys": int(polys),
+            "poly_corners": int(len(e.poly_corners)) if polys else 0,
+        }
+        if paint:
+            layers = paint.get("layers", [])
+            materials = paint.get("materials", [])
+            o["paint"] = {
+                "composite": paint["composite"],
+                "layers": [{k: layer[k] for k in ("name", "attribute", "visible", "opacity")} for layer in layers],
+                "materials": [{k: m[k] for k in ("name", "attribute", "slot")} for m in materials],
             }
-        )
+        objects.append(o)
     header = json.dumps({"format": FORMAT, "from": sender, "smooth": bool(smooth), "objects": objects}).encode("utf-8")
 
     def write(f):
@@ -225,8 +268,69 @@ def write_package(path, sender, entries, smooth=True):
             if o["polys"]:
                 f.write(np.ascontiguousarray(e.poly_sizes, dtype="<u4").tobytes())
                 f.write(np.ascontiguousarray(e.poly_corners, dtype="<u4").tobytes())
+        if any(p is not None for p in painted):
+            f.write(PAINT_MAGIC)
+            for paint in painted:
+                if paint is None:
+                    continue
+                f.write(np.ascontiguousarray(paint["colours"], dtype=np.uint8).tobytes())
+                for layer in paint.get("layers", []):
+                    f.write(np.ascontiguousarray(layer["colours"], dtype=np.uint8).tobytes())
+                for material in paint.get("materials", []):
+                    f.write(np.ascontiguousarray(material["weights"], dtype="<f4").tobytes())
 
     _write_whole(path, write)
+
+
+def _read_paint(f, heads, entries):
+    """Reads the paint at the end of a package onto the entries whose header said they had
+    some. Returns whether it could; if not, no entry has any (the shapes stand without it)."""
+    if not any(heads):
+        return True
+    if f.read(len(PAINT_MAGIC)) != PAINT_MAGIC:
+        return False
+
+    def take(count, kind, width):
+        size = count * width * np.dtype(kind).itemsize
+        data = f.read(size)
+        if len(data) != size:
+            raise ValueError("the paint is cut short")
+        array = np.frombuffer(data, dtype=kind)
+        return array.reshape((count, width)) if width > 1 else array
+
+    read = []
+    try:
+        for head, e in zip(heads, entries):
+            if not head:
+                read.append(None)
+                continue
+            count = len(e.points)
+            paint = {"composite": str(head.get("composite") or COMPOSITE), "colours": take(count, np.uint8, 4)}
+            paint["layers"] = [
+                {
+                    "name": str(layer.get("name", "")),
+                    "attribute": str(layer.get("attribute", "")),
+                    "visible": bool(layer.get("visible", True)),
+                    "opacity": int(layer.get("opacity", 255)),
+                    "colours": take(count, np.uint8, 4),
+                }
+                for layer in head.get("layers", [])
+            ]
+            paint["materials"] = [
+                {
+                    "name": str(m.get("name", "")),
+                    "attribute": str(m.get("attribute", "")),
+                    "slot": int(m.get("slot", 0)),
+                    "weights": take(count, "<f4", 1),
+                }
+                for m in head.get("materials", [])
+            ]
+            read.append(paint)
+    except ValueError:
+        return False
+    for e, paint in zip(entries, read):
+        e.paint = paint
+    return True
 
 
 def read_package(path):
@@ -249,7 +353,10 @@ def read_package(path):
             return array.reshape((count, width)) if width > 1 else array
 
         entries = []
+        heads = []
         for o in header.get("objects", []):
+            paint = o.get("paint")
+            heads.append(paint if isinstance(paint, dict) else None)
             e = Entry(str(o.get("name", "Object")))
             e.ref = str(o.get("ref", ""))
             e.sent_as = str(o.get("sent_as", ""))
@@ -275,6 +382,7 @@ def read_package(path):
                 if not sound:
                     e.poly_sizes = e.poly_corners = None
             entries.append(e)
+        header["paint_lost"] = not _read_paint(f, heads, entries)
         return header, entries
 
 
@@ -303,6 +411,105 @@ def _to_sculpt(points, per_cm):
     out[:, 2] = -points[:, 1]
     out /= per_cm
     return out
+
+
+# ---- paint on a mesh
+
+
+def _srgb_to_linear(c):
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def _linear_to_srgb(c):
+    c = np.clip(c, 0.0, None)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
+
+
+def _set_colours(attribute, colours):
+    """Puts sRGB bytes (points x 4) into a colour attribute. A byte colour keeps
+    them exactly: it holds sRGB bytes itself."""
+    values = np.ascontiguousarray(colours, np.float32).ravel() / 255.0
+    try:
+        attribute.data.foreach_set("color_srgb", values)
+    except (AttributeError, TypeError, RuntimeError):
+        rgba = values.reshape((-1, 4)).copy()
+        rgba[:, :3] = _srgb_to_linear(rgba[:, :3])
+        attribute.data.foreach_set("color", rgba.ravel())
+
+
+def _get_colours(attribute):
+    """A colour attribute's colours as sRGB numbers from 0 to 1 (count x 4)."""
+    values = np.empty(len(attribute.data) * 4, np.float32)
+    try:
+        attribute.data.foreach_get("color_srgb", values)
+        return values.reshape((-1, 4))
+    except (AttributeError, TypeError, RuntimeError):
+        attribute.data.foreach_get("color", values)
+        rgba = values.reshape((-1, 4))
+        rgba[:, :3] = _linear_to_srgb(rgba[:, :3])
+        return rgba
+
+
+def _paint_attribute(mesh):
+    """The colour attribute that goes to GolemSculpt: "GolemSculpt Paint", else the active one."""
+    attributes = getattr(mesh, "color_attributes", None)
+    if attributes is None:
+        return None
+    found = attributes.get(COMPOSITE)
+    if found is None:
+        found = getattr(attributes, "active_color", None)
+    if found is None or found.domain not in ("POINT", "CORNER"):
+        return None
+    return found
+
+
+def _colours_of(mesh):
+    """The colour that goes to GolemSculpt, one per point as sRGB bytes, and
+    the name of the attribute it is; None for a mesh with none. Colour on the
+    corners of faces is the mean of each point's corners."""
+    attribute = _paint_attribute(mesh)
+    if attribute is None:
+        return None
+    values = _get_colours(attribute)
+    count = len(mesh.vertices)
+    if attribute.domain == "CORNER":
+        corners = np.empty(len(mesh.loops), np.int32)
+        mesh.loops.foreach_get("vertex_index", corners)
+        shares = np.maximum(np.bincount(corners, minlength=count), 1).astype(np.float64)
+        values = np.stack([np.bincount(corners, weights=values[:, k], minlength=count) / shares for k in range(4)], axis=1)
+    if len(values) != count:
+        return None
+    return attribute.name, np.clip(np.rint(values * 255.0), 0, 255).astype(np.uint8)
+
+
+def _put_paint(mesh, paint):
+    """Gives a mesh made from a package its paint: each colour an attribute on
+    the points, each material's weight a number attribute, and the composite
+    the colour that shows and renders. Returns whether it had any."""
+    if not paint or not _paint_fits(paint, len(mesh.vertices)):
+        return False
+    attributes = mesh.color_attributes
+    composite = attributes.new(paint["composite"] or COMPOSITE, "BYTE_COLOR", "POINT")
+    _set_colours(composite, paint["colours"])
+    name = composite.name
+    for layer in paint.get("layers", []):
+        made = attributes.new(layer["attribute"] or layer["name"] or "Paint", "BYTE_COLOR", "POINT")
+        _set_colours(made, layer["colours"])
+    for m in paint.get("materials", []):
+        made = mesh.attributes.new(m["attribute"] or m["name"] or "Material", "FLOAT", "POINT")
+        made.data.foreach_set("value", np.ascontiguousarray(m["weights"], np.float32))
+    # Found again by name: making attributes can move the ones made before.
+    try:
+        attributes.active_color = attributes.get(name)
+    except (AttributeError, TypeError):
+        pass
+    for k, attribute in enumerate(attributes):
+        if attribute.name == name:
+            try:
+                attributes.render_color_index = k
+            except (AttributeError, TypeError):
+                pass
+    return True
 
 
 # ---- the scene the link works in
@@ -405,8 +612,9 @@ def _listed(names):
 
 
 def _fingerprint(obj, scene):
-    """A mark of an object's shape and place. Empty for one whose shape is not
-    simply its mesh (it has modifiers or shape keys): that always counts as changed."""
+    """A mark of an object's shape, place and the colour that goes with it. Empty for one
+    whose shape is not simply its mesh (it has modifiers or shape keys): that always counts
+    as changed."""
     if obj.type != "MESH" or len(obj.modifiers) or obj.data.shape_keys is not None:
         return ""
     mesh = obj.data
@@ -422,6 +630,11 @@ def _fingerprint(obj, scene):
     mark.update(starts.tobytes())
     mark.update(np.array(obj.matrix_world, np.float32).tobytes())
     mark.update(struct.pack("<d", scene.unit_settings.scale_length))
+    # Painting in Blender changes the object as much as sculpting does.
+    colours = _colours_of(mesh)
+    if colours is not None:
+        mark.update(colours[0].encode("utf-8"))
+        mark.update(colours[1].tobytes())
     return mark.hexdigest()
 
 
@@ -485,7 +698,7 @@ def receive(path):
     per_cm = _per_cm(scene)
     smooth = bool(header.get("smooth", True))
     collection = None
-    added, updated, same, switched_off = [], [], 0, 0
+    added, updated, same, switched_off, painted = [], [], 0, 0, 0
     for entry in entries:
         if len(entry.triangles) == 0:
             continue
@@ -498,6 +711,7 @@ def receive(path):
         world = _to_blender(entry.points, per_cm)
         origin = _to_blender(np.array([entry.origin], np.float64), per_cm)[0]
         mesh = _build_mesh(entry.name, world - origin, entry, smooth)
+        painted += _put_paint(mesh, entry.paint)
         if obj is None:
             obj = bpy.data.objects.new(entry.name, mesh)
             collection = collection or _collection(scene)
@@ -554,6 +768,10 @@ def receive(path):
             "" if switched_off == 1 else "s",
             "it" if switched_off == 1 else "them",
         )
+    if painted:
+        text += ' The paint is the colour attribute "%s" (Solid shading, Color: Attribute, shows it).' % COMPOSITE
+    if header.get("paint_lost"):
+        text += " The paint that came could not be read, so the shapes came without it."
     if metric:
         text += " This new file was set to millimetres."
     return text
@@ -590,6 +808,10 @@ def _entry_of(obj, scene, depsgraph, per_cm):
         local = local.reshape((-1, 3)).astype(np.float64)
         placed = local @ world[:3, :3].T + world[:3, 3]
         entry.points = _to_sculpt(placed, per_cm).astype(np.float32)
+        # Its colour, as it shows: what was painted here goes back as a paint layer.
+        colours = _colours_of(mesh)
+        if colours is not None:
+            entry.paint = {"composite": colours[0], "colours": colours[1], "layers": [], "materials": []}
 
         mesh.calc_loop_triangles()
         triangles = np.empty(len(mesh.loop_triangles) * 3, np.int32)

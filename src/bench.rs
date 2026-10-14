@@ -55,7 +55,7 @@ pub fn stroke(
             verts.len()
         }
         // The benchmark's meshes have no sculpt layers.
-        Some(StrokeDelta::Layered { .. }) | None => 0,
+        Some(StrokeDelta::Layered { .. } | StrokeDelta::Paint(_) | StrokeDelta::Painted { .. }) | None => 0,
     };
     if let Some(delta) = &delta {
         mesh.apply_delta(delta, true);

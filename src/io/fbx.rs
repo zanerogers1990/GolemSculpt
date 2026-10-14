@@ -18,7 +18,8 @@
 //!
 //! As the OBJ does, an export bakes each place's position, rotation and scale
 //! into its points, one mesh for the object and one for each live copy, and
-//! keeps a quad-remeshed mesh's quads.
+//! keeps a quad-remeshed mesh's quads. A painted mesh also takes its colour
+//! and its materials, as `fbx/paint.rs` sets out.
 
 use std::io::Write;
 use std::path::Path;
@@ -26,8 +27,11 @@ use std::path::Path;
 use glam::{Mat3, Mat4, Vec3};
 use sculpt_geom::units;
 
+use super::painted::{ExportPaint, Painted};
 use super::{Points, Result, export_points, nothing_to_export, replace_file, time_stamp};
 use crate::mesh::Mesh;
+
+mod paint;
 
 const VERSION: u32 = 7400;
 const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
@@ -230,16 +234,33 @@ pub fn export_fbx_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> R
 ///
 /// A mesh with no surface is left out; with none that has one, nothing is
 /// written. Returns how many points were written mended, over all of them.
+#[allow(dead_code)] // the app writes with the scene's paint settings (`export_fbx_painted`)
 pub fn export_fbx_objects(objects: &[(&Mesh, &[(&str, Mat4)])], path: &Path) -> Result<usize> {
+    export_fbx_painted(objects, &ExportPaint::default(), path)
+}
+
+/// [`export_fbx_objects`] with the scene's paint settings: a painted mesh
+/// goes with its colour and materials (see `fbx/paint.rs`).
+pub fn export_fbx_painted(objects: &[(&Mesh, &[(&str, Mat4)])], paint: &ExportPaint, path: &Path) -> Result<usize> {
     let solid: Vec<&(&Mesh, &[(&str, Mat4)])> = objects.iter().filter(|(mesh, _)| !mesh.indices.is_empty()).collect();
     if solid.is_empty() {
         return Err("There is nothing to export: no selected object has a surface.".into());
     }
     let points: Vec<(Points, usize)> = solid.iter().map(|(mesh, _)| export_points(mesh)).collect();
     let mended = points.iter().map(|(_, mended)| mended).sum();
-    let pieces: Vec<Piece> =
-        solid.iter().zip(&points).map(|(&&(mesh, places), (points, _))| Piece { mesh, points, places }).collect();
-    let top = document(&pieces);
+    let painted: Vec<Option<Painted>> = solid.iter().map(|(mesh, _)| Painted::of(mesh, paint)).collect();
+    let shading: Vec<Option<paint::Shading>> = solid
+        .iter()
+        .zip(&painted)
+        .map(|((mesh, _), painted)| painted.as_ref().map(|p| paint::Shading::of(mesh, p, paint)))
+        .collect();
+    let pieces: Vec<Piece> = solid
+        .iter()
+        .zip(&points)
+        .zip(&shading)
+        .map(|((&&(mesh, places), (points, _)), shading)| Piece { mesh, points, places, shading: shading.as_ref() })
+        .collect();
+    let top = document(&pieces, paint);
     // Every offset in the file is four bytes.
     let nodes_end = MAGIC.len() as u64 + 4 + children_len(&top);
     if nodes_end > u32::MAX as u64 {
@@ -268,23 +289,29 @@ struct Piece<'a> {
     mesh: &'a Mesh,
     points: &'a Points<'a>,
     places: &'a [(&'a str, Mat4)],
+    /// Its paint, if it has any.
+    shading: Option<&'a paint::Shading<'a>>,
 }
 
 /// The records at the top of the file, in the order FBX has them.
-fn document<'a>(pieces: &[Piece<'a>]) -> Vec<Node<'a>> {
+fn document<'a>(pieces: &[Piece<'a>], paint: &ExportPaint) -> Vec<Node<'a>> {
     let count = pieces.iter().map(|piece| piece.places.len()).sum::<usize>() as i32;
     // Ids only have to differ from one another, and from 0, which is the scene itself.
     let geometry_id = |place: usize| 1_000 + 2 * place as i64;
     let model_id = |place: usize| 1_001 + 2 * place as i64;
+    // Above every geometry and model id: no file has half a billion places.
+    let material_id = |material: usize| 1_000_000_000 + material as i64;
 
     let mut objects = Vec::new();
     let mut links = Vec::new();
+    // Every material of the file, once, whichever models share it.
+    let mut materials: Vec<paint::Key> = Vec::new();
     let link = |child: i64, parent: i64| node("C", vec![text("OO"), Value::Long(child), Value::Long(parent)], Vec::new());
     // Every place of every mesh, numbered through the file.
-    let places = pieces.iter().flat_map(|piece| piece.places.iter().map(move |place| (piece.mesh, piece.points, place)));
-    for (i, (mesh, points, &(name, model))) in places.enumerate() {
+    let places = pieces.iter().flat_map(|piece| piece.places.iter().map(move |place| (piece, place)));
+    for (i, (piece, &(name, model))) in places.enumerate() {
         let name = if name.is_empty() { "Object" } else { name };
-        objects.push(geometry(geometry_id(i), name, mesh, points, model));
+        objects.push(geometry(geometry_id(i), name, piece, model, paint.weights_in_uvs));
         objects.push(node("Model", vec![Value::Long(model_id(i)), named(name, "Model"), text("Mesh")], vec![
             leaf("Version", Value::Int(232)),
             node("Properties70", Vec::new(), vec![
@@ -296,9 +323,24 @@ fn document<'a>(pieces: &[Piece<'a>]) -> Vec<Node<'a>> {
         ]));
         links.push(link(model_id(i), 0));
         links.push(link(geometry_id(i), model_id(i)));
+        // In the order the material layer counts them.
+        for &key in piece.shading.map_or(&[][..], |s| s.keys.as_slice()) {
+            let at = materials.iter().position(|&k| k == key).unwrap_or_else(|| {
+                materials.push(key);
+                materials.len() - 1
+            });
+            links.push(link(material_id(at), model_id(i)));
+        }
+    }
+    let material_count = materials.len() as i32;
+    for (at, &key) in materials.iter().enumerate() {
+        objects.push(paint::material(material_id(at), key, paint));
+    }
+    let mut kinds = vec![kind_of("GlobalSettings", 1), kind_of("Geometry", count), kind_of("Model", count)];
+    if material_count > 0 {
+        kinds.push(kind_of("Material", material_count));
     }
 
-    let kind = |name: &str, count: i32| node("ObjectType", vec![text(name)], vec![leaf("Count", Value::Int(count))]);
     let centimetres = f64::from(units::MILLIMETRES_PER_UNIT) / 10.0;
     vec![
         node("FBXHeaderExtension", Vec::new(), vec![
@@ -339,17 +381,23 @@ fn document<'a>(pieces: &[Piece<'a>]) -> Vec<Node<'a>> {
             ]),
         ]),
         node("References", Vec::new(), Vec::new()),
-        node("Definitions", Vec::new(), vec![
-            leaf("Version", Value::Int(100)),
-            leaf("Count", Value::Int(1 + 2 * count)),
-            kind("GlobalSettings", 1),
-            kind("Geometry", count),
-            kind("Model", count),
-        ]),
+        node(
+            "Definitions",
+            Vec::new(),
+            [leaf("Version", Value::Int(100)), leaf("Count", Value::Int(1 + 2 * count + material_count))]
+                .into_iter()
+                .chain(kinds)
+                .collect(),
+        ),
         node("Objects", Vec::new(), objects),
         node("Connections", Vec::new(), links),
         node("Takes", Vec::new(), vec![leaf("Current", text(""))]),
     ]
+}
+
+/// One kind of object of the file, and how many of it there are, as `Definitions` lists them.
+fn kind_of<'a>(name: &str, count: i32) -> Node<'a> {
+    node("ObjectType", vec![text(name)], vec![leaf("Count", Value::Int(count))])
 }
 
 /// When the file was made, as the header keeps it: each part a number of its own.
@@ -386,9 +434,10 @@ fn put(w: &mut dyn Write, v: Vec3) -> std::io::Result<()> {
     w.write_all(&bytes)
 }
 
-/// The mesh at `points`, placed by `model`: its points, its faces, and its
-/// normals when it has one for every point.
-fn geometry<'a>(id: i64, name: &str, mesh: &'a Mesh, points: &'a Points<'a>, model: Mat4) -> Node<'a> {
+/// A piece's mesh placed by `model`: its points, its faces, its normals when
+/// it has one for every point, and its paint when it has any.
+fn geometry<'a>(id: i64, name: &str, piece: &Piece<'a>, model: Mat4, weights_in_uvs: bool) -> Node<'a> {
+    let (mesh, points) = (piece.mesh, piece.points);
     let linear = Mat3::from_mat4(model);
     let determinant = linear.determinant();
     // A negative scale mirrors the model and turns every face inside out.
@@ -417,6 +466,8 @@ fn geometry<'a>(id: i64, name: &str, mesh: &'a Mesh, points: &'a Points<'a>, mod
         leaf("Vertices", Value::Doubles(3 * point_count, positions)),
         leaf("PolygonVertexIndex", Value::Ints(corner_count, corners)),
     ];
+    // What each layer holds: the kind of record and its number.
+    let mut layers: Vec<Vec<(&'static str, i32)>> = vec![Vec::new()];
     if points.normals.len() == point_count {
         let normals: Fill =
             Box::new(move |w| points.normals.iter().try_for_each(|&n| put(w, (normal_matrix * n).normalize_or_zero())));
@@ -428,13 +479,24 @@ fn geometry<'a>(id: i64, name: &str, mesh: &'a Mesh, points: &'a Points<'a>, mod
             leaf("ReferenceInformationType", text("Direct")),
             leaf("Normals", Value::Doubles(3 * point_count, normals)),
         ]));
-        children.push(node("Layer", vec![Value::Int(0)], vec![
-            leaf("Version", Value::Int(100)),
-            node("LayerElement", Vec::new(), vec![
-                leaf("Type", text("LayerElementNormal")),
-                leaf("TypedIndex", Value::Int(0)),
-            ]),
-        ]));
+        layers[0].push(("LayerElementNormal", 0));
+    }
+    if let Some(shading) = piece.shading {
+        for (record, kind, index) in paint::elements(shading, mesh, mirrored, weights_in_uvs) {
+            children.push(record);
+            let at = index as usize;
+            if layers.len() <= at {
+                layers.resize_with(at + 1, Vec::new);
+            }
+            layers[at].push((kind, index));
+        }
+    }
+    for (number, held) in layers.into_iter().enumerate().filter(|(_, held)| !held.is_empty()) {
+        let mut layer = vec![leaf("Version", Value::Int(100))];
+        layer.extend(held.into_iter().map(|(kind, index)| {
+            node("LayerElement", Vec::new(), vec![leaf("Type", text(kind)), leaf("TypedIndex", Value::Int(index))])
+        }));
+        children.push(node("Layer", vec![Value::Int(number as i32)], layer));
     }
     node("Geometry", vec![Value::Long(id), named(name, "Geometry"), text("Mesh")], children)
 }
@@ -808,5 +870,236 @@ mod tests {
 
         assert!(export_fbx_objects(&[(&empty, &[("Nothing", Mat4::IDENTITY)])], &temp("none.fbx")).is_err());
         assert!(export_fbx_objects(&[], &temp("none.fbx")).is_err());
+    }
+
+    // ---------------------------------------------------------------- paint
+
+    use crate::mesh::paint::palette::{PaletteEntry, ScenePaint};
+    use crate::mesh::paint::{Channels, Mat8, PaintLayer, PaintRow, PaintStack, Rgba8};
+
+    /// A ball painted blue on the vertices above its middle, slot 3 painted
+    /// fully on the right-hand ones, slot 5 on every vertex left of
+    /// x = -0.3 at 200, and slot 6 at 60 on every fifth vertex.
+    fn painted_ball(colour_only: bool) -> Mesh {
+        let mut mesh = primitives::build(Primitive::Sphere, 1_000, 0.5);
+        let n = mesh.vertex_count();
+        let p = mesh.positions.clone();
+        let colour = (0..n).map(|v| if p[v].y > 0.0 { Rgba8([0, 0, 255, 255]) } else { Rgba8([0; 4]) }).collect();
+        let material = (0..n)
+            .map(|v| match p[v].x {
+                x if x > 0.1 => Mat8([3, 255]),
+                x if x < -0.3 => Mat8([5, 200]),
+                _ if v % 5 == 0 => Mat8([6, 60]),
+                _ => Mat8([0, 0]),
+            })
+            .collect();
+        let data = Channels { colour: Some(colour), material: (!colour_only).then_some(material), ..Channels::default() };
+        let mut stack = PaintStack::new(n);
+        stack.layers.push(PaintLayer { row: PaintRow::new(1, "Paint 1".into()), data });
+        (stack.next_id, stack.active, stack.table) = (2, Some(1), vec![3, 5, 6]);
+        mesh.set_paint(Some(stack));
+        mesh
+    }
+
+    fn palette() -> ExportPaint {
+        let entry = |slot: u8, name: &str, swatch: [f32; 3]| PaletteEntry { slot, name: name.into(), swatch, ..PaletteEntry::default() };
+        let palette = vec![entry(3, "Metal - Rust", [1.0, 0.0, 0.0]), entry(5, "Clay - Terracotta", [0.5, 0.25, 0.1])];
+        ExportPaint::of([0.5, 0.5, 0.5], &ScenePaint { palette, ..ScenePaint::default() })
+    }
+
+    fn id_of(record: &Record) -> i64 {
+        match record.values[0] {
+            Got::Long(id) => id,
+            _ => panic!("no id"),
+        }
+    }
+
+    fn links_of(file: &Record) -> Vec<(i64, i64)> {
+        file.child("Connections")
+            .all("C")
+            .iter()
+            .map(|c| match (&c.values[1], &c.values[2]) {
+                (Got::Long(child), Got::Long(parent)) => (*child, *parent),
+                _ => panic!("a link without ids"),
+            })
+            .collect()
+    }
+
+    /// What a `Layer` record lists: each element's kind and number.
+    fn layer_list(layer: &Record) -> Vec<(String, i32)> {
+        layer
+            .all("LayerElement")
+            .iter()
+            .map(|e| match &e.child("TypedIndex").values[0] {
+                Got::Int(i) => (e.child("Type").text(0), *i),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    }
+
+    /// The point each corner names, in the order `PolygonVertexIndex` has them.
+    fn corner_points(geometry: &Record) -> Vec<i32> {
+        geometry.ints("PolygonVertexIndex").iter().map(|&c| if c < 0 { !c } else { c }).collect()
+    }
+
+    #[test]
+    fn a_painted_model_takes_its_colour_and_its_materials() {
+        let mesh = painted_ball(false);
+        let paint = palette();
+        let painted = Painted::of(&mesh, &paint).unwrap();
+        let mirrored = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+        let path = temp("painted.fbx");
+        export_fbx_painted(&[(&mesh, &[("Ball", Mat4::IDENTITY), ("Ball_MirrorX", mirrored)])], &paint, &path).unwrap();
+        let file = read(&path);
+        let objects = file.child("Objects");
+        let geometries = objects.all("Geometry");
+        let models = objects.all("Model");
+        let (n, faces) = (mesh.vertex_count(), mesh.triangle_count());
+
+        for geometry in &geometries {
+            let colour = geometry.child("LayerElementColor");
+            assert_eq!(colour.child("Name").text(0), "GolemSculpt Paint");
+            assert_eq!(colour.child("MappingInformationType").text(0), "ByPolygonVertex");
+            assert_eq!(colour.child("ReferenceInformationType").text(0), "IndexToDirect");
+            let colours = colour.doubles("Colors");
+            assert_eq!(colours.len(), 4 * n);
+            for v in [0, n / 3, n - 1] {
+                let want = painted.seen[v].map(|b| f64::from(b) / 255.0);
+                assert_eq!(&colours[4 * v..4 * v + 4], &[want[0], want[1], want[2], 1.0]);
+            }
+            // One index per corner, naming the corner's own point, mirrored or not.
+            let index = colour.ints("ColorIndex");
+            assert_eq!(index.len(), 3 * faces);
+            assert_eq!(index, corner_points(geometry).as_slice());
+
+            let material = geometry.child("LayerElementMaterial");
+            assert_eq!(material.child("MappingInformationType").text(0), "ByPolygon");
+            assert_eq!(material.child("ReferenceInformationType").text(0), "IndexToDirect");
+            let per_face = material.ints("Materials");
+            assert_eq!(per_face.len(), faces);
+            // Base first, then the materials in table order: rust, terracotta (slot 6 never wins a face).
+            let want: Vec<i32> = mesh
+                .indices
+                .chunks_exact(3)
+                .map(|t| match painted.dominant(t) {
+                    None => 0,
+                    Some(0) => 1,
+                    Some(1) => 2,
+                    other => panic!("{other:?} has most of a face"),
+                })
+                .collect();
+            assert_eq!(per_face, want.as_slice());
+            assert!(want.contains(&0) && want.contains(&1) && want.contains(&2));
+
+            let layer = geometry.child("Layer");
+            let held = layer_list(layer);
+            let names: Vec<&str> = held.iter().map(|(kind, _)| kind.as_str()).collect();
+            assert_eq!(names, ["LayerElementNormal", "LayerElementColor", "LayerElementMaterial"]);
+            assert!(geometry.all("LayerElementUV").is_empty(), "no UVs unless asked for");
+        }
+
+        // One material object each, shared by both models, linked in the order the layer counts them.
+        let materials = objects.all("Material");
+        let names: Vec<String> = materials.iter().map(|m| m.text(1)).collect();
+        assert_eq!(names, ["GolemSculpt Base\u{0}\u{1}Material", "Metal - Rust\u{0}\u{1}Material", "Clay - Terracotta\u{0}\u{1}Material"]);
+        let diffuse = |m: &Record| -> Vec<f64> {
+            let p = m.child("Properties70").children.iter().find(|p| p.text(0) == "DiffuseColor").unwrap();
+            p.values[4..].iter().map(|v| if let Got::Double(d) = v { *d } else { panic!() }).collect()
+        };
+        assert_eq!(diffuse(materials[1]), [1.0, 0.0, 0.0], "the swatch, in linear light");
+        let base = f64::from(crate::io::painted::linear(128.0 / 255.0));
+        assert!(diffuse(materials[0]).iter().all(|c| (c - base).abs() < 1e-6));
+        let links = links_of(&file);
+        for model in &models {
+            let mine: Vec<i64> = links.iter().filter(|(_, parent)| *parent == id_of(model)).map(|(child, _)| *child).collect();
+            let want: Vec<i64> = materials.iter().map(|m| id_of(m)).collect();
+            assert_eq!(mine[1..], want, "its geometry first, then base, rust, terracotta");
+        }
+        assert_eq!(file.child("Definitions").child("Count").values, [Got::Int(1 + 4 + 3)]);
+        let kinds: Vec<String> = file.child("Definitions").all("ObjectType").iter().map(|k| k.text(0)).collect();
+        assert_eq!(kinds, ["GlobalSettings", "Geometry", "Model", "Material"]);
+    }
+
+    #[test]
+    fn material_weights_go_in_uv_sets_when_asked() {
+        let mesh = painted_ball(false);
+        let mut paint = palette();
+        paint.weights_in_uvs = true;
+        let painted = Painted::of(&mesh, &paint).unwrap();
+        let path = temp("weights.fbx");
+        export_fbx_painted(&[(&mesh, &[("Ball", Mat4::IDENTITY)])], &paint, &path).unwrap();
+        let file = read(&path);
+        let geometry = file.child("Objects").child("Geometry");
+        let n = mesh.vertex_count();
+        let uvs = geometry.all("LayerElementUV");
+        let names: Vec<String> = uvs.iter().map(|u| u.child("Name").text(0)).collect();
+        assert_eq!(names, ["UVMap", "Weights Metal - Rust + Clay - Terracotta", "Weights Material 6"]);
+        let corners = corner_points(geometry);
+        assert_eq!(uvs[0].doubles("UV"), [0.0, 0.0]);
+        assert!(uvs[0].ints("UVIndex").len() == corners.len() && uvs[0].ints("UVIndex").iter().all(|&i| i == 0));
+        for (set, uv) in uvs[1..].iter().enumerate() {
+            assert_eq!(uv.ints("UVIndex"), corners.as_slice());
+            let values = uv.doubles("UV");
+            assert_eq!(values.len(), 2 * n);
+            for v in 0..n {
+                let first = f64::from(painted.weight(v, 2 * set));
+                let second = if 2 * set + 1 < 3 { f64::from(painted.weight(v, 2 * set + 1)) } else { 0.0 };
+                assert_eq!((values[2 * v], values[2 * v + 1]), (first, second));
+            }
+        }
+        // Layer 0 holds UV set 0 with the rest; each further set has a layer of its own.
+        let layers = geometry.all("Layer");
+        assert_eq!(layers.len(), 3);
+        assert!(layer_list(layers[0]).contains(&("LayerElementUV".into(), 0)));
+        assert_eq!(layer_list(layers[1]), [("LayerElementUV".to_owned(), 1)]);
+        assert_eq!(layer_list(layers[2]), [("LayerElementUV".to_owned(), 2)]);
+    }
+
+    /// Writes `painted.fbx` and what Blender's importer should find in it
+    /// into the folder GOLEMSCULPT_PAINT_CHECK names, for
+    /// tests/blender_link/check_fbx_paint.py (see tests/blender_link/README.md).
+    #[test]
+    #[ignore = "writes the file tests/blender_link/check_fbx_paint.py reads in Blender"]
+    fn blender_fbx_check_file() {
+        let folder = std::path::PathBuf::from(std::env::var_os("GOLEMSCULPT_PAINT_CHECK").expect("set GOLEMSCULPT_PAINT_CHECK"));
+        std::fs::create_dir_all(&folder).unwrap();
+        let mesh = painted_ball(false);
+        let mut paint = palette();
+        paint.weights_in_uvs = true;
+        let painted = Painted::of(&mesh, &paint).unwrap();
+        let mirrored = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+        export_fbx_painted(&[(&mesh, &[("Ball", Mat4::IDENTITY), ("Ball_MirrorX", mirrored)])], &paint, &folder.join("painted.fbx")).unwrap();
+        let shading = paint::Shading::of(&mesh, &painted, &paint);
+        let names: Vec<String> = shading.keys.iter().map(|&key| paint::described(key, &paint).0).collect();
+        let faces: Vec<i32> = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| shading.keys.iter().position(|k| *k == painted.dominant(t).map(|k| painted.table[k])).unwrap() as i32)
+            .collect();
+        let weights: Vec<Vec<f32>> = painted.materials.iter().map(|&k| (0..mesh.vertex_count()).map(|v| painted.weight(v, k)).collect()).collect();
+        let expect = serde_json::json!({
+            "vertices": mesh.vertex_count(),
+            "seen": painted.seen,
+            "materials": names,
+            "faces": faces,
+            "weights": weights,
+        });
+        std::fs::write(folder.join("fbx_expect.json"), expect.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_model_painted_with_colour_alone_has_no_materials_and_an_unpainted_one_no_paint() {
+        let painted = painted_ball(true);
+        let plain = primitives::build(Primitive::Cube, 500, 0.5);
+        let path = temp("colour only.fbx");
+        let objects: [(&Mesh, &[(&str, Mat4)]); 2] = [(&painted, &[("Ball", Mat4::IDENTITY)]), (&plain, &[("Block", Mat4::IDENTITY)])];
+        export_fbx_painted(&objects, &palette(), &path).unwrap();
+        let file = read(&path);
+        let geometries = file.child("Objects").all("Geometry");
+        assert_eq!(geometries[0].child("LayerElementColor").ints("ColorIndex").len(), 3 * painted.triangle_count());
+        assert!(geometries[0].all("LayerElementMaterial").is_empty());
+        assert!(geometries[1].all("LayerElementColor").is_empty() && geometries[1].all("LayerElementMaterial").is_empty());
+        assert!(file.child("Objects").all("Material").is_empty());
+        assert_eq!(links_of(&file).len(), 4);
     }
 }

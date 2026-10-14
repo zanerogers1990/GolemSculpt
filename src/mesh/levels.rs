@@ -62,6 +62,7 @@ use super::{Mesh, Polys, sound};
 mod cached;
 mod grouped;
 mod layered;
+mod painted;
 
 /// The most triangles a level made by Subdivide may have. Past this a mesh
 /// and its undo no longer fit comfortably in memory, and a step between
@@ -257,6 +258,10 @@ impl MeshLevels {
 
     pub fn triangle_count(&self, level: usize) -> usize {
         self.stack.triangle_count(level)
+    }
+
+    pub fn vertex_count(&self, level: usize) -> usize {
+        self.stack.vertex_count(level)
     }
 
     /// Whether `level` was made by splitting faces flat, for a level above
@@ -579,10 +584,13 @@ pub fn subdivided(mesh: &Mesh, split: Split) -> Result<(Mesh, Subdivided), Strin
     let (hidden, remembered) = hidden_on(&stack, &levels.hidden, from, from + 1, levels.level_hidden(mesh));
     let riding = layered::subdivided(mesh, levels, &stack);
     let groups = levels.groups.step(&stack, from, from + 1, levels.level_groups(mesh));
+    let painted = painted::subdivided(mesh, levels, &stack);
     let LevelMesh { positions, mask, triangles, polys } = level;
     let lists = (positions, mask, Some((triangles, polys)));
     // A new finest level: whatever was kept of the old one is no use now.
-    Ok((built(stack, lists, &hidden, remembered, riding, groups, None)?, note))
+    let mut new = built(stack, lists, &hidden, remembered, riding, groups, None)?;
+    painted::arrive(&mut new, painted);
+    Ok((new, note))
 }
 
 /// `mesh` stepped to level `to`, as a new mesh, and whether anything
@@ -598,13 +606,16 @@ pub fn stepped(mesh: &Mesh, to: usize) -> Result<(Mesh, bool), String> {
     let (hidden, remembered) = hidden_on(&stack, &levels.hidden, from, to, levels.level_hidden(mesh));
     let riding = layered::stepped(mesh, levels, &positions, &mask, to, &stack, &arrived);
     let groups = levels.groups.step(&stack, from, to, levels.level_groups(mesh));
+    let painted = painted::stepped(mesh, levels, to);
     // Leaving the finest level, what its mesh was built into is kept for the way back.
     let top_mesh = match from == levels.top() {
         true => Some(Arc::new(cached::TopMesh::of(mesh, levels))),
         false => levels.top_mesh.clone(),
     };
     let lists = (arrived, arrived_mask, None);
-    Ok((built(stack, lists, &hidden, remembered, riding, groups, top_mesh)?, carried))
+    let mut new = built(stack, lists, &hidden, remembered, riding, groups, top_mesh)?;
+    painted::arrive(&mut new, painted);
+    Ok((new, carried))
 }
 
 /// The levels `mesh` would have with every level below its own dropped

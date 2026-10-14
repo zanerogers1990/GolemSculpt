@@ -109,7 +109,8 @@ fn changed(delta: &Option<StrokeDelta>) -> &[u32] {
     fn of(delta: &StrokeDelta) -> &[u32] {
         match delta {
             StrokeDelta::Positions { verts, .. } | StrokeDelta::Mask { verts, .. } => verts,
-            StrokeDelta::Layered { stroke, .. } => of(stroke),
+            StrokeDelta::Layered { stroke, .. } | StrokeDelta::Painted { shape: stroke, .. } => of(stroke),
+            StrokeDelta::Paint(_) => &[],
         }
     }
     delta.as_ref().map_or(&[], of)
