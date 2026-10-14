@@ -19,8 +19,7 @@ use serde_json::{Value, json};
 use super::Running;
 use crate::doc::Doc;
 use crate::materials::library::Origin;
-use crate::materials::{Ask, PaintMaterial, builtin, custom, files, palette, rows, thumbs};
-use crate::prefs::Prefs;
+use crate::materials::{Ask, builtin, custom, files, palette, rows, thumbs};
 use crate::render::DrawItem;
 
 /// The mesh id the thumbnails' ball is drawn under: no scene ever reaches it.
@@ -29,31 +28,18 @@ const BALL_ID: u64 = u64::MAX - 0x6d61;
 const THUMBS_PER_FRAME: usize = 2;
 
 impl Doc {
-    /// The palette slot paint strokes lay their material as, or `None` when
-    /// no material is picked. A material picked from the library joins the
-    /// scene's palette the first time it is asked for here (its pattern
-    /// frozen at the model's size now), so this is what a paint stroke calls
-    /// as it begins. Says why not when the palette is full or the slot
-    /// picked is no longer in it.
-    pub fn paint_slot(&mut self) -> Result<Option<u8>, String> {
+    /// Makes library material `i` the one paint strokes lay: it joins the
+    /// scene's palette the first time (its pattern frozen at the model's size
+    /// now, see `materials::palette::ensure_in_palette`), and its slot is
+    /// `opts.paint.active_material`. Gives back the slot.
+    pub fn paint_with(&mut self, i: usize) -> Result<u8, String> {
         let size = crate::look::model_size(&self.scene, &self.mesh);
         let opts = &mut self.opts;
-        match self.sculptor.settings.paint.material.clone() {
-            None => Ok(None),
-            Some(PaintMaterial::Palette(slot)) => {
-                if opts.paint.palette.iter().any(|e| e.slot == slot) {
-                    Ok(Some(slot))
-                } else {
-                    Err("The material picked for painting is no longer in the scene's palette: pick another.".into())
-                }
-            }
-            Some(PaintMaterial::Library(name)) => {
-                let state = &opts.materials;
-                let i = state.library.named(&name).ok_or_else(|| format!("There is no material called {name} any more."))?;
-                let material = state.library.entries()[i].material.clone();
-                palette::ensure_in_palette(&mut opts.paint, &material, size, &state.shaders).map(Some)
-            }
-        }
+        let state = &opts.materials;
+        let material = state.library.entries().get(i).ok_or("There is no such material.")?.material.clone();
+        let slot = palette::ensure_in_palette(&mut opts.paint, &material, size, &state.shaders)?;
+        opts.paint.active_material = Some(slot);
+        Ok(slot)
     }
 
     /// The palette slots some object's paint uses (its local table).
@@ -74,9 +60,8 @@ impl Doc {
 
 impl Running {
     /// Start-up: reads the custom shaders and the user's materials into the
-    /// library, the first time only, and takes up the paint pick the
-    /// settings file remembers.
-    pub(super) fn materials_restore(&mut self, kept: &Prefs) {
+    /// library, the first time only.
+    pub(super) fn materials_restore(&mut self) {
         let folder = self.files.materials.folder().map(Path::to_path_buf);
         let writable = self.files.materials.writable();
         let state = &mut self.doc.opts.materials;
@@ -94,7 +79,6 @@ impl Running {
             state.library.set_shaders(&state.shaders);
         }
         notes.extend(self.files.materials.load(&mut state.library));
-        self.doc.sculptor.settings.paint = kept.paint.in_range();
         if !notes.is_empty() {
             self.status(notes.join(" "), false);
         }
@@ -259,8 +243,11 @@ impl Running {
     /// Every ask that needs no file box: what the Claude bridge may ask too.
     pub(super) fn material_edit(&mut self, ask: Ask) -> Result<String, String> {
         let size = crate::look::model_size(&self.doc.scene, &self.doc.mesh);
-        let used = self.doc.paint_slots_in_use();
-        let pick = &mut self.doc.sculptor.settings.paint;
+        let mut used = self.doc.paint_slots_in_use();
+        if let Ask::Select(i) = ask {
+            self.doc.paint_with(i)?;
+            return Ok(String::new());
+        }
         let opts = &mut self.doc.opts;
         let state = &mut opts.materials;
         let library = &mut state.library;
@@ -268,20 +255,20 @@ impl Running {
             library.entries().get(i).map(|e| e.material.name.clone()).ok_or("There is no such material.")
         };
         match ask {
-            Ask::Select(i) => {
-                pick.material = Some(PaintMaterial::Library(name(library, i)?));
-                Ok(String::new())
-            }
+            Ask::Select(_) => Ok(String::new()),
             Ask::SelectSlot(slot) => {
                 opts.paint.palette.iter().find(|e| e.slot == slot).ok_or("There is no such palette entry.")?;
-                pick.material = Some(PaintMaterial::Palette(slot));
+                opts.paint.active_material = Some(slot);
                 Ok(String::new())
+            }
+            Ask::ColourOnly => {
+                opts.paint.active_material = None;
+                Ok("Painting lays colour only.".into())
             }
             Ask::Duplicate(i) => {
                 let from = name(library, i)?;
                 let new = library.duplicate(i).ok_or("There is no such material.")?;
                 let new_name = library.entries()[new].material.name.clone();
-                pick.material = Some(PaintMaterial::Library(new_name.clone()));
                 Ok(format!("{new_name} is a copy of {from}, and yours to change."))
             }
             Ask::Rename(i, to) => {
@@ -289,9 +276,6 @@ impl Running {
                 library.rename(i, &to)?;
                 let to = library.entries()[i].material.name.clone();
                 palette::follow_rename(&mut opts.paint, &from, &to);
-                if pick.material == Some(PaintMaterial::Library(from.clone())) {
-                    pick.material = Some(PaintMaterial::Library(to.clone()));
-                }
                 Ok(format!("{from} is now called {to}."))
             }
             Ask::Delete(i) => {
@@ -301,9 +285,6 @@ impl Running {
                 }
                 let aside = self.files.materials.set_aside(library, i);
                 library.delete(i)?;
-                if pick.material == Some(PaintMaterial::Library(gone.clone())) {
-                    pick.material = None;
-                }
                 let kept = if aside.is_some() {
                     " A copy is in the materials folder, under deleted; Import Material brings it back."
                 } else {
@@ -321,7 +302,6 @@ impl Running {
                 let material = builtin::from_look(&opts.look, opts.base_color, opts.smoothness);
                 let i = library.add(material);
                 let made = library.entries()[i].material.name.clone();
-                pick.material = Some(PaintMaterial::Library(made.clone()));
                 Ok(format!("Saved the Look's finish as the material {made}."))
             }
             Ask::SaveSlot(slot) => {
@@ -330,12 +310,9 @@ impl Running {
                 Ok(format!("{} is in your library now.", library.entries()[i].material.name))
             }
             Ask::RemoveUnused => {
+                // The material picked to paint with stays, painted yet or not.
+                used.extend(opts.paint.active_material);
                 let gone = palette::remove_unused(&mut opts.paint, &used);
-                if let Some(PaintMaterial::Palette(slot)) = pick.material {
-                    if !opts.paint.palette.iter().any(|e| e.slot == slot) {
-                        pick.material = None;
-                    }
-                }
                 Ok(match gone {
                     0 => "Every material in the palette is painted on something.".to_owned(),
                     1 => "Took 1 unused material out of the palette.".to_owned(),
@@ -372,9 +349,7 @@ impl Running {
     /// user's own, and picks it for painting.
     pub(super) fn import_material(&mut self, path: &Path) -> Result<String, String> {
         let library = &mut self.doc.opts.materials.library;
-        let (i, said) = files::import(path, library)?;
-        let name = library.entries()[i].material.name.clone();
-        self.doc.sculptor.settings.paint.material = Some(PaintMaterial::Library(name));
+        let (_, said) = files::import(path, library)?;
         Ok(said)
     }
 
@@ -385,7 +360,8 @@ impl Running {
 
     /// The bridge's material commands: `materials` lists the library and the
     /// palette; `paint_material` picks what painting lays, by a library
-    /// material's `material` name or a palette `slot` (`"none"` for none).
+    /// material's `material` name (which joins the palette) or a palette
+    /// `slot` (`"none"` for colour only).
     pub(super) fn materials_command(&mut self, name: &str, args: &Value) -> Option<Result<String, String>> {
         match name {
             "materials" => Some(Ok(self.materials_listing().to_string())),
@@ -423,12 +399,11 @@ impl Running {
             .iter()
             .map(|e| json!({ "slot": e.slot, "name": e.name, "from": palette::library_name(e), "reference": e.reference }))
             .collect();
-        let picked = match &self.doc.sculptor.settings.paint.material {
-            Some(PaintMaterial::Library(name)) => json!({ "material": name }),
-            Some(PaintMaterial::Palette(slot)) => json!({ "slot": slot }),
+        let picked = match self.doc.opts.paint.active_material {
+            Some(slot) => json!(slot),
             None => Value::Null,
         };
-        json!({ "library": library, "palette": palette, "paint_material": picked,
+        json!({ "library": library, "palette": palette, "active_material": picked,
                 "show_polypaint": self.doc.opts.paint.show_polypaint, "show_materials": self.doc.opts.paint.show_materials })
     }
 
@@ -440,7 +415,7 @@ impl Running {
         }
         let wanted = args.get("material").and_then(Value::as_str).ok_or("paint_material needs a material name or a slot.")?;
         if wanted.trim().eq_ignore_ascii_case("none") {
-            self.doc.sculptor.settings.paint.material = None;
+            self.doc.opts.paint.active_material = None;
             return Ok("Painting with no material.".into());
         }
         let library = &self.doc.opts.materials.library;
@@ -448,9 +423,9 @@ impl Running {
             let names: Vec<&str> = library.entries().iter().map(|e| e.material.name.as_str()).collect();
             format!("There is no material \"{wanted}\". The materials are: {}.", names.join(", "))
         })?;
-        self.material_edit(Ask::Select(i))?;
+        let slot = self.doc.paint_with(i)?;
         let name = self.doc.opts.materials.library.entries()[i].material.name.clone();
-        Ok(format!("Painting with {name}."))
+        Ok(format!("Painting with {name}, palette slot {slot}."))
     }
 }
 

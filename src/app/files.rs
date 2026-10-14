@@ -238,7 +238,7 @@ impl Running {
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
         self.doc.tools.unit = kept.length_unit();
         self.brushes_restore(kept);
-        self.materials_restore(kept);
+        self.materials_restore();
         prefs::cards::restore(&self.egui_ctx, &kept.cards);
         sculpt_toolkit::floating::restore(&self.egui_ctx, &kept.floating_cards);
         self.ui.recent.restore(kept.recent.clone(), self.files.home.pictures());
@@ -276,7 +276,6 @@ impl Running {
             dynamic_topology: self.doc.sculptor.dyntopo.enabled,
             dynamic_topology_detail: self.doc.sculptor.dyntopo.detail,
             recent: self.ui.recent.paths().to_vec(),
-            paint: settings.paint.kept(),
         }
     }
 

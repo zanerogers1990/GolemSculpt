@@ -67,69 +67,6 @@ pub struct State {
     pub ball: Option<crate::mesh::Mesh>,
 }
 
-/// The most colours the recent swatches keep.
-pub const RECENT_COLOURS: usize = 12;
-
-/// Which material paint strokes lay.
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-pub enum PaintMaterial {
-    /// A material of the library, by name. It joins the scene's palette the
-    /// first time it is painted with (`Doc::paint_slot`).
-    Library(String),
-    /// An entry of the scene's palette, by slot.
-    Palette(u8),
-}
-
-/// What the painting brush paints with: kept with the brush settings
-/// (`sculpt::Settings::paint`) and in the settings file.
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PaintPick {
-    /// sRGB 0 to 1.
-    pub colour: [f32; 3],
-    /// `None` paints no material.
-    pub material: Option<PaintMaterial>,
-    /// Colours painted with lately, newest first, at most [`RECENT_COLOURS`].
-    pub recent: Vec<[f32; 3]>,
-}
-
-impl Default for PaintPick {
-    fn default() -> Self {
-        PaintPick { colour: [0.8, 0.25, 0.2], material: None, recent: Vec::new() }
-    }
-}
-
-impl PaintPick {
-    /// Puts `colour` at the front of the recent swatches (once).
-    pub fn remember_colour(&mut self, colour: [f32; 3]) {
-        let colour = colour.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
-        self.recent.retain(|c| *c != colour);
-        self.recent.insert(0, colour);
-        self.recent.truncate(RECENT_COLOURS);
-    }
-
-    /// The pick as a settings file keeps it: a palette slot means something
-    /// only in the scene it was picked in, so it is not kept.
-    pub fn kept(&self) -> PaintPick {
-        let material = match &self.material {
-            Some(PaintMaterial::Library(name)) => Some(PaintMaterial::Library(name.clone())),
-            _ => None,
-        };
-        PaintPick { material, ..self.clone() }
-    }
-
-    /// A pick read from a settings file, with every number in range.
-    pub fn in_range(&self) -> PaintPick {
-        let mut out = self.kept();
-        out.colour = self.colour.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.5 });
-        out.recent = Vec::new();
-        for c in self.recent.iter().rev() {
-            out.remember_colour(*c);
-        }
-        out
-    }
-}
-
 /// Which finish function shades a material. The numbers are what the
 /// painted shader switches on (`KIND_` in painted.wgsl); 0 to 4 are the
 /// Look's own `FINISH_` numbers.

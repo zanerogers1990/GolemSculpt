@@ -47,10 +47,9 @@ impl Running {
                 eprintln!("demo-paint: no material called {name}");
                 continue;
             };
-            let _ = self.material_edit(Ask::Select(i));
-            match self.doc.paint_slot() {
-                Ok(Some(slot)) => slots.push(slot),
-                other => eprintln!("demo-paint: {name} did not join the palette: {other:?}"),
+            match self.doc.paint_with(i) {
+                Ok(slot) => slots.push(slot),
+                Err(why) => eprintln!("demo-paint: {name} did not join the palette: {why}"),
             }
         }
         if let Err(why) = demo::paint_bands(&mut self.doc.mesh, &slots, Some([205, 70, 45]), true) {

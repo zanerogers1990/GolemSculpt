@@ -34,10 +34,13 @@ pub struct Entry {
 /// and the status line are the app's.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Ask {
-    /// Paint with this material of the library from now on.
+    /// Paint with this material of the library from now on: it joins the
+    /// scene's palette, and is its `active_material`.
     Select(usize),
     /// Paint with this material of the scene's palette from now on.
     SelectSlot(u8),
+    /// Paint colour only, no material.
+    ColourOnly,
     Duplicate(usize),
     Rename(usize, String),
     Delete(usize),

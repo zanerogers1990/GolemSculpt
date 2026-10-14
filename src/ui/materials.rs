@@ -19,7 +19,8 @@ use super::theme::{self, ACCENT, ButtonStyle};
 use crate::doc::Action;
 use crate::materials::library::{Entry, Origin};
 use crate::materials::palette::material_of;
-use crate::materials::{Ask, Kind, Material, PaintMaterial, PaintPick, Settings, State, TintMode, Value};
+use crate::materials::palette::library_name;
+use crate::materials::{Ask, Kind, Material, Settings, State, TintMode, Value};
 use crate::mesh::paint::palette::ScenePaint;
 
 const CARD: Color32 = Color32::from_rgb(214, 160, 230);
@@ -320,13 +321,10 @@ fn manage(ui: &mut Ui, state: &State, i: usize, tips: bool, actions: &mut Vec<Ac
 }
 
 /// The scene's palette: every material the scene's paint can use.
-fn palette_rows(ui: &mut Ui, state: &State, paint: &ScenePaint, pick: &PaintPick, tips: bool, actions: &mut Vec<Action>) {
+fn palette_rows(ui: &mut Ui, state: &State, paint: &ScenePaint, tips: bool, actions: &mut Vec<Action>) {
     theme::heading(ui, "This Scene's Palette");
     let width = theme::row_width(ui, COLUMNS, GAP);
-    let picked = match pick.material {
-        Some(PaintMaterial::Palette(slot)) => Some(slot),
-        _ => None,
-    };
+    let picked = paint.active_material;
     for line in paint.palette.chunks(COLUMNS) {
         ui.horizontal(|ui| {
             for entry in line {
@@ -346,13 +344,17 @@ fn palette_rows(ui: &mut Ui, state: &State, paint: &ScenePaint, pick: &PaintPick
     if let Some(slot) = picked.filter(|s| paint.palette.iter().any(|e| e.slot == *s)) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
-            let w = theme::row_width(ui, 2, GAP);
+            let w = theme::row_width(ui, 3, GAP);
+            let text = "Paint colour only, with no material.";
+            if theme::tip(theme::button(ui, w, "Colour Only", ButtonStyle::default()), tips, text).clicked() {
+                actions.push(Action::Material(Ask::ColourOnly));
+            }
             let text = "Size this material's pattern to the model as it is now.";
             if theme::tip(theme::button(ui, w, "Re-measure", ButtonStyle::default()), tips, text).clicked() {
                 actions.push(Action::Material(Ask::Remeasure(slot)));
             }
-            let text = "Keep this material in your library, to use in other scenes.";
-            if theme::tip(theme::button(ui, w, "Save as Material", ButtonStyle::default()), tips, text).clicked() {
+            let text = "Keep this material in your library (Save as Material), to use in other scenes.";
+            if theme::tip(theme::button(ui, w, "Keep", ButtonStyle::default()), tips, text).clicked() {
                 actions.push(Action::Material(Ask::SaveSlot(slot)));
             }
         });
@@ -380,23 +382,15 @@ pub fn card(
     ui: &mut Ui,
     state: &State,
     paint: &mut ScenePaint,
-    pick: &PaintPick,
     thumbs: &mut Thumbs,
     tips: bool,
     actions: &mut Vec<Action>,
 ) {
     let entries = state.library.entries();
-    let picked = match &pick.material {
-        Some(PaintMaterial::Library(name)) => state.library.named(name),
-        _ => None,
-    };
-    let summary = match &pick.material {
-        Some(PaintMaterial::Library(name)) => name.clone(),
-        Some(PaintMaterial::Palette(slot)) => {
-            paint.palette.iter().find(|e| e.slot == *slot).map(|e| e.name.clone()).unwrap_or_default()
-        }
-        None => String::new(),
-    };
+    // The material painting lays, and the library material it was made from.
+    let active = paint.active_material.and_then(|slot| paint.palette.iter().find(|e| e.slot == slot));
+    let picked = active.and_then(|e| state.library.named(library_name(e)));
+    let summary = active.map(|e| e.name.clone()).unwrap_or_default();
     theme::category(ui, "Materials", CARD, &summary, false, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
@@ -436,16 +430,16 @@ pub fn card(
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 2, 6.0);
             let text = "Bring in a material from a file: one a friend sent, or one you exported or deleted.";
-            if theme::tip(theme::button(ui, w, "Import Material...", ButtonStyle::default()), tips, text).clicked() {
+            if theme::tip(theme::button(ui, w, "Import...", ButtonStyle::default()), tips, text).clicked() {
                 actions.push(Action::Material(Ask::Import));
             }
             let text = "Make a material of your own from the Look's surface finish as it is now, sliders and all.";
-            if theme::tip(theme::button(ui, w, "Save Look as Material", ButtonStyle::default()), tips, text).clicked() {
+            if theme::tip(theme::button(ui, w, "Save the Look", ButtonStyle::default()), tips, text).clicked() {
                 actions.push(Action::Material(Ask::SaveLook));
             }
         });
         if !paint.palette.is_empty() {
-            palette_rows(ui, state, paint, pick, tips, actions);
+            palette_rows(ui, state, paint, tips, actions);
         }
         let w = ui.available_width();
         let text = "Read the custom materials in the shaders folder again (changed files are read by themselves).";

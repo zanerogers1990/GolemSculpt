@@ -696,6 +696,7 @@ fn tools() -> Value {
                         "group_masked", "group_visible", "auto_groups", "groups_by_angle", "clear_groups",
                         "pick_group", "isolate_group", "hide_group", "show_all_faces", "mask_group",
                         "mask_all_but_group", "merge_groups", "show_group_colours",
+                        "materials", "paint_material",
                     ],
                     "remesh rebuilds the mesh from voxels, evening out the triangles. clone adds an independent \
                      copy; instance adds a linked copy that shares the mesh; make_unique unlinks an instance. \
@@ -727,7 +728,11 @@ fn tools() -> Value {
                      rest; mask_all_but_group the other way about; merge_groups makes it part of the group at \
                      into_x and into_y, or into_group. show_group_colours tints each face with its group's \
                      colour. A brush with stay_in_group set (set_brush) changes only the group its stroke \
-                     begins on. Groups follow a remesh and the other rebuilds by the nearest old face.",
+                     begins on. Groups follow a remesh and the other rebuilds by the nearest old face. \
+                     Materials: materials lists the material library (each with its finish and where it came \
+                     from, and why a custom one cannot be drawn), the scene's palette by slot, and the material \
+                     painting lays; paint_material picks that by a library material's name (it joins the \
+                     palette) or a palette slot, or \"none\" for colour only.",
                 ),
                 "resolution": number("For remesh: voxels along the longest side, 4 to 1024. Default: the app's setting."),
                 "amount": number("For mask_recesses and mask_peaks: 0 to 1, how much of the surface is taken. 0 is only the sharpest creases or ridges, 1 anything that lies low or stands up at all. Default 0.7."),
@@ -742,6 +747,8 @@ fn tools() -> Value {
                 "into_x": number("For merge_groups: with into_y, a window position on the group to merge into."),
                 "into_y": number("For merge_groups: with into_x, a window position on the group to merge into."),
                 "into_group": number("For merge_groups: the number of the group to merge into, instead of into_x and into_y."),
+                "material": string("For paint_material: a library material's name, as materials lists them, or \"none\"."),
+                "slot": number("For paint_material: a palette slot, as materials lists them, instead of a name."),
                 "angle": number("For groups_by_angle: degrees, 1 to 180. Edges where the surface turns by more than this split the groups. Default: the card's setting (35)."),
                 "keep_mask": boolean("For group_masked: true leaves the mask as it is; false (the default) clears it."),
                 "on": boolean("For show_group_colours: true shows them, false hides them. Default true."),

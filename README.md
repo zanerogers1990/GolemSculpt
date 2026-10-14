@@ -2055,6 +2055,122 @@ behind. Switch it on to see the inside, tinted dark blue-grey so holes and
 faces turned the wrong way stand out, as it always was before. It is saved
 with the other shading settings.
 
+### Materials
+
+The **Materials** card (Look tab, under Material) is the library of materials
+paint can put on the model, beside its colour. Each row has a little picture
+of the material on a grooved ball.
+
+- **Built in**: Plain, and one material for every preset of the Look's
+  finishes: the 6 lure plastics, 7 metals, 5 clays, 6 woods and 8 glows. A
+  built-in material is exactly that preset as the Look shows it before any
+  slider is moved. To change one, **Duplicate** it: the copy is yours to
+  rename, change and delete.
+- **Yours**: duplicates, **Save the Look** (the Look's surface finish as it is
+  now, sliders and all), and **Import...** (a material file a friend sent, or
+  one you exported or deleted). Your materials are files in a `materials`
+  folder beside the settings file; Delete moves the file into
+  `materials\deleted`, where Import finds it again. A material of your own
+  shows its finish's sliders in the card, and **Painted Colour** says what
+  colour painted over it does: **Off** (the material keeps its own colours),
+  **Multiply** (it is stained by the paint, like a tinted clay) or
+  **Replace** (the paint takes the place of its colour; its gloss, bumps and
+  sheen stay), with an Amount. Built in, plain and glow materials take the
+  paint outright (Replace), clay as a stain (Multiply), and plastic, metal and
+  wood keep their own colours (Off).
+- **Custom Shaders**: materials you write yourself (see below).
+
+Picking a material makes it the one painting lays. It joins **This Scene's
+Palette**: the materials this scene's paint uses, kept whole inside the
+`.sclp` file, so a scene looks the same on a computer without your library.
+A material's pattern (grain, flakes, patches) is sized to the model when it
+joins the palette, as picking a Look preset does; **Re-measure** sizes it
+to the model as it is now. **Replace With...** puts another material in an
+entry's place, so everything painted with it changes at once. **Keep** saves
+an entry into your library, **Colour Only** paints no material, and **Remove
+Unused** takes out the materials nothing is painted with. Changing one of
+your materials changes what was painted with it.
+
+One object's paint can use up to eight materials. Where materials meet, they
+blend smoothly: each point of the surface is a mixture of the materials at
+the corners of its triangle, never a material that is at none of them.
+
+**Show Polypaint** and **Show Materials** (top of the card) switch the painted
+colour and the painted materials off and on, to see the clay underneath.
+Under a matcap, painted colour tints the matcap, and each painted material
+tints it with its swatch colour.
+
+#### Custom materials
+
+A custom material is a finish written in WGSL, the graphics card's shading
+language: two files with one name in `materials\shaders` beside the
+settings file (the card says where): `copper.wgsl` and `copper.json`. The
+first time the app runs it puts an example there, **Hammered Copper**
+(`assets/materials/example`), with every line explained. The app looks at
+the files about once a second: save a change and the model shows it.
+
+The `.wgsl` file defines one function named for the file:
+
+```wgsl
+fn finish_copper(s: Surface, params: FinishParams) -> MaterialSample {
+    var m = material(s, params.v[0].rgb);   // a sample of just this colour
+    m.metallic = 1.0;
+    m.smoothness = params.v[1].x;
+    return m;
+}
+```
+
+- **`Surface`** is the pixel: `world` (its place), `v` (toward the eye), `p`
+  (its place in the object's own space at world size: put patterns here so
+  they stay on the model), `footprint` (one pixel's size on the model),
+  `p_dx` / `p_dy` (how much `p` changes to the next pixel right and down),
+  `n` (the normal to shade with), `smooth_n`, `curv` (above 0.5 a recess,
+  below a ridge), `shadow`, `ao`, `base_color`, `back_depth`, and the
+  object's axes `mx`, `my`, `mz` and `scale`.
+- **`FinishParams`** is sixteen `vec4`s, `params.v[0]` to `params.v[15]`,
+  filled from the sliders as the sidecar says.
+- **`MaterialSample`** is what the surface is made of there: `albedo`,
+  `metallic`, `smoothness`, `occlusion`, `normal`, `emission` (light it
+  gives off), `sheen_amount` / `sheen_power` (a second, sharper highlight),
+  `scatter_color` / `scatter_wrap` / `scatter_shadow` (light bleeding past
+  the shadow line) and `dim`. The app lights it.
+- Everything in the app's own shader is there to use: `material(s, albedo)`,
+  `value_noise`, `fbm`, `hash33`, `glow_cells`, `perturb_normal`,
+  `surface_convexity`, `to_world_dir`, `surface_width` and the rest. Name
+  your own helpers starting with your material's name, so two materials'
+  helpers cannot clash.
+- **No screen-space derivatives**: no `dpdx`, `dpdy`, `fwidth`, nor
+  `textureSample` without a level. A painted material is shaded inside a
+  branch chosen pixel by pixel, where those give garbage. Use `s.footprint`
+  to fade detail smaller than a pixel, or `surface_width(s, gradient)` for
+  what `fwidth` would have said. The app warns if a file uses them.
+
+The `.json` sidecar names the material and lists its sliders:
+
+```json
+{ "name": "Copper", "swatch": [0.8, 0.5, 0.3], "needs": ["curvature"],
+  "params": [
+    { "name": "Colour", "kind": "colour", "default": [0.86, 0.52, 0.34], "at": [0, 0] },
+    { "name": "Gloss", "kind": "number", "min": 0, "max": 1, "default": 0.7, "at": [1, 0] },
+    { "name": "Dent Size", "kind": "number", "min": 0.005, "max": 0.2, "default": 0.03,
+      "at": [1, 1], "scale": "size" },
+    { "name": "Polished", "kind": "toggle", "default": true, "at": [1, 2] } ] }
+```
+
+`at` is which `vec4` and which lane (0 to 3) a slider's value goes in. A
+colour fills three lanes, in linear colour; a toggle is 1 or 0; a number with
+`"scale": "size"` is a fraction of the model's size, as the built-in
+finishes' pattern sizes are. `needs` asks for what costs an extra pass:
+`"curvature"` (for `s.curv`) and `"back_depth"` (for `s.back_depth`). The
+swatch is the colour the material's row and the matcap show.
+
+Before the graphics card sees a custom material it is checked the way the
+card would check it. One with a mistake shows as its plain swatch colour, a
+red dot marks its row, and the status line says which line of the file is
+wrong ("Custom material "Copper" did not compile (line 12: expected `;`)").
+The app never closes over one. **Reload Custom Materials** reads the folder
+again.
+
 ## Objects
 
 The **Objects** card at the top of the Scene panel is the scene graph.
@@ -2694,6 +2810,11 @@ with neither the group picked last; `merge_groups` also takes `into_x` and
 object's `groups` (how many, whether the colours show, and the group picked),
 `pick` gives the `group` under a window position (0 for none), and
 `set_brush` takes `stay_in_group`.
+
+And materials: `materials` lists the material library, the scene's palette
+by slot and the `active_material` painting lays; `paint_material` picks that
+by a library material's name (`material`, which joins the palette), by a
+palette `slot`, or `"none"` for colour only.
 
 There are two halves. The app listens on `127.0.0.1:47823` (`src/app/bridge.rs`;
 this machine only, and only the first copy of the app if several are open).

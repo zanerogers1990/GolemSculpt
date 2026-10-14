@@ -367,9 +367,6 @@ pub struct Settings {
     /// step: `Library::select`). `None` is the working set, which is how it
     /// is while there is only the one Smooth.
     pub shift: Option<ShiftBrush>,
-    /// What painting lays: the colour, the material and the recent colours
-    /// (picked in the Materials card; see materials/mod.rs).
-    pub paint: crate::materials::PaintPick,
 }
 
 /// What a Shift stroke takes from the brush Shift uses: its settings and its
@@ -449,7 +446,6 @@ impl Default for Settings {
             lazy_strength: 1.0,
             build_up_on_hold: false,
             shift: None,
-            paint: Default::default(),
         }
     }
 }

@@ -395,22 +395,26 @@ fn palette_entries_follow_their_library_material() {
 }
 
 #[test]
-fn a_paint_pick_keeps_only_what_means_something_in_another_scene() {
-    let mut pick = PaintPick::default();
-    for k in 0..20 {
-        pick.remember_colour([k as f32 / 20.0, 0.0, 0.0]);
-    }
-    pick.remember_colour([0.0, 0.0, 0.0]);
-    assert_eq!(pick.recent.len(), RECENT_COLOURS);
-    assert_eq!(pick.recent[0], [0.0, 0.0, 0.0]);
-    assert_eq!(pick.recent.iter().filter(|c| **c == [0.0, 0.0, 0.0]).count(), 1);
-    pick.material = Some(PaintMaterial::Palette(3));
-    assert_eq!(pick.kept().material, None);
-    pick.material = Some(PaintMaterial::Library("Metal - Rust".into()));
-    let read = pick.kept().in_range();
-    assert_eq!(read, pick);
-    let wild = PaintPick { colour: [f32::NAN, 9.0, -1.0], ..PaintPick::default() };
-    assert_eq!(wild.in_range().colour, [0.5, 1.0, 0.0]);
+fn the_material_to_paint_with_is_kept_with_the_scene() {
+    let library = Library::default();
+    let shaders = Shaders::default();
+    let mut paint = ScenePaint::default();
+    let slot = ensure_in_palette(&mut paint, &library_material(&library, "Wood - Mahogany"), 1.0, &shaders).unwrap();
+    paint.active_material = Some(slot);
+    let mut details = crate::io::Details::default();
+    paint.keep(&mut details);
+    assert_eq!(ScenePaint::read(&details).unwrap().active_material, Some(slot));
+    // One the palette does not have is none; a file without it reads as none.
+    paint.active_material = Some(77);
+    let mut details = crate::io::Details::default();
+    paint.keep(&mut details);
+    assert_eq!(ScenePaint::read(&details).unwrap().active_material, None);
+    let mut old = serde_json::to_value(&paint).unwrap();
+    old.as_object_mut().unwrap().remove("active_material");
+    let mut details = crate::io::Details::default();
+    details.set(crate::io::slot::PAINT, &old);
+    let read = ScenePaint::read(&details).unwrap();
+    assert_eq!((read.active_material, read.palette.len()), (None, 1));
 }
 
 #[test]
