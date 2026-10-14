@@ -478,7 +478,8 @@ impl Running {
         let mut opts = Options::default();
         opts.matcap = ui.assets.default_matcap_index();
         opts.new_shape_tris = files.starting_detail();
-        let renderer = Renderer::new(&gpu, &ui::assets::default_matcap());
+        let mut renderer = Renderer::new(&gpu, &ui::assets::default_matcap());
+        renderer.prewarm();
 
         let mut mesh = new_scene::starting_mesh(opts.new_shape_tris);
         let mut scene = Scene::new(Primitive::Sphere.name());
@@ -1549,6 +1550,7 @@ impl Running {
             model_size: crate::look::model_size(&self.doc.scene, &self.doc.mesh),
             time: self.time() as f32,
             gradient_background: o.gradient_background,
+            smoothness: o.smoothness,
         })
     }
 

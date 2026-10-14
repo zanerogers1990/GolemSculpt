@@ -733,6 +733,8 @@ fn shading_of(m: &Material, e: &Environment) -> Shading {
         // By the picture's name alone, as Unity kept it; the app finds the folder.
         matcap: m.matcap_name.clone(),
         flat_shading: m.flat_shading,
+        // Unity culled nothing; the app's own default stands.
+        show_backfaces: base.show_backfaces,
         cavity: m.screen_cavity_enabled,
         cavity_ridge: number(m.cavity_ridge, base.cavity_ridge),
         cavity_valley: number(m.cavity_valley, base.cavity_valley),

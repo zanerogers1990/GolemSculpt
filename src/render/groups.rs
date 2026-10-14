@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use rayon::prelude::*;
 
 use super::cache::Stamp;
+use super::pipelines::Cull;
 use super::{DEPTH_FORMAT, DrawItem, Gpu, MSAA_SAMPLES, MeshBuffers};
 use crate::mesh::Mesh;
 use crate::mesh::groups::colour;
@@ -81,7 +82,8 @@ pub struct Layer {
     uniforms: wgpu::Buffer,
     bind: wgpu::BindGroup,
     mesh_layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    /// One per way of culling (`Cull::index`), as the main pass culls.
+    pipelines: [wgpu::RenderPipeline; 3],
     /// Keyed by the scene's mesh id. Only meshes that have groups are here.
     tints: HashMap<u64, Tint>,
     /// Moves when colours are built or let go (see cache.rs).
@@ -160,7 +162,7 @@ impl Layer {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipelines = Cull::ALL.map(|cull| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("groups"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
@@ -174,9 +176,10 @@ impl Layer {
                     attributes: &wgpu::vertex_attr_array![1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4],
                 })],
             },
-            // Both faces, like the main pass and the selection flash: the back
-            // of the surface loses the depth test unless the mesh is open there.
-            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            // The faces the main pass draws, as the selection flash: with
+            // both drawn, the back of the surface loses the depth test unless
+            // the mesh is open there.
+            primitive: wgpu::PrimitiveState { cull_mode: cull.face(), ..Default::default() },
             // Tested against the scene's depth and never written, with the
             // flash's nudge toward the eye for the last-bit differences a
             // driver may leave between two shaders (see flash.rs).
@@ -200,8 +203,8 @@ impl Layer {
             }),
             multiview_mask: None,
             cache: None,
-        });
-        Layer { enabled: false, uniforms, bind, mesh_layout, pipeline, tints: HashMap::new(), stamp: Stamp::default() }
+        }));
+        Layer { enabled: false, uniforms, bind, mesh_layout, pipelines, tints: HashMap::new(), stamp: Stamp::default() }
     }
 
     /// Builds the colours of mesh `id` if they are shown and are missing or
@@ -280,10 +283,10 @@ impl Layer {
         objects: Option<&wgpu::Buffer>,
         items: &[DrawItem],
         runs: &[Vec<std::ops::Range<u32>>],
+        show_backfaces: bool,
     ) {
         let (true, false, Some(objects)) = (self.enabled, self.tints.is_empty(), objects) else { return };
         gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(view_proj));
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind, &[]);
         pass.set_vertex_buffer(0, objects.slice(..));
         for (i, item) in items.iter().enumerate() {
@@ -292,6 +295,8 @@ impl Layer {
             if tint.built.uid != mesh.uid || tint.positions != mesh.positions || tint.indices != mesh.indices {
                 continue;
             }
+            let cull = Cull::of(show_backfaces, super::pipelines::mirrored(&item.model));
+            pass.set_pipeline(&self.pipelines[cull.index()]);
             pass.set_bind_group(1, &tint.bind, &[]);
             // Only the parts in view, as the scene drew them (render/chunks.rs).
             let end = tint.count.min(mesh.index_count);

@@ -1398,79 +1398,47 @@ pub struct LookUniform {
     /// x backdrop (0 flat, 1 gradient, 2 HDRI), y HDRI turn in radians,
     /// z HDRI exposure, w gradient bias
     pub bg_params: [f32; 4],
-    /// x metallic, z normal detail strength, w normal detail scale
+    /// z normal detail strength, w normal detail scale
     pub base_params: [f32; 4],
     /// x intensity, y tint by base colour, z finish (0 none, 1 plastic,
-    /// 2 metal, 3 clay, 4 wood), w back-face depth buffer is valid
+    /// 2 metal, 3 clay, 4 wood; the renderer picks the finish's pipeline by
+    /// it), w back-face depth buffer is valid
     pub matcap_params: [f32; 4],
     pub mask_tint: [f32; 4],
-
-    pub plastic_thin: [f32; 4],
-    pub plastic_thick: [f32; 4],
-    /// x absorption depth, y transmission, z gloss
-    pub plastic_params: [f32; 4],
-    pub flake_a: [f32; 4],
-    pub flake_b: [f32; 4],
-    pub flake_c: [f32; 4],
-    pub micro_color: [f32; 4],
-    /// x cell size, y density, z shape, w tilt
-    pub flake_p0: [f32; 4],
-    /// x sparkle, y micro cell size, z micro density
-    pub flake_p1: [f32; 4],
-
-    pub metal_color: [f32; 4],
-    pub coat_a: [f32; 4],
-    pub coat_b: [f32; 4],
-    pub wash_color: [f32; 4],
-    pub metal_offset: [f32; 4],
-    /// x metal smoothness, y metal metallic, z coat metallic, w coat smoothness
-    pub metal_p0: [f32; 4],
-    /// x wash, y coverage, z edge wear, w patch size
-    pub metal_p1: [f32; 4],
-    /// x patch contrast, y patch amount, z coat follows recesses, w grain size
-    pub metal_p2: [f32; 4],
-    /// x grain, y detail, z patch breakup, w sparkle
-    pub metal_p3: [f32; 4],
-    /// x undulation, y undulation size
-    pub metal_p4: [f32; 4],
-
-    pub clay_color: [f32; 4],
-    pub clay_recess: [f32; 4],
-    pub clay_scatter: [f32; 4],
-    /// x smoothness, y wetness, z wet power, w subsurface
-    pub clay_p0: [f32; 4],
-    /// x recess, y ridge, z mottle, w mottle size
-    pub clay_p1: [f32; 4],
-    /// x grain, y grain size, z detail
-    pub clay_p2: [f32; 4],
-
-    pub wood_early: [f32; 4],
-    pub wood_late: [f32; 4],
-    pub wood_worn: [f32; 4],
-    pub wood_recess: [f32; 4],
-    pub wood_scatter: [f32; 4],
-    pub wood_axis: [f32; 4],
-    pub wood_pith: [f32; 4],
-    /// x ring size, y ring contrast, z latewood fraction, w wobble
-    pub wood_p0: [f32; 4],
-    /// x figure size, y streaks, z streak size, w pores
-    pub wood_p1: [f32; 4],
-    /// x end grain, y patina, z wear, w smoothness
-    pub wood_p2: [f32; 4],
-    /// x wax, y wax power, z subsurface, w checks
-    pub wood_p3: [f32; 4],
-    /// x detail
-    pub wood_p4: [f32; 4],
-
-    pub glow_hot: [f32; 4],
-    pub glow_cool: [f32; 4],
-    /// x on, y pattern, z intensity, w coverage
-    pub glow_p0: [f32; 4],
-    /// x rim, y pattern size, z speed, w pulse
-    pub glow_p1: [f32; 4],
-    /// x pulse rate, y dim
-    pub glow_p2: [f32; 4],
+    /// The finish's own settings (see [`FinishParams`]), and the glow's.
+    pub finish: FinishParams,
+    pub glow: FinishParams,
 }
+
+/// A finish's settings as its shader function reads them: sixteen groups of
+/// four numbers, laid out by each finish its own way (the `pack_` functions
+/// below, which the `finish_` functions in sculpt_pbr.wgsl mirror). A saved
+/// material can be a finish and one of these.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable, PartialEq, Debug)]
+pub struct FinishParams {
+    pub v: [[f32; 4]; 16],
+}
+
+impl FinishParams {
+    /// Settings made of `slots`, the rest zero. `N` is the finish's slot
+    /// count (`PLASTIC_SLOTS` and the others), so a packer that fills more
+    /// or fewer than its finish reads does not compile.
+    fn of<const N: usize>(slots: [[f32; 4]; N]) -> FinishParams {
+        let mut out = FinishParams::zeroed();
+        out.v[..N].copy_from_slice(&slots);
+        out
+    }
+}
+
+/// How many of the sixteen slots each finish uses (the shader test checks
+/// its functions read no further).
+pub const PBR_SLOTS: usize = 1;
+pub const PLASTIC_SLOTS: usize = 9;
+pub const METAL_SLOTS: usize = 10;
+pub const CLAY_SLOTS: usize = 6;
+pub const WOOD_SLOTS: usize = 12;
+pub const GLOW_SLOTS: usize = 5;
 
 /// What the uniform builder needs to know about the frame.
 pub struct Frame {
@@ -1489,6 +1457,8 @@ pub struct Frame {
     pub model_size: f32,
     pub time: f32,
     pub gradient_background: bool,
+    /// The model's own smoothness (the plain finish's gloss).
+    pub smoothness: f32,
 }
 
 /// Side of the square shadow map. Deliberately modest: with the soft filter
@@ -1646,7 +1616,7 @@ impl Look {
             self.gradient_bias.clamp(0.2, 4.0),
         ];
 
-        u.base_params = [clamp01(self.metallic), 0.0, self.normal_strength.clamp(0.0, 2.0), self.normal_scale.clamp(1.0, 300.0)];
+        u.base_params = [0.0, 0.0, self.normal_strength.clamp(0.0, 2.0), self.normal_scale.clamp(1.0, 300.0)];
         let finish = match self.finish {
             Finish::None => 0.0,
             Finish::LurePlastic => 1.0,
@@ -1659,49 +1629,63 @@ impl Look {
         // ZBrush and Blender, so the mask does not read as paint.
         u.mask_tint = rgba([0.1, 0.1, 0.1], 0.6);
 
-        let size_of = |reference: f32| if reference > 0.0 { reference } else { f.model_size };
-        match self.finish {
-            Finish::None => {}
-            Finish::LurePlastic => self.push_lure(&mut u, size_of(self.lure.reference)),
-            Finish::Metal => self.push_metal(&mut u, size_of(self.metal.reference)),
-            Finish::Clay => self.push_clay(&mut u, size_of(self.clay.reference)),
-            Finish::Wood => self.push_wood(&mut u, size_of(self.wood.reference)),
-        }
+        u.finish = self.finish_params(self.finish, f);
         if self.glow.on {
-            self.push_glow(&mut u, size_of(self.glow.reference));
+            u.glow = self.pack_glow(self.size_of(self.glow.reference, f));
         }
         u
     }
 
-    fn push_lure(&self, u: &mut LookUniform, size: f32) {
-        let s = &self.lure;
-        let p = &LURES[idx(s.preset, LURES.len())];
-        u.plastic_thin = rgba(p.thin, 1.0);
-        u.plastic_thick = rgba(p.thick, 1.0);
-        // Translucency drives both how deep light gets and how much of it
-        // makes it back out: one "how see-through" dial.
-        u.plastic_params = [p.depth * size * s.translucency, p.transmission * s.translucency, clamp01(s.gloss), 0.0];
-        let flake = |c: [f32; 4]| rgba([c[0], c[1], c[2]], c[3]);
-        u.flake_a = flake(p.flakes[0]);
-        u.flake_b = flake(p.flakes[1]);
-        u.flake_c = flake(p.flakes[2]);
-        u.micro_color = rgba(p.micro, 1.0);
-        // A cell holds one flake averaging 0.67 of the cell's width.
-        u.flake_p0 = [
-            p.flake_size * size * s.flake_size / 0.67,
-            clamp01(p.flake_density * s.flake_amount),
-            p.flake_shape,
-            FLAKE_TILT,
-        ];
-        u.flake_p1 = [
-            s.sparkle,
-            p.micro_size * size * s.flake_size / 0.67,
-            clamp01(p.micro_density * s.flake_amount),
-            0.0,
-        ];
+    /// The size a finish's pattern is drawn at: the one it was frozen
+    /// against, or the model's now if it never was.
+    fn size_of(&self, reference: f32, f: &Frame) -> f32 {
+        if reference > 0.0 { reference } else { f.model_size }
     }
 
-    fn push_metal(&self, u: &mut LookUniform, size: f32) {
+    /// `finish`'s settings as its shader function reads them.
+    pub fn finish_params(&self, finish: Finish, f: &Frame) -> FinishParams {
+        match finish {
+            Finish::None => self.pack_pbr(f.smoothness),
+            Finish::LurePlastic => self.pack_plastic(self.size_of(self.lure.reference, f)),
+            Finish::Metal => self.pack_metal(self.size_of(self.metal.reference, f)),
+            Finish::Clay => self.pack_clay(self.size_of(self.clay.reference, f)),
+            Finish::Wood => self.pack_wood(self.size_of(self.wood.reference, f)),
+        }
+    }
+
+    /// The plain finish: v[0] x metallic, y smoothness (see `finish_pbr`).
+    pub fn pack_pbr(&self, smoothness: f32) -> FinishParams {
+        FinishParams::of::<PBR_SLOTS>([[clamp01(self.metallic), smoothness, 0.0, 0.0]])
+    }
+
+    /// The lure plastic (see `finish_plastic`), its pattern at `size`.
+    pub fn pack_plastic(&self, size: f32) -> FinishParams {
+        let s = &self.lure;
+        let p = &LURES[idx(s.preset, LURES.len())];
+        let flake = |c: [f32; 4]| rgba([c[0], c[1], c[2]], c[3]);
+        FinishParams::of::<PLASTIC_SLOTS>([
+            rgba(p.thin, 1.0),
+            rgba(p.thick, 1.0),
+            // Translucency drives both how deep light gets and how much of it
+            // makes it back out: one "how see-through" dial.
+            [p.depth * size * s.translucency, p.transmission * s.translucency, clamp01(s.gloss), 0.0],
+            flake(p.flakes[0]),
+            flake(p.flakes[1]),
+            flake(p.flakes[2]),
+            rgba(p.micro, 1.0),
+            // A cell holds one flake averaging 0.67 of the cell's width.
+            [
+                p.flake_size * size * s.flake_size / 0.67,
+                clamp01(p.flake_density * s.flake_amount),
+                p.flake_shape,
+                FLAKE_TILT,
+            ],
+            [s.sparkle, p.micro_size * size * s.flake_size / 0.67, clamp01(p.micro_density * s.flake_amount), 0.0],
+        ])
+    }
+
+    /// The aged metal (see `finish_metal`), its pattern at `size`.
+    pub fn pack_metal(&self, size: f32) -> FinishParams {
         // Coverage shift at each end of the Exposed Metal slider: enough to
         // take any preset from almost fully coated to mostly bare.
         const EXPOSURE_REACH: f32 = 0.6;
@@ -1710,47 +1694,53 @@ impl Look {
         const PATTERN_PATH_LENGTH: f32 = 40.0;
         let s = &self.metal;
         let p = &METALS[idx(s.preset, METALS.len())];
-        u.metal_color = rgba(p.metal, 1.0);
-        u.coat_a = rgba(p.coat_a, 1.0);
-        u.coat_b = rgba(p.coat_b, 1.0);
-        u.wash_color = rgba(p.wash_color, 1.0);
         let path = Vec3::new(0.53, 0.29, 0.80).normalize() * (clamp01(s.seed) * PATTERN_PATH_LENGTH);
-        u.metal_offset = [path.x, path.y, path.z, 0.0];
-        u.metal_p0 = [
-            clamp01(p.metal_smoothness * s.gloss),
-            p.metal_metallic,
-            p.coat_metallic,
-            clamp01(p.coat_smoothness * s.gloss),
-        ];
-        u.metal_p1 = [
-            clamp01(p.wash * s.wash),
-            p.coverage - (s.exposure - 1.0) * EXPOSURE_REACH,
-            p.edge_wear * s.edge_wear,
-            p.patch_size * size * s.pattern_size,
-        ];
-        u.metal_p2 = [p.patch_contrast, p.patchiness, p.follows_recesses, p.grain_size * size * s.pattern_size];
-        u.metal_p3 = [p.grain, s.detail, p.patch_breakup, p.sparkle];
-        u.metal_p4 = [p.undulation, p.undulation_size * size * s.pattern_size, 0.0, 0.0];
+        FinishParams::of::<METAL_SLOTS>([
+            rgba(p.metal, 1.0),
+            rgba(p.coat_a, 1.0),
+            rgba(p.coat_b, 1.0),
+            rgba(p.wash_color, 1.0),
+            [path.x, path.y, path.z, 0.0],
+            [
+                clamp01(p.metal_smoothness * s.gloss),
+                p.metal_metallic,
+                p.coat_metallic,
+                clamp01(p.coat_smoothness * s.gloss),
+            ],
+            [
+                clamp01(p.wash * s.wash),
+                p.coverage - (s.exposure - 1.0) * EXPOSURE_REACH,
+                p.edge_wear * s.edge_wear,
+                p.patch_size * size * s.pattern_size,
+            ],
+            [p.patch_contrast, p.patchiness, p.follows_recesses, p.grain_size * size * s.pattern_size],
+            [p.grain, s.detail, p.patch_breakup, p.sparkle],
+            [p.undulation, p.undulation_size * size * s.pattern_size, 0.0, 0.0],
+        ])
     }
 
-    fn push_clay(&self, u: &mut LookUniform, size: f32) {
+    /// The sculptor's clay (see `finish_clay`), its pattern at `size`.
+    pub fn pack_clay(&self, size: f32) -> FinishParams {
         let s = &self.clay;
         let p = &CLAYS[idx(s.preset, CLAYS.len())];
-        u.clay_color = rgba(p.color, 1.0);
-        u.clay_recess = rgba(p.recess_color, 1.0);
-        u.clay_scatter = rgba(p.scatter_color, 1.0);
-        u.clay_p0 = [
-            clamp01(p.smoothness * s.gloss),
-            // Gloss takes the wet film with it: a matte clay has no wet shine either.
-            p.wetness * s.wetness * s.gloss.min(1.0),
-            p.wet_sharpness,
-            p.subsurface * s.subsurface,
-        ];
-        u.clay_p1 = [p.recess_depth * s.recess, p.ridge_burnish, p.mottle, p.mottle_size * size];
-        u.clay_p2 = [p.grain * s.grain, p.grain_size * size, s.detail, 0.0];
+        FinishParams::of::<CLAY_SLOTS>([
+            rgba(p.color, 1.0),
+            rgba(p.recess_color, 1.0),
+            rgba(p.scatter_color, 1.0),
+            [
+                clamp01(p.smoothness * s.gloss),
+                // Gloss takes the wet film with it: a matte clay has no wet shine either.
+                p.wetness * s.wetness * s.gloss.min(1.0),
+                p.wet_sharpness,
+                p.subsurface * s.subsurface,
+            ],
+            [p.recess_depth * s.recess, p.ridge_burnish, p.mottle, p.mottle_size * size],
+            [p.grain * s.grain, p.grain_size * size, s.detail, 0.0],
+        ])
     }
 
-    fn push_wood(&self, u: &mut LookUniform, size: f32) {
+    /// The carved wood (see `finish_wood`), its pattern at `size`.
+    pub fn pack_wood(&self, size: f32) -> FinishParams {
         // The pith's walk, in model sizes: from a little off centre (dead
         // centre rings the model with bullseyes) out past its edge, where the
         // rings flatten into the stripes of quarter-sawn wood.
@@ -1759,52 +1749,53 @@ impl Look {
         let s = &self.wood;
         let p = &WOODS[idx(s.preset, WOODS.len())];
         let scale = size * s.grain_scale;
-        u.wood_early = rgba(p.early, 1.0);
-        u.wood_late = rgba(p.late, 1.0);
-        u.wood_worn = rgba(p.worn, 1.0);
-        u.wood_recess = rgba(p.recess, 1.0);
-        u.wood_scatter = rgba(p.scatter, 1.0);
-        u.wood_axis = match s.axis {
+        let axis = match s.axis {
             1 => [1.0, 0.0, 0.0, 0.0],
             2 => [0.0, 0.0, 1.0, 0.0],
             _ => [0.0, 1.0, 0.0, 0.0],
         };
         let pith = Vec3::new(0.61, 0.17, -0.77).normalize() * ((PITH_START + clamp01(s.seed) * PITH_PATH_LENGTH) * size);
-        u.wood_pith = [pith.x, pith.y, pith.z, 0.0];
-        u.wood_p0 = [p.ring_size * scale, p.ring_contrast * s.grain, p.latewood, p.wobble];
-        u.wood_p1 = [p.figure_size * scale, p.streaks * s.grain, p.streak_size * scale, p.pores * s.grain];
-        u.wood_p2 = [p.end_grain, p.patina * s.patina, p.edge_wear * s.edge_wear, clamp01(p.smoothness * s.sheen)];
-        u.wood_p3 = [
-            // Sheen takes the wax with it: a dry wood has no wax highlight either.
-            p.wax * s.sheen,
-            p.wax_sharpness,
-            p.subsurface,
-            // Additive, so the slider can add cracks to a preset that has none.
-            clamp01(p.checks + (s.cracks - 1.0) * 0.5),
-        ];
-        u.wood_p4 = [s.detail, 0.0, 0.0, 0.0];
+        FinishParams::of::<WOOD_SLOTS>([
+            rgba(p.early, 1.0),
+            rgba(p.late, 1.0),
+            rgba(p.worn, 1.0),
+            rgba(p.recess, 1.0),
+            rgba(p.scatter, 1.0),
+            axis,
+            [pith.x, pith.y, pith.z, 0.0],
+            [p.ring_size * scale, p.ring_contrast * s.grain, p.latewood, p.wobble],
+            [p.figure_size * scale, p.streaks * s.grain, p.streak_size * scale, p.pores * s.grain],
+            [p.end_grain, p.patina * s.patina, p.edge_wear * s.edge_wear, clamp01(p.smoothness * s.sheen)],
+            [
+                // Sheen takes the wax with it: a dry wood has no wax highlight either.
+                p.wax * s.sheen,
+                p.wax_sharpness,
+                p.subsurface,
+                // Additive, so the slider can add cracks to a preset that has none.
+                clamp01(p.checks + (s.cracks - 1.0) * 0.5),
+            ],
+            [s.detail, 0.0, 0.0, 0.0],
+        ])
     }
 
-    fn push_glow(&self, u: &mut LookUniform, size: f32) {
+    /// The glow (see `finish_glow`), its pattern at `size`. v[2].x is 1: on.
+    pub fn pack_glow(&self, size: f32) -> FinishParams {
         let s = &self.glow;
         let p = &GLOWS[idx(s.preset, GLOWS.len())];
-        u.glow_hot = rgba(shift_hue(p.hot, s.hue_shift), 1.0);
-        u.glow_cool = rgba(shift_hue(p.cool, s.hue_shift), 1.0);
-        // Additive around the preset (1 = the preset), so a slider at 2 gives
-        // a rim, a pulse or a dim to presets that have none.
-        u.glow_p0 = [
-            1.0,
-            p.pattern as f32,
-            p.intensity * s.intensity,
-            (p.coverage + (s.coverage - 1.0) * 0.5).clamp(0.0, 1.5),
-        ];
-        u.glow_p1 = [
-            (p.rim + (s.rim - 1.0) * 0.5).max(0.0),
-            p.pattern_size * size * s.pattern_size,
-            p.speed * s.speed,
-            clamp01(p.pulse + (s.pulse - 1.0) * 0.5),
-        ];
-        u.glow_p2 = [p.pulse_rate, clamp01(p.dim + (s.dim - 1.0) * 0.5), 0.0, 0.0];
+        FinishParams::of::<GLOW_SLOTS>([
+            rgba(shift_hue(p.hot, s.hue_shift), 1.0),
+            rgba(shift_hue(p.cool, s.hue_shift), 1.0),
+            // Additive around the preset (1 = the preset), so a slider at 2
+            // gives a rim, a pulse or a dim to presets that have none.
+            [1.0, p.pattern as f32, p.intensity * s.intensity, (p.coverage + (s.coverage - 1.0) * 0.5).clamp(0.0, 1.5)],
+            [
+                (p.rim + (s.rim - 1.0) * 0.5).max(0.0),
+                p.pattern_size * size * s.pattern_size,
+                p.speed * s.speed,
+                clamp01(p.pulse + (s.pulse - 1.0) * 0.5),
+            ],
+            [p.pulse_rate, clamp01(p.dim + (s.dim - 1.0) * 0.5), 0.0, 0.0],
+        ])
     }
 }
 
@@ -1895,6 +1886,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "panels" => opts.clean_view = !on,
             "gradient" => opts.gradient_background = on,
             "flat" => opts.flat_shading = on,
+            "backfaces" => opts.show_backfaces = on,
             "wire" => opts.wireframe = on,
             "five" => look.five_point = on,
             "follow" => look.follow_camera = on,

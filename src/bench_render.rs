@@ -140,7 +140,9 @@ fn globals(view: &View, opts: &Options, guides: bool) -> Globals {
 }
 
 /// Turns Show Backfaces on or off, where this build has it.
-fn set_backfaces(_opts: &mut Options, _on: bool) {}
+fn set_backfaces(opts: &mut Options, on: bool) {
+    opts.show_backfaces = on;
+}
 
 /// What is drawn: meshes by id, and the objects placed from them (the first
 /// is the active one).
@@ -238,6 +240,7 @@ impl Stage {
             model_size: bounds.size().max_element(),
             time: CLOCK,
             gradient_background: self.opts.gradient_background,
+            smoothness: self.opts.smoothness,
         });
         let items = self
             .objects

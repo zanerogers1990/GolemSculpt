@@ -10,7 +10,8 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use crate::doc::Options;
-use crate::look::{Finish, LookUniform, Tonemap, SHADOW_SIZE};
+use crate::look::{LookUniform, Tonemap, SHADOW_SIZE};
+use pipelines::{Cull, MeshKey};
 use crate::mesh::Mesh;
 
 mod cache;
@@ -18,6 +19,7 @@ mod chunks;
 mod dof;
 pub mod env;
 mod mips;
+mod pipelines;
 pub mod flash;
 pub mod groups;
 pub mod post;
@@ -295,10 +297,12 @@ pub struct Renderer {
     bind_pre: wgpu::BindGroup,
     bind_main: Option<wgpu::BindGroup>,
     pipe_background: wgpu::RenderPipeline,
-    pipe_mesh: wgpu::RenderPipeline,
-    pipe_prepass: wgpu::RenderPipeline,
-    pipe_shadow: wgpu::RenderPipeline,
-    pipe_back: wgpu::RenderPipeline,
+    /// The main pass's, one per finish and culling (pipelines.rs).
+    mesh_pipes: pipelines::MeshPipelines,
+    /// The helper passes', one per way of culling (`Cull::index`).
+    pipe_prepass: [wgpu::RenderPipeline; 3],
+    pipe_shadow: [wgpu::RenderPipeline; 3],
+    pipe_back: [wgpu::RenderPipeline; 3],
     matcap: wgpu::TextureView,
     sampler: wgpu::Sampler,
     shadow: wgpu::TextureView,
@@ -512,33 +516,7 @@ impl Renderer {
                 immediate_size: 0,
             })
         };
-        let vertex_buffers = [
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 12,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-            }),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 12,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![1 => Float32x3],
-            }),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 4,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![2 => Float32],
-            }),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4],
-            }),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 4,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![7 => Float32],
-            }),
-        ];
+        let vertex_buffers = pipelines::mesh_vertex_buffers();
         // The helper passes read only positions, normals and the objects'
         // matrices: the mask and curvature slots are left out of their layout.
         let slim_buffers = [vertex_buffers[0].clone(), vertex_buffers[1].clone(), None, vertex_buffers[3].clone(), None];
@@ -557,8 +535,7 @@ impl Renderer {
             })
         };
         let multisample = |count| wgpu::MultisampleState { count, mask: !0, alpha_to_coverage_enabled: false };
-        // Both faces are drawn; the shader tints the inside so holes are visible.
-        let primitive = wgpu::PrimitiveState { cull_mode: None, ..Default::default() };
+        let primitive = wgpu::PrimitiveState::default();
 
         let layout = pipeline_layout(&layout_main);
         let pipe_background = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -582,29 +559,10 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        let pipe_mesh = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mesh"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_mesh"),
-                compilation_options: Default::default(),
-                buffers: &vertex_buffers,
-            },
-            primitive,
-            depth_stencil: depth_state(true),
-            multisample: multisample(MSAA_SAMPLES),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_mesh"),
-                compilation_options: Default::default(),
-                targets: &[Some(HDR_FORMAT.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let mesh_pipes =
+            pipelines::MeshPipelines::new(device, &shader, &layout, HDR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES);
         let layout = pipeline_layout(&layout_pre);
-        let helper = |label, fragment: &str, format: wgpu::TextureFormat, cull_mode| {
+        let helper = |label, fragment: &str, format: wgpu::TextureFormat, cull: Cull| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -614,7 +572,7 @@ impl Renderer {
                     compilation_options: Default::default(),
                     buffers: &slim_buffers,
                 },
-                primitive: wgpu::PrimitiveState { cull_mode, ..Default::default() },
+                primitive: wgpu::PrimitiveState { cull_mode: cull.face(), ..Default::default() },
                 depth_stencil: depth_state(true),
                 multisample: multisample(1),
                 fragment: Some(wgpu::FragmentState {
@@ -627,32 +585,37 @@ impl Renderer {
                 cache: None,
             })
         };
-        let pipe_prepass = helper("prepass", "fs_prepass", GBUF_FORMAT, None);
-        // Back faces only: the far side of the model under each pixel. Picked in the
-        // shader, since a mirror copy's faces are turned the other way round.
-        let pipe_back = helper("back depth", "fs_back_depth", BACK_FORMAT, None);
-        // Depth only, from the key light; ordinary (not reverse) depth.
-        let pipe_shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shadow"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_shadow"),
-                compilation_options: Default::default(),
-                buffers: &slim_buffers,
-            },
-            primitive,
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: multisample(1),
-            fragment: None,
-            multiview_mask: None,
-            cache: None,
+        // Culled as the main pass is, so they see the faces it shows.
+        let pipe_prepass = Cull::ALL.map(|cull| helper("prepass", "fs_prepass", GBUF_FORMAT, cull));
+        // Back faces only: the far side of the model under each pixel. Indexed
+        // by the object's own culling, and culling the other face; with Show
+        // Backfaces on both come through and the shader drops the front ones.
+        let pipe_back = Cull::ALL.map(|cull| helper("back depth", "fs_back_depth", BACK_FORMAT, cull.flipped()));
+        // Depth only, from the key light; ordinary (not reverse) depth. Only
+        // faces toward the light: a closed model's others are behind them.
+        let pipe_shadow = Cull::ALL.map(|cull| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("shadow"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_shadow"),
+                    compilation_options: Default::default(),
+                    buffers: &slim_buffers,
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: cull.face(), ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: multisample(1),
+                fragment: None,
+                multiview_mask: None,
+                cache: None,
+            })
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -678,7 +641,7 @@ impl Renderer {
             bind_pre,
             bind_main: None,
             pipe_background,
-            pipe_mesh,
+            mesh_pipes,
             pipe_prepass,
             pipe_shadow,
             pipe_back,
@@ -706,6 +669,13 @@ impl Renderer {
             shadow_drawn: None,
             blit: cache::Blit::new(gpu),
         }
+    }
+
+    /// Starts building every way of shading the main pass can need on a
+    /// thread of its own, so the first time a finish is picked is not a
+    /// pause (see pipelines.rs).
+    pub fn prewarm(&mut self) {
+        self.mesh_pipes.prewarm();
     }
 
     /// Exchanges the working textures in use with those in `side`. Call it
@@ -971,7 +941,14 @@ impl Renderer {
         let hdri = settings.hdri.active();
         let occlusion = lit && settings.ambient_occlusion;
         let shadows = lit && look.light_params[1] > 0.5;
-        let plastic = lit && settings.finish == Finish::LurePlastic;
+        // The pipeline: the matcap, or the finish the look names, with the glow or not.
+        let surface = if globals.shading[0] > 0.5 {
+            pipelines::SURFACE_MATCAP
+        } else {
+            ((look.matcap_params[2] + 0.5) as u32).clamp(0, 4)
+        };
+        let glow = look.glow.v[2][0] > 0.5;
+        let plastic = lit && surface == 1;
         let source = lit.then(|| env_source(globals, look, opts));
         let post_params = post_params(globals, look, settings);
 
@@ -1048,11 +1025,20 @@ impl Renderer {
         // Which parts of each object are in view (chunks.rs).
         let view_proj = glam::Mat4::from_cols_array_2d(&globals.view_proj);
         let in_view = self.visible_runs(&view_proj, items);
-        let draw_items = |pass: &mut wgpu::RenderPass, runs: &[Vec<std::ops::Range<u32>>]| {
+        // How each object is culled, and the main pass's pipeline for each.
+        let culls: Vec<Cull> =
+            items.iter().map(|i| Cull::of(opts.show_backfaces, pipelines::mirrored(&i.model))).collect();
+        let mesh_pipes: Vec<(Cull, wgpu::RenderPipeline)> = Cull::ALL
+            .into_iter()
+            .filter(|c| culls.contains(c))
+            .map(|cull| (cull, self.mesh_pipes.get(MeshKey { surface, glow, cull }).clone()))
+            .collect();
+        // Draws the objects culled as `cull`, the parts of each in `runs`.
+        let draw_items = |pass: &mut wgpu::RenderPass, runs: &[Vec<std::ops::Range<u32>>], cull: Cull| {
             let Some((objects, _)) = &self.objects else { return };
             for (i, item) in items.iter().enumerate() {
                 let Some(mesh) = self.meshes.get(&item.mesh) else { continue };
-                if runs[i].is_empty() {
+                if runs[i].is_empty() || culls[i] != cull {
                     continue;
                 }
                 pass.set_vertex_buffer(0, mesh.positions.slice(..));
@@ -1067,7 +1053,7 @@ impl Renderer {
             }
         };
         // A colour buffer cleared to "nothing here", with its own depth.
-        let helper_pass = |encoder: &mut wgpu::CommandEncoder, label: &str, view: &wgpu::TextureView, pipeline: &wgpu::RenderPipeline| {
+        let helper_pass = |encoder: &mut wgpu::CommandEncoder, label: &str, view: &wgpu::TextureView, pipelines: &[wgpu::RenderPipeline; 3]| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1089,12 +1075,14 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
-            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.bind_pre, &[]);
-            draw_items(&mut pass, &in_view);
+            for cull in Cull::ALL.into_iter().filter(|c| culls.contains(c)) {
+                pass.set_pipeline(&pipelines[cull.index()]);
+                draw_items(&mut pass, &in_view, cull);
+            }
         };
 
-        let shadow_key = shadows.then(|| self.shadow_key(&look, items));
+        let shadow_key = shadows.then(|| self.shadow_key(&look, items, opts.show_backfaces));
         if shadows && shadow_key != self.shadow_drawn {
             self.shadow_drawn = shadow_key;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1103,10 +1091,13 @@ impl Renderer {
                 depth_stencil_attachment: depth_attachment(&self.shadow, 1.0),
                 ..Default::default()
             });
-            pass.set_pipeline(&self.pipe_shadow);
             pass.set_bind_group(0, &self.bind_pre, &[]);
             let light = glam::Mat4::from_cols_array_2d(&look.shadow_view_proj);
-            draw_items(&mut pass, &self.visible_runs(&light, items));
+            let runs = self.visible_runs(&light, items);
+            for cull in Cull::ALL.into_iter().filter(|c| culls.contains(c)) {
+                pass.set_pipeline(&self.pipe_shadow[cull.index()]);
+                draw_items(&mut pass, &runs, cull);
+            }
         }
         if cavity || occlusion {
             helper_pass(encoder, "normals prepass", &targets.gbuf, &self.pipe_prepass);
@@ -1136,9 +1127,9 @@ impl Renderer {
             pass.set_bind_group(0, bind_main, &[]);
             pass.set_pipeline(&self.pipe_background);
             pass.draw(0..3, 0..1);
-            if !items.is_empty() {
-                pass.set_pipeline(&self.pipe_mesh);
-                draw_items(&mut pass, &in_view);
+            for (cull, pipeline) in &mesh_pipes {
+                pass.set_pipeline(pipeline);
+                draw_items(&mut pass, &in_view, *cull);
             }
         }
 
@@ -1177,10 +1168,10 @@ impl Renderer {
         });
         // The pulse tints the surface, so the wireframe and the SSpheres go over it.
         if self.overlays {
-            self.flash.draw(&mut pass, &self.meshes);
+            self.flash.draw(&mut pass, &self.meshes, opts.show_backfaces);
         }
         let objects = self.objects.as_ref().map(|o| &o.0);
-        self.groups.draw(gpu, &mut pass, &globals.view_proj, &self.meshes, objects, items, &in_view);
+        self.groups.draw(gpu, &mut pass, &globals.view_proj, &self.meshes, objects, items, &in_view, opts.show_backfaces);
         self.wire.draw(gpu, &mut pass, globals, &self.meshes, objects, items);
         self.spheres.draw(&mut pass);
         if self.overlays {
@@ -1211,9 +1202,10 @@ impl Renderer {
     /// following the camera the key turns with every orbit, and the map is
     /// drawn every frame of one; with the lights left in the world it is
     /// drawn once and kept until the model or the scene changes.
-    fn shadow_key(&self, look: &LookUniform, items: &[DrawItem]) -> cache::SceneKey {
+    fn shadow_key(&self, look: &LookUniform, items: &[DrawItem], show_backfaces: bool) -> cache::SceneKey {
         let mut key = cache::SceneKey::default();
         key.push(&look.light_dir[0]).push(&look.shadow_view_proj).push(&look.shadow_params);
+        key.push(&(show_backfaces as u32));
         key.push(&(items.len() as u64));
         for item in items {
             key.push(&item.mesh).push(&item.model);
@@ -1257,6 +1249,7 @@ impl Renderer {
             flag(self.overlays),
             flag(self.wire.enabled),
             flag(self.groups.enabled),
+            flag(opts.show_backfaces),
         ]);
         key.push(&[
             self.forced,
@@ -1277,8 +1270,8 @@ impl Renderer {
 /// being reused.
 fn look_without_clock(look: &LookUniform) -> LookUniform {
     let mut out = *look;
-    let glow_on = look.glow_p0[0] > 0.5;
-    let moving = look.glow_p1[2] != 0.0;
+    let glow_on = look.glow.v[2][0] > 0.5;
+    let moving = look.glow.v[3][2] != 0.0;
     if !(glow_on && moving) {
         out.light_params[3] = 0.0;
     }
@@ -1394,4 +1387,23 @@ pub fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> image::RgbaImage {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_clock_is_in_the_scene_key_only_while_a_glow_moves() {
+        let mut look = LookUniform::zeroed();
+        look.light_params[3] = 12.5;
+        assert_eq!(look_without_clock(&look).light_params[3], 0.0, "no glow");
+        look.glow.v[2][0] = 1.0;
+        assert_eq!(look_without_clock(&look).light_params[3], 0.0, "a glow standing still");
+        look.glow.v[3][2] = 0.8;
+        assert_eq!(look_without_clock(&look).light_params[3], 12.5, "a moving glow");
+        // Nothing else is touched.
+        look.light_params[0] = 3.0;
+        assert_eq!(look_without_clock(&look).light_params[0], 3.0);
+    }
 }

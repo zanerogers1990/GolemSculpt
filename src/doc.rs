@@ -16,6 +16,10 @@ pub struct Options {
     pub matcap_on: bool,
     pub matcap: usize,
     pub flat_shading: bool,
+    /// Draw the inside of the surface too, where a hole or a hidden face
+    /// lets it be seen. Off, faces turned away from the camera are left out,
+    /// which halves the work of drawing a closed model.
+    pub show_backfaces: bool,
     /// Draw the edges of every face over the model.
     pub wireframe: bool,
     pub cavity: bool,
@@ -70,6 +74,7 @@ impl Default for Options {
             matcap_on: true,
             matcap: 0,
             flat_shading: false,
+            show_backfaces: false,
             wireframe: false,
             cavity: true,
             cavity_ridge: 1.0,

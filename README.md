@@ -2045,6 +2045,16 @@ A matcap carries its own lighting, so the lights, shadows and finishes only
 show with Matcap off. All of these settings are saved in the `.sclp` file and
 come back when it is opened (see Files).
 
+**Show Backfaces** (at the bottom of the viewport, beside Flat Shading and
+Wireframe) draws the inside of the surface as well as the outside. It is off
+to start with: the side of the clay facing away from you is not drawn, which
+on a closed model changes nothing you can see and leaves the graphics card
+half the work. Where the model is open (a hole, a cut edge, faces you have
+hidden) you then look straight through it, past the inside, to whatever is
+behind. Switch it on to see the inside, tinted dark blue-grey so holes and
+faces turned the wrong way stand out, as it always was before. It is saved
+with the other shading settings.
+
 ## Objects
 
 The **Objects** card at the top of the Scene panel is the scene graph.
@@ -2240,6 +2250,9 @@ any other surface. Nothing is cut away.
   works on the whole model too, and what was hidden is still hidden
   afterwards (its triangles are the model's own, fewer of them).
 - The wireframe draws only the faces that show.
+- With Show Backfaces off (the default, see Look) you see through the
+  opening to what is behind the model; switch it on to see the inside of the
+  part that is left.
 
 ## Turntable
 
@@ -2515,6 +2528,12 @@ cargo test -p sculpt-geom --release timing_of_decimation -- --ignored --nocaptur
 cargo test --release timing_of_a_decimate -- --ignored --nocapture                  # Decimate as the app runs it, sculpt mesh included, at 200k and 1M triangles; prints the status lines
 cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
+sculpt.exe --bench-render 1000000 5000000 10000000   # the viewport's drawing alone: ms per frame orbiting and with nothing changing (a pointer move), per finish, half off screen, faces hidden
+sculpt.exe --bench-render-ab other\sculpt.exe 3 1000000 5000000 10000000   # this build against another, taking turns, best of 3 each, with the ratio
+sculpt.exe --render-shots shots
+ew   # a fixed set of viewport pictures (every finish and preset, glows, matcap, a mirrored copy, an opened model...)
+sculpt.exe --compare-shots shots\old shots
+ew   # two such sets compared pixel by pixel
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first; spacing=150, scatter=50 and jitter=40 set every brush's Spacing, Scatter and Size Jitter in percent, and alpha=scales+random180 an alpha with Random Rotation)
 SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
 SCULPT_DEMO_SYMMETRY=repair sculpt.exe --screenshot out.png --demo-symmetry --demo-ui "float=Symmetry@640:20"   # Check Symmetry, Make Symmetric and Symmetry Cleanup pressed in turn on a model made lopsided for them, each undone and redone; prints the status lines and a line per check (ok / FAIL)

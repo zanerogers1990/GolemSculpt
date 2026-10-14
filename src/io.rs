@@ -806,6 +806,7 @@ pub struct Shading {
     /// does not have, leaves the matcap as it is.
     pub matcap: String,
     pub flat_shading: bool,
+    pub show_backfaces: bool,
     pub cavity: bool,
     pub cavity_ridge: f32,
     pub cavity_valley: f32,
@@ -828,6 +829,7 @@ impl Shading {
             matcap_on: o.matcap_on,
             matcap,
             flat_shading: o.flat_shading,
+            show_backfaces: o.show_backfaces,
             cavity: o.cavity,
             cavity_ridge: o.cavity_ridge,
             cavity_valley: o.cavity_valley,
@@ -844,6 +846,7 @@ impl Shading {
         let unit = |c: [f32; 3]| c.map(|v| v.clamp(0.0, 1.0));
         o.matcap_on = self.matcap_on;
         o.flat_shading = self.flat_shading;
+        o.show_backfaces = self.show_backfaces;
         o.cavity = self.cavity;
         o.cavity_ridge = self.cavity_ridge.clamp(0.0, 2.0);
         o.cavity_valley = self.cavity_valley.clamp(0.0, 2.0);

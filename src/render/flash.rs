@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 
 use super::cache::Stamp;
+use super::pipelines::Cull;
 use super::{DEPTH_FORMAT, Gpu, MSAA_SAMPLES, MeshBuffers};
 
 /// What the pulse announces; sets its colour and length.
@@ -143,12 +144,15 @@ struct Instance {
 }
 
 pub struct Layer {
-    pipeline: wgpu::RenderPipeline,
+    /// One per way of culling (`Cull::index`), as the main pass culls.
+    pipelines: [wgpu::RenderPipeline; 3],
     uniforms: wgpu::Buffer,
     bind: wgpu::BindGroup,
     instances: wgpu::Buffer,
     /// The mesh of each instance written this frame; empty means no flash.
     meshes: Vec<u64>,
+    /// Whether each instance's placement mirrors, which turns its culling round.
+    mirrored: Vec<bool>,
     /// Moves when what is drawn changes (see cache.rs).
     pub(super) stamp: Stamp,
 }
@@ -210,7 +214,7 @@ impl Layer {
                 ],
             }),
         ];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipelines = Cull::ALL.map(|cull| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("flash"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
@@ -219,11 +223,11 @@ impl Layer {
                 compilation_options: Default::default(),
                 buffers: &vertex_buffers,
             },
-            // Both faces, like the main pass: the object's own surface is the
-            // only thing at the scene's depth, so its back faces lose the
-            // test unless the mesh is open there, and then the flash covers
-            // what is visible through the hole too.
-            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            // The faces the main pass draws: the object's own surface is the
+            // only thing at the scene's depth, so with both faces drawn its
+            // back faces lose the test unless the mesh is open there, and
+            // then the flash covers what is visible through the hole too.
+            primitive: wgpu::PrimitiveState { cull_mode: cull.face(), ..Default::default() },
             // Reverse depth, as everywhere. Tested against the scene's depth
             // but never written, with a nudge toward the eye (the shader
             // shares the scene's arithmetic, so this only has to cover the
@@ -249,8 +253,8 @@ impl Layer {
             }),
             multiview_mask: None,
             cache: None,
-        });
-        Layer { pipeline, uniforms, bind, instances, meshes: Vec::new(), stamp: Stamp::default() }
+        }));
+        Layer { pipelines, uniforms, bind, instances, meshes: Vec::new(), mirrored: Vec::new(), stamp: Stamp::default() }
     }
 
     /// Sets what is drawn this frame: `items` is empty while nothing pulses,
@@ -266,6 +270,7 @@ impl Layer {
         gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(view_proj));
         gpu.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&data));
         self.meshes.extend(items.iter().map(|i| i.mesh));
+        self.mirrored = items.iter().map(|i| super::pipelines::mirrored(&i.model)).collect();
         self.stamp.note(&[bytemuck::bytes_of(view_proj), bytemuck::cast_slice(&data), bytemuck::cast_slice(&self.meshes)]);
     }
 
@@ -275,15 +280,17 @@ impl Layer {
     }
 
     /// Draws into the overlay pass, after the scene and its depth.
-    pub(super) fn draw(&self, pass: &mut wgpu::RenderPass, buffers: &HashMap<u64, MeshBuffers>) {
+    /// `show_backfaces` as the main pass had it.
+    pub(super) fn draw(&self, pass: &mut wgpu::RenderPass, buffers: &HashMap<u64, MeshBuffers>, show_backfaces: bool) {
         if self.meshes.is_empty() {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind, &[]);
         pass.set_vertex_buffer(1, self.instances.slice(..));
         for (i, id) in self.meshes.iter().enumerate() {
             let Some(mesh) = buffers.get(id) else { continue };
+            let cull = Cull::of(show_backfaces, self.mirrored.get(i).copied().unwrap_or(false));
+            pass.set_pipeline(&self.pipelines[cull.index()]);
             pass.set_vertex_buffer(0, mesh.positions.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, i as u32..i as u32 + 1);

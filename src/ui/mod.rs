@@ -153,6 +153,7 @@ pub fn build(
                     ui.spacing_mut().item_spacing.x = 14.0;
                     theme::checkbox(ui, &mut doc.opts.flat_shading, "Flat Shading", ACCENT());
                     theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT());
+                    theme::checkbox(ui, &mut doc.opts.show_backfaces, "Show Backfaces", ACCENT());
                     theme::checkbox(ui, &mut doc.opts.groups.colours, "Group Colours", ACCENT());
                 });
             });
