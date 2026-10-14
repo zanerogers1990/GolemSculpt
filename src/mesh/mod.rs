@@ -8,6 +8,7 @@ pub mod groups;
 pub mod layers;
 pub mod levels;
 mod lists;
+mod normals;
 pub mod primitives;
 pub mod visibility;
 
@@ -77,6 +78,11 @@ pub struct Mesh {
     stroke_leaves: BitSet,
 
     pending_normals: BitSet,
+    /// Leaves next to ones whose vertices moved: only their vertices beside
+    /// those need their normals again (see normals.rs).
+    pending_rims: BitSet,
+    /// The leaves the last normals flush went over, kept for the next.
+    flush_leaves: Vec<u32>,
     dirty_pos: BitSet,
     dirty_nrm: BitSet,
     dirty_mask: BitSet,
@@ -289,6 +295,8 @@ impl Mesh {
             touched: Vec::new(),
             stroke_leaves: BitSet::with_len(leaf_count),
             pending_normals: BitSet::with_len(leaf_count),
+            pending_rims: BitSet::with_len(leaf_count),
+            flush_leaves: Vec::new(),
             dirty_pos: BitSet::with_len(leaf_count),
             dirty_nrm: BitSet::with_len(leaf_count),
             dirty_mask: BitSet::with_len(leaf_count),
@@ -395,12 +403,8 @@ impl Mesh {
         // orders; float sums here seed symmetry drift over a long session.
         let mut sum = DVec3::ZERO;
         for &t in tris {
-            let i = t as usize * 3;
-            let p0 = positions[indices[i] as usize].as_dvec3();
-            let p1 = positions[indices[i + 1] as usize].as_dvec3();
-            let p2 = positions[indices[i + 2] as usize].as_dvec3();
             // Cross product length is twice the area, so this is area weighted.
-            sum += (p1 - p0).cross(p2 - p0);
+            sum += normals::face(positions, indices, t);
         }
         let len = sum.length();
         if len > 1e-30 { (sum / len).as_vec3() } else { fallback }
@@ -414,6 +418,7 @@ impl Mesh {
             *n = Self::vertex_normal(positions, indices, vt.row(v), *n);
         });
         self.pending_normals.clear();
+        self.pending_rims.clear();
         let leaves = self.bvh.leaves.len();
         self.dirty_pos.set_all(leaves);
         self.dirty_nrm.set_all(leaves);
@@ -828,10 +833,12 @@ impl Mesh {
             }
         }
         // A moved vertex also changes the normals of neighbours owned by
-        // adjacent leaves.
+        // adjacent leaves. Dynamic topology adds leaves without telling this
+        // set, so it makes room for them itself.
+        self.pending_rims.grow(self.bvh.leaves.len());
         for &l in leaves {
             for &o in self.bvh.leaf_neighbours(l) {
-                self.pending_normals.set(o as usize);
+                self.pending_rims.set(o as usize);
             }
         }
     }
@@ -862,41 +869,6 @@ impl Mesh {
         let mut out = Vec::new();
         set.for_each(|l| out.push(l as u32));
         out
-    }
-
-    /// Recomputes normals for everything that moved since the last call.
-    pub fn flush_normals(&mut self) {
-        if !self.pending_normals.any() {
-            return;
-        }
-        let mut leaves = Vec::new();
-        self.pending_normals.for_each(|l| leaves.push(l as u32));
-        self.pending_normals.clear();
-        {
-            let positions = &self.positions;
-            let indices = &self.indices;
-            let vt = &self.vt;
-            let bvh = &self.bvh;
-            let out = SharedMut::new(&mut self.normals);
-            leaves.par_iter().with_min_len(32).for_each(|&l| {
-                let leaf = &bvh.leaves[l as usize];
-                for v in leaf.vert_start as usize..leaf.vert_end as usize {
-                    let tris = vt.row(v);
-                    // SAFETY: every leaf owns a disjoint vertex range, so each
-                    // normal is read and written by exactly one task.
-                    unsafe {
-                        let old = out.read(v);
-                        out.write(v, Self::vertex_normal(positions, indices, tris, old));
-                    }
-                }
-            });
-        }
-        for &l in &leaves {
-            self.dirty_nrm.set(l as usize);
-        }
-        if self.curv_on {
-            self.update_curvature(&leaves);
-        }
     }
 
     fn ranges(&self, set: &BitSet) -> Vec<Range<u32>> {
