@@ -22,6 +22,7 @@ mod masking;
 mod mirror_copies;
 mod modes;
 mod overlay;
+mod paint;
 mod panels;
 mod pose;
 pub mod question;
@@ -288,7 +289,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
         for row in Brush::ALL.chunks(PER_ROW) {
             ui.horizontal(|ui| {
                 for &b in row {
-                    // The thirteen base brushes; the rest are in the card below.
+                    // The fourteen base brushes; the rest are in the card below.
                     let base = crate::sculpt::library::Library::base(b);
                     let active = (base == in_hand && !s.mask_mode).then_some(ACCENT());
                     // A brush with no number key has no badge.
@@ -348,12 +349,16 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
         brush_size::slider(ui, s, tips);
         let strength = if brush == Brush::Move && !s.mask_mode {
             "How far the surface follows the pen: at 100% it stays under it, lower is a gentler pull. Hold F and drag."
+        } else if brush == Brush::Paint && !s.mask_mode {
+            "Flow: how much of the Opacity each dab of paint lays. Low builds paint up softly as you go over a place.              Hold F and drag."
         } else {
             "How hard the brush works. Hold F and drag."
         };
+        // The Paint brush's Strength is its Flow (sculpt/paint.rs).
+        let label = if brush == Brush::Paint && !s.mask_mode { "Flow" } else { "Strength" };
         let bs = s.current_mut();
         tip(
-            theme::slider(ui, "Strength", &mut bs.strength, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)),
+            theme::slider(ui, label, &mut bs.strength, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)),
             tips,
             strength,
         );
@@ -425,6 +430,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
             Brush::Pinch => theme::hint(ui, "Draws the surface in to the line of the stroke. Ctrl or the right button spreads it apart."),
             Brush::Nudge => theme::hint(ui, "Strength is how far the surface follows the pen: at 100% what is under the middle of the ring stays under it."),
             Brush::EraseLayer => brushes::erase_layer_note(ui, &doc.mesh),
+            Brush::Paint => paint::brush_settings(ui, &mut s.paint, &doc.opts.paint, &doc.mesh, &mut doc.opts.tabs, tips, actions),
             Brush::Layer => {
                 theme::slider(ui, "Layer Height", &mut s.layer_height, 0.02..=1.0, |v| format!("{v:.2}"));
             }
@@ -499,6 +505,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     });
     levels::card(ui, doc, actions);
     layers::card(ui, doc, &state.assets, actions);
+    paint::card(ui, doc, &state.assets, actions);
     groups::card(ui, doc, actions);
 
     theme::category(ui, "Masking", theme::MASK, "", false, |ui| {
@@ -519,6 +526,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             });
         }
         masking::by_shape(ui, tips, actions);
+        paint::masking(ui, doc, tips, actions);
     });
 
     // Faces switched off on the selected object (the box and lasso hide tools).

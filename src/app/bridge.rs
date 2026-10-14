@@ -575,6 +575,7 @@ impl Running {
                 "offset": round(s.pose.offset),
                 "rigidity": round(s.pose.rigidity),
             },
+            "paint": super::paint::settings_of(&s.paint, self.doc.paint_slot()),
         });
         // The brush as one of the library's: its own name, the rest of its
         // record, and the names there are to pick from.
@@ -619,6 +620,7 @@ impl Running {
                     "symmetry": doc.scene.symmetry(o.id).summary(),
                     "levels": super::levels::state_of(mesh),
                     "layers": super::layers::state_of(mesh),
+                    "paint_layers": super::paint::state_of(mesh),
                     "groups": super::groups::state_of(&doc.scene, &doc.opts.groups, o, mesh),
                     "on_screen": if o.visible { self.on_screen(bounds) } else { Value::Null },
                 })
@@ -826,6 +828,13 @@ impl Running {
         if let Some(why) = self.doc.layer_stroke_refusal().or_else(|| self.doc.erase_refusal(smooth)) {
             return Err(why);
         }
+        // The Paint brush in Sample mode picks paint up at the first point: a click, not a stroke.
+        let s = &self.doc.sculptor.settings;
+        if s.brush == crate::sculpt::Brush::Paint && !s.mask_mode && !smooth && s.paint.mode == crate::sculpt::paint::PaintMode::Sample {
+            return self.paint_pick(samples[0].0);
+        }
+        // And a Paint stroke needs a layer to paint on, which is made if there is none (app/paint.rs).
+        let made = self.doc.paint_prepare(smooth)?;
         // And if it adds triangles, it is checked for holes.
         self.stroke_baseline(smooth);
         let doc = &mut self.doc;
@@ -851,11 +860,12 @@ impl Running {
         };
         let dabs = doc.sculptor.dabs_applied - dabs_before;
         self.stroke_check();
+        let made = made.map_or_else(String::new, |text| format!(" {text}"));
         Ok(if changed && dabs == 0 {
             // Move and Pose take hold once and are dragged: they lay no dabs.
             format!("{what} drag made. One undo step.")
         } else if changed {
-            format!("{what} stroke drawn ({dabs} dabs). One undo step.")
+            format!("{what} stroke drawn ({dabs} dabs). One undo step.{made}")
         } else {
             format!("{what} stroke drawn, but it changed nothing. Check the strength, the mask and the radius.")
         })
@@ -981,6 +991,7 @@ impl Running {
                 let own = self.levels_command(other, args).or_else(|| self.layers_command(other, args));
                 let own = own.or_else(|| self.groups_command(other, args));
                 let own = own.or_else(|| self.materials_command(other, args));
+                let own = own.or_else(|| self.paint_command(other, args));
                 // A scripted run's stroke drawn by hand answers for its two (app/ui_demo/hand.rs).
                 let own = own.or_else(|| self.hand_demo_command(other));
                 return own.unwrap_or_else(|| Err(format!("There is no command \"{name}\".")));

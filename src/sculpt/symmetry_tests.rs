@@ -14,6 +14,7 @@
 
 mod erase_layer;
 mod layer_corner;
+mod paint;
 
 use glam::{Vec2, Vec3};
 use sculpt_geom::{SymmetryGroup, SymmetryOp};
@@ -1222,8 +1223,9 @@ fn every_brush_stays_symmetric_under_radial_symmetry() {
         let partners = ball.partners_under(&symmetry.group());
         for from_axis in [0.6, 6.0] {
             let points = stroke_points(from_axis * BRUSH_RADIUS, STROKE_FRAMES);
-            // (Erase Layer needs a layer to rub out: its strokes are in `erase_layer.rs`.)
-            for brush in Brush::ALL.into_iter().filter(|&brush| brush != Brush::EraseLayer) {
+            // (Erase Layer needs a layer to rub out: its strokes are in `erase_layer.rs`. Paint moves nothing:
+            // its strokes are in `paint.rs`.)
+            for brush in Brush::ALL.into_iter().filter(|&brush| !matches!(brush, Brush::EraseLayer | Brush::Paint)) {
                 let mut sculptor = sculptor_with(brush);
                 symmetry.set(&mut sculptor.settings);
                 let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);

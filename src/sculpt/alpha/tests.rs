@@ -352,9 +352,10 @@ fn height(p: Vec3) -> f32 {
 
 /// The brushes that print an alpha on a plain ball. Erase Layer takes one
 /// too, and does nothing without a sculpt layer to rub out: what it does
-/// through a picture is in `erase/tests.rs`.
+/// through a picture is in `erase/tests.rs`. Paint paints through one and
+/// moves nothing: that is in `paint/tests.rs`.
 fn printers() -> impl Iterator<Item = Brush> {
-    Brush::ALL.into_iter().filter(|&brush| brush.takes_alpha() && brush != Brush::EraseLayer)
+    Brush::ALL.into_iter().filter(|&brush| brush.takes_alpha() && !matches!(brush, Brush::EraseLayer | Brush::Paint))
 }
 
 #[test]
@@ -382,7 +383,7 @@ fn with_no_alpha_or_a_blank_white_one_a_stroke_is_the_same_to_the_bit() {
 
 #[test]
 fn every_brush_that_takes_an_alpha_prints_it_and_the_others_do_not() {
-    for brush in Brush::ALL.into_iter().filter(|&brush| brush != Brush::EraseLayer) {
+    for brush in Brush::ALL.into_iter().filter(|&brush| !matches!(brush, Brush::EraseLayer | Brush::Paint)) {
         let stroke = |alpha: AlphaSettings| {
             let mut mesh = sphere(60_000);
             let view = view_of(&mesh);

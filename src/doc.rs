@@ -239,6 +239,51 @@ pub enum LayerAction {
     BakeAll,
 }
 
+/// What the Paint Layers card, the Paint card and the Masking card's paint
+/// commands can ask for (see app/paint.rs). A layer is named by its number
+/// (`mesh::paint::PaintRow::id`), which no other layer of the mesh ever has.
+/// Each is one undo step.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaintAction {
+    /// A new, empty layer above the active one, and active.
+    New,
+    Delete(u32),
+    Rename(u32, String),
+    /// Strokes and fills go to this layer from now on.
+    Select(u32),
+    /// Move the layer to this place in the stack, counted from the bottom.
+    Move(u32, usize),
+    Duplicate(u32),
+    MergeDown(u32),
+    FlattenAll,
+    /// The layer's settings as the card has them now: the eye, the lock,
+    /// the blend modes, the channel toggles, the mask source.
+    Row(crate::mesh::paint::PaintRow),
+    /// The Opacity slider is held at this. Sent every frame it is held; the
+    /// whole drag is one undo step, closed by `OpacityDone`.
+    Opacity(u32, u8),
+    OpacityDone,
+    /// Fill the active layer with the Paint card's colour (`colour`) and the
+    /// scene's material to paint with (`material`), over `area`.
+    Fill { area: crate::mesh::paint::FillArea, colour: bool, material: bool },
+    /// Fill over the face group picked on the model (the Face Groups card).
+    FillPickedGroup { colour: bool, material: bool },
+    /// Empty the layer of its paint.
+    Clear(u32),
+    /// Take the layer's cavity snapshot again from the surface as it is.
+    RecomputeCavity(u32),
+    /// Mask the layer by the face group picked on the model.
+    MaskByPickedGroup(u32),
+    /// The eyedropper at this window position, in pixels.
+    PickAt(glam::Vec2),
+    /// Masking card: mask where the paint is near the Paint card's colour.
+    MaskByColour,
+    /// Masking card: mask where the scene's material to paint with is painted.
+    MaskByMaterial,
+    /// Masking card: mask where the active layer has paint.
+    MaskByLayer,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Undo,
@@ -328,6 +373,9 @@ pub enum Action {
     /// A command of the Face Groups card, for the active object's face
     /// groups (see app/groups.rs).
     Groups(crate::ui::groups::Ask),
+    /// A command of the Paint Layers card or the Paint card, for the active
+    /// object's paint (see app/paint.rs).
+    Paint(PaintAction),
     /// Cut the active object at one of its own planes and rebuild the other
     /// side as the mirror image of the side kept: the positive side when
     /// `from_positive` (see app/cut_mirror.rs).

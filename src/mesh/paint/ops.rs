@@ -417,17 +417,41 @@ impl Mesh {
         Ok(step)
     }
 
-    /// Changes layer `id`'s settings to `row` (its number must stay).
+    /// Changes layer `id`'s settings to `row` (its number must stay). A
+    /// layer given a Cavity mask with no cavity snapshot yet takes one from
+    /// the surface as it is, in the same step: a mask of nothing would hide it.
     pub fn set_paint_row(&mut self, row: PaintRow) -> Result<PaintStep, PaintRefusal> {
-        let (_, step) = self.paint_change(&[], false, |stack, _| {
+        let snapshot = row.mask == MaskSource::Cavity
+            && self.paint.as_ref().and_then(|p| p.stack.layer(row.id)).is_some_and(|l| l.data.cavity.is_none());
+        let cavity = snapshot.then(|| self.cavity_now());
+        let changing = if snapshot { vec![row.id] } else { Vec::new() };
+        let (_, step) = self.paint_change(&changing, false, |stack, _| {
             let layer = stack.layer_mut(row.id).ok_or(PaintRefusal::NoLayer)?;
             if layer.row == row {
                 return Err(PaintRefusal::Unchanged);
             }
             layer.row = row;
+            if let Some(cavity) = cavity {
+                layer.data.cavity = Some(cavity);
+            }
             Ok(())
         })?;
         Ok(step)
+    }
+
+    /// Shows layer `row.id` with the settings `row` while a slider is held,
+    /// with no undo step: the card's Opacity slider. When it is let go the
+    /// row is put back as it was and set once more through
+    /// [`Self::set_paint_row`], which makes the drag one step. Gives back
+    /// whether there is such a layer.
+    pub fn preview_paint_row(&mut self, row: PaintRow) -> bool {
+        let Some(paint) = self.paint.as_mut() else { return false };
+        let Some(layer) = paint.stack.layer_mut(row.id) else { return false };
+        if layer.row != row {
+            layer.row = row;
+            paint.live.all = true;
+        }
+        true
     }
 
     /// Makes layer `id` the one strokes and fills go to.

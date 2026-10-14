@@ -5,7 +5,7 @@
 //! Clay Buildup, Dam Standard and Trim Dynamic are each a kernel with a
 //! falloff, an alpha, a spacing, a pressure mapping and a few numbers. Here
 //! a brush is a [`Record`] of exactly that, and the library holds any number
-//! of them over the thirteen kernels: the thirteen the kernels start as (the
+//! of them over the fourteen kernels: the fourteen the kernels start as (the
 //! base brushes, which keep the number keys and cannot be deleted), the ones
 //! that ship with the app (`shipped.rs`) and the user's own.
 //!
@@ -92,7 +92,7 @@ impl Numbers {
             Brush::Move => self.move_connected = from.move_connected,
             Brush::Pose => self.pose = from.pose,
             Brush::Smooth | Brush::Inflate | Brush::Standard | Brush::SnakeHook | Brush::Pinch | Brush::Nudge => {}
-            Brush::EraseLayer => {}
+            Brush::EraseLayer | Brush::Paint => {}
         }
         self
     }
@@ -201,7 +201,7 @@ fn settings_in_range(mut b: BrushSettings) -> BrushSettings {
 /// Where a brush came from, which says what may be done with it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Origin {
-    /// One of the thirteen the kernels start as. It has the kernel's name and
+    /// One of the fourteen the kernels start as. It has the kernel's name and
     /// number key, and can be neither renamed nor deleted.
     Base,
     /// One that ships with the app. It can be deleted, and Reset puts it
@@ -475,13 +475,13 @@ impl Library {
         Ok(())
     }
 
-    /// Deletes brush `i`: any but the thirteen base brushes. If it was in
+    /// Deletes brush `i`: any but the fourteen base brushes. If it was in
     /// hand, or live, or the one Shift uses, its kernel's base brush takes
     /// its place.
     pub fn delete(&mut self, i: usize, s: &mut Settings) -> Result<(), String> {
         let entry = self.entries.get(i).ok_or("There is no such brush.")?;
         if entry.origin == Origin::Base {
-            return Err(format!("{} is one of the thirteen base brushes, which stay.", entry.name));
+            return Err(format!("{} is one of the fourteen base brushes, which stay.", entry.name));
         }
         let (kernel, in_hand) = (entry.kernel, self.selected(s) == i);
         if self.is_live(i) {

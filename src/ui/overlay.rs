@@ -300,7 +300,7 @@ pub fn brush_wheel_tile(library: &Library, brush: usize) -> Option<Vec2> {
 
 /// What a tile of the brush wheel shows for a brush of the library, or for
 /// the mask tile: its name, its icon and, for a brush that is not one of
-/// the base thirteen, its initials for the corner (the icon is its kernel's,
+/// the base fourteen, its initials for the corner (the icon is its kernel's,
 /// which it shares).
 fn brush_tile(library: &Library, tile: Option<usize>) -> (&str, &'static str, String) {
     let Some(entry) = tile.and_then(|i| library.entries().get(i)) else { return ("Mask", "brush_mask", String::new()) };
@@ -725,7 +725,7 @@ mod tests {
         assert!(!pressed && !released && value == 1.0);
     }
 
-    /// Every base brush but Erase Layer starts on the wheel once, with the
+    /// Every base brush but Erase Layer and Paint starts on the wheel once, with the
     /// mask tile, Move at the top; and however many tiles a wheel has, no two of them
     /// overlap, each is picked from its own middle only, and all of it is
     /// inside the wheel's own square.
@@ -733,7 +733,8 @@ mod tests {
     fn the_brush_wheel_has_room_for_every_brush_however_many_there_are() {
         let library = Library::default();
         let tiles = wheel_tiles(&library);
-        assert_eq!(tiles.len(), Brush::ALL.len());
+        // The base brushes but two, and the mask tile.
+        assert_eq!(tiles.len(), Brush::ALL.len() - 1);
         assert_eq!(tiles[0], Some(Library::base(Brush::Move)));
         assert_eq!(tiles.iter().filter(|tile| tile.is_none()).count(), 1);
         for brush in Brush::ALL {

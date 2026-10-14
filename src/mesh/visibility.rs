@@ -682,8 +682,9 @@ mod tests {
         let centre = SIZE * 0.5;
         let points: Vec<Vec2> =
             (0..=40).map(|i| centre + Vec2::new(14.0, -90.0 + 180.0 * i as f32 / 40.0)).collect();
-        // (Not Erase Layer: it does nothing without a sculpt layer, and `sculpt/erase/tests.rs` has it on hidden faces.)
-        let sculpting = Brush::ALL.into_iter().filter(|&b| b != Brush::EraseLayer);
+        // (Not Erase Layer: it does nothing without a sculpt layer, and `sculpt/erase/tests.rs` has it on hidden faces.
+        // Nor Paint, which moves nothing: `sculpt/paint/tests.rs` has it on hidden faces.)
+        let sculpting = Brush::ALL.into_iter().filter(|&b| !matches!(b, Brush::EraseLayer | Brush::Paint));
         for (brush, mask_mode) in sculpting.map(|b| (b, false)).chain([(Brush::Standard, true)]) {
             let mut mesh = sphere(80_000);
             let view = view_of(&mesh);

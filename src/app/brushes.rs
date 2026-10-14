@@ -18,7 +18,7 @@ use crate::sculpt::library::{Ask, Library, Origin};
 
 impl Running {
     /// Puts back the brushes a settings file remembers, in the one order
-    /// that works. The file's brush settings are the thirteen base brushes',
+    /// that works. The file's brush settings are the fourteen base brushes',
     /// so the base brushes are made the live ones before those settings are
     /// laid in the working sets (at start-up they already are; a settings
     /// file read later must not land on whatever brush is in hand). Then
@@ -126,7 +126,7 @@ impl Running {
         let sculptor = &mut self.doc.sculptor;
         let entry = sculptor.library.entries().get(i).ok_or("There is no such brush.")?;
         if entry.origin == Origin::Base {
-            return Err(format!("{} is one of the thirteen base brushes, which stay.", entry.name));
+            return Err(format!("{} is one of the fourteen base brushes, which stay.", entry.name));
         }
         let (name, shipped) = (entry.name.clone(), entry.origin == Origin::Shipped);
         let aside = self.files.brushes.set_aside(&sculptor.library, i, &sculptor.settings);

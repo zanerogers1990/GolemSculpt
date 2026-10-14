@@ -129,6 +129,9 @@ pub struct Params {
     /// Erase Layer: the sculpt layer the stroke rubs out, if there is one
     /// for it to (`erase.rs`).
     pub erase: Option<Erased>,
+    /// The Paint brush: what its stroke lays (`paint.rs`). `None` for every
+    /// other brush, and for mask painting.
+    pub paint: Option<super::paint::PaintDab>,
 }
 
 #[derive(Clone, Copy)]
@@ -184,7 +187,9 @@ impl Params {
     /// Whether the stroke is one print of the brush's alpha, placed by
     /// dragging (see `alpha::Print`), and not a run of dabs.
     pub fn prints(&self) -> bool {
-        !self.mask && self.alpha.is_some_and(|stamp| stamp.drags())
+        // Paint lays its alpha dab by dab; a print dragged out and made again at each new size would only ever
+        // add paint, never take back what a smaller print would not have covered.
+        !self.mask && self.brush != Brush::Paint && self.alpha.is_some_and(|stamp| stamp.drags())
     }
 
     /// The weight the brush's alpha gives a vertex `rel` from the centre of
@@ -512,6 +517,8 @@ pub struct Scratch {
     /// (`Sculptor::apply_symmetric`): what they have done to each vertex
     /// between them.
     pub(super) shared: Vec<Shared>,
+    /// What a dab of the Paint brush fills (`paint.rs`).
+    pub(super) paint: super::paint::Buffers,
 }
 
 /// Totals `add` over every vertex owned by `leaves` that is not hidden. The
@@ -583,6 +590,10 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
     if p.mask {
         return mask_paint(mesh, p, d, leaves);
     }
+    if p.brush == Brush::Paint {
+        // One copy of a Paint or Erase dab; it moves nothing. Blur and Smear lay every copy at once (paint.rs).
+        return super::paint::lay(mesh, p, d, leaves, scratch);
+    }
     if p.brush == Brush::EraseLayer {
         // Before the print below, which raises the surface: this brush's own print takes away.
         return erase::dab(mesh, p, d, leaves, scratch);
@@ -602,8 +613,8 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
         Brush::Pinch => pinch(mesh, p, d, leaves),
         Brush::Nudge => nudge(mesh, p, d, leaves, fit),
         // Move and Pose take hold once at the press and are dragged, not
-        // dabbed. Erase Layer was seen to above.
-        Brush::Move | Brush::Pose | Brush::EraseLayer => {}
+        // dabbed. Erase Layer and Paint were seen to above.
+        Brush::Move | Brush::Pose | Brush::EraseLayer | Brush::Paint => {}
     }
 }
 

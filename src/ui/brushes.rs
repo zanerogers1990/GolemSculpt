@@ -1,5 +1,5 @@
 //! The brush library in the interface: the Brush Library card (every brush
-//! beyond the base thirteen as a named row, and what can be done with the one
+//! beyond the base fourteen as a named row, and what can be done with the one
 //! in hand) and which brushes the hold-Space wheel shows.
 //!
 //! A brush is told from the others over its kernel without a picture of its
@@ -62,10 +62,11 @@ fn noted(response: egui::Response, name: &str) -> egui::Response {
 }
 
 /// The base brushes round the wheel, clockwise from the top: kin beside kin.
-/// (Erase Layer has a place for when it is pinned; it starts off the wheel.)
+/// (Erase Layer and Paint have places for when they are pinned; they start
+/// off the wheel.)
 const WHEEL_ORDER: [Brush; Brush::COUNT] = {
     use Brush::*;
-    [Move, Clay, Standard, Layer, Smooth, Crease, Pinch, Inflate, Flatten, Pose, SnakeHook, Nudge, EraseLayer]
+    [Move, Clay, Standard, Layer, Smooth, Crease, Pinch, Inflate, Flatten, Pose, SnakeHook, Nudge, EraseLayer, Paint]
 };
 
 /// The tiles of the brush wheel, clockwise from the top: every pinned brush
@@ -264,7 +265,7 @@ fn manage(ui: &mut Ui, library: &Library, i: usize, tips: bool, actions: &mut Ve
             actions.push(ask(Ask::Reset(i)));
         }
         let base = entry.origin == Origin::Base;
-        let text = if base { "The thirteen base brushes stay." } else { "Take this brush out of the library." };
+        let text = if base { "The fourteen base brushes stay." } else { "Take this brush out of the library." };
         let delete = ui.add_enabled_ui(!base, |ui| theme::button(ui, w, "Delete", ButtonStyle::default())).inner;
         if theme::tip(noted(delete, "Delete"), tips, text).clicked() && !base {
             actions.push(ask(Ask::Delete(i)));
@@ -350,7 +351,7 @@ mod tests {
         let name = |library: &Library, tile: Option<usize>| tile.map_or("Mask".to_owned(), |i| library.entries()[i].name.clone());
         let names = |library: &Library| wheel_tiles(library).into_iter().map(|tile| name(library, tile)).collect::<Vec<_>>();
         // The wheel of before there was a library: the twelve of then and
-        // the mask. Erase Layer, the thirteenth, starts off it.
+        // the mask. Erase Layer and Paint, the last two, start off it.
         let was = ["Move", "Clay", "Standard", "Layer", "Smooth", "Crease", "Pinch", "Mask", "Inflate", "Flatten", "Pose", "Snake Hook", "Nudge"];
         assert_eq!(names(&library), was);
 

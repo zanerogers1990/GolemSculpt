@@ -20,7 +20,7 @@
 //! naming no kernel) is skipped and said so, and is never written over.
 //!
 //! What goes where:
-//!  - the thirteen base brushes stay in `settings.json`, exactly as before
+//!  - the fourteen base brushes stay in `settings.json`, exactly as before
 //!    there was a library, so a settings file of any age still means what
 //!    it meant ([`Kept`] is the little the library adds to it);
 //!  - a brush of the user's own has a file here;

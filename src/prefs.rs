@@ -342,6 +342,9 @@ pub struct BrushPrefs {
     pub lazy_radius: f32,
     pub lazy_strength: f32,
     pub build_up_on_hold: bool,
+    /// The Paint brush's colour, swatches, mode and channels. A file from
+    /// before there was one gives the brush as it starts.
+    pub paint: crate::sculpt::paint::PaintKept,
 }
 
 impl Default for BrushPrefs {
@@ -396,6 +399,7 @@ impl BrushPrefs {
             lazy_radius: s.lazy_radius,
             lazy_strength: s.lazy_strength,
             build_up_on_hold: s.build_up_on_hold,
+            paint: crate::sculpt::paint::PaintKept::of(&s.paint),
         }
     }
 
@@ -478,6 +482,7 @@ impl BrushPrefs {
         s.lazy_radius = fit(self.lazy_radius, 1.0, 150.0, d.lazy_radius);
         s.lazy_strength = fit(self.lazy_strength, 0.05, 1.0, d.lazy_strength);
         s.build_up_on_hold = self.build_up_on_hold;
+        self.paint.apply(&mut s.paint);
     }
 }
 
@@ -509,7 +514,7 @@ pub struct Prefs {
     /// the left and top of each one's window, in the interface's points. A
     /// card that is not here is in its panel (see `sculpt_toolkit::floating`).
     pub floating_cards: BTreeMap<String, [f32; 2]>,
-    /// The thirteen base brushes' settings, and what every brush shares.
+    /// The fourteen base brushes' settings, and what every brush shares.
     pub brush: BrushPrefs,
     /// The brush library: which brush is in hand, which one Shift uses, the
     /// pins and the shipped brushes deleted. The user's own brushes are
@@ -646,6 +651,14 @@ pub mod cards {
         notes(ctx, |n| {
             n.states = remembered.clone();
             n.waiting = remembered.clone();
+        });
+    }
+
+    /// Opens the card titled `title` the next time it is drawn: what a
+    /// button that sends the sculptor to another card does.
+    pub fn open(ctx: &egui::Context, title: &str) {
+        notes(ctx, |n| {
+            n.waiting.insert(title.to_owned(), true);
         });
     }
 
@@ -984,7 +997,7 @@ mod tests {
             assert!(brush.remove(key).is_some(), "{key} is in the file");
         }
         // Nor about the brushes added after it.
-        for later in ["Pose", "Pinch", "Nudge", "Erase Layer"] {
+        for later in ["Pose", "Pinch", "Nudge", "Erase Layer", "Paint"] {
             assert!(brush["brushes"].as_object_mut().unwrap().remove(later).is_some());
         }
         brush["brush"] = "Snake Hook".into();

@@ -221,11 +221,12 @@ impl AlphaSettings {
 impl Brush {
     /// Whether this brush can print an alpha: the ones that lay material
     /// down or take it away under the ring, Erase Layer among them (it rubs
-    /// a layer out through the picture). The others move what is there
+    /// a layer out through the picture), and Paint (it paints through it, a
+    /// stencil). The others move what is there
     /// (Move, Snake Hook, Pose), even it out (Smooth, Flatten) or cut a line
     /// (Crease), and have no use for a picture.
     pub fn takes_alpha(self) -> bool {
-        matches!(self, Brush::Standard | Brush::Clay | Brush::Inflate | Brush::Layer | Brush::EraseLayer)
+        matches!(self, Brush::Standard | Brush::Clay | Brush::Inflate | Brush::Layer | Brush::EraseLayer | Brush::Paint)
     }
 }
 

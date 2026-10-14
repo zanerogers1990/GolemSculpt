@@ -264,7 +264,7 @@ impl Running {
             scene_tab: opts.tabs.scene.name().to_owned(),
             theme: crate::ui::theme::THEMES[opts.theme.min(crate::ui::theme::THEMES.len() - 1)].name.to_owned(),
             floating_cards: sculpt_toolkit::floating::snapshot(&self.egui_ctx),
-            // The file keeps the thirteen base brushes here, whichever
+            // The file keeps the fourteen base brushes here, whichever
             // brushes are in hand; the others are files of their own.
             brush: BrushPrefs::of(&library.base_image(settings)),
             library: crate::brush_files::Kept::of(library, settings),

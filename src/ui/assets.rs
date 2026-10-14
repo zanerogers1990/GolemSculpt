@@ -27,6 +27,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "brush_pinch",
     "brush_nudge",
     "brush_erase_layer",
+    "brush_paint",
     "brush_mask",
     "polarity_add",
     "polarity_sub",

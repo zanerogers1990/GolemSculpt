@@ -10,6 +10,10 @@
 //! - `broken`: the fourth one a custom material that does not compile, which
 //!   shows as its swatch while the status line says which line is wrong.
 //!
+//! And for the Paint brush (see app/paint_play.rs): `play` works the brush
+//! and the Paint Layers card with a line per check; `brush` and `layers` are
+//! a ball painted by real strokes with the brush's settings or the card open.
+//!
 //! It prints the status line, so a script can see what the app said.
 
 use super::Running;
@@ -22,6 +26,11 @@ const BROKEN_SIDECAR: &str = r#"{ "name": "Demo Broken", "swatch": [0.85, 0.25, 
 
 impl Running {
     pub(super) fn paint_demo(&mut self, what: &str) {
+        match what {
+            "play" => return self.paint_play(),
+            "brush" | "layers" => return self.paint_brush_picture(what),
+            _ => {}
+        }
         let mut names = ["Metal - Antique Gold", "Clay - Grey Plasteline", "Wood - Golden Oak", "Lure - Blue Flake"];
         if what == "custom" || what == "broken" {
             // A run for a picture writes nothing beside its settings by

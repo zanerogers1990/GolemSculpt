@@ -47,14 +47,15 @@ fn scribble(s: &mut Settings, salt: f32) {
 }
 
 #[test]
-fn the_library_starts_as_the_thirteen_base_brushes_then_the_shipped_ones() {
+fn the_library_starts_as_the_fourteen_base_brushes_then_the_shipped_ones() {
     let library = Library::default();
     let s = Settings::default();
     for (i, kernel) in Brush::ALL.into_iter().enumerate() {
         let entry = &library.entries()[i];
         assert_eq!((entry.name.as_str(), entry.kernel, entry.origin), (kernel.name(), kernel, Origin::Base));
-        // All but Erase Layer, which is pinned by whoever wants it there.
-        assert_eq!(entry.pinned, kernel != Brush::EraseLayer, "{}: the base brushes start on the wheel", entry.name);
+        // All but Erase Layer and Paint, which are pinned by whoever wants them there.
+        assert_eq!(entry.pinned, kernel.starts_on_wheel(), "{}: the base brushes start on the wheel", entry.name);
+        assert_eq!(kernel.starts_on_wheel(), !matches!(kernel, Brush::EraseLayer | Brush::Paint));
         assert!(library.record(i, &s) == Record::base(kernel), "{} starts as its kernel does", entry.name);
     }
     let shipped = &library.entries()[Brush::COUNT..];
@@ -456,8 +457,8 @@ fn pins_are_each_brushs_own() {
     library.set_pinned(Library::base(Brush::Pose), false);
     assert!(library.entries()[rake].pinned && !library.entries()[Library::base(Brush::Pose)].pinned);
     let pinned = library.entries().iter().filter(|e| e.pinned).count();
-    // Every base brush but Erase Layer starts on the wheel.
-    assert_eq!(pinned, Brush::COUNT - 1, "one on, one off");
+    // Every base brush but Erase Layer and Paint starts on the wheel.
+    assert_eq!(pinned, Brush::COUNT - 2, "one on, one off");
 }
 
 #[test]
@@ -504,7 +505,7 @@ fn start_up_puts_back_the_brush_in_hand_the_shift_brush_the_pins_and_the_deletio
     let mut s = Settings { brush: Brush::Crease, mask_mode: true, ..Settings::default() };
     library.restore(&[], None, "", "", &mut s);
     assert_eq!((library.selected(&s), s.mask_mode), (Library::base(Brush::Crease), true));
-    assert_eq!(library.entries().iter().filter(|e| e.pinned).count(), Brush::COUNT - 1, "the starting pins");
+    assert_eq!(library.entries().iter().filter(|e| e.pinned).count(), Brush::COUNT - 2, "the starting pins");
     assert!(s.shift.is_none());
 }
 
@@ -566,6 +567,8 @@ fn every_shipped_brush_draws_and_stays_a_mirror_image_under_symmetry() {
         let ball = sphere(80_000);
         let rough = ball.positions.iter().map(|&p| p * (1.0 + 0.01 * (p.x.abs() * 60.0).sin() * (p.y * 60.0).sin())).collect();
         let mut mesh = Mesh::new(rough, ball.indices.clone(), None);
+        // A paint layer for a painting brush to paint on.
+        mesh.add_paint_layer(None).expect("a layer");
         let before = mesh.positions.clone();
         let twins = twins(&mesh);
         let view = view_of(&mesh);
@@ -579,6 +582,16 @@ fn every_shipped_brush_draws_and_stays_a_mirror_image_under_symmetry() {
         let mut path: Vec<Vec2> = (0..=40).map(|i| side.lerp(plane, i as f32 / 40.0)).collect();
         path.extend((1..=40).map(|i| plane.lerp(along, i as f32 / 40.0)));
         draw(&mut mesh, &mut sculptor, &view, &path, 4, Some(&|along| 0.3 + 0.7 * along));
+        if sculptor.settings.brush == Brush::Paint {
+            // A painting brush: the paint is its own mirror image, and nothing moved.
+            let stack = mesh.paint_stack().expect("paint").into_owned();
+            let data = &stack.layers[0].data;
+            let painted = (0..mesh.vertex_count()).filter(|&v| data.texel(v).colour.0[3] > 0).count();
+            let mirrored = twins.iter().enumerate().all(|(v, &t)| data.texel(v) == data.texel(t as usize));
+            println!("{name}: painted {painted}, mirrored {mirrored}");
+            assert!(painted > 200 && mirrored && mesh.positions == before, "{name}: painted {painted}, mirrored {mirrored}");
+            continue;
+        }
         let flip = Vec3::new(-1.0, 1.0, 1.0);
         let (mut worst, mut biggest) = (0.0f32, 0.0f32);
         for (v, &t) in twins.iter().enumerate() {

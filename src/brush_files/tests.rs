@@ -470,6 +470,6 @@ fn the_settings_file_keeps_its_old_shape() {
     assert!(written["brush"]["alpha"].get("Clay").is_none(), "Clay Strips' alpha is not the base Clay's");
     assert_eq!(written["library"]["selected"], "Clay Strips");
     assert_eq!(written["library"]["shift"], "Smooth");
-    // Every base brush but Erase Layer, which starts off the wheel.
-    assert_eq!(written["library"]["pinned"].as_array().map(Vec::len), Some(Brush::COUNT - 1));
+    // Every base brush but Erase Layer and Paint, which start off the wheel.
+    assert_eq!(written["library"]["pinned"].as_array().map(Vec::len), Some(Brush::COUNT - 2));
 }

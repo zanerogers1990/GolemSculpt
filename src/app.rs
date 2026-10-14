@@ -54,7 +54,9 @@ mod levels;
 mod live_copies;
 mod mask_shape;
 mod materials;
+mod paint;
 mod paint_demo;
+mod paint_play;
 mod masked;
 mod mirror_copies;
 mod new_scene;
@@ -927,6 +929,10 @@ impl Running {
                 // A layer that records but does not show takes no stroke, and the status line says why.
                 // Nor does Erase Layer begin one with no layer to rub out.
                 let refused = on_active && (self.layer_refuses_stroke() || self.erase_refuses_stroke(mods.shift_key()));
+                // The Paint brush's Sample mode is the eyedropper: a click, no stroke. And a Paint stroke needs a
+                // layer to paint on, which is made if there is none (app/paint.rs).
+                let refused = refused || (on_active && self.paint_samples_press(pos, mods.shift_key()));
+                let refused = refused || (on_active && self.paint_refuses_stroke(mods.shift_key()));
                 if on_active && !refused {
                     self.stroke_baseline(mods.shift_key());
                 }
@@ -1080,6 +1086,9 @@ impl Running {
                 self.input.gauge =
                     Some(gauge(GaugeKind::Focal, self.doc.sculptor.settings.current().focal_shift));
             }
+            // P: the Paint brush, and again the brush before it. I: the eyedropper, at the pointer (app/paint.rs).
+            KeyCode::KeyP if idle && !ctrl => self.paint_key(),
+            KeyCode::KeyI if idle && !ctrl => self.act(Action::Paint(crate::doc::PaintAction::PickAt(self.input.pointer))),
             KeyCode::KeyM if idle => {
                 let s = &mut self.doc.sculptor.settings;
                 s.mask_mode = !s.mask_mode;
@@ -1217,6 +1226,8 @@ impl Running {
         self.redraw = true;
         // A Strength slider of the Layers card that is still held is let go first.
         self.layers_before(&action);
+        // And so is an Opacity slider of the Paint Layers card (app/paint.rs).
+        self.paint_before(&action);
         // And a deformation on the model is applied (app/deform.rs).
         self.deform_before(&action);
         // While the SSphere tool is up, Z steps its rig first.
@@ -1383,6 +1394,7 @@ impl Running {
             Action::DeleteLevels { lower } => self.delete_levels(lower),
             Action::Layer(action) => self.layer_act(action),
             Action::Groups(ask) => self.groups_act(ask),
+            Action::Paint(action) => self.paint_act(action),
             Action::Decimate => self.decimate_asking(),
             Action::DecimateAnyway => self.decimate_start(),
             Action::Mask(op) => {
@@ -1788,6 +1800,7 @@ impl Running {
         // Says so when something has just replaced a mesh that had subdivision levels or sculpt layers.
         self.levels_watch();
         self.layers_watch();
+        self.paint_watch();
         self.groups_watch();
         // The selected object's symmetry is the sculptor's: what the Pose
         // brush's preview goes by between strokes (a stroke asks again).

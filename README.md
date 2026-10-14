@@ -37,6 +37,9 @@ sculpts at full strength and full size).
 | / | Local View: only the selection, framed; again to bring the rest and the view back |
 | Delete | Delete the selected object (asks first) |
 | 1 2 3 4 5 6 7 8 9 0 | The base brushes Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook (Pinch, Nudge and Erase Layer have no key, nor has any other brush of the library: pick them in the panel or on the wheel) |
+| P | The Paint brush; again, the brush you had before it (see Polypaint) |
+| I | Eyedropper: pick up the colour and material of the paint under the pointer |
+| Ctrl + drag / Shift + drag with the Paint brush | Erase the paint / blur the paint (it never smooths the clay) |
 | S / F / D + drag | Brush size / strength / focal shift |
 | Space (hold) | Brush wheel: the brushes pinned to it, with the Strength of the brush in hand on a bar under it |
 | M | Mask painting |
@@ -75,7 +78,7 @@ back.
 
 ## Brushes
 
-There are any number of brushes: the thirteen base ones, the ones that come
+There are any number of brushes: the fourteen base ones, the ones that come
 with the app, and your own (see Brush library, below). Each keeps its own
 Strength, Focal Shift and falloff, its own spacing and pen settings (see
 Stroke and pen, below) and the rest of what is in its settings card; Size is
@@ -124,6 +127,9 @@ shared by them all.
   model underneath and the other layers are not touched. It works on the
   layer that is recording (see Sculpt layers, below, which has the rest).
   It has no number key and starts off the Space wheel.
+- **Paint** paints colour and materials on the model instead of sculpting
+  it: see Polypaint, below. P takes it up (and puts it down again), and it
+  starts off the Space wheel.
 
 **Smooth** (and Shift + drag with any brush, which is Smooth) has four modes
 and one slider:
@@ -158,13 +164,13 @@ and one slider:
 ### Brush library
 
 A brush here is what it is in ZBrush or Nomad: a name over a set of settings.
-Thirteen of them are the **base brushes** (Move, Clay, Smooth, Crease,
+Fourteen of them are the **base brushes** (Move, Clay, Smooth, Crease,
 Inflate, Flatten, Pose, Standard, Layer, Snake Hook, Pinch, Nudge, Erase
 Layer), one for each kind of stroke the app can make. Every other brush is one of those kinds with its
 own settings: Dam Standard is a Crease that tapers with the pen, Trim is a
 Flatten that only scrapes, Rake is a Standard with the Rake alpha.
 
-**Picking a brush.** The base thirteen are the tiles at the top of the Brush
+**Picking a brush.** The base fourteen are the tiles at the top of the Brush
 tab, with their number keys. The rest are in the **Brush Library** card under
 it, each a row with its kind's icon and its name: the ones that came with the
 app first, then **Yours**. Click a row and that brush is in hand; its name is
@@ -192,7 +198,7 @@ Hold, the pen's Pressure Curve, symmetry and dynamic topology.
   brushes that came with the app keep their names.
 - **Reset** puts the brush back as it came with the app or, for one of your
   own, as it was when you made it.
-- **Delete** takes it out of the library. The thirteen base brushes stay. A
+- **Delete** takes it out of the library. The fourteen base brushes stay. A
   brush of your own that is deleted is not destroyed: its file is moved to a
   `deleted` folder inside the brushes folder, and Import Brush brings it
   back. A deleted brush that came with the app comes back with **Restore
@@ -228,12 +234,13 @@ Hold, the pen's Pressure Curve, symmetry and dynamic topology.
 | Surface Noise | Standard | Roughens the surface with scattered, turned prints of a noise picture |
 | Scales | Layer | Press and drag out one print of scales |
 | Spread | Pinch | Pinch turned round: opens a crease up |
+| Airbrush | Paint | Soft, light mists of paint that build up as you go over a place: shading and blushes |
 
 Each was set up by drawing with it and looking, on a finely remeshed ball.
 They are starting points: change one and it stays changed, and Reset gives
 you the original back.
 
-**Where brushes are kept.** The thirteen base brushes are in the settings file,
+**Where brushes are kept.** The fourteen base brushes are in the settings file,
 as they always were, so settings from an older version come straight in as
 the base brushes' settings. Your own brushes are one small file each in
 `%APPDATA%\Sculpt\brushes` (plain JSON; the file Export Brush writes is the
@@ -2125,6 +2132,100 @@ does, and the warning says so. The count is quick, 5 to 8 ms for each million
 triangles (`crates/geom/src/edge_census.rs`); the wording is in
 `src/printable.rs`.
 
+## Polypaint
+
+Colour, and the materials of the Materials card, painted straight onto the
+model's surface, in layers, as in ZBrush's Polypaint or a painting program.
+Paint lives on the vertices like the mask, so a dense model holds as much
+paint detail as it holds form, and the paint goes wherever the clay goes:
+undo, a save, a remesh, a change of subdivision level, a join, a copy, Send
+to Blender.
+
+**The Paint brush** (P, or its tile in the Brushes card) paints on the paint
+layer that is lit on the Paint Layers card. On an object with no paint yet,
+the first stroke makes a layer, "Paint 1", and the line says so. It is a
+brush like the others: the ring, Focal Shift, the falloff curve, alphas (a
+stencil to paint through), Spacing, Scatter, Size Jitter, the pen's pressure,
+Lazy Mouse, Front Facing, Stay in Group, the mirrors and radial symmetry all
+work as they do for sculpting; masked surface takes no paint and hidden
+faces none. A stroke is one undo step. Painting never moves the surface or
+adds triangles, even with dynamic topology on.
+
+Its settings (Brush tab, the Brush Settings card):
+
+- **Flow** (the Strength slider, F + drag) is how much each dab lays, and
+  **Opacity** the most a stroke lays: going over a place again in the same
+  stroke builds up to the Opacity and never past it, so a 40% stroke
+  scrubbed back and forth is 40% everywhere. The pen's pressure lightens the
+  Flow as it lightens any brush's Strength.
+- **Paint**, **Erase**, **Blur**, **Smear**, **Sample**: Paint lays the colour;
+  Erase takes this layer's paint away (colour, material, roughness and
+  metallic alike); Blur softens it as Smooth softens clay; Smear picks up the
+  paint it passes over and drags it along, like a finger in wet paint; Sample
+  is the eyedropper: a click picks up the colour and material under it.
+  **Ctrl** swaps Paint and Erase for one stroke, and **Shift** blurs the paint
+  (with the Paint brush in hand Shift never smooths the clay). **I** picks up
+  the paint under the pointer at any time, whatever brush is in hand.
+- **Colour**: the colour well opens a picker; the row of swatches under it is
+  the colours painted with lately (click one to take it up again).
+- **Paints**: which of the layer's channels the brush writes: Colour,
+  Material, Roughness and Metallic (each of those two with the value it lays).
+  The material is the one picked on the Materials card (see Materials), shown
+  with its swatch; **None** paints colour only and leaves the materials under
+  it alone, and **Materials...** opens the card.
+- **Zadd (Colour + Sculpt)**: each dab also sculpts, with the brush chosen
+  under it (Standard, Clay, Layer, Inflate or Crease), at that brush's own
+  Strength and with the Paint brush's ring, falloff and alpha, so the paint
+  stands up off the surface. Ctrl paints out and digs in. The stroke is one
+  undo step for the paint and the shape together. The sculpting brush is a
+  choice of its own rather than the brush you had before: that would change
+  under your hand each time another brush was picked.
+- **Paint Layer Mask** (for a layer whose mask is Paintable): the brush paints
+  the layer's own mask instead of its paint: Paint hides the layer under the
+  brush, Ctrl brings it back.
+
+A shipped brush, **Airbrush**, paints soft, light mists that build up as you
+go over a place, for shading and blushes.
+
+**The Paint Layers card** (Mesh tab, under Layers) lists the selected
+object's paint layers, the top one first; a higher layer paints over the
+ones under it. A row has a grip to drag it up or down the stack, the dot that
+marks the layer the brush paints on (click another row to paint on it), the
+name (double-click to rename), the eye, the padlock (a locked layer takes no
+stroke, fill or clear), the bin, and its **Opacity** (one drag is one undo
+step). **New Layer**, **Duplicate**, **Merge Down** (the layer folded into the
+one under it, looking the same) and **Flatten All** (every layer that shows
+folded into one; hidden ones are dropped) are above the list. Under it are the
+settings of the layer being painted on:
+
+- **Blend**: how its colour lands on what is under it, by the names painting
+  programs use: Normal, Multiply, Screen, Overlay, Darken, Lighten, Hard
+  Light, Soft Light, Add, Subtract, Hue, Saturation and Colour.
+- **Material**: **Normal** lays its material over what is under it, by how
+  strongly it is painted; **Add** adds it, and the others give way only where
+  there is no room.
+- **Colour, Material, Rough, Metal**: which of its channels it shows.
+- **Shows**: where on the surface it shows: **Everywhere**; **Paintable** (its
+  own mask, painted with Paint Layer Mask); **Sculpt Mask** or **Not Masked**
+  (the sculpt mask, as it is now, so remasking moves the layer); **Cavity**
+  (the recesses of the surface, as they were when it was picked; **Recompute
+  Cavity** takes them again); or a **Face Group** (the one picked on the model
+  with Ctrl + Shift + click).
+- **Fill All**, **Fill Masked**, **Fill Unmasked**, **Fill Picked Group**: the
+  layer painted at once with the brush's colour and the material picked
+  (**Fill with** says which), over the whole layer, the masked surface, the
+  rest, or a face group. **Clear Layer** empties it. Each is one undo step.
+
+**Masking by paint** (the Masking card, Mesh tab, on an object with paint):
+**By Colour** masks where the paint is the Paint brush's colour, within
+**Colour Tolerance**; **By Material** where the material picked is painted;
+**By Layer** where the layer being painted on has paint. Each is an ordinary
+mask step, so Invert, Blur and the rest work on it.
+
+What leaves the app with the model: the paint as it shows goes into OBJ, PLY
+and FBX files, its materials into PLY and FBX, and every layer into Blender
+(see What each format carries of a painted model, under Files, and Blender).
+
 ## Look
 
 How the model is shaded is in three cards on the Scene panel's Look tab. The shaders and
@@ -2550,10 +2651,10 @@ Windows comes with).
 ## The wheel, the panels and their cards
 
 **The wheel shows the brushes pinned to it**, with Mask at the bottom. It
-starts with twelve of the base brushes (all but Erase Layer); **On the Space Wheel** in the Brush
+starts with twelve of the base brushes (all but Erase Layer and Paint); **On the Space Wheel** in the Brush
 Library card puts any other brush on it or takes one off, and the wheel makes
 room for however many there are. Brushes of one kind sit together. A brush
-that is not one of the base thirteen has its initials in the corner of its
+that is not one of the base fourteen has its initials in the corner of its
 tile, since it shares its kind's picture, and a long name is cut short on the
 tile and shown whole in the middle of the wheel when the pen is over it.
 
@@ -2717,7 +2818,8 @@ Ported from the Unity app, each described in its own section above:
   Decimate, Set Origin to Mesh, the buttons for Cut & Mirror, brush
   alphas with Drag to Place, the Pinch, Nudge and Erase Layer brushes and the brush
   library (named brushes, your own and the ones that ship) are this app's own,
-  as are subdivision levels, sculpt layers and face groups.
+  as are subdivision levels, sculpt layers, face groups and Polypaint (paint
+  layers, materials as paint, the Paint brush).
 - **Objects**: the scene graph (add shapes, show / hide, rename, clone,
   instance, reorder), join and the booleans, live mirror copies, and the
   transform gizmo and view gizmo.
@@ -2945,6 +3047,28 @@ And materials: `materials` lists the material library, the scene's palette
 by slot and the `active_material` painting lays; `paint_material` picks that
 by a library material's name (`material`, which joins the palette), by a
 palette `slot`, or `"none"` for colour only.
+
+And Polypaint: `set_brush` with `brush: "Paint"` (or `"Airbrush"`) and then
+`stroke` paints, making a paint layer first if the object has none (the reply
+says so). `command` `paint_settings` sets the Paint brush's `colour` (`[r, g,
+b]`, 0 to 255, or `"#rrggbb"`), `mode` (Paint, Erase, Blur, Smear, Sample),
+`opacity`, `channels` (`rgb`, `material`, `roughness`, `metallic`),
+`roughness` and `metallic` (the values laid, in percent), `zadd`,
+`zadd_brush`, `layer_mask` and `tolerance`, and answers with them all.
+`paint_layer` works the Paint Layers card: `do` is `new` (with
+`layer_name`), `delete`, `select`, `rename` (with `new_name`), `move` (with
+`to`, 1 for the top),
+`duplicate`, `merge_down`, `flatten`, `show`, `hide`, `lock`, `unlock`,
+`opacity` (with `percent`), `blend` (with `blend`, a mode's name),
+`material_blend` (with `blend`, normal or add), `channels`, `mask` (with
+`mask`: none, paintable, sculpt_mask, sculpt_mask_inverted, cavity, or
+face_group with `group`), `recompute_cavity`, `fill` (with `area`: all,
+masked, unmasked, or group with `group`; and `fill_colour` and
+`fill_material`, true or false) or `clear`, on the layer named by `layer` (its name or id) or the one
+painted on; it answers with the layers. `pick_paint` (with `x` and `y`) is the
+eyedropper, and `mask_by_colour`, `mask_by_material` and `mask_by_layer` are
+the Masking card's. `get_state` gives each object's `paint_layers`, top
+first, and the brush's `paint` settings.
 
 There are two halves. The app listens on `127.0.0.1:47823` (`src/app/bridge.rs`;
 this machine only, and only the first copy of the app if several are open).

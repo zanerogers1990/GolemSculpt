@@ -851,6 +851,10 @@ fn every_brush_kept_to_a_group_leaves_the_rest_of_the_model_alone() {
     // Every brush twice: on a plain mesh, and on one with a sculpt layer recording, which is
     // where a stroke is written down by another road and where Erase Layer has something to rub out.
     for ((brush, mask_mode), layered) in brushes().map(|b| (b, false)).chain(brushes().map(|b| (b, true))) {
+        // Paint moves nothing: it is held to its group in `sculpt/paint/tests.rs`.
+        if brush == Brush::Paint && !mask_mode {
+            continue;
+        }
         let kind = if mask_mode { "Mask" } else { brush.name() };
         let what = format!("{kind}{}", if layered { " on a layer" } else { "" });
         let dragged = matches!(kind, "Move" | "Snake Hook" | "Nudge" | "Pose");
@@ -905,8 +909,8 @@ fn every_brush_kept_to_a_group_leaves_the_rest_of_the_model_alone() {
             );
         }
     }
-    // Every brush and the mask on both meshes, less Erase Layer's one round out.
-    assert_eq!(checked, (Brush::ALL.len() + 1) * 2 - 1);
+    // Every brush and the mask on both meshes, less Erase Layer's one round out and Paint's two.
+    assert_eq!(checked, (Brush::ALL.len() + 1) * 2 - 3);
 }
 
 #[test]

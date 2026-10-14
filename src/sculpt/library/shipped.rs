@@ -1,4 +1,4 @@
-//! The brushes that ship with the app besides the thirteen base ones: the
+//! The brushes that ship with the app besides the fourteen base ones: the
 //! handful a sculptor reaches for by name in ZBrush or Nomad, each a record
 //! over one of the kernels.
 //!
@@ -37,7 +37,7 @@ const PLAIN: AlphaSettings = AlphaSettings {
     random_rotation: 0.0,
 };
 
-const SHIPPED: [Shipped; 15] = [
+const SHIPPED: [Shipped; 16] = [
     Shipped {
         name: "Clay Strips",
         kernel: Brush::Clay,
@@ -212,6 +212,19 @@ const SHIPPED: [Shipped; 15] = [
         kernel: Brush::Pinch,
         about: "Pinch turned round: opens a crease up and pushes the surface apart from the stroke.",
         tune: |r| r.settings.positive = false,
+    },
+    Shipped {
+        name: "Airbrush",
+        kernel: Brush::Paint,
+        about: "Paints in soft, light mists that build up the longer you go over a place: shading and blushes.",
+        tune: |r| {
+            // A tenth of the Opacity a dab, soft right out to the rim, so
+            // one pass is a mist and a third is a coat with no edge to it.
+            r.settings.strength = 0.1;
+            r.settings.focal_shift = 0.6;
+            r.settings.spacing = 0.1;
+            r.settings.pressure_strength = 1.0;
+        },
     },
 ];
 

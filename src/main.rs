@@ -243,7 +243,7 @@ fn window_options(args: &[String]) -> app::Args {
             // bend | arc | twist | taper | flatten | inflate | stretch | lattice | play
             "--demo-deform" => opts.demo_deform = it.next().cloned(),
             // A sphere painted with materials and colour: lit | matcap | no-materials | no-polypaint | card |
-            // custom | broken (see app/paint_demo.rs).
+            // custom | broken; the Paint brush: play | brush | layers (see app/paint_demo.rs, app/paint_play.rs).
             "--demo-paint" => opts.demo_paint = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.

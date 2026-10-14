@@ -65,8 +65,10 @@ fn line(from: Vec2, to: Vec2, n: usize) -> Vec<Vec2> {
 /// Every brush that sculpts a plain mesh. Erase Layer does nothing to one:
 /// it rubs out a sculpt layer, and its strokes (what they move, undo, the
 /// mirror plane) are in `sculpt/erase/tests.rs`, on a mesh that has layers.
+/// The brushes that move a plain mesh: not Erase Layer (it needs a sculpt
+/// layer), nor Paint (it moves nothing: `sculpt/paint/tests.rs`).
 fn brushes() -> impl Iterator<Item = Brush> {
-    Brush::ALL.into_iter().filter(|&brush| brush != Brush::EraseLayer)
+    Brush::ALL.into_iter().filter(|&brush| !matches!(brush, Brush::EraseLayer | Brush::Paint))
 }
 
 fn moved_count(delta: &Option<StrokeDelta>) -> usize {

@@ -440,7 +440,7 @@ fn brush_library_properties() -> Value {
         "duplicate_as": string("Make a brush of the user's own under this name that starts as the brush in hand is now (after brush, if both are given), and take it in hand. What else this call sets is set on the copy."),
         "rename": string("A new name for the brush in hand. Only the user's own brushes can be renamed."),
         "reset": boolean("true puts the brush in hand back as it shipped or, one of the user's own, as it was made."),
-        "delete": boolean("true takes the brush in hand out of the library once the rest of this call is done. The thirteen base brushes stay. A deleted brush of the user's own is kept as a file in the brushes folder, under deleted."),
+        "delete": boolean("true takes the brush in hand out of the library once the rest of this call is done. The fourteen base brushes stay. A deleted brush of the user's own is kept as a file in the brushes folder, under deleted."),
         "pinned": boolean("Whether the brush in hand has a tile on the wheel that opens while Space is held."),
         "shift_uses": boolean("true makes the brush in hand the one that smooth: true strokes (Shift in the app) smooth with. It must be a Smooth-kernel brush. false hands that back to the base Smooth."),
         "import_file": string("The full path of a brush file (.json) to bring into the library as one of the user's own; it is then the brush in hand. A brush that names an alpha this computer does not have comes in with none."),
@@ -494,6 +494,45 @@ fn tools() -> Value {
     let object = || {
         json!({ "type": ["integer", "string"], "description": "An object's id or name, from get_state. Leave out for the active object." })
     };
+    // The paint commands' arguments (`paint_settings`, `paint_layer`), apart: one `json!` holding every
+    // command's would be more than the macro unfolds.
+    let paint_properties = json!({
+        "do": choice(
+            &[
+                "new", "delete", "select", "rename", "move", "duplicate", "merge_down", "flatten", "show",
+                "hide", "lock", "unlock", "opacity", "blend", "material_blend", "channels", "mask",
+                "recompute_cavity", "fill", "clear",
+            ],
+            "For paint_layer: what to do. new adds a layer above the one painted on (named layer_name) and \
+             paints on it; select paints on the layer; rename takes new_name; move takes to (1 for the top); \
+             merge_down folds the layer into the one under it; flatten folds every layer that shows into \
+             one; opacity takes percent; blend takes blend (Normal, Multiply, Screen, Overlay, Darken, \
+             Lighten, Hard Light, Soft Light, Add, Subtract, Hue, Saturation, Colour); material_blend takes \
+             blend (normal or add); channels takes channels (colour, material, roughness, metallic: which \
+             the layer shows); mask takes mask; fill paints the layer with the brush's colour (fill_colour) \
+             and the material painted with (fill_material) over area; clear empties it.",
+        ),
+        "layer_name": string("For paint_layer new: the new layer's name."),
+        "to": number("For paint_layer move: the place to move the layer to, 1 for the top of the stack."),
+        "blend": string("For paint_layer blend: a colour blend mode's name; for material_blend: normal or add."),
+        "mask": choice(
+            &["none", "paintable", "sculpt_mask", "sculpt_mask_inverted", "cavity", "face_group"],
+            "For paint_layer mask: where the layer shows. face_group takes group.",
+        ),
+        "area": choice(&["all", "masked", "unmasked", "group"], "For paint_layer fill: where. group takes group. Default all."),
+        "fill_colour": boolean("For paint_layer fill: fill with the Paint brush's colour. Default true."),
+        "fill_material": boolean("For paint_layer fill: fill with the material painted with, if one is picked. Default true."),
+        "colour": json!({ "type": ["array", "string"], "description": "For paint_settings: the colour to paint, [red, green, blue] each 0 to 255, or \"#rrggbb\"." }),
+        "mode": choice(&["Paint", "Erase", "Blur", "Smear", "Sample"], "For paint_settings: what the Paint brush does. Sample makes a stroke pick up the paint at its first point instead."),
+        "opacity": number("For paint_settings: 1 to 100, the most one stroke lays."),
+        "channels": json!({ "type": "object", "description": "For paint_settings: which channels the brush writes, { rgb, material, roughness, metallic }, each true or false. For paint_layer channels: which the layer shows, { colour, material, roughness, metallic }." }),
+        "roughness": number("For paint_settings: 0 to 100, the roughness laid where roughness is painted."),
+        "metallic": number("For paint_settings: 0 to 100, the metallic laid where metallic is painted."),
+        "zadd": boolean("For paint_settings: each dab also sculpts with zadd_brush, so the paint stands up."),
+        "zadd_brush": choice(&["Standard", "Clay", "Layer", "Inflate", "Crease"], "For paint_settings: the brush Zadd sculpts with."),
+        "layer_mask": boolean("For paint_settings: paint the layer's own mask (its mask must be paintable) instead of its paint."),
+        "tolerance": number("For paint_settings: 0 to 100, how far from the colour mask_by_colour still takes in."),
+    });
     json!([
         tool(
             "launch",
@@ -547,8 +586,8 @@ fn tools() -> Value {
         tool(
             "set_brush",
             "Choose the brush and its settings. Only what is given changes. Returns the brush as it now is. \
-             A brush is a named record of settings over one of thirteen kernels, kept in the app's brush library: \
-             the thirteen base brushes (one per kernel), the ones that ship with the app (Clay Strips, Dam Standard, \
+             A brush is a named record of settings over one of fourteen kernels, kept in the app's brush library: \
+             the fourteen base brushes (one per kernel), the ones that ship with the app (Clay Strips, Dam Standard, \
              Trim and so on) and the user's own. Each keeps its own settings, so what is set here is set on the \
              brush in hand and stays with it. The reply's library lists every brush's name; list: true adds what \
              each one is, and said holds anything the app had to say (a brush imported without its alpha, where \
@@ -558,9 +597,11 @@ fn tools() -> Value {
             with_properties(brush_library_properties(), json!({
                 "brush": string(
                     "The brush, by its name in the library: a base brush (Move, Clay, Smooth, Crease, Inflate, \
-                     Flatten, Pose, Standard, Layer, Snake Hook, Pinch, Nudge, Erase Layer), a shipped one or one of \
-                     the user's \
-                     own. Choosing one turns mask painting off. Pose bends a limb: a stroke with it presses on \
+                     Flatten, Pose, Standard, Layer, Snake Hook, Pinch, Nudge, Erase Layer, Paint), a shipped one or \
+                     one of the user's \
+                     own. Paint paints colour and the scene's material on the active object's paint layer (a stroke \
+                     makes one if there is none) and moves nothing; its strength is its flow, and command \
+                     paint_settings sets its colour, mode and channels; invert erases the paint. Choosing one turns mask painting off. Pose bends a limb: a stroke with it presses on \
                      the limb and drags, and the limb turns about a joint the brush finds one brush radius back \
                      along it, toward the body. Size the brush to put the joint where the bend should be. Pinch \
                      draws the surface in to the stroke's line (inverted, spreads it apart). Nudge slides the \
@@ -684,7 +725,7 @@ fn tools() -> Value {
         tool(
             "command",
             "Run one of the app's commands on the active object.",
-            json!({
+            with_properties(paint_properties, json!({
                 "name": choice(
                     &[
                         "undo", "redo", "remesh", "mask_invert", "mask_clear", "mask_blur", "mask_sharpen",
@@ -697,6 +738,8 @@ fn tools() -> Value {
                         "pick_group", "isolate_group", "hide_group", "show_all_faces", "mask_group",
                         "mask_all_but_group", "merge_groups", "show_group_colours",
                         "materials", "paint_material",
+                        "paint_settings", "paint_layer", "pick_paint", "mask_by_colour", "mask_by_material",
+                        "mask_by_layer",
                     ],
                     "remesh rebuilds the mesh from voxels, evening out the triangles. clone adds an independent \
                      copy; instance adds a linked copy that shares the mesh; make_unique unlinks an instance. \
@@ -732,7 +775,16 @@ fn tools() -> Value {
                      Materials: materials lists the material library (each with its finish and where it came \
                      from, and why a custom one cannot be drawn), the scene's palette by slot, and the material \
                      painting lays; paint_material picks that by a library material's name (it joins the \
-                     palette) or a palette slot, or \"none\" for colour only.",
+                     palette) or a palette slot, or \"none\" for colour only. \
+                     Polypaint (set_brush brush \"Paint\", then stroke, paints; get_state gives each object's \
+                     paint_layers, top first, and the brush's paint settings): paint_settings sets the Paint \
+                     brush's colour, mode, opacity, channels, roughness, metallic, zadd, zadd_brush, layer_mask and \
+                     tolerance, and answers with them all; paint_layer does what its do says, as the Paint \
+                     Layers card would (on the layer named by layer, or the one painted on), and answers with the layers; \
+                     pick_paint is the eyedropper at x and y: the paint's colour and material there become the ones \
+                     painted with; mask_by_colour masks where the paint is the brush's colour (within tolerance), \
+                     mask_by_material where the material painted with is, mask_by_layer where the layer painted on \
+                     has paint.",
                 ),
                 "resolution": number("For remesh: voxels along the longest side, 4 to 1024. Default: the app's setting."),
                 "amount": number("For mask_recesses and mask_peaks: 0 to 1, how much of the surface is taken. 0 is only the sharpest creases or ridges, 1 anything that lies low or stands up at all. Default 0.7."),
@@ -752,7 +804,7 @@ fn tools() -> Value {
                 "angle": number("For groups_by_angle: degrees, 1 to 180. Edges where the surface turns by more than this split the groups. Default: the card's setting (35)."),
                 "keep_mask": boolean("For group_masked: true leaves the mask as it is; false (the default) clears it."),
                 "on": boolean("For show_group_colours: true shows them, false hides them. Default true."),
-            }),
+            })),
             &["name"],
         ),
         tool(

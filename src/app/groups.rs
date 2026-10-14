@@ -326,7 +326,7 @@ impl Running {
     }
 
     /// The group picked, or a line saying that none is.
-    fn group_picked_or_say(&mut self) -> Option<u16> {
+    pub(super) fn group_picked_or_say(&mut self) -> Option<u16> {
         let picked = self.group_picked().map(|picked| picked.group);
         if picked.is_none() {
             self.status(

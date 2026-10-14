@@ -24,6 +24,7 @@ pub mod library;
 mod library_tests;
 mod modes;
 mod pace;
+pub mod paint;
 mod pose;
 mod radial;
 mod share;
@@ -73,11 +74,12 @@ pub enum Brush {
     Pinch,
     Nudge,
     EraseLayer,
+    Paint,
 }
 
 impl Brush {
     /// How many brushes there are: what everything kept per brush is sized by.
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
 
     pub const ALL: [Brush; Brush::COUNT] = [
         Brush::Move,
@@ -93,6 +95,7 @@ impl Brush {
         Brush::Pinch,
         Brush::Nudge,
         Brush::EraseLayer,
+        Brush::Paint,
     ];
 
     pub fn index(self) -> usize {
@@ -114,6 +117,7 @@ impl Brush {
             Brush::Pinch => "Pinch",
             Brush::Nudge => "Nudge",
             Brush::EraseLayer => "Erase Layer",
+            Brush::Paint => "Paint",
         }
     }
 
@@ -134,6 +138,9 @@ impl Brush {
             Brush::EraseLayer => {
                 "Rub out the sculpt layer that is recording, under the ring: its detail goes, the model underneath                  and the other layers stay."
             }
+            Brush::Paint => {
+                "Paint colour and materials on the model, on the active paint layer. Ctrl erases, Shift blurs the paint."
+            }
         }
     }
 
@@ -152,6 +159,8 @@ impl Brush {
             Brush::Standard => '8',
             Brush::Layer => '9',
             Brush::SnakeHook => '0',
+            // Not a number key: P takes it up and puts it down again (app.rs).
+            Brush::Paint => 'P',
             Brush::Pinch | Brush::Nudge | Brush::EraseLayer => return None,
         })
     }
@@ -171,21 +180,28 @@ impl Brush {
             Brush::Pinch => "brush_pinch",
             Brush::Nudge => "brush_nudge",
             Brush::EraseLayer => "brush_erase_layer",
+            Brush::Paint => "brush_paint",
         }
     }
 
     /// Whether Ctrl / right button flips this brush. Erase Layer has nothing
     /// to flip to: what it rubbed out is in no layer any more (`erase.rs`).
+    /// Paint adds and removes no clay: Ctrl swaps painting and erasing
+    /// instead (`paint.rs`), which the Add and Sub buttons do not show.
     pub fn has_polarity(self) -> bool {
-        !matches!(self, Brush::Smooth | Brush::Move | Brush::Pose | Brush::SnakeHook | Brush::Nudge | Brush::EraseLayer)
+        !matches!(
+            self,
+            Brush::Smooth | Brush::Move | Brush::Pose | Brush::SnakeHook | Brush::Nudge | Brush::EraseLayer | Brush::Paint
+        )
     }
 
     /// Whether the brush is on the hold-Space wheel until the user says
     /// otherwise. Erase Layer is not: it is for one job, does nothing until
     /// a layer records, and the wheel is what a sculptor's hand knows. It is
-    /// pinned from the Brush Library card like any other.
+    /// pinned from the Brush Library card like any other. Nor is Paint, so
+    /// that the wheel stays as the hand knows it: P takes it up.
     pub fn starts_on_wheel(self) -> bool {
-        self != Brush::EraseLayer
+        !matches!(self, Brush::EraseLayer | Brush::Paint)
     }
 
     /// Whether the brush works across the way its stroke is going, and so
@@ -367,6 +383,8 @@ pub struct Settings {
     /// step: `Library::select`). `None` is the working set, which is how it
     /// is while there is only the one Smooth.
     pub shift: Option<ShiftBrush>,
+    /// The Paint brush's colour, mode, channels and Zadd (`paint.rs`).
+    pub paint: paint::PaintSettings,
 }
 
 /// What a Shift stroke takes from the brush Shift uses: its settings and its
@@ -416,6 +434,10 @@ impl Default for Settings {
         // An eraser pressed hard rubs right out; the pen's pressure is what
         // makes it gentle (a light touch works at an eighth of this).
         per_brush[Brush::EraseLayer.index()].strength = 1.0;
+        // Paint's Strength is its Flow: at full pressure a dab lays the whole
+        // Opacity under the middle of the ring, and the falloff softens the
+        // edge. A light touch of the pen lays an eighth of that.
+        per_brush[Brush::Paint.index()].strength = 1.0;
         Self {
             brush: Brush::Move,
             per_brush,
@@ -446,6 +468,7 @@ impl Default for Settings {
             lazy_strength: 1.0,
             build_up_on_hold: false,
             shift: None,
+            paint: paint::PaintSettings::default(),
         }
     }
 }
@@ -759,6 +782,11 @@ struct Stroke {
     /// What the walk over mirror images keeps between dabs, like `scratch`.
     walk: Walked,
     scratch: kernels::Scratch,
+    /// The Paint brush with Zadd: the sculpting kernel's settings, run in
+    /// the same dab as the paint (`paint.rs`).
+    zadd: Option<Params>,
+    /// What a Paint stroke carries from dab to dab (Smear).
+    painting: paint::Painting,
 }
 
 /// The buffers of the walk over mirror images (`Sculptor::apply_symmetric`),
@@ -946,7 +974,7 @@ const MAX_WIDEN: f32 = 64.0;
 #[derive(Default)]
 pub struct Sculptor {
     pub settings: Settings,
-    /// Every brush there is to pick: the thirteen the kernels start as, the
+    /// Every brush there is to pick: the fourteen the kernels start as, the
     /// ones that ship with the app and the user's own (`library.rs`).
     pub library: library::Library,
     /// How much of a stroke each frame lays (`pace.rs`). The app sets it for
@@ -1087,8 +1115,11 @@ impl Sculptor {
     }
 
     /// Brush that a stroke started now would use.
+    /// Shift with the Paint brush blurs the paint instead (`paint.rs`): a
+    /// painting brush never moves the surface unasked.
     pub fn effective_brush(&self, smooth_held: bool) -> Brush {
-        if smooth_held && !self.settings.mask_mode { Brush::Smooth } else { self.settings.brush }
+        let paints = self.settings.brush == Brush::Paint;
+        if smooth_held && !self.settings.mask_mode && !paints { Brush::Smooth } else { self.settings.brush }
     }
 
     /// Whether a stroke begun on `mesh` now could add triangles to it: see
@@ -1115,6 +1146,35 @@ impl Sculptor {
         input::pen_curve(self.pen.smoothed, self.settings.pressure_curve)
     }
 
+    /// Zadd's sculpting kernel for a Paint stroke with `params`: the
+    /// kernel's own Strength and options, the Paint brush's ring, falloff
+    /// and alpha. Ctrl turns it round, as it turns painting into erasing.
+    fn zadd_params(&self, params: &Params, invert: bool) -> Option<Params> {
+        let s = &self.settings;
+        if params.mask || params.brush != Brush::Paint || !s.paint.zadd || params.paint.is_none() {
+            return None;
+        }
+        let kernel = s.paint.zadd_brush;
+        if !paint::ZADD_BRUSHES.contains(&kernel) {
+            return None;
+        }
+        let own = s.per_brush[kernel.index()];
+        let sign = if own.positive != invert { 1.0 } else { -1.0 };
+        Some(Params {
+            brush: kernel,
+            sign,
+            strength: own.strength,
+            accumulate: own.accumulate,
+            build_up: own.build_up,
+            smooth_mode: own.smooth_mode,
+            keep_volume: own.keep_volume,
+            flatten_mode: own.flatten_mode,
+            erase: None,
+            paint: None,
+            ..*params
+        })
+    }
+
     /// Starts a stroke if the pointer is over the mesh. Returns whether it did.
     pub fn begin(
         &mut self,
@@ -1132,9 +1192,18 @@ impl Sculptor {
 
         let brush = self.effective_brush(smooth_held);
         let mask = self.settings.mask_mode;
+        // The Paint brush's stroke: what its mode (Blur with Shift, Erase and
+        // Paint swapped by Ctrl) lays. Sample is a click, not a stroke.
+        let painting = (!mask && brush == Brush::Paint).then(|| {
+            let mode = if smooth_held { paint::PaintMode::Blur } else { self.settings.paint.mode };
+            self.settings.paint.stroke(mode, invert)
+        });
+        if painting == Some(None) {
+            return false;
+        }
         // Shift smooths with the brush marked for it, whichever Smooth brush
         // was last in hand.
-        let (mut bs, falloff) = self.settings.in_use(brush, smooth_held && !mask);
+        let (mut bs, falloff) = self.settings.in_use(brush, smooth_held && !mask && brush == Brush::Smooth);
         let mut tuned_spacing = brush.default_spacing();
         if mask {
             // A mask is painted where the ring is, at one pace whichever
@@ -1184,7 +1253,9 @@ impl Sculptor {
             spacing: bs.spacing,
             dose: Stroke::dose(bs.spacing, tuned_spacing),
             erase: if !mask && brush == Brush::EraseLayer { erase::Erased::of(mesh) } else { None },
+            paint: painting.flatten(),
         };
+        let zadd = self.zadd_params(&params, invert);
         self.pen_stroke = sample.pressure.is_some();
         let pressure = self.shape_pressure(&sample);
         let bounds = mesh.bounds();
@@ -1247,6 +1318,8 @@ impl Sculptor {
             curvature,
             walk: Walked::default(),
             scratch: kernels::Scratch::default(),
+            zadd,
+            painting: paint::Painting::default(),
         };
         self.last_hit = Some(hit.pos);
         if !mask && brush == Brush::Move {
@@ -1763,6 +1836,14 @@ impl Sculptor {
     fn apply_symmetric(mesh: &mut Mesh, stroke: &mut Stroke, p: &Params, dab: Dab) {
         let p = *p;
         let reach = p.reach(&dab);
+        if !p.mask && p.brush == Brush::Paint {
+            // Zadd: the sculpting kernel first, under the same symmetry, then the paint on what it raised.
+            if let Some(z) = stroke.zadd {
+                let z = z.for_dab(p.radius, p.spacing, Stroke::dose(p.spacing, z.brush.default_spacing()));
+                Self::apply_symmetric(mesh, stroke, &z, dab);
+            }
+            return paint::dab(mesh, &p, &dab, &stroke.ops, reach, &mut stroke.painting, &mut stroke.scratch);
+        }
         if !p.mask && p.brush == Brush::Clay {
             for &op in &stroke.ops {
                 let (at, cam) = (op.apply_point(dab.center), op.apply_point(dab.cam));
