@@ -143,13 +143,18 @@ pub fn build(
 
         overlay::view_gizmo(&ctx, doc, panels::gizmo_origin(screen, folded[1]), &mut actions);
 
-        // Bottom bar: the two ways of looking at the surface toggled constantly.
+        // Bottom bar: the ways of looking at the surface toggled constantly.
+        // Its first row sits where it always has; in a window too narrow for
+        // all of it between the panels, the rest goes on a row above.
+        let origin = panels::bottom_bar_origin(screen, folded[0]);
         egui::Area::new(Id::new("bottom_bar"))
             .order(Order::Middle)
             .fade_in(false)
-            .fixed_pos(panels::bottom_bar_origin(screen, folded[0]))
+            .pivot(Align2::LEFT_BOTTOM)
+            .fixed_pos(origin + vec2(0.0, 22.0))
             .show(&ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.set_max_width(panels::bottom_bar_width(screen, folded));
+                ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 14.0;
                     theme::checkbox(ui, &mut doc.opts.flat_shading, "Flat Shading", ACCENT());
                     theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT());

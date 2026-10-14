@@ -124,6 +124,12 @@ pub fn bottom_bar_origin(screen: Rect, left_folded: bool) -> Pos2 {
     pos2(screen.left() + taken(Side::Left, left_folded) + 12.0, screen.bottom() - 12.0 - 22.0)
 }
 
+/// How wide the bottom bar may get before it runs under the right panel.
+pub fn bottom_bar_width(screen: Rect, folded: [bool; 2]) -> f32 {
+    let right = screen.right() - taken(Side::Right, folded[1]) - 12.0;
+    (right - bottom_bar_origin(screen, folded[0]).x).max(120.0)
+}
+
 /// The two parts a panel is drawn in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Part {
