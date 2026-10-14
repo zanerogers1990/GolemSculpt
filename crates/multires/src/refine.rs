@@ -135,8 +135,16 @@ pub(crate) trait Refiner: Sync {
 
     /// Calls `wedge(a, b)` for every corner of a fine face at fine vertex
     /// `vertex`, `a` and `b` being its neighbours there with `(vertex, a, b)`
-    /// wound as the face is.
+    /// wound as the face is. Whenever `u` is named in `v`'s fan, `v` is named
+    /// in `u`'s: a step up that starts from what moved relies on it.
     fn fan(&self, vertex: usize, wedge: impl FnMut(u32, u32));
+
+    /// Calls `touched(v)` for fine vertices whose `smooth` or `between`
+    /// reads coarse vertex `coarse`: every one that does, perhaps some that do
+    /// not, perhaps some twice. Not necessarily `coarse` itself. This is how
+    /// a step up that starts from the coarse vertices an edit changed finds
+    /// the fine vertices it has to look at (`crate::dirty`).
+    fn touched_by(&self, coarse: u32, touched: impl FnMut(u32));
 
     /// The finer level's faces.
     fn fine_faces(&self) -> Faces;
@@ -147,16 +155,17 @@ pub(crate) trait Refiner: Sync {
 
 /// The finer level's positions.
 pub(crate) fn place<R: Refiner>(r: &R, split: Split, coarse: &[Vec3]) -> Vec<Vec3> {
-    let kept = r.kept();
-    (0..r.total())
-        .into_par_iter()
-        .with_min_len(PER_TASK)
-        .map(|i| match split {
-            Split::Smooth => r.smooth(coarse, i),
-            Split::Flat if i < kept => coarse[i],
-            Split::Flat => Vec3::mean(coarse, r.between(i)),
-        })
-        .collect()
+    (0..r.total()).into_par_iter().with_min_len(PER_TASK).map(|i| place_one(r, split, coarse, i)).collect()
+}
+
+/// Fine vertex `i` of [`place`].
+#[inline]
+pub(crate) fn place_one<R: Refiner>(r: &R, split: Split, coarse: &[Vec3], i: usize) -> Vec3 {
+    match split {
+        Split::Smooth => r.smooth(coarse, i),
+        Split::Flat if i < r.kept() => coarse[i],
+        Split::Flat => Vec3::mean(coarse, r.between(i)),
+    }
 }
 
 /// A channel carried up one level: kept vertices keep their values and new
@@ -185,21 +194,27 @@ pub(crate) fn raise_over<R: Refiner, T: Channel>(
     fine: &[T],
     settle: impl Fn(T) -> T + Sync,
 ) -> Vec<T> {
-    let kept = r.kept();
-    (0..r.total())
-        .into_par_iter()
-        .with_min_len(PER_TASK)
-        .map(|i| {
-            if i < kept {
-                return now[i];
-            }
-            let between = r.between(i);
-            if between.iter().all(|&v| was[v as usize].same(now[v as usize])) {
-                return fine[i];
-            }
-            settle(fine[i].shifted(T::mean(was, between), T::mean(now, between)))
-        })
-        .collect()
+    (0..r.total()).into_par_iter().with_min_len(PER_TASK).map(|i| raise_over_one(r, was, now, fine, &settle, i)).collect()
+}
+
+/// Fine vertex `i` of [`raise_over`].
+#[inline]
+pub(crate) fn raise_over_one<R: Refiner, T: Channel>(
+    r: &R,
+    was: &[T],
+    now: &[T],
+    fine: &[T],
+    settle: &impl Fn(T) -> T,
+    i: usize,
+) -> T {
+    if i < r.kept() {
+        return now[i];
+    }
+    let between = r.between(i);
+    if between.iter().all(|&v| was[v as usize].same(now[v as usize])) {
+        return fine[i];
+    }
+    settle(fine[i].shifted(T::mean(was, between), T::mean(now, between)))
 }
 
 /// The crease edges met at one vertex, counted as they are found.

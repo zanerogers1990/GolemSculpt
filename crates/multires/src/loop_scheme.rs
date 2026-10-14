@@ -219,6 +219,19 @@ impl Refiner for LoopRefiner<'_> {
         }
     }
 
+    /// A kept vertex reads itself and its neighbours; a new one the ends of
+    /// its edge and the corners opposite. So: the vertex, its neighbours, and
+    /// every edge of every triangle round it (its own edges and the far ones).
+    fn touched_by(&self, coarse: u32, mut touched: impl FnMut(u32)) {
+        touched(coarse);
+        self.tables.adjacency.neighbours_of(coarse as usize).iter().for_each(|&u| touched(u));
+        for &t in self.tables.adjacency.triangles_of(coarse as usize) {
+            if let Some(m) = self.edge_vertices(t as usize) {
+                m.into_iter().for_each(&mut touched);
+            }
+        }
+    }
+
     /// Triangle `t` becomes `4t..4t + 4`: the one at each of its corners, in
     /// corner order and each starting from that corner, then the middle one.
     fn fine_faces(&self) -> Faces {

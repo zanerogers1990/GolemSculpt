@@ -19,7 +19,8 @@
 //!   whatever has to turn with it (the levels' own detail, and the app's
 //!   sculpt layers).
 //! * `refine` is what the two share, and `detail` is how sculpted detail
-//!   follows an edit made lower down.
+//!   follows an edit made lower down; `dirty` does the same from what the
+//!   edit changed, so that a dab low down is not paid for at every vertex.
 //! * [`subdivide`] is one subdivision on its own, with no levels kept.
 //!
 //! # What a caller can rely on
@@ -45,6 +46,7 @@
 
 mod catmull_clark;
 mod detail;
+mod dirty;
 mod levels;
 mod loop_scheme;
 mod mesh;

@@ -45,15 +45,17 @@ impl Levels {
     /// been handed yet, and those are found again after loading the same way
     /// they would have been, by comparing it with what the stack holds.
     pub fn to_parts(&self) -> LevelsParts {
-        let kept = self.kept.clone().unwrap_or(Kept { positions: Vec::new(), mask: Vec::new() });
+        let (positions, mask) = self.kept.as_ref().map_or((Vec::new(), Vec::new()), |kept| {
+            (kept.positions.to_vec(), kept.mask.to_vec())
+        });
         LevelsParts {
             vertex_count: self.sizes[0].vertices,
             triangles: self.faces[0].triangles(),
             polys: self.faces[0].polys(),
             splits: self.steps.iter().map(|step| step.split).collect(),
             current: self.current,
-            positions: kept.positions,
-            mask: kept.mask,
+            positions,
+            mask,
         }
     }
 
@@ -62,7 +64,7 @@ impl Levels {
         let kept = self.kept.take();
         let mut parts = self.to_parts();
         if let Some(kept) = kept {
-            (parts.positions, parts.mask) = (kept.positions, kept.mask);
+            (parts.positions, parts.mask) = kept.into_lists();
         }
         parts
     }
@@ -88,7 +90,7 @@ impl Levels {
             ));
         }
         levels.current = current;
-        levels.kept = (current < top).then_some(Kept { positions, mask });
+        levels.kept = (current < top).then(|| Kept::of(positions, mask));
         Ok(levels)
     }
 }

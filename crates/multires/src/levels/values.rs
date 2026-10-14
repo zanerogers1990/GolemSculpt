@@ -7,10 +7,12 @@
 
 use super::{Levels, with_refiner};
 use glam::Vec3;
+use rayon::prelude::*;
 
 use super::sound;
 use crate::detail::{self, Ride};
-use crate::refine::{Channel, Refiner, place, raise};
+use crate::dirty::Way;
+use crate::refine::{Channel, PER_TASK, Refiner, place, raise};
 
 /// One list of vectors riding on the surface, for [`Levels::riders_up`].
 pub struct Rider<'a> {
@@ -127,7 +129,12 @@ impl Levels {
         self.check_span(from, to)?;
         self.check_len(from, edited.len())?;
         self.check_len(to, fine.len())?;
-        Ok(self.raise_edit(from, to, edited.to_vec(), fine, |value| value))
+        let changed: Vec<u32> = (0..edited.len() as u32)
+            .into_par_iter()
+            .with_min_len(PER_TASK)
+            .filter(|&i| !edited[i as usize].same(fine[i as usize]))
+            .collect();
+        Ok(self.raise_edit(from, to, edited, &changed, fine, &|value| value, Way::Quicker).0)
     }
 
     /// A per-triangle value carried from level `from` to level `to`, up or
