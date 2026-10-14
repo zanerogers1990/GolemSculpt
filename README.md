@@ -1009,6 +1009,9 @@ triangles, and an engine usually allows one model somewhere between 200k and
   target, it stops there and the line says why.
 - **Hidden parts are decimated with the rest, and stay hidden.** The budget
   is the whole model's, as is the file an export writes.
+- **Face groups stay as they were.** Every face left is one the model had,
+  and it stays in its group, so a group's border stays on the faces it ran
+  along.
 - **Symmetry is not kept exactly, so it asks first.** The two sides of a
   mirror (or the repeats of a radial symmetry) are thinned each in its own
   order, so afterwards the model is symmetric to the eye and its points no

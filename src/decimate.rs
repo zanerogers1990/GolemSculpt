@@ -23,6 +23,8 @@
 //!     is a matter of what is seen; the budget, and the file an export
 //!     writes, are of the whole model. A triangle of the result is one of
 //!     the triangles the model had, so what was hidden still is.
+//!   - **Face groups stay**, by the same token: each triangle of the result
+//!     is in the group of the triangle it was.
 //!   - **The quads of a quad remesh go**: what comes out is triangles.
 //!   - **Symmetry is not kept exactly.** The two sides are thinned in
 //!     whatever order their costs come. The app asks before decimating an
@@ -56,6 +58,8 @@ pub struct Source {
     mask: Vec<f32>,
     /// One flag for each triangle; empty when nothing is hidden.
     hidden: Vec<bool>,
+    /// The group of each triangle; empty when the mesh has no groups.
+    groups: Vec<u16>,
 }
 
 impl Source {
@@ -65,6 +69,7 @@ impl Source {
             indices: mesh.indices.clone(),
             mask: mesh.mask.clone(),
             hidden: mesh.hidden_triangles().map_or_else(Vec::new, <[bool]>::to_vec),
+            groups: mesh.group_ids().to_vec(),
         }
     }
 
@@ -140,7 +145,16 @@ pub fn decimated(
         closed_before,
         closed_after: sculpt_geom::edge_census(done.positions.len(), &done.indices),
     };
-    let mesh = Mesh::new_with_hidden(done.positions, done.indices, done.values, &hidden);
+    // Each triangle of the result in the group of the triangle it was.
+    let groups: Vec<u16> =
+        done.triangle_source.iter().map(|&t| source.groups.get(t as usize).copied().unwrap_or(0)).collect();
+    let mesh = if source.groups.is_empty() {
+        Mesh::new_with_hidden(done.positions, done.indices, done.values, &hidden)
+    } else {
+        let (mut mesh, numbering) = Mesh::new_numbered(done.positions, done.indices, done.values, &hidden);
+        mesh.set_group_ids(crate::mesh::groups::renumbered(&groups, &numbering.triangle));
+        mesh
+    };
     Ok(Some((mesh, report)))
 }
 
@@ -317,6 +331,43 @@ mod tests {
             }
         }
         assert!(line("Ball", &report, 0.1).0.contains(" Hidden parts were decimated with the rest and are still hidden."));
+    }
+
+    /// Groups painted by where a face is: the top cap one group, a band
+    /// round the middle another, the rest in none.
+    fn group_by_place(mesh: &Mesh, t: u32) -> u16 {
+        let corners = &mesh.indices[t as usize * 3..t as usize * 3 + 3];
+        let y = corners.iter().map(|&v| mesh.positions[v as usize].y).sum::<f32>() / 3.0;
+        if y > 0.2 {
+            3
+        } else if y.abs() < 0.08 {
+            7
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn face_groups_are_decimated_with_the_rest_and_stay_where_they_were() {
+        let mut model = lumpy(40_000);
+        let ids: Vec<u16> = (0..model.triangle_count() as u32).map(|t| group_by_place(&model, t)).collect();
+        model.set_group_ids(ids);
+        let hide: Vec<u32> = (0..model.triangle_count() as u32).filter(|&t| group_by_place(&model, t) == 7).collect();
+        assert!(model.hide(&hide).is_some());
+        let (mesh, report) = run(&model, 8_000);
+        assert!(report.reached() && printable::census(&mesh).is_closed());
+        assert!(mesh.has_groups() && mesh.group_count() == model.group_count(), "{}", mesh.group_count());
+        // A decimated face lies where the face it was did, give or take the
+        // collapsed edges round it: nearly every one is still in the group
+        // its place says, and the hidden band is still the hidden band.
+        let wrong = (0..mesh.triangle_count() as u32).filter(|&t| mesh.group_of(t) != group_by_place(&mesh, t)).count();
+        assert!(wrong * 50 < mesh.triangle_count(), "{wrong} of {} faces in another group", mesh.triangle_count());
+        for t in 0..mesh.triangle_count() as u32 {
+            assert_eq!(mesh.is_triangle_hidden(t), mesh.group_of(t) == 7, "hidden and grouped faces go together");
+        }
+        // Without groups, still none.
+        let (plain, _) = run(&lumpy(20_000), 4_000);
+        assert!(!plain.has_groups());
     }
 
     #[test]

@@ -39,7 +39,9 @@
 //!   each level's own list remembered so a round trip is exact (`levels.rs`);
 //! - a rebuild that renumbers the same triangles (a file opened, a copy
 //!   made): by the numbering ([`renumbered`]);
-//! - a rebuild that makes new triangles (remesh, decimate, a boolean, a cut):
+//! - decimate: every triangle it leaves is one the mesh had, and keeps its
+//!   group (`decimate.rs`);
+//! - a rebuild that makes new triangles (remesh, a boolean, a cut):
 //!   each new triangle takes the group of the old surface nearest its centre
 //!   (`transfer.rs`).
 //!
