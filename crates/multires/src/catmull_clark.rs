@@ -246,6 +246,24 @@ impl Refiner for QuadRefiner<'_> {
         }
     }
 
+    /// A face's vertex reads its corners; an edge's its ends and the corners
+    /// of the faces either side; a kept vertex its neighbours and the corners
+    /// of its faces. So: for every face round the vertex, its middle, its
+    /// corners and its sides. (A vertex in no face is read by itself alone.)
+    fn touched_by(&self, coarse: u32, mut touched: impl FnMut(u32)) {
+        touched(coarse);
+        let poly = &self.poly;
+        for &c in self.tables.corners_at.row(coarse as usize) {
+            let f = poly.face_of(c as usize);
+            touched(self.face_vertex(f));
+            let (from, to) = poly.range(f);
+            for corner in from..to {
+                touched(poly.corners[corner]);
+                touched(self.side_vertex(corner));
+            }
+        }
+    }
+
     fn fine_faces(&self) -> Faces {
         let poly = &self.poly;
         let mut quads = vec![0u32; poly.corners.len() * 4];

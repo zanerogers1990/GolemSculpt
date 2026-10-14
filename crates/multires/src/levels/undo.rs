@@ -10,6 +10,8 @@
 //! Redoing a step is taking it again with the mesh [`Levels::undo_step`]
 //! handed back: everything here is deterministic, so it lands where it did.
 
+use std::sync::Arc;
+
 use glam::Vec3;
 use rayon::prelude::*;
 
@@ -60,6 +62,12 @@ impl<T: Channel> Sparse<T> {
         Sparse { at, values }
     }
 
+    /// The entries `at` (ascending) of `values`.
+    fn at(values: &[T], at: Vec<u32>) -> Sparse<T> {
+        let values = at.iter().map(|&i| values[i as usize]).collect();
+        Sparse { at, values }
+    }
+
     fn write_into(&self, array: &mut [T]) {
         for (&i, &value) in self.at.iter().zip(&self.values) {
             array[i as usize] = value;
@@ -103,24 +111,26 @@ impl StepUndo {
     }
 
     /// Notes where the level left (`live`) differs from the stack's copy
-    /// (the first entries of `kept`), and says whether it does anywhere.
-    pub(super) fn note_live_positions(&mut self, live: &[Vec3], kept: &[Vec3]) -> bool {
+    /// (the first entries of `kept`), and gives back where, ascending, if it
+    /// does anywhere.
+    pub(super) fn note_live_positions(&mut self, live: &[Vec3], kept: &[Vec3]) -> Option<&[u32]> {
         self.live_positions = Sparse::differing(live, &kept[..live.len()]);
-        !self.live_positions.at.is_empty()
+        (!self.live_positions.at.is_empty()).then_some(&self.live_positions.at[..])
     }
 
-    pub(super) fn note_live_mask(&mut self, live: &[f32], kept: &[f32]) -> bool {
+    pub(super) fn note_live_mask(&mut self, live: &[f32], kept: &[f32]) -> Option<&[u32]> {
         self.live_mask = Sparse::differing(live, &kept[..live.len()]);
-        !self.live_mask.at.is_empty()
+        (!self.live_mask.at.is_empty()).then_some(&self.live_mask.at[..])
     }
 
-    /// Notes what the kept finest level held wherever the step changed it.
-    pub(super) fn note_kept_positions(&mut self, was: &[Vec3], now: &[Vec3]) {
-        self.kept_positions = Sparse::differing(was, now);
+    /// Notes what the kept finest level held (`was`) at the vertices the
+    /// step changed, `at`, ascending.
+    pub(super) fn note_kept_positions(&mut self, was: &[Vec3], at: Vec<u32>) {
+        self.kept_positions = Sparse::at(was, at);
     }
 
-    pub(super) fn note_kept_mask(&mut self, was: &[f32], now: &[f32]) {
-        self.kept_mask = Sparse::differing(was, now);
+    pub(super) fn note_kept_mask(&mut self, was: &[f32], at: Vec<u32>) {
+        self.kept_mask = Sparse::at(was, at);
     }
 }
 
@@ -149,18 +159,24 @@ impl Levels {
         // they come back the same way.
         let mut kept = match self.kept.take() {
             Some(kept) => kept,
-            None => Kept { positions: positions.to_vec(), mask: mask.to_vec() },
+            None => Kept::of(positions.to_vec(), mask.to_vec()),
         };
-        undo.kept_positions.write_into(&mut kept.positions);
-        undo.kept_mask.write_into(&mut kept.mask);
+        // Copied first if a clone of the stack shares them, and only then.
+        if !undo.kept_positions.at.is_empty() {
+            undo.kept_positions.write_into(Arc::make_mut(&mut kept.positions).as_mut_slice());
+        }
+        if !undo.kept_mask.at.is_empty() {
+            undo.kept_mask.write_into(Arc::make_mut(&mut kept.mask).as_mut_slice());
+        }
         self.current = undo.from;
         if undo.from == top {
-            return Ok(self.mesh(top, kept.positions, kept.mask));
+            let (positions, mask) = kept.into_lists();
+            return Ok(self.mesh(top, positions, mask));
         }
-        let mut live = kept.first(self.sizes[undo.from]);
-        undo.live_positions.write_into(&mut live.positions);
-        undo.live_mask.write_into(&mut live.mask);
+        let (mut live_positions, mut live_mask) = kept.first(self.sizes[undo.from]);
+        undo.live_positions.write_into(&mut live_positions);
+        undo.live_mask.write_into(&mut live_mask);
         self.kept = Some(kept);
-        Ok(self.mesh(undo.from, live.positions, live.mask))
+        Ok(self.mesh(undo.from, live_positions, live_mask))
     }
 }

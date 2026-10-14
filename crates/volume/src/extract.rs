@@ -108,6 +108,10 @@ pub struct Stats {
     /// negative half is read from the positive, so every cell has its twin.
     pub mirrored_cells: usize,
     pub mirror_skipped: usize,
+    /// Of a boolean: times a lattice edge was read that more surfaces cross
+    /// than the quick way has room for, and that was read the slower way.
+    /// Correct either way; counted to show how rare it is.
+    pub long_edges: usize,
 }
 
 /// An extracted surface: a closed mesh wound counter-clockwise seen from

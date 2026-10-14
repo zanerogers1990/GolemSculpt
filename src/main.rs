@@ -3,6 +3,7 @@
 
 mod app;
 mod bench;
+mod bench_levels;
 mod bench_matched;
 mod bench_render;
 mod brush_hash;
@@ -89,6 +90,8 @@ enum Errand {
     /// strokes and a hash of the mesh after each, to show a speed change
     /// left every result as it was (see brush_hash.rs).
     BrushHash(Vec<usize>),
+    /// `--bench-levels`, with what follows it: the finest level's triangles, e.g. `--bench-levels 1000000`.
+    BenchLevels(Vec<usize>),
 }
 
 /// The errand the arguments ask for, if any; `None` is the app itself, with
@@ -116,6 +119,8 @@ fn errand(args: &[String]) -> Option<Errand> {
         Some(Errand::CompareShots(PathBuf::from(a), PathBuf::from(b)))
     } else if let Some(rest) = after("--brush-hash") {
         Some(Errand::BrushHash(numbers(rest)))
+    } else if let Some(rest) = after("--bench-levels") {
+        Some(Errand::BenchLevels(numbers(rest)))
     } else {
         after("--bench-volume").map(|_| Errand::BenchVolume)
     }
@@ -157,6 +162,7 @@ fn main() {
         Some(Errand::RenderShots(folder)) => return bench_render::run_shots(&folder),
         Some(Errand::CompareShots(a, b)) => return bench_render::compare(&a, &b),
         Some(Errand::BrushHash(tris)) => return brush_hash::run(&tris),
+        Some(Errand::BenchLevels(sizes)) => return bench_levels::run(&or(sizes, &[1_000_000, 5_000_000, 10_000_000])),
         _ => {}
     }
 

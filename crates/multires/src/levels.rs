@@ -9,7 +9,9 @@
 //!   written out when a level is handed over and not stored.
 //! * While the app is working below the finest level, the finest level's
 //!   positions and mask, exactly as they were handed in. Nothing else: no
-//!   detail vectors, no positions per level.
+//!   detail vectors, no positions per level. A step that changes neither
+//!   passes them on as they are, shared with every clone of the stack the
+//!   app keeps for undo, rather than copied.
 //!
 //! That last array is every level at once. Vertices keep their numbers going
 //! up, and a coarse vertex is where the fine vertex of the same number is
@@ -40,7 +42,9 @@
 //! at a time: at each level the base surface is made from the level below as
 //! it was and as it is now, and each vertex the change reaches is put at the
 //! new base plus its old detail, turned with the surface. Vertices the change
-//! does not reach are not recomputed.
+//! does not reach are not recomputed, nor, for a small edit, even looked at:
+//! each level starts from the vertices that changed on the one below
+//! ([`crate::dirty`]).
 //!
 //! One consequence to know about. The base of a level made smooth is the
 //! smooth rule's, which pulls a kept vertex toward its neighbours. So a single
@@ -78,10 +82,10 @@ use glam::Vec3;
 use rayon::prelude::*;
 
 use crate::catmull_clark::{self, QuadTables};
-use crate::detail;
+use crate::dirty::{self, Way};
 use crate::loop_scheme::LoopTables;
 use crate::mesh::{Faces, LevelMesh, Polys};
-use crate::refine::{Channel, MOST_VERTICES, PER_TASK, Refiner, Split, place, raise, raise_over};
+use crate::refine::{Channel, MOST_VERTICES, PER_TASK, Refiner, Split, place, raise};
 
 /// Which rules a stack subdivides by, settled by the mesh it was started from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,9 +111,9 @@ pub enum Scheme {
 /// let step = levels.step_to(levels.top(), &positions, &mask)?;     // up: the detail has come along
 /// ```
 ///
-/// A clone shares the faces and tables of every level and copies only the
-/// kept finest level, so keeping one for undo costs little: see
-/// [`Self::owned_bytes`].
+/// A clone shares the faces and tables of every level, and the kept finest
+/// level until one of the two changes it, so keeping one for undo costs
+/// little: see [`Self::owned_bytes`].
 #[derive(Clone)]
 pub struct Levels {
     /// The faces of every level that has a finer one, and of the only level
@@ -143,10 +147,17 @@ struct Size {
     triangles: usize,
 }
 
+/// The finest level while the app is below it. Shared, because a step that
+/// carries nothing up hands it on unchanged, and the app keeps the stack of
+/// every step for undo: copied, a model of ten million triangles paid 80 MB
+/// and tens of milliseconds a step for a copy of what it already had. (An
+/// `Arc<Vec>` and not an `Arc<[T]>`: a step that does carry an edit up makes
+/// the new list as a `Vec`, and arriving on the finest level hands the list
+/// to the app as one, and neither then has to be copied again.)
 #[derive(Clone)]
 struct Kept {
-    positions: Vec<Vec3>,
-    mask: Vec<f32>,
+    positions: Arc<Vec<Vec3>>,
+    mask: Arc<Vec<f32>>,
 }
 
 /// Runs `$body` with `$r` the [`Refiner`] that makes level `$level + 1` of
@@ -268,7 +279,19 @@ impl Levels {
 
     /// The polygon faces of `level`, for a polygon mesh.
     pub fn polys(&self, level: usize) -> Option<Polys> {
-        self.faces_of(level).polys()
+        match self.scheme() {
+            Scheme::Loop => None,
+            Scheme::CatmullClark => self.faces_of(level).polys(),
+        }
+    }
+
+    /// The triangles of `level` and, for a polygon mesh, its polygon faces:
+    /// [`Self::triangles`] and [`Self::polys`] at once, for the cost of one.
+    pub fn faces(&self, level: usize) -> (Vec<u32>, Option<Polys>) {
+        match self.faces_of(level) {
+            Cow::Borrowed(faces) => (faces.triangles(), faces.polys()),
+            Cow::Owned(faces) => faces.into_lists(),
+        }
     }
 
     /// For every triangle of `level`, the triangle of the level below that it
@@ -329,21 +352,41 @@ impl Levels {
     /// is taken as not edited. (On the finest level the mesh handed in is
     /// simply kept, whatever it holds.)
     pub fn step_to(&mut self, level: usize, positions: &[Vec3], mask: &[f32]) -> Result<Stepped, String> {
+        let (positions, mask, undo) = self.step_lists(level, positions, mask)?;
+        Ok(Stepped { mesh: self.mesh(level, positions, mask), undo })
+    }
+
+    /// [`Self::step_to`] without the faces of the level arrived at: its
+    /// positions and mask, and what [`Self::undo_step`] needs. Writing out
+    /// the faces of a finest level of ten million triangles takes a while,
+    /// and a caller that kept them from before has no use for them
+    /// ([`Self::faces`] gives them when it has not).
+    pub fn step_lists(
+        &mut self,
+        level: usize,
+        positions: &[Vec3],
+        mask: &[f32],
+    ) -> Result<(Vec<Vec3>, Vec<f32>, StepUndo), String> {
         self.check_level(level)?;
         self.check_mesh(positions, mask)?;
         let (from, top) = (self.current, self.top());
         let mut undo = StepUndo::new(from, level, self.level_count());
         match self.kept.take() {
             // On the finest level the handed mesh is the stack's whole state.
-            None => self.kept = Some(Kept { positions: positions.to_vec(), mask: mask.to_vec() }),
+            None => self.kept = Some(Kept::of(positions.to_vec(), mask.to_vec())),
             Some(kept) => self.kept = Some(self.fold(from, kept, positions, mask, &mut undo)),
         }
         self.current = level;
         // Arriving at the finest level takes the kept arrays with it; anywhere else gets a copy of its share.
-        let kept =
-            if level == top { self.kept.take() } else { self.kept.as_ref().map(|kept| kept.first(self.sizes[level])) };
-        let Kept { positions, mask } = kept.expect("the finest level was just kept");
-        Ok(Stepped { mesh: self.mesh(level, positions, mask), undo })
+        let kept = self.kept.take().expect("the finest level was just kept");
+        let (positions, mask) = if level == top {
+            kept.into_lists()
+        } else {
+            let first = kept.first(self.sizes[level]);
+            self.kept = Some(kept);
+            first
+        };
+        Ok((positions, mask, undo))
     }
 
     /// Makes the current level the coarsest by dropping every level below it.
@@ -382,15 +425,19 @@ impl Levels {
             + self.steps.get(level).map_or(0, |step| step.tables.bytes())
     }
 
-    /// This stack's share of the memory: the kept finest level, which is its
-    /// own, and of each level's faces and tables an equal part with every
-    /// clone that shares them. Summed over a stack and its clones it is what
-    /// they hold between them, so each can be charged for it without the
-    /// tables being counted once per clone.
+    /// This stack's share of the memory: of each level's faces and tables,
+    /// and of the kept finest level, an equal part with every clone that
+    /// shares them. Summed over a stack and its clones it is what they hold
+    /// between them, so each can be charged for it without anything being
+    /// counted once per clone.
     pub fn owned_bytes(&self) -> usize {
         let faces: usize = self.faces.iter().map(|faces| faces.bytes() / Arc::strong_count(faces)).sum();
         let steps: usize = self.steps.iter().map(|step| step.tables.bytes() / Arc::strong_count(step)).sum();
-        faces + steps + self.kept_bytes()
+        let kept = self.kept.as_ref().map_or(0, |kept| {
+            kept.positions.len() * 12 / Arc::strong_count(&kept.positions)
+                + kept.mask.len() * 4 / Arc::strong_count(&kept.mask)
+        });
+        faces + steps + kept
     }
 
     /// The finest level's positions as the stack keeps them while the app is
@@ -436,10 +483,7 @@ impl Levels {
     }
 
     fn mesh(&self, level: usize, positions: Vec<Vec3>, mask: Vec<f32>) -> LevelMesh {
-        let (triangles, polys) = match self.faces_of(level) {
-            Cow::Borrowed(faces) => (faces.triangles(), faces.polys()),
-            Cow::Owned(faces) => faces.into_lists(),
-        };
+        let (triangles, polys) = self.faces(level);
         LevelMesh { positions, mask, triangles, polys }
     }
 
@@ -475,67 +519,129 @@ impl Levels {
     }
 
     /// Carries what the app changed on level `from` up into the kept finest
-    /// level, noting in `undo` what it changed there.
+    /// level, noting in `undo` what it changed there. What did not change is
+    /// handed on as it was, shared.
     fn fold(&self, from: usize, kept: Kept, positions: &[Vec3], mask: &[f32], undo: &mut StepUndo) -> Kept {
         let Kept { positions: kept_positions, mask: kept_mask } = kept;
         let top = self.top();
 
         let live = sound(positions, &kept_positions, |p| p.is_finite());
-        let positions = if undo.note_live_positions(&live, &kept_positions) {
-            let raised = self.raise_positions(from, live, &kept_positions);
-            undo.note_kept_positions(&kept_positions, &raised);
-            raised
-        } else {
-            kept_positions
+        let positions = match undo.note_live_positions(&live, &kept_positions) {
+            Some(changed) => {
+                let (raised, changed) = self.raise_positions(from, &live, changed, &kept_positions, Way::Quicker);
+                undo.note_kept_positions(&kept_positions, changed);
+                Arc::new(raised)
+            }
+            None => kept_positions,
         };
 
         let live = sound(mask, &kept_mask, |m| m.is_finite());
-        let mask = if undo.note_live_mask(&live, &kept_mask) {
-            let raised = self.raise_edit(from, top, live, &kept_mask, |m: f32| m.clamp(0.0, 1.0));
-            undo.note_kept_mask(&kept_mask, &raised);
-            raised
-        } else {
-            kept_mask
+        let mask = match undo.note_live_mask(&live, &kept_mask) {
+            Some(changed) => {
+                let settle = |m: f32| m.clamp(0.0, 1.0);
+                let (raised, changed) = self.raise_edit(from, top, &live, changed, &kept_mask, &settle, Way::Quicker);
+                undo.note_kept_mask(&kept_mask, changed);
+                Arc::new(raised)
+            }
+            None => kept_mask,
         };
         Kept { positions, mask }
     }
 
-    /// The finest level's positions after level `from` was edited to `live`,
-    /// `kept` being the finest level before.
-    fn raise_positions(&self, from: usize, live: Vec<Vec3>, kept: &[Vec3]) -> Vec<Vec3> {
-        let mut now = live;
-        for level in from..self.top() {
-            let (was, fine) = (&kept[..self.sizes[level].vertices], &kept[..self.sizes[level + 1].vertices]);
-            let split = self.steps[level].split;
-            now = with_refiner!(self, level, |r| detail::carry(&r, split, was, &now, fine));
+    /// The finest level's positions after level `from` was edited to `live`
+    /// at the vertices `changed` (ascending), `kept` being the finest level
+    /// before; and where the two differ, ascending. `way` is for tests.
+    pub(crate) fn raise_positions(
+        &self,
+        from: usize,
+        live: &[Vec3],
+        changed: &[u32],
+        kept: &[Vec3],
+        way: Way,
+    ) -> (Vec<Vec3>, Vec<u32>) {
+        let mut work = copied(kept);
+        for &v in changed {
+            work[v as usize] = live[v as usize];
         }
-        now
+        let mut changed = changed.to_vec();
+        for level in from..self.top() {
+            let split = self.steps[level].split;
+            changed = with_refiner!(self, level, |r| dirty::carry_level(&r, split, kept, &mut work, &changed, way));
+        }
+        (work, changed)
     }
 
     /// A channel at level `to` after its entries for level `from` were edited
-    /// to `edited`, `fine` being the channel at `to` before.
-    fn raise_edit<T: Channel>(
+    /// to `edited` at the vertices `changed` (ascending), `fine` being the
+    /// channel at `to` before; and where the two differ, ascending.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn raise_edit<T: Channel>(
         &self,
         from: usize,
         to: usize,
-        edited: Vec<T>,
+        edited: &[T],
+        changed: &[u32],
         fine: &[T],
-        settle: impl Fn(T) -> T + Sync,
-    ) -> Vec<T> {
-        let mut now = edited;
-        for level in from..to {
-            let (was, over) = (&fine[..self.sizes[level].vertices], &fine[..self.sizes[level + 1].vertices]);
-            now = with_refiner!(self, level, |r| raise_over(&r, was, &now, over, &settle));
+        settle: &(impl Fn(T) -> T + Sync),
+        way: Way,
+    ) -> (Vec<T>, Vec<u32>) {
+        let mut work = copied(fine);
+        for &v in changed {
+            work[v as usize] = edited[v as usize];
         }
-        now
+        let mut changed = changed.to_vec();
+        for level in from..to {
+            changed = with_refiner!(self, level, |r| dirty::raise_level(&r, fine, &mut work, &changed, settle, way));
+        }
+        (work, changed)
+    }
+}
+
+#[cfg(test)]
+impl Levels {
+    /// The kept finest level's mask, as [`Self::finest_positions`] is of its positions.
+    pub(crate) fn finest_mask(&self) -> Option<&[f32]> {
+        self.kept.as_ref().map(|kept| &kept.mask[..])
+    }
+
+    /// For each fine vertex of level `level + 1`, the vertices its fan names;
+    /// and for each vertex of `level`, what [`Refiner::touched_by`] names.
+    pub(crate) fn fans_and_touches(&self, level: usize) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+        with_refiner!(self, level, |r| {
+            let fan = |i: usize| {
+                let mut named = Vec::new();
+                r.fan(i, |a, b| named.extend([a, b]));
+                named
+            };
+            let touched = |c: u32| {
+                let mut named = Vec::new();
+                r.touched_by(c, |v| named.push(v));
+                named
+            };
+            ((0..r.total()).map(fan).collect(), (0..r.kept() as u32).map(touched).collect())
+        })
     }
 }
 
 impl Kept {
-    /// The level of `size` out of the finest: its first entries.
-    fn first(&self, size: Size) -> Kept {
-        Kept { positions: self.positions[..size.vertices].to_vec(), mask: self.mask[..size.vertices].to_vec() }
+    fn of(positions: Vec<Vec3>, mask: Vec<f32>) -> Kept {
+        Kept { positions: Arc::new(positions), mask: Arc::new(mask) }
     }
+
+    /// The level of `size` out of the finest: its first entries.
+    fn first(&self, size: Size) -> (Vec<Vec3>, Vec<f32>) {
+        (self.positions[..size.vertices].to_vec(), self.mask[..size.vertices].to_vec())
+    }
+
+    /// The lists themselves, copied only if a clone of the stack shares them.
+    fn into_lists(self) -> (Vec<Vec3>, Vec<f32>) {
+        (Arc::unwrap_or_clone(self.positions), Arc::unwrap_or_clone(self.mask))
+    }
+}
+
+/// A copy of `list` made on every thread: these are the finest level's.
+fn copied<T: Copy + Send + Sync>(list: &[T]) -> Vec<T> {
+    list.par_iter().with_min_len(PER_TASK * 8).copied().collect()
 }
 
 /// What the app handed in for a level, with anything that is not a number

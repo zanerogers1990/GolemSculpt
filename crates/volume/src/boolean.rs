@@ -21,6 +21,8 @@
 //! shells listed in one mesh are their union, which is how to cut with many
 //! cutters at once: append them into one mesh.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use glam::Vec3;
 use sculpt_geom::{Aabb, TriMesh};
 
@@ -67,14 +69,22 @@ impl BooleanSettings {
 /// Most solids one operation takes. More are better appended into one mesh.
 pub const MAX_SOLIDS: usize = 8;
 
-/// Most crossings looked at on one lattice edge.
+/// Crossings of one lattice edge kept on the stack. An edge crossed more
+/// often than this (many thin shells stacked within one cell) is read into a
+/// list instead: dropping the rest, as this once did, walked the windings
+/// wrongly and put the surface in the wrong place on that edge.
 const MAX_EVENTS: usize = 16;
+
+/// One crossing of a lattice edge: where, which way, which solid, its normal.
+type Event = (f32, i8, u8, u32);
 
 /// Several scan-converted solids read as one.
 struct Combined {
     scans: Vec<Scan>,
     op: BooleanOp,
     grid: Grid,
+    /// Edges read the slower way, for [`Stats::long_edges`](crate::extract::Stats).
+    long_edges: AtomicUsize,
 }
 
 impl Combined {
@@ -94,22 +104,34 @@ impl Combined {
     /// order, and the ones at which the result changes between inside and
     /// outside are its surface.
     fn edge_hit(&self, axis: usize, at: [usize; 3], lower_inside: bool) -> Option<(f32, Vec3)> {
-        let mut events = [(0.0f32, 0i8, 0u8, 0u32); MAX_EVENTS];
+        let mut few: [Event; MAX_EVENTS] = [(0.0, 0, 0, 0); MAX_EVENTS];
+        let mut many: Vec<Event> = Vec::new();
         let mut count = 0;
         let mut windings = [0i32; MAX_SOLIDS];
         for (s, scan) in self.scans.iter().enumerate() {
             windings[s] = scan.winding_at(axis, at);
             for (t, winding, normal) in scan.edge_crossings(axis, at) {
+                let event = (t, winding, s as u8, normal);
                 if count < MAX_EVENTS {
-                    events[count] = (t, winding, s as u8, normal);
-                    count += 1;
+                    few[count] = event;
+                } else {
+                    if count == MAX_EVENTS {
+                        many.extend_from_slice(&few);
+                    }
+                    many.push(event);
                 }
+                count += 1;
             }
         }
         if count == 0 {
             return None;
         }
-        let events = &mut events[..count];
+        let events: &mut [Event] = if count > MAX_EVENTS {
+            self.long_edges.fetch_add(1, Ordering::Relaxed);
+            &mut many
+        } else {
+            &mut few[..count]
+        };
         events.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)));
 
         let windings = &mut windings[..self.scans.len()];
@@ -347,9 +369,9 @@ pub fn boolean_with(
         scans.push(scan);
     }
     let sources = Sources::of(&scans);
-    let source = Combined { scans, op, grid };
+    let source = Combined { scans, op, grid, long_edges: AtomicUsize::new(0) };
     let options = ExtractOptions { mirror: settings.mirror, max_vertices: settings.max_triangles / 4 * 3 };
-    let surface = extract::extract(&source, &grid, &options).map_err(|error| {
+    let mut surface = extract::extract(&source, &grid, &options).map_err(|error| {
         if !error.contains("no solid volume") {
             return error;
         }
@@ -359,6 +381,7 @@ pub fn boolean_with(
             BooleanOp::Union => error,
         }
     })?;
+    surface.stats.long_edges = source.long_edges.into_inner();
     Ok(Remeshed::new(surface, resolution, cell, sources))
 }
 
@@ -784,6 +807,51 @@ mod tests {
             }
         }
         solid
+    }
+
+    /// Eleven plates, each thinner than a cell, side by side within one cell
+    /// and against a slab, united with a block: the lattice edges through
+    /// them are crossed 23 times, more than the 16 a crossing list holds on
+    /// the stack. Every crossing counts: the surface on such an edge is where
+    /// the result changes between inside and out, averaged over all 23 (the
+    /// first 16 alone put it well over a tenth of a cell out), and the slower
+    /// way is counted in the stats.
+    #[test]
+    fn an_edge_crossed_more_than_sixteen_times_is_read_whole() {
+        let block = box_mesh(Vec3::splat(-1.0), Vec3::splat(1.0));
+        // Samples sit at odd sixteenths (resolution 16 over a block 2 long):
+        // the plates fill the cell from x = 1.1875 to 1.3125.
+        let mut faces: Vec<f32> =
+            (0..11).flat_map(|k| [1.195 + 0.0105 * k as f32, 1.199 + 0.0105 * k as f32]).collect();
+        let mut plates = TriMesh::default();
+        for pair in faces.chunks(2) {
+            plates.append(&box_mesh(Vec3::new(pair[0], -0.5, -0.5), Vec3::new(pair[1], 0.5, 0.5)));
+        }
+        // The slab the far end of the edge is inside, so the surface crosses it.
+        plates.append(&box_mesh(Vec3::new(1.308, -0.5, -0.5), Vec3::new(1.6, 0.5, 0.5)));
+        faces.push(1.308);
+        let settings = BooleanSettings::new(16);
+        let Admitted { grid, cell, .. } = admit(&block, &[&plates], BooleanOp::Union, &settings).unwrap();
+        assert_eq!(cell, 0.125);
+        let sample = |axis: usize, x: f32| ((x / cell - 0.5).round() as i32 - grid.lo[axis]) as usize;
+        let at = [sample(0, 1.1875), sample(1, 0.0625), sample(2, 0.0625)];
+        assert_eq!((grid.coord(0, at[0]), grid.coord(1, at[1])), (1.1875, 0.0625));
+        let scans = [&block, &plates].map(|mesh| Scan::new(&mesh.positions, &mesh.indices, &grid).unwrap());
+        let source = Combined { scans: scans.into(), op: BooleanOp::Union, grid, long_edges: AtomicUsize::new(0) };
+        let (fraction, normal) = source.edge_hit(0, at, false).expect("the plates cross the edge");
+        let mean = |list: &[f32]| list.iter().sum::<f32>() / list.len() as f32;
+        let all = (mean(&faces) - 1.1875) / cell;
+        assert!((fraction - all).abs() < 1e-4, "{fraction} where all the crossings put it at {all}");
+        assert!(((mean(&faces[..16]) - 1.1875) / cell - all).abs() > 0.1, "the first 16 alone would be well off");
+        assert!(normal.x < -0.9, "facing out of the result, back toward the block: {normal}");
+        assert_eq!(source.long_edges.into_inner(), 1);
+
+        // Start to finish: the long edges are counted, and the result is sound.
+        let out = boolean_with(&block, &[&plates], BooleanOp::Union, &settings).unwrap();
+        assert!(out.stats.long_edges > 0, "{:?}", out.stats);
+        assert_eq!(defects(&out.mesh), Defects::default());
+        let plain = combined(&block, &unit_cube(Vec3::new(0.0, 3.0, 0.0)), BooleanOp::Union, 16);
+        assert_eq!(plain.stats.long_edges, 0);
     }
 
     /// Whatever goes in, what comes out is either a plain refusal or a closed,

@@ -163,6 +163,8 @@ pub fn voxel_remesh_noted(mesh: &Mesh, resolution: u32, symmetry: [bool; 3]) -> 
     }
     let rebuilt = remesh_with(&mesh.positions, &mesh.indices, &settings).map_err(reworded)?;
     let notes = Notes::of(&rebuilt);
+    // The remesher's own normals are left: they are the old surface's, not
+    // the new one's (`the_remeshers_normals_are_not_the_meshes_own`).
     Ok((Mesh::new(rebuilt.mesh.positions, rebuilt.mesh.indices, None), notes))
 }
 
@@ -352,6 +354,62 @@ mod tests {
              built, which leaves holes. 4 places where surfaces nearly touch could not be kept apart."
         );
         assert_eq!(Notes::default().after_boolean(), "");
+    }
+
+    /// The remesher hands back a normal for every vertex, taken from the
+    /// faces of the model it read; the sculpt mesh works its own out from
+    /// its new triangles. How far apart the two are, in degrees: the mean,
+    /// the 99th percentile and the worst, and the share of vertices more
+    /// than 5 degrees apart.
+    fn normals_apart(model: &Mesh, resolution: u32) -> (f32, f32, f32, f32) {
+        let settings = RemeshSettings { resolution, mirror: [false; 3], max_triangles: MAX_TRIANGLES };
+        let rebuilt = remesh_with(&model.positions, &model.indices, &settings).unwrap();
+        assert_eq!(rebuilt.normals.len(), rebuilt.mesh.positions.len());
+        let (mesh, went) = Mesh::new_mapped(rebuilt.mesh.positions.clone(), rebuilt.mesh.indices.clone(), None);
+        let mut angles: Vec<f32> = rebuilt
+            .normals
+            .iter()
+            .zip(&went)
+            .filter(|(_, at)| **at != u32::MAX)
+            .map(|(given, &at)| given.angle_between(mesh.normals[at as usize]).to_degrees())
+            .collect();
+        angles.sort_by(f32::total_cmp);
+        let mean = angles.iter().sum::<f32>() / angles.len() as f32;
+        let wide = angles.iter().filter(|&&a| a > 5.0).count() as f32 / angles.len() as f32;
+        (mean, angles[angles.len() * 99 / 100], *angles.last().unwrap(), wide)
+    }
+
+    /// Why a remesh works its normals out again rather than keeping the
+    /// remesher's (`remesh_with` hands back one for every vertex, taken from
+    /// the faces of the model it read). On a smooth ball the two agree to
+    /// within 2 degrees, and on a box exactly. But where the model had detail
+    /// near the size of a cell, finer than the new triangles can follow, the
+    /// remesher's still show it: on the ball below, 2 degrees apart on
+    /// average, 6 at the 99th percentile, 10 at worst, one vertex in 27 more
+    /// than 5. Shaded with them, a remeshed model would show detail its
+    /// surface no longer has, and lose it in patches wherever a stroke went
+    /// (a stroke works its normals out afresh); brushes that push along the
+    /// normal would push differently from today. Working them out costs
+    /// about 20 ms for five million vertices, a small part of any remesh of
+    /// that size, so they are worked out.
+    #[test]
+    fn the_remeshers_normals_are_not_the_meshes_own() {
+        let ball = primitives::build(Primitive::Sphere, 20_000, 0.5);
+        let rough = Mesh::new(
+            ball.positions.iter().map(|&p| p * (1.0 + 0.01 * (p.x * 60.0).sin() * (p.y * 50.0).cos())).collect(),
+            ball.indices.clone(),
+            None,
+        );
+        let cube = primitives::build(Primitive::Cube, 2_400, 0.5);
+        for (name, model) in [("smooth ball", &ball), ("cube", &cube), ("ball with fine detail", &rough)] {
+            let (mean, p99, worst, wide) = normals_apart(model, 64);
+            println!("{name}: {mean:.2} mean, {p99:.2} at the 99th percentile, {worst:.1} worst, {:.1}% over 5", wide * 100.0);
+            match name {
+                "smooth ball" => assert!(mean < 1.0 && worst < 3.0, "{name}: {mean} {worst}"),
+                "cube" => assert!(worst < 0.5, "{name}: {worst}"),
+                _ => assert!(p99 > 4.0 && worst > 8.0 && wide > 0.01, "{name}: {p99} {worst} {wide}"),
+            }
+        }
     }
 
     #[test]

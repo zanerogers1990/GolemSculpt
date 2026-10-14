@@ -133,7 +133,7 @@ pub struct Hit {
     pub bary: [f32; 3],
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Bvh {
     pub nodes: Vec<Node>,
     pub leaves: Vec<Leaf>,

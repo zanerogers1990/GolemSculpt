@@ -727,11 +727,18 @@ one level is kept on the others.
 - Levels are saved in the `.sclp` file, and in the copies kept in case of a
   crash, and a file opens on the level it was saved on. The card says how
   much memory the levels take (about 35 MB for each million triangles of the
-  finest level, beside the model itself). If that part of a file cannot be
+  finest level, beside the model itself, and about 60 MB more while you are
+  on a lower level: see below). If that part of a file cannot be
   read, the model still opens, as the level it was saved on, and the status
   line says its levels could not be read.
-- A step to a very fine level takes a moment, because the model is rebuilt
-  for the brushes each time: about a second for five million triangles.
+- A step to a very fine level used to take a moment, because the model was
+  rebuilt for the brushes each time. Now stepping down from the finest level
+  keeps what it was built into, so stepping back up to it is quick (about a
+  tenth of a second for five million triangles, a quarter for ten), with or
+  without sculpting done lower down. Stepping down from the finest level
+  takes a little longer for it (a few hundredths of a second), and a step to
+  a fine level that is not the finest, or the first step up after a file is
+  opened, still rebuilds.
 
 ## Sculpt layers
 
@@ -1009,6 +1016,9 @@ triangles, and an engine usually allows one model somewhere between 200k and
   target, it stops there and the line says why.
 - **Hidden parts are decimated with the rest, and stay hidden.** The budget
   is the whole model's, as is the file an export writes.
+- **Face groups stay as they were.** Every face left is one the model had,
+  and it stays in its group, so a group's border stays on the faces it ran
+  along.
 - **Symmetry is not kept exactly, so it asks first.** The two sides of a
   mirror (or the repeats of a radial symmetry) are thinned each in its own
   order, so afterwards the model is symmetric to the eye and its points no
@@ -2536,6 +2546,8 @@ sculpt.exe --compare-shots shots\old shots
 ew   # two such sets compared pixel by pixel
 SCULPT_BENCH_ROWS="Clay,Smooth,Clay|" sculpt.exe --bench 1000000   # only those rows (as labelled; rows ending in | run beside the mirror plane)
 sculpt.exe --brush-hash       # scripted strokes of every brush, symmetry, mask, hidden faces, layers and dynamic topology, with a hash of the mesh after each: a speed change must leave every line the same
+sculpt.exe --bench-levels 1000000 5000000 10000000   # subdivision levels: subdivide, down, up with and without a small edit, at about those finest-level triangle counts; each line prints a fingerprint of what the step made, to compare two builds bit for bit
+cargo test -p sculpt-multires --release timing_of_the_two_ways -- --ignored --nocapture   # an edit carried up from what it changed against every vertex looked at, as the edit grows
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first; spacing=150, scatter=50 and jitter=40 set every brush's Spacing, Scatter and Size Jitter in percent, and alpha=scales+random180 an alpha with Random Rotation)
 SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
 SCULPT_DEMO_SYMMETRY=repair sculpt.exe --screenshot out.png --demo-symmetry --demo-ui "float=Symmetry@640:20"   # Check Symmetry, Make Symmetric and Symmetry Cleanup pressed in turn on a model made lopsided for them, each undone and redone; prints the status lines and a line per check (ok / FAIL)

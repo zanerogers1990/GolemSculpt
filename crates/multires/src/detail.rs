@@ -72,9 +72,7 @@ pub(crate) fn carry<R: Refiner>(
             if !reached(r, &moved, i) {
                 return fine_was[i];
             }
-            let detail = fine_was[i].as_dvec3() - was[i].as_dvec3();
-            let turn = Turn::of(&BaseFan { r, vertex: i, was: &was, now: &now });
-            (now[i].as_dvec3() + turn.apply(detail)).as_vec3()
+            carried_one(r, i, fine_was[i], |v| (was[v], now[v]))
         })
         .collect()
 }
@@ -117,7 +115,7 @@ pub(crate) fn carry_with<R: Refiner>(
     let count = rides.len() + 1;
     let mut all = vec![Vec3::ZERO; r.total() * count];
     all.par_chunks_mut(count).enumerate().with_min_len(PER_TASK).for_each(|(i, out)| {
-        let turn = reached(r, &moved, i).then(|| Turn::of(&BaseFan { r, vertex: i, was: &was, now: &now }));
+        let turn = reached(r, &moved, i).then(|| Turn::of(&BaseFan { r, vertex: i, base: |v| (was[v], now[v]) }));
         out[0] = match turn {
             Some(turn) => (now[i].as_dvec3() + turn.apply(fine_was[i].as_dvec3() - was[i].as_dvec3())).as_vec3(),
             None => fine_was[i],
@@ -137,6 +135,18 @@ pub(crate) fn carry_with<R: Refiner>(
     (list(0), (1..count).map(list).collect())
 }
 
+/// Where fine vertex `i`, at `fine_was` before the edit, is after it: its
+/// detail over the base it was measured from, turned as the base turned
+/// round it and put on the base as it is now. `base(v)` is fine vertex `v`'s
+/// base before the edit and after it, for `i` and every vertex of its fan.
+#[inline]
+pub(crate) fn carried_one<R: Refiner>(r: &R, i: usize, fine_was: Vec3, base: impl Fn(usize) -> (Vec3, Vec3)) -> Vec3 {
+    let (was, now) = base(i);
+    let detail = fine_was.as_dvec3() - was.as_dvec3();
+    let turn = Turn::of(&BaseFan { r, vertex: i, base });
+    (now.as_dvec3() + turn.apply(detail)).as_vec3()
+}
+
 /// Where two lists differ, bit for bit.
 fn differing(was: &[Vec3], now: &[Vec3]) -> Vec<bool> {
     was.par_iter().zip(now).with_min_len(PER_TASK).map(|(a, b)| !a.same(*b)).collect()
@@ -152,19 +162,24 @@ fn reached<R: Refiner>(r: &R, moved: &[bool], i: usize) -> bool {
 }
 
 /// The fan of base faces round one fine vertex, in the base as it was and
-/// as it is now.
-struct BaseFan<'a, R> {
+/// as it is now: `base(v)` is fine vertex `v`'s base before and after.
+struct BaseFan<'a, R, B> {
     r: &'a R,
     vertex: usize,
-    was: &'a [Vec3],
-    now: &'a [Vec3],
+    base: B,
 }
 
-impl<R: Refiner> Fan for BaseFan<'_, R> {
+impl<R: Refiner, B: Fn(usize) -> (Vec3, Vec3)> Fan for BaseFan<'_, R, B> {
     fn wedges(&self, mut wedge: impl FnMut([DVec3; 2], [DVec3; 2])) {
-        let (centre_was, centre_now) = (self.was[self.vertex].as_dvec3(), self.now[self.vertex].as_dvec3());
-        let spoke_was = |v: u32| self.was[v as usize].as_dvec3() - centre_was;
-        let spoke_now = |v: u32| self.now[v as usize].as_dvec3() - centre_now;
-        self.r.fan(self.vertex, |a, b| wedge([spoke_was(a), spoke_was(b)], [spoke_now(a), spoke_now(b)]));
+        let (centre_was, centre_now) = (self.base)(self.vertex);
+        let (centre_was, centre_now) = (centre_was.as_dvec3(), centre_now.as_dvec3());
+        let spoke = |v: u32| {
+            let (was, now) = (self.base)(v as usize);
+            (was.as_dvec3() - centre_was, now.as_dvec3() - centre_now)
+        };
+        self.r.fan(self.vertex, |a, b| {
+            let (a, b) = (spoke(a), spoke(b));
+            wedge([a.0, b.0], [a.1, b.1])
+        });
     }
 }

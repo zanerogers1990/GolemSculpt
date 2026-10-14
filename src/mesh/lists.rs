@@ -11,7 +11,7 @@
 /// The least room a list is given once it has moved.
 const MIN_ROOM: u32 = 8;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Lists {
     /// Where each list starts in `data`, and how many entries it has.
     span: Vec<[u32; 2]>,
