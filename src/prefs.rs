@@ -531,6 +531,9 @@ pub struct Prefs {
     pub dynamic_topology_detail: f32,
     /// Sculpts recently saved or opened, newest first (see `recent.rs`).
     pub recent: Vec<PathBuf>,
+    /// What painting lays: the colour, a library material by name, the
+    /// recent colours (see `materials::PaintPick`).
+    pub paint: crate::materials::PaintPick,
 }
 
 impl Default for Prefs {
@@ -559,6 +562,7 @@ impl Default for Prefs {
             dynamic_topology: dyntopo.enabled,
             dynamic_topology_detail: dyntopo.detail,
             recent: Vec::new(),
+            paint: Default::default(),
         }
     }
 }

@@ -68,6 +68,9 @@ pub struct Options {
     pub groups: crate::ui::groups::Card,
     /// The scene's material palette for painting, kept in the file (see mesh/paint/palette.rs).
     pub paint: crate::mesh::paint::palette::ScenePaint,
+    /// The material library and the custom shaders, which the Materials card
+    /// edits (see materials/mod.rs). Not part of the scene.
+    pub materials: crate::materials::State,
 }
 
 impl Default for Options {
@@ -104,6 +107,7 @@ impl Default for Options {
             look: Look::default(),
             groups: Default::default(),
             paint: Default::default(),
+            materials: Default::default(),
         }
     }
 }
@@ -351,6 +355,9 @@ pub enum Action {
     /// Something asked of the brush library: duplicate, rename, delete,
     /// Import Brush and the rest (see app/brushes.rs).
     Brush(crate::sculpt::library::Ask),
+    /// Something asked of the material library or the scene's palette (see
+    /// app/materials.rs).
+    Material(crate::materials::Ask),
     /// Look through the alpha folder again for pictures added by hand.
     RescanAlphas,
     /// Pick an HDRI picture to light the scene with.

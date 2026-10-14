@@ -15,6 +15,7 @@ mod gizmo;
 mod history;
 mod io;
 mod look;
+mod materials;
 mod mcp;
 mod mesh;
 mod prefs;
@@ -219,6 +220,9 @@ fn window_options(args: &[String]) -> app::Args {
             "--demo-layers" => opts.demo_layers = it.next().cloned(),
             // Face groups: play (worked and checked), or a picture (see app/groups/play.rs).
             "--demo-groups" => opts.demo_groups = it.next().cloned(),
+            // A sphere painted with materials and colour: lit | matcap | no-materials | no-polypaint | card |
+            // custom | broken (see app/paint_demo.rs).
+            "--demo-paint" => opts.demo_paint = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

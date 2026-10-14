@@ -8,11 +8,11 @@ use super::tip;
 use crate::doc::{Action, Options};
 use crate::look::{self, Finish, Look, Rgb, Tonemap};
 
-fn two(v: f32) -> String {
+pub(super) fn two(v: f32) -> String {
     format!("{v:.2}")
 }
 
-fn percent(v: f32) -> String {
+pub(super) fn percent(v: f32) -> String {
     format!("{:.0}%", v * 100.0)
 }
 
@@ -21,7 +21,7 @@ fn to_color(c: Rgb) -> Color32 {
 }
 
 /// A caption with a colour well that opens a picker.
-fn color_row(ui: &mut egui::Ui, label: &str, color: &mut Rgb) {
+pub(super) fn color_row(ui: &mut egui::Ui, label: &str, color: &mut Rgb) {
     ui.horizontal(|ui| {
         ui.color_edit_button_rgb(color);
         ui.label(egui::RichText::new(label).font(theme::font(12.0)).color(theme::TEXT()));
@@ -30,7 +30,7 @@ fn color_row(ui: &mut egui::Ui, label: &str, color: &mut Rgb) {
 
 /// A grid of preset buttons, each with a dot of the preset's colour. Returns
 /// the one clicked.
-fn preset_grid(
+pub(super) fn preset_grid(
     ui: &mut egui::Ui,
     tips: bool,
     selected: Option<usize>,
@@ -60,7 +60,7 @@ fn preset_grid(
 }
 
 /// A row of buttons of which one is on. Returns the one clicked.
-fn choice(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Option<usize> {
+pub(super) fn choice(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Option<usize> {
     let mut picked = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -197,7 +197,7 @@ pub fn material(ui: &mut egui::Ui, o: &mut Options, size: f32, actions: &mut Vec
     }
 }
 
-fn lure(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
+pub(super) fn lure(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
     theme::hint(ui, "Translucent soft plastic with glitter cast into it.");
     let presets = look::LURES.iter().map(|p| (p.name, p.description, p.thin));
     if let Some(i) = preset_grid(ui, tips, Some(look.lure.preset), presets) {
@@ -211,7 +211,7 @@ fn lure(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
     theme::slider(ui, "Gloss", &mut s.gloss, 0.0..=1.0, two);
 }
 
-fn metal(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
+pub(super) fn metal(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
     theme::hint(ui, "Aged metal: a coat in the recesses, worn bright on the edges.");
     let presets = look::METALS.iter().map(|p| (p.name, p.description, p.coat_a));
     if let Some(i) = preset_grid(ui, tips, Some(look.metal.preset), presets) {
@@ -233,7 +233,7 @@ fn metal(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
     }
 }
 
-fn clay(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
+pub(super) fn clay(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
     theme::hint(ui, "Sculptor's oil clay: satin, a wet highlight, richer in the recesses.");
     let presets = look::CLAYS.iter().map(|p| (p.name, p.description, p.color));
     if let Some(i) = preset_grid(ui, tips, Some(look.clay.preset), presets) {
@@ -248,7 +248,7 @@ fn clay(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
     theme::slider(ui, "Grain", &mut s.grain, 0.0..=3.0, two);
 }
 
-fn wood(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
+pub(super) fn wood(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
     theme::hint(ui, "Carved, waxed wood: rings around a log through the model.");
     let presets = look::WOODS.iter().map(|p| (p.name, p.description, p.early));
     if let Some(i) = preset_grid(ui, tips, Some(look.wood.preset), presets) {

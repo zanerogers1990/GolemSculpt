@@ -16,6 +16,7 @@ pub mod groups;
 mod layers;
 mod levels;
 mod look;
+pub mod materials;
 mod masking;
 mod mirror_copies;
 mod modes;
@@ -72,6 +73,8 @@ pub struct UiState {
     /// the interface's points: the grabbed point, then each joint. Empty
     /// when there is nothing to show.
     pub pose: Vec<Vec<Pos2>>,
+    /// The Materials card's thumbnails (see materials.rs).
+    pub materials: materials::Thumbs,
 }
 
 impl UiState {
@@ -86,6 +89,7 @@ impl UiState {
             gizmo: Vec::new(),
             recent: Default::default(),
             pose: Vec::new(),
+            materials: Default::default(),
         }
     }
 }
@@ -763,6 +767,8 @@ fn look_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             theme::slider(ui, "Valley", &mut o.cavity_valley, 0.0..=2.0, |v| format!("{v:.2}"));
         }
     });
+    let o = &mut doc.opts;
+    materials::card(ui, &o.materials, &mut o.paint, &doc.sculptor.settings.paint, &mut state.materials, tips, actions);
     look::lighting(ui, &mut doc.opts, actions);
     look::effects(ui, &mut doc.opts);
 }

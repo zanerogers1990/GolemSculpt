@@ -51,6 +51,8 @@ mod layers;
 mod levels;
 mod live_copies;
 mod mask_shape;
+mod materials;
+mod paint_demo;
 mod masked;
 mod mirror_copies;
 mod new_scene;
@@ -169,6 +171,10 @@ pub struct Args {
     /// Face groups: `play` works them and prints a line per check; the other
     /// words set up a picture (see app/groups/play.rs).
     pub demo_groups: Option<String>,
+    /// A sphere painted with materials and colour: `lit`, `matcap`,
+    /// `no-materials`, `no-polypaint`, `card`, `custom`, `broken` (for
+    /// visual checks; see app/paint_demo.rs).
+    pub demo_paint: Option<String>,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -676,6 +682,9 @@ impl Running {
         }
         if let Some(what) = running.args.demo_groups.clone() {
             running.groups_demo(&what);
+        }
+        if let Some(what) = running.args.demo_paint.clone() {
+            running.paint_demo(&what);
         }
         if let Some((yaw, pitch)) = running.args.view {
             // Every object in the picture, from the side asked for.
@@ -1404,6 +1413,7 @@ impl Running {
             }
             Action::ImportAlpha => self.pick_alpha(),
             Action::Brush(ask) => self.brush_ask(ask),
+            Action::Material(ask) => self.material_ask(ask),
             Action::RescanAlphas => self.rescan_alphas(),
             Action::LoadHdri => {
                 let picked = rfd::FileDialog::new()
@@ -1861,10 +1871,16 @@ impl Running {
         // The steps of a scripted check of recovery, if this run is one.
         self.recovery_frame();
 
+        // The palette packed for the renderer, custom shaders read again
+        // if their files changed (app/materials.rs).
+        self.materials_frame();
         // Send the mesh changes: a whole mesh if it is new or was replaced,
         // otherwise only the vertex ranges the brush touched.
         let doc = &mut self.doc;
-        self.renderer.want_curvature = doc.opts.look.needs_curvature(doc.opts.matcap_on);
+        // Curvature, for the Look's finish or a painted material that reads it.
+        let painted_curvature =
+            !doc.opts.matcap_on && doc.opts.paint.show_materials && self.renderer.painted.upload().any_curvature();
+        self.renderer.want_curvature = doc.opts.look.needs_curvature(doc.opts.matcap_on) || painted_curvature;
         self.renderer.wire.enabled = doc.opts.wireframe;
         self.renderer.groups.enabled = doc.opts.groups.colours;
         if doc.opts.look.animated() {
@@ -2009,6 +2025,8 @@ impl Running {
         }
         // Pictures for a 360 loop or a timelapse, now the window's is out.
         self.recording_capture(event_loop);
+        // The Materials card's thumbnails, each its own batch of work.
+        self.materials_thumbs();
 
         self.frames += 1;
         let frame_ms = now.elapsed().as_secs_f32() * 1000.0;

@@ -19,6 +19,7 @@ mod chunks;
 mod dof;
 pub mod env;
 mod mips;
+pub mod paint;
 mod pipelines;
 pub mod flash;
 pub mod groups;
@@ -243,6 +244,11 @@ struct MeshBuffers {
     index_room: u32,
     /// The mesh cut into pieces, so only those in view are drawn (chunks.rs).
     chunks: chunks::Chunks,
+    /// The paint composite, for a mesh with paint (paint.rs), with room for
+    /// `vertex_room` vertices.
+    paint: Option<wgpu::Buffer>,
+    /// The palette slots of the paint's local table (`Mesh::paint_table`).
+    table: Vec<u8>,
 }
 
 impl MeshBuffers {
@@ -273,6 +279,50 @@ fn roomy_buffer(gpu: &Gpu, label: &str, bytes: &[u8], room: u64, usage: wgpu::Bu
     });
     gpu.queue.write_buffer(&buffer, 0, bytes);
     buffer
+}
+
+/// Sends what changed of `mesh`'s paint composite into `buffers` (see
+/// paint.rs): all of it into a new buffer when the mesh first has paint or
+/// its buffers were outgrown, otherwise only the vertex ranges that changed,
+/// as for the mask. Gives back the bytes sent, and whether anything the
+/// picture is drawn from changed (the local table too).
+fn sync_paint(
+    gpu: &Gpu,
+    buffers: &mut MeshBuffers,
+    mesh: &Mesh,
+    outgrown: bool,
+    dirty: &[std::ops::Range<u32>],
+) -> (usize, bool) {
+    let stream = mesh.paint_stream();
+    let table_changed = buffers.table.as_slice() != mesh.paint_table();
+    if table_changed {
+        buffers.table = mesh.paint_table().to_vec();
+    }
+    let plan = paint::Sync::plan(buffers.paint.is_some(), stream.len(), mesh.vertex_count(), outgrown, dirty);
+    let mut bytes = 0;
+    match &plan {
+        paint::Sync::Nothing => {}
+        paint::Sync::Drop => buffers.paint = None,
+        paint::Sync::Create => {
+            let data: &[u8] = bytemuck::cast_slice(stream);
+            let room = buffers.vertex_room as u64 * paint::STRIDE;
+            buffers.paint = Some(roomy_buffer(gpu, "paint", data, room, wgpu::BufferUsages::VERTEX));
+            bytes = data.len();
+        }
+        paint::Sync::Write(ranges) => {
+            let Some(buffer) = &buffers.paint else { return (0, table_changed) };
+            for r in ranges {
+                let (start, end) = (r.start as usize, (r.end as usize).min(stream.len()));
+                if start >= end {
+                    continue;
+                }
+                let data: &[u8] = bytemuck::cast_slice(&stream[start..end]);
+                gpu.queue.write_buffer(buffer, start as u64 * paint::STRIDE, data);
+                bytes += data.len();
+            }
+        }
+    }
+    (bytes, plan.changes_picture() || table_changed)
 }
 
 /// An index buffer holding `corners`. It is never made empty: a mesh with
@@ -348,6 +398,8 @@ pub struct Renderer {
     /// `shadow_key`), not every frame.
     shadow_drawn: Option<cache::SceneKey>,
     blit: cache::Blit,
+    /// Painted objects' pipelines, the palette and the local tables (paint.rs).
+    pub painted: paint::Painted,
 }
 
 /// The renderer's working textures for a second picture size: what a
@@ -561,6 +613,7 @@ impl Renderer {
         });
         let mesh_pipes =
             pipelines::MeshPipelines::new(device, &shader, &layout, HDR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES);
+        let painted = paint::Painted::new(gpu, &layout_main, HDR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES);
         let layout = pipeline_layout(&layout_pre);
         let helper = |label, fragment: &str, format: wgpu::TextureFormat, cull: Cull| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -668,6 +721,7 @@ impl Renderer {
             uploads: cache::Stamp::default(),
             shadow_drawn: None,
             blit: cache::Blit::new(gpu),
+            painted,
         }
     }
 
@@ -795,6 +849,10 @@ impl Renderer {
         };
         // Every vertex goes up, hidden or not; only the faces drawn shrink.
         let shown = mesh.visible_indices();
+        let stream = mesh.paint_stream();
+        let painted = (stream.len() == mesh.vertex_count() && !stream.is_empty())
+            .then(|| make("paint", bytemuck::cast_slice(stream), vertex));
+        let paint_bytes = if painted.is_some() { stream.len() * paint::STRIDE as usize } else { 0 };
         let buffers = MeshBuffers {
             uid: mesh.uid,
             positions: make("positions", bytemuck::cast_slice(&mesh.positions), vertex | groups::READ),
@@ -808,10 +866,12 @@ impl Renderer {
             vertex_room: mesh.vertex_count() as u32,
             index_room: shown.len().max(3) as u32,
             chunks: chunks::Chunks::build(mesh),
+            paint: painted,
+            table: mesh.paint_table().to_vec(),
         };
         debug_assert_eq!(buffers.index_count as usize, mesh.visible_triangle_count() * 3);
         self.meshes.insert(id, buffers);
-        self.last_upload_bytes = mesh.vertex_count() * 32 + shown.len() * 4;
+        self.last_upload_bytes = mesh.vertex_count() * 32 + shown.len() * 4 + paint_bytes;
     }
 
     /// Sends only what changed since the last call.
@@ -844,6 +904,8 @@ impl Renderer {
             buffers.vertex_room = room;
             bytes += count as usize * 32;
         }
+        let (paint_bytes, paint_changed) = sync_paint(gpu, buffers, mesh, outgrown, &dirty.paint);
+        bytes += paint_bytes;
         let moved = outgrown || !dirty.positions.is_empty();
         let dirty = if outgrown { crate::mesh::DirtyRanges { triangles: dirty.triangles, ..Default::default() } } else { dirty };
         for r in &dirty.positions {
@@ -909,7 +971,7 @@ impl Renderer {
         } else if moved {
             buffers.chunks.refresh(mesh);
         }
-        if bytes > 0 || split || shown_again {
+        if bytes > 0 || split || shown_again || paint_changed {
             self.uploads.bump();
         }
         if bytes > 0 {
@@ -948,7 +1010,22 @@ impl Renderer {
             ((look.matcap_params[2] + 0.5) as u32).clamp(0, 4)
         };
         let glow = look.glow.v[2][0] > 0.5;
-        let plastic = lit && surface == 1;
+        // Which objects are drawn with their paint (paint.rs): those whose
+        // mesh has some, while painted colour or materials show.
+        let shown = &opts.paint;
+        self.painted.set_show(gpu, shown.show_polypaint, shown.show_materials);
+        let mut painted: Vec<bool> = items
+            .iter()
+            .map(|i| self.painted.draws(self.meshes.get(&i.mesh).is_some_and(|m| m.paint.is_some())))
+            .collect();
+        // The plastic reads the back faces' depth, as the Look's finish or
+        // as a painted material of an object in the picture.
+        let upload = self.painted.upload();
+        let painted_lure = shown.show_materials
+            && items.iter().zip(&painted).any(|(i, &p)| {
+                p && self.meshes.get(&i.mesh).is_some_and(|m| upload.back_depth_for(m.table.iter().copied()))
+            });
+        let plastic = lit && (surface == 1 || painted_lure);
         let source = lit.then(|| env_source(globals, look, opts));
         let post_params = post_params(globals, look, settings);
 
@@ -1028,17 +1105,51 @@ impl Renderer {
         // How each object is culled, and the main pass's pipeline for each.
         let culls: Vec<Cull> =
             items.iter().map(|i| Cull::of(opts.show_backfaces, pipelines::mirrored(&i.model))).collect();
-        let mesh_pipes: Vec<(Cull, wgpu::RenderPipeline)> = Cull::ALL
-            .into_iter()
-            .filter(|c| culls.contains(c))
-            .map(|cull| (cull, self.mesh_pipes.get(MeshKey { surface, glow, cull }).clone()))
-            .collect();
-        // Draws the objects culled as `cull`, the parts of each in `runs`.
-        let draw_items = |pass: &mut wgpu::RenderPass, runs: &[Vec<std::ops::Range<u32>>], cull: Cull| {
+        // Each painted object's local table, as palette rows, by its place.
+        if painted.contains(&true) {
+            let upload = self.painted.upload();
+            let tables: Vec<[u32; 8]> = items
+                .iter()
+                .map(|i| {
+                    let mut rows = [0u32; 8];
+                    if let Some(mesh) = self.meshes.get(&i.mesh) {
+                        for (row, &slot) in rows.iter_mut().zip(&mesh.table) {
+                            *row = upload.row_of(slot);
+                        }
+                    }
+                    rows
+                })
+                .collect();
+            self.painted.set_tables(gpu, &tables);
+        }
+        // The main pass's pipelines: for each way of culling in use, the
+        // finish's own for objects without paint and the palette's painted
+        // one for objects with. A painted pipeline that cannot be built
+        // leaves its objects drawn without their paint.
+        let module = self.painted.module_key();
+        let mut mesh_pipes: Vec<(Cull, bool, wgpu::RenderPipeline)> = Vec::new();
+        for cull in Cull::ALL {
+            let with_paint = |painted: &[bool]| (0..items.len()).any(|i| culls[i] == cull && painted[i]);
+            if with_paint(&painted) {
+                let key = paint::Key { module: module.clone(), surface, glow, cull };
+                match self.painted.pipeline(&key) {
+                    Some(pipeline) => mesh_pipes.push((cull, true, pipeline)),
+                    None => (0..items.len()).filter(|&i| culls[i] == cull).for_each(|i| painted[i] = false),
+                }
+            }
+            if (0..items.len()).any(|i| culls[i] == cull && !painted[i]) {
+                mesh_pipes.push((cull, false, self.mesh_pipes.get(MeshKey { surface, glow, cull }).clone()));
+            }
+        }
+        let paint_bind = painted.contains(&true).then(|| self.painted.bind().clone());
+        // Draws the objects culled as `cull`, the parts of each in `runs`:
+        // all of them, or with `paint` only those drawn with their paint or
+        // only those without.
+        let draw_items = |pass: &mut wgpu::RenderPass, runs: &[Vec<std::ops::Range<u32>>], cull: Cull, paint: Option<bool>| {
             let Some((objects, _)) = &self.objects else { return };
             for (i, item) in items.iter().enumerate() {
                 let Some(mesh) = self.meshes.get(&item.mesh) else { continue };
-                if runs[i].is_empty() || culls[i] != cull {
+                if runs[i].is_empty() || culls[i] != cull || paint.is_some_and(|p| p != painted[i]) {
                     continue;
                 }
                 pass.set_vertex_buffer(0, mesh.positions.slice(..));
@@ -1046,6 +1157,10 @@ impl Renderer {
                 pass.set_vertex_buffer(2, mesh.mask.slice(..));
                 pass.set_vertex_buffer(3, objects.slice(..));
                 pass.set_vertex_buffer(4, mesh.curv.slice(..));
+                if paint == Some(true) {
+                    let Some(colour) = &mesh.paint else { continue };
+                    pass.set_vertex_buffer(5, colour.slice(..));
+                }
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 for run in &runs[i] {
                     pass.draw_indexed(run.clone(), 0, i as u32..i as u32 + 1);
@@ -1078,7 +1193,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.bind_pre, &[]);
             for cull in Cull::ALL.into_iter().filter(|c| culls.contains(c)) {
                 pass.set_pipeline(&pipelines[cull.index()]);
-                draw_items(&mut pass, &in_view, cull);
+                draw_items(&mut pass, &in_view, cull, None);
             }
         };
 
@@ -1096,7 +1211,7 @@ impl Renderer {
             let runs = self.visible_runs(&light, items);
             for cull in Cull::ALL.into_iter().filter(|c| culls.contains(c)) {
                 pass.set_pipeline(&self.pipe_shadow[cull.index()]);
-                draw_items(&mut pass, &runs, cull);
+                draw_items(&mut pass, &runs, cull, None);
             }
         }
         if cavity || occlusion {
@@ -1127,9 +1242,12 @@ impl Renderer {
             pass.set_bind_group(0, bind_main, &[]);
             pass.set_pipeline(&self.pipe_background);
             pass.draw(0..3, 0..1);
-            for (cull, pipeline) in &mesh_pipes {
+            for (cull, with_paint, pipeline) in &mesh_pipes {
                 pass.set_pipeline(pipeline);
-                draw_items(&mut pass, &in_view, *cull);
+                if let (true, Some(bind)) = (*with_paint, &paint_bind) {
+                    pass.set_bind_group(1, bind, &[]);
+                }
+                draw_items(&mut pass, &in_view, *cull, Some(*with_paint));
             }
         }
 
@@ -1260,6 +1378,7 @@ impl Renderer {
             self.previews.stamp.count(),
             self.wire.stamp.count(),
             self.groups.stamp.count(),
+            self.painted.stamp.count(),
         ]);
         key
     }

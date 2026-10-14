@@ -3,8 +3,10 @@
 // in sculpt_pbr.wgsl, which is compiled together with this file. Colour is
 // linear and unclamped here; post.wgsl tone-maps and encodes it.
 
-// The finishes take screen-space derivatives of patterns inside branches, as
-// the shader they are ported from does.
+// The built-in finishes take no screen-space derivatives (a painted material
+// runs inside a branch chosen pixel by pixel, where they mean nothing; a test
+// holds them to it), but a custom material written by hand may. It is warned
+// about when it is read (materials/custom.rs) and still compiles.
 diagnostic(off, derivative_uniformity);
 
 struct Globals {
@@ -109,6 +111,12 @@ struct VsOut {
 
 @vertex
 fn vs_mesh(in: VsIn) -> VsOut {
+    return mesh_vertex(in);
+}
+
+// The main pass's vertex stage, shared with the painted pipelines
+// (painted.wgsl), which add the paint to what it hands on.
+fn mesh_vertex(in: VsIn) -> VsOut {
     var out: VsOut;
     let x = in.model_x.xyz;
     let y = in.model_y.xyz;

@@ -199,6 +199,13 @@ struct Surface {
     // one pixel covers: patterns live here so they stay on the model.
     p: vec3<f32>,
     footprint: f32,
+    // How much p changes to the next pixel right and down: what dpdx(p) and
+    // dpdy(p) would say, worked out where they mean something. A finish may
+    // run inside a branch chosen pixel by pixel (a painted material), where
+    // screen derivatives give garbage, so finishes use these instead (see
+    // `surface_width`).
+    p_dx: vec3<f32>,
+    p_dy: vec3<f32>,
     scale: vec3<f32>,
     // The object's axes (its matrix by columns).
     mx: vec3<f32>,
@@ -267,6 +274,13 @@ fn material(s: Surface, albedo: vec3<f32>) -> MaterialSample {
     m.scatter_shadow = 0.0;
     m.dim = 1.0;
     return m;
+}
+
+// What `fwidth` of a pattern would be at this pixel: how much a value with
+// gradient `grad` (per unit of p, the object's own space at world size)
+// changes across one pixel, from the pixel's own steps in p.
+fn surface_width(s: Surface, grad: vec3<f32>) -> f32 {
+    return abs(dot(grad, s.p_dx)) + abs(dot(grad, s.p_dy));
 }
 
 fn to_world_dir(s: Surface, v: vec3<f32>) -> vec3<f32> {
@@ -919,7 +933,13 @@ fn finish_wood(s: Surface, params: FinishParams) -> MaterialSample {
     // Good years and lean years: ring widths vary.
     phase += value_noise(vec3<f32>(phase * 0.3, along / fig_size * 0.4, 7.7)) * 1.5;
     let t = fract(phase);
-    let fw = fwidth(phase);
+    // How far the phase moves across one pixel. Not `fwidth(phase)`: a
+    // finish may run inside a branch (a painted material, chosen pixel by
+    // pixel), where screen derivatives mean nothing. The phase climbs one per
+    // ring straight out from the pith, so it is the pixel's step along that
+    // way, in rings (the wobble and the uneven years are slow beside it).
+    let outward = (u * radial.x + w * radial.y) / max(radius, 1e-6);
+    let fw = surface_width(s, outward / ring_size);
     // Earlywood eases into dark latewood, which stops dead at the next year.
     var late = smoothstep(1.0 - sharp * 1.8, 1.0 - sharp * 0.3, t)
         * (1.0 - smoothstep(1.0 - max(fw, 0.02), 1.0, t));
@@ -1051,10 +1071,32 @@ fn glow_cells(p: vec3<f32>) -> Cells {
     return out;
 }
 
+// The lava's crust plates are cells warped so they are not polygons, slowly
+// shifting: where in the cells point `p` (pattern units) falls at time `t`.
+fn glow_lava_warp(p: vec3<f32>, t: f32) -> vec3<f32> {
+    let warp = vec3<f32>(
+        value_noise(p * 0.6 + vec3<f32>(0.0, t * 0.05, 0.0)),
+        value_noise(p * 0.6 + vec3<f32>(13.1, 0.0, t * 0.05)),
+        value_noise(p * 0.6 + vec3<f32>(t * 0.05, 27.3, 5.7))) - 0.5;
+    return p + warp * 0.8;
+}
+
+// The two drifting noise fields whose zero-crossings are the energy veins.
+fn glow_vein_a(p: vec3<f32>, t: f32) -> f32 {
+    return fbm(p + vec3<f32>(0.0, t * 0.25, 0.0)) - 0.5;
+}
+
+fn glow_vein_b(p: vec3<f32>, t: f32) -> f32 {
+    return fbm(p * 1.9 + vec3<f32>(t * 0.2, 7.7, 3.1)) - 0.5;
+}
+
 // A line where v crosses zero, `width` wide and hottest at its centre.
 // `fw` is how much v changes across a pixel: the line is widened to at least
 // a pixel and dimmed to match, so a thin line fades out as the camera pulls
-// back rather than breaking into dashes.
+// back rather than breaking into dashes. The callers work `fw` out from the
+// pixel's steps in the object's space (`Surface::p_dx`, `p_dy`), not with
+// `fwidth`: a glow can be a painted material, run inside a branch chosen
+// pixel by pixel, where screen derivatives mean nothing.
 fn glow_line(v: f32, fw: f32, width: f32) -> f32 {
     let w = max(width, fw * 1.5);
     return saturate(1.0 - abs(v) / w) * saturate(width / w);
@@ -1095,14 +1137,15 @@ fn finish_glow(s: Surface, params: FinishParams) -> MaterialSample {
     } else if (pattern == 2) {
         // Lava: crust plates, warped so they are not polygons and slowly
         // shifting, split by molten cracks; molten pools in the recesses.
-        let warp = vec3<f32>(
-            value_noise(p * 0.6 + vec3<f32>(0.0, t * 0.05, 0.0)),
-            value_noise(p * 0.6 + vec3<f32>(13.1, 0.0, t * 0.05)),
-            value_noise(p * 0.6 + vec3<f32>(t * 0.05, 27.3, 5.7))) - 0.5;
-        let q = p + warp * 0.8;
+        let q = glow_lava_warp(p, t);
         let cells = glow_cells(q);
         let edge = cells.f2 - cells.f1;
-        let crack = glow_line(edge, fwidth(edge), 0.04 + 0.12 * coverage);
+        // How much the crack field changes to the next pixel right and down,
+        // as `fwidth(edge)` would measure it, without screen derivatives.
+        let right = glow_cells(glow_lava_warp(p + s.p_dx / pattern_size, t));
+        let down = glow_cells(glow_lava_warp(p + s.p_dy / pattern_size, t));
+        let fw_edge = abs(right.f2 - right.f1 - edge) + abs(down.f2 - down.f1 - edge);
+        let crack = glow_line(edge, fw_edge, 0.04 + 0.12 * coverage);
         // Each stretch of crack flares and fades on its own slow cycle.
         let flare = 0.6 + 0.4 * value_noise(q * 1.3 + vec3<f32>(0.0, 0.0, t * 0.3));
         let pool = smoothstep(0.35 - 0.4 * coverage, 0.75 - 0.4 * coverage, -cv);
@@ -1110,10 +1153,16 @@ fn finish_glow(s: Surface, params: FinishParams) -> MaterialSample {
         heat = max(crack * crack * flare, pool * 0.6);
     } else if (pattern == 3) {
         // Veins: the zero-crossings of two drifting noise fields.
-        let n1 = fbm(p + vec3<f32>(0.0, t * 0.25, 0.0)) - 0.5;
-        let n2 = fbm(p * 1.9 + vec3<f32>(t * 0.2, 7.7, 3.1)) - 0.5;
+        let n1 = glow_vein_a(p, t);
+        let n2 = glow_vein_b(p, t);
+        // Each field's change to the next pixel right and down, as `fwidth`
+        // would measure it, without screen derivatives.
+        let dx = s.p_dx / pattern_size;
+        let dy = s.p_dy / pattern_size;
+        let fw1 = abs(glow_vein_a(p + dx, t) - n1) + abs(glow_vein_a(p + dy, t) - n1);
+        let fw2 = abs(glow_vein_b(p + dx, t) - n2) + abs(glow_vein_b(p + dy, t) - n2);
         let width = 0.02 + 0.05 * coverage;
-        m = max(glow_line(n1, fwidth(n1), width), glow_line(n2, fwidth(n2), width * 0.7) * 0.7);
+        m = max(glow_line(n1, fw1, width), glow_line(n2, fw2, width * 0.7) * 0.7);
         heat = m * m;
         m *= 0.7 + 0.3 * value_noise(p * 3.0 - t * 1.5);
     } else if (pattern == 4) {
@@ -1129,7 +1178,10 @@ fn finish_glow(s: Surface, params: FinishParams) -> MaterialSample {
         let fres = pow(1.0 - facing, 2.0);
         let y = s.world.y / pattern_size;
         let scan_v = fract(y - t * 0.5) - 0.5;
-        let scan = glow_line(scan_v, fwidth(scan_v), 0.04 + 0.12 * coverage);
+        // The scanlines climb with the world's height: one pixel's step in
+        // it, from the pixel's steps in the object's own space.
+        let rise = vec3<f32>(s.mx.y, s.my.y, s.mz.y) / s.scale;
+        let scan = glow_line(scan_v, surface_width(s, rise) / pattern_size, 0.04 + 0.12 * coverage);
         let sweep = pow(fract(y * 0.05 - t * 0.12), 12.0);
         let flicker = 0.85 + 0.15 * value_noise(vec3<f32>(t * 9.0, 0.5, 0.5));
         m = saturate(fres * 1.2 + scan * 0.45 + sweep * 0.5 + 0.08) * flicker;
@@ -1187,9 +1239,11 @@ fn surface_material(s: Surface) -> MaterialSample {
     return finish_pbr(s, look.finish);
 }
 
-@fragment
-fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
-    let front = is_front(handedness(in.model_x, in.model_y, in.model_z), facing);
+// What the pixel is, before any light: where it is, which way it faces,
+// its place in the object's own pattern space, its curvature and the
+// surface grain. Shared with the painted pipelines (painted.wgsl), so a
+// painted object and a bare one are the same surface.
+fn mesh_surface(in: VsOut, front: bool) -> Surface {
     var n = shading_normal(in.normal, in.world, front);
     let smooth_n = select(-normalize(in.normal), normalize(in.normal), front);
 
@@ -1208,6 +1262,8 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
     s.scale = vec3<f32>(length(s.mx), length(s.my), length(s.mz));
     s.p = in.local * s.scale;
     s.footprint = length(fwidth(s.p));
+    s.p_dx = dpdx(s.p);
+    s.p_dy = dpdy(s.p);
     s.smooth_n = smooth_n;
     s.curv = in.curv;
     s.base_color = g.base_color.rgb;
@@ -1222,22 +1278,28 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
         n = perturb_normal(n, in.local * look.base_params.w, look.base_params.z);
     }
     s.n = n;
+    return s;
+}
 
-    var color: vec3<f32>;
-    if (FINISH == FINISH_MATCAP) {
-        color = matcap_shade(n);
-    } else {
-        s.shadow = key_shadow(in.world);
-        if (look.env_params.z > 0.5) {
-            s.ao = textureLoad(ao_tex, s.pixel, 0).r;
-            s.ao_direct = mix(1.0, s.ao, look.env_params.w);
-        }
-        if (look.matcap_params.w > 0.5) {
-            s.back_depth = textureLoad(back_tex, s.pixel, 0).r;
-        }
-        color = light_sample(s, surface_material(s));
+// The surface with what reaches it of the lights: the key's shadow, the
+// ambient occlusion, and the back faces behind it for the plastic.
+fn lit_surface(surface: Surface) -> Surface {
+    var s = surface;
+    s.shadow = key_shadow(s.world);
+    if (look.env_params.z > 0.5) {
+        s.ao = textureLoad(ao_tex, s.pixel, 0).r;
+        s.ao_direct = mix(1.0, s.ao, look.env_params.w);
     }
+    if (look.matcap_params.w > 0.5) {
+        s.back_depth = textureLoad(back_tex, s.pixel, 0).r;
+    }
+    return s;
+}
 
+// What goes over the shaded surface, the same for every pipeline: cavity,
+// the glow, the inside's tint, the mask and the symmetry guides.
+fn mesh_finish(shaded: vec3<f32>, s: Surface, in: VsOut, front: bool) -> vec4<f32> {
+    var color = shaded;
     // Cavity multiplies the finished colour - over a matcap's baked lighting
     // or the lit result alike - and before the mask tint, so a masked crease
     // still reads as a crease.
@@ -1297,6 +1359,20 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
         color = mix(color, spoke_color[i32(g.radial_spoke.w)], guide * 0.35);
     }
     return vec4<f32>(color, 1.0);
+}
+
+@fragment
+fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
+    let front = is_front(handedness(in.model_x, in.model_y, in.model_z), facing);
+    var s = mesh_surface(in, front);
+    var color: vec3<f32>;
+    if (FINISH == FINISH_MATCAP) {
+        color = matcap_shade(s.n);
+    } else {
+        s = lit_surface(s);
+        color = light_sample(s, surface_material(s));
+    }
+    return mesh_finish(color, s, in, front);
 }
 
 // ---- helper passes --------------------------------------------------------
