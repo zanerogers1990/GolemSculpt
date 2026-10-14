@@ -279,6 +279,7 @@ impl Layer {
         meshes: &HashMap<u64, MeshBuffers>,
         objects: Option<&wgpu::Buffer>,
         items: &[DrawItem],
+        runs: &[Vec<std::ops::Range<u32>>],
     ) {
         let (true, false, Some(objects)) = (self.enabled, self.tints.is_empty(), objects) else { return };
         gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(view_proj));
@@ -292,7 +293,13 @@ impl Layer {
                 continue;
             }
             pass.set_bind_group(1, &tint.bind, &[]);
-            pass.draw(0..tint.count.min(mesh.index_count), i as u32..i as u32 + 1);
+            // Only the parts in view, as the scene drew them (render/chunks.rs).
+            let end = tint.count.min(mesh.index_count);
+            for run in &runs[i] {
+                if run.start < end {
+                    pass.draw(run.start..run.end.min(end), i as u32..i as u32 + 1);
+                }
+            }
         }
     }
 }

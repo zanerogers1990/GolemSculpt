@@ -14,6 +14,7 @@ use crate::look::{Finish, LookUniform, Tonemap, SHADOW_SIZE};
 use crate::mesh::Mesh;
 
 mod cache;
+mod chunks;
 mod dof;
 pub mod env;
 mod mips;
@@ -238,6 +239,26 @@ struct MeshBuffers {
     /// buffers, and the whole mesh sent again, every frame.
     vertex_room: u32,
     index_room: u32,
+    /// The mesh cut into pieces, so only those in view are drawn (chunks.rs).
+    chunks: chunks::Chunks,
+}
+
+impl MeshBuffers {
+    /// The runs of corners to draw of this mesh placed by `model` (an
+    /// object's matrix by columns, as in `DrawItem`) and seen through
+    /// `view_proj`.
+    fn visible(&self, view_proj: &glam::Mat4, model: &[[f32; 4]; 4], out: &mut Vec<std::ops::Range<u32>>) {
+        out.clear();
+        if self.chunks.all().end != self.index_count {
+            // Pieces of another set of faces than the buffer's: all of it.
+            out.push(0..self.index_count);
+            return;
+        }
+        let mut model = glam::Mat4::from_cols_array_2d(model);
+        // The last element carries the active flag, not the matrix's own 1.
+        model.w_axis.w = 1.0;
+        self.chunks.visible(&(*view_proj * model), out);
+    }
 }
 
 /// A buffer with room for `room` bytes, holding `bytes` at its start.
@@ -816,6 +837,7 @@ impl Renderer {
             topology: mesh.topology_version(),
             vertex_room: mesh.vertex_count() as u32,
             index_room: shown.len().max(3) as u32,
+            chunks: chunks::Chunks::build(mesh),
         };
         debug_assert_eq!(buffers.index_count as usize, mesh.visible_triangle_count() * 3);
         self.meshes.insert(id, buffers);
@@ -852,6 +874,7 @@ impl Renderer {
             buffers.vertex_room = room;
             bytes += count as usize * 32;
         }
+        let moved = outgrown || !dirty.positions.is_empty();
         let dirty = if outgrown { crate::mesh::DirtyRanges { triangles: dirty.triangles, ..Default::default() } } else { dirty };
         for r in &dirty.positions {
             let data: &[u8] = bytemuck::cast_slice(&mesh.positions[r.start as usize..r.end as usize]);
@@ -911,6 +934,11 @@ impl Renderer {
             buffers.index_count = corners;
         }
         buffers.topology = mesh.topology_version();
+        if split || shown_again {
+            buffers.chunks = chunks::Chunks::build(mesh);
+        } else if moved {
+            buffers.chunks.refresh(mesh);
+        }
         if bytes > 0 || split || shown_again {
             self.uploads.bump();
         }
@@ -1017,17 +1045,25 @@ impl Renderer {
         }
         let bind_main = self.bind_main.as_ref().unwrap();
 
-        let draw_items = |pass: &mut wgpu::RenderPass| {
+        // Which parts of each object are in view (chunks.rs).
+        let view_proj = glam::Mat4::from_cols_array_2d(&globals.view_proj);
+        let in_view = self.visible_runs(&view_proj, items);
+        let draw_items = |pass: &mut wgpu::RenderPass, runs: &[Vec<std::ops::Range<u32>>]| {
             let Some((objects, _)) = &self.objects else { return };
             for (i, item) in items.iter().enumerate() {
                 let Some(mesh) = self.meshes.get(&item.mesh) else { continue };
+                if runs[i].is_empty() {
+                    continue;
+                }
                 pass.set_vertex_buffer(0, mesh.positions.slice(..));
                 pass.set_vertex_buffer(1, mesh.normals.slice(..));
                 pass.set_vertex_buffer(2, mesh.mask.slice(..));
                 pass.set_vertex_buffer(3, objects.slice(..));
                 pass.set_vertex_buffer(4, mesh.curv.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, i as u32..i as u32 + 1);
+                for run in &runs[i] {
+                    pass.draw_indexed(run.clone(), 0, i as u32..i as u32 + 1);
+                }
             }
         };
         // A colour buffer cleared to "nothing here", with its own depth.
@@ -1055,7 +1091,7 @@ impl Renderer {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.bind_pre, &[]);
-            draw_items(&mut pass);
+            draw_items(&mut pass, &in_view);
         };
 
         let shadow_key = shadows.then(|| self.shadow_key(&look, items));
@@ -1069,7 +1105,8 @@ impl Renderer {
             });
             pass.set_pipeline(&self.pipe_shadow);
             pass.set_bind_group(0, &self.bind_pre, &[]);
-            draw_items(&mut pass);
+            let light = glam::Mat4::from_cols_array_2d(&look.shadow_view_proj);
+            draw_items(&mut pass, &self.visible_runs(&light, items));
         }
         if cavity || occlusion {
             helper_pass(encoder, "normals prepass", &targets.gbuf, &self.pipe_prepass);
@@ -1101,7 +1138,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
             if !items.is_empty() {
                 pass.set_pipeline(&self.pipe_mesh);
-                draw_items(&mut pass);
+                draw_items(&mut pass, &in_view);
             }
         }
 
@@ -1143,7 +1180,7 @@ impl Renderer {
             self.flash.draw(&mut pass, &self.meshes);
         }
         let objects = self.objects.as_ref().map(|o| &o.0);
-        self.groups.draw(gpu, &mut pass, &globals.view_proj, &self.meshes, objects, items);
+        self.groups.draw(gpu, &mut pass, &globals.view_proj, &self.meshes, objects, items, &in_view);
         self.wire.draw(gpu, &mut pass, globals, &self.meshes, objects, items);
         self.spheres.draw(&mut pass);
         if self.overlays {
@@ -1152,6 +1189,21 @@ impl Renderer {
         drop(pass);
         self.blit.draw(encoder, &targets.blit_finished, target);
         self.targets.as_mut().unwrap().drawn = Some(key);
+    }
+
+    /// For each of `items`, the runs of its mesh's corners in the view
+    /// `view_proj` (none for a mesh with no buffers).
+    fn visible_runs(&self, view_proj: &glam::Mat4, items: &[DrawItem]) -> Vec<Vec<std::ops::Range<u32>>> {
+        items
+            .iter()
+            .map(|item| {
+                let mut runs = Vec::new();
+                if let Some(mesh) = self.meshes.get(&item.mesh) {
+                    mesh.visible(view_proj, &item.model, &mut runs);
+                }
+                runs
+            })
+            .collect()
     }
 
     /// What the shadow map is drawn from: the key light's direction and
