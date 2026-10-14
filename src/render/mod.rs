@@ -318,6 +318,10 @@ pub struct Renderer {
     forced: u64,
     /// Moves whenever a mesh's buffers are sent or let go.
     uploads: cache::Stamp,
+    /// What the shadow map holds: drawn from the key light over the objects
+    /// as this key has them. It is drawn again only when that changes (see
+    /// `shadow_key`), not every frame.
+    shadow_drawn: Option<cache::SceneKey>,
     blit: cache::Blit,
 }
 
@@ -514,6 +518,9 @@ impl Renderer {
                 attributes: &wgpu::vertex_attr_array![7 => Float32],
             }),
         ];
+        // The helper passes read only positions, normals and the objects'
+        // matrices: the mask and curvature slots are left out of their layout.
+        let slim_buffers = [vertex_buffers[0].clone(), vertex_buffers[1].clone(), None, vertex_buffers[3].clone(), None];
         // Reverse depth: nearer fragments have larger depth values.
         let depth_state = |write: bool| {
             Some(wgpu::DepthStencilState {
@@ -582,9 +589,9 @@ impl Renderer {
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_mesh"),
+                    entry_point: Some("vs_prepass"),
                     compilation_options: Default::default(),
-                    buffers: &vertex_buffers,
+                    buffers: &slim_buffers,
                 },
                 primitive: wgpu::PrimitiveState { cull_mode, ..Default::default() },
                 depth_stencil: depth_state(true),
@@ -611,7 +618,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("vs_shadow"),
                 compilation_options: Default::default(),
-                buffers: &vertex_buffers,
+                buffers: &slim_buffers,
             },
             primitive,
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -675,6 +682,7 @@ impl Renderer {
             scene_dirty: false,
             forced: 0,
             uploads: cache::Stamp::default(),
+            shadow_drawn: None,
             blit: cache::Blit::new(gpu),
         }
     }
@@ -1050,7 +1058,9 @@ impl Renderer {
             draw_items(&mut pass);
         };
 
-        if shadows {
+        let shadow_key = shadows.then(|| self.shadow_key(&look, items));
+        if shadows && shadow_key != self.shadow_drawn {
+            self.shadow_drawn = shadow_key;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
                 color_attachments: &[],
@@ -1142,6 +1152,22 @@ impl Renderer {
         drop(pass);
         self.blit.draw(encoder, &targets.blit_finished, target);
         self.targets.as_mut().unwrap().drawn = Some(key);
+    }
+
+    /// What the shadow map is drawn from: the key light's direction and
+    /// view, the biases, the objects and their meshes. With the lights
+    /// following the camera the key turns with every orbit, and the map is
+    /// drawn every frame of one; with the lights left in the world it is
+    /// drawn once and kept until the model or the scene changes.
+    fn shadow_key(&self, look: &LookUniform, items: &[DrawItem]) -> cache::SceneKey {
+        let mut key = cache::SceneKey::default();
+        key.push(&look.light_dir[0]).push(&look.shadow_view_proj).push(&look.shadow_params);
+        key.push(&(items.len() as u64));
+        for item in items {
+            key.push(&item.mesh).push(&item.model);
+        }
+        key.push(&self.uploads.count());
+        key
     }
 
     /// The bytes of everything this frame's picture is drawn from (see

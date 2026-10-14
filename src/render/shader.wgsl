@@ -141,25 +141,64 @@ fn handedness(x: vec3<f32>, y: vec3<f32>, z: vec3<f32>) -> f32 {
 // Whether this fragment is on the outside of the surface. The hardware calls a
 // face "front" by the order its corners land on the screen, and a mirroring
 // matrix reverses that order for every face: the outer side of a mirror copy
-// would be taken for its inside. Undone here, from the matrix.
-fn is_front(in: VsOut, facing: bool) -> bool {
-    return facing == (handedness(in.model_x, in.model_y, in.model_z) > 0.0);
+// would be taken for its inside. Undone here, from the matrix's handedness.
+fn is_front(hand: f32, facing: bool) -> bool {
+    return facing == (hand > 0.0);
 }
 
-fn shading_normal(in: VsOut, front: bool) -> vec3<f32> {
-    var n = normalize(in.normal);
+fn shading_normal(normal: vec3<f32>, world: vec3<f32>, front: bool) -> vec3<f32> {
+    var n = normalize(normal);
     if (g.shading.y > 0.5) {
         // Flat shading: the true facet normal, to judge mesh density.
-        let f = normalize(cross(dpdy(in.world), dpdx(in.world)));
+        let f = normalize(cross(dpdy(world), dpdx(world)));
         n = select(-f, f, dot(f, n) >= 0.0);
     }
     return select(-n, n, front);
 }
 
+// ---- helper passes' vertex stage --------------------------------------------
+//
+// The normals prepass, the plastic's back faces and the shadow map read only
+// the position and the normal, so they take only those (and the object's
+// matrix), and hand on only what their fragment stages use. The arithmetic is
+// vs_mesh's, so the depths and normals they make match the main pass's.
+
+struct PreIn {
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(3) model_x: vec4<f32>,
+    @location(4) model_y: vec4<f32>,
+    @location(5) model_z: vec4<f32>,
+    @location(6) model_w: vec4<f32>,
+};
+
+struct PreOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) world: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    // The placement's handedness (see `handedness`).
+    @location(2) @interpolate(flat) hand: f32,
+};
+
+@vertex
+fn vs_prepass(in: PreIn) -> PreOut {
+    var out: PreOut;
+    let x = in.model_x.xyz;
+    let y = in.model_y.xyz;
+    let z = in.model_z.xyz;
+    let world = x * in.position.x + y * in.position.y + z * in.position.z + in.model_w.xyz;
+    out.pos = g.view_proj * vec4<f32>(world, 1.0);
+    out.world = world;
+    out.hand = handedness(x, y, z);
+    let n = in.normal;
+    out.normal = (cross(y, z) * n.x + cross(z, x) * n.y + cross(x, y) * n.z) * out.hand;
+    return out;
+}
+
 // View-space normal + eye depth, read back by the cavity term.
 @fragment
-fn fs_prepass(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
-    let n = shading_normal(in, is_front(in, facing));
+fn fs_prepass(in: PreOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
+    let n = shading_normal(in.normal, in.world, is_front(in.hand, facing));
     let vn = (g.view * vec4<f32>(n, 0.0)).xyz;
     let depth = dot(in.world - g.cam_pos.xyz, g.cam_forward.xyz);
     return vec4<f32>(vn, max(depth, 1e-6));
