@@ -62,7 +62,11 @@ fn a_ninety_degree_bend_of_a_turned_and_stretched_cylinder_follows_the_arc_in_it
     for (was, now) in rest.iter().zip(&mesh.positions) {
         let q = (scale * *was).as_dvec3();
         let theta = std::f64::consts::FRAC_PI_2 * (q.y + 1.5) / length;
-        let want = DVec3::new(q.x, -1.5 + big * theta.sin() - q.z * theta.sin(), big * (1.0 - theta.cos()) + q.z * theta.cos());
+        let want = DVec3::new(
+            q.x,
+            -1.5 + big * theta.sin() - q.z * theta.sin(),
+            big * (1.0 - theta.cos()) + q.z * theta.cos(),
+        );
         let got = frame.from_world(model.transform_point3(*now).as_dvec3());
         assert!(got.distance(want) < 2e-5, "{was} went to {got}, not {want}");
     }
@@ -77,7 +81,8 @@ fn a_twist_of_nothing_and_a_taper_of_one_to_one_leave_every_vertex_to_the_bit() 
     assert!(applied(&mut mesh, &[twist, taper]).is_none(), "nothing to undo");
     assert_eq!(bits(&mesh.positions), rest);
     // And a twist that was shown and then taken back to nothing.
-    let mut target = shown(&mut mesh, Mat4::IDENTITY, &AT_REST, &[Params { kind: Kind::Twist, angle: 50.0, ..Params::default() }]);
+    let mut target =
+        shown(&mut mesh, Mat4::IDENTITY, &AT_REST, &[Params { kind: Kind::Twist, angle: 50.0, ..Params::default() }]);
     assert_ne!(bits(&mesh.positions), rest);
     target.apply(&mut mesh, None, 1);
     assert!(target.end(&mut mesh, Ride::Turned).is_none());
@@ -89,7 +94,13 @@ fn masked_vertices_stay_put_half_masked_go_half_way_and_hidden_ones_stay_too() {
     let mut mesh = cylinder(20_000);
     for v in 0..mesh.vertex_count() {
         let y = mesh.positions[v].y;
-        mesh.mask[v] = if y < -0.5 { 1.0 } else if y < 0.0 { 0.5 } else { 0.0 };
+        mesh.mask[v] = if y < -0.5 {
+            1.0
+        } else if y < 0.0 {
+            0.5
+        } else {
+            0.0
+        };
     }
     // Hide the faces on the far side, x > 0.25.
     let far: Vec<u32> = (0..mesh.triangle_count() as u32)
@@ -145,11 +156,20 @@ fn undo_puts_every_vertex_back_to_the_bit_with_sculpt_layers_and_without() {
                 }
                 assert!(mesh.layers.as_ref().unwrap().offsets(id).unwrap().iter().any(|o| *o != Vec3::ZERO));
             }
-            let offsets = |mesh: &Mesh| mesh.layer_rows().iter().map(|r| bits(mesh.layers.as_ref().unwrap().offsets(r.id).unwrap())).collect::<Vec<_>>();
+            let offsets = |mesh: &Mesh| {
+                mesh.layer_rows()
+                    .iter()
+                    .map(|r| bits(mesh.layers.as_ref().unwrap().offsets(r.id).unwrap()))
+                    .collect::<Vec<_>>()
+            };
             let (rest, rest_offsets) = (bits(&mesh.positions), offsets(&mesh));
             let twist = Params { kind: Kind::Twist, angle: 120.0, anchor: Anchor::Middle, ..Params::default() };
             let delta = applied(&mut mesh, &[bend(40.0), twist]).expect("it moved");
-            assert_eq!(matches!(delta, StrokeDelta::Layered { .. }), layered, "layers told of it: {layered} {recording}");
+            assert_eq!(
+                matches!(delta, StrokeDelta::Layered { .. }),
+                layered,
+                "layers told of it: {layered} {recording}"
+            );
             history.push_stroke(delta);
             let (after, after_offsets) = (bits(&mesh.positions), offsets(&mesh));
             assert_eq!(history.undo(&mut mesh), Some(false));
@@ -167,7 +187,8 @@ fn cancel_puts_every_vertex_back_to_the_bit_and_leaves_nothing_to_undo() {
     let (id, _) = mesh.add_layer(None);
     mesh.record_on_layer(None);
     mesh.flush_normals();
-    let (rest, normals, offsets) = (bits(&mesh.positions), bits(&mesh.normals), bits(mesh.layers.as_ref().unwrap().offsets(id).unwrap()));
+    let (rest, normals, offsets) =
+        (bits(&mesh.positions), bits(&mesh.normals), bits(mesh.layers.as_ref().unwrap().offsets(id).unwrap()));
     let inflate = Params { kind: Kind::Inflate, inflate: 0.05, ..Params::default() };
     let target = shown(&mut mesh, Mat4::IDENTITY, &AT_REST, &[bend(30.0), bend(80.0), inflate.clone()]);
     mesh.flush_normals();
@@ -293,7 +314,10 @@ fn the_bridge_reads_its_numbers_as_the_card_shows_them() {
         "kind": "bend_arc", "axis": "z", "tip": [10, -20, 30], "range": [25, 75], "softness": 0, "anchor": "end"
     }))
     .unwrap();
-    assert_eq!((p.kind, p.axis, p.tip, p.range, p.softness, p.anchor), (Kind::BendArc, 2, [0.1, -0.2, 0.3], [0.25, 0.75], 0.0, Anchor::End));
+    assert_eq!(
+        (p.kind, p.axis, p.tip, p.range, p.softness, p.anchor),
+        (Kind::BendArc, 2, [0.1, -0.2, 0.3], [0.25, 0.75], 0.0, Anchor::End)
+    );
     let p = params_from(&json!({ "kind": "Inflate", "amount": -5 })).unwrap();
     assert_eq!(p.inflate, -0.05);
     let p = params_from(&json!({ "kind": "lattice", "lattice_points": [2, 4, 2], "lattice_moves": [{ "point": [1, 4, 2], "by": [0, 50, 0] }] })).unwrap();
@@ -302,5 +326,7 @@ fn the_bridge_reads_its_numbers_as_the_card_shows_them() {
     assert!(params_from(&json!({ "kind": "melt" })).unwrap_err().contains("bend, bend_arc"));
     assert!(params_from(&json!({ "kind": "bend", "axis": "w" })).is_err());
     assert!(params_from(&json!({ "kind": "twist", "amount": 3 })).is_err());
-    assert!(params_from(&json!({ "kind": "lattice", "lattice_moves": [{ "point": [9, 1, 1], "by": [0, 0, 0] }] })).is_err());
+    assert!(
+        params_from(&json!({ "kind": "lattice", "lattice_moves": [{ "point": [9, 1, 1], "by": [0, 0, 0] }] })).is_err()
+    );
 }

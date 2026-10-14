@@ -159,7 +159,9 @@ impl Running {
 
     /// The handles as flat shapes in window pixels, for the gizmo's overlay.
     pub(in crate::app) fn deform_shapes(&self) -> Vec<Shape> {
-        let Some(session) = self.transform.deform.session.as_ref().filter(|_| self.deform_on()) else { return Vec::new() };
+        let Some(session) = self.transform.deform.session.as_ref().filter(|_| self.deform_on()) else {
+            return Vec::new();
+        };
         let ppp = self.egui_ctx.pixels_per_point();
         let p = self.doc.opts.deform.params.sanitized();
         let px = |q: glam::DVec3| self.view.project(session.frame.to_world(q).as_vec3());
@@ -191,7 +193,9 @@ impl Running {
             if let (Some(a), Some(t)) = (px(anchor), px(deform::tip_point(&p, &session.bounds))) {
                 out.push(Shape::Line { points: vec![a, t], width: 1.5 * ppp, color: [255, 214, 64, 140] });
                 let size = if hot == Some(Handle::Tip) { 10.0 } else { 8.0 } * ppp;
-                let diamond = |s: f32| vec![t + Vec2::new(0.0, -s), t + Vec2::new(s, 0.0), t + Vec2::new(0.0, s), t + Vec2::new(-s, 0.0)];
+                let diamond = |s: f32| {
+                    vec![t + Vec2::new(0.0, -s), t + Vec2::new(s, 0.0), t + Vec2::new(0.0, s), t + Vec2::new(-s, 0.0)]
+                };
                 out.push(Shape::Fill { points: diamond(size + 1.5 * ppp), color: [15, 15, 20, 255] });
                 out.push(Shape::Fill { points: diamond(size), color: TIP_COLOR });
             }
@@ -207,11 +211,21 @@ impl Running {
     }
 
     /// The cage: its edges, then its points, the picked one in yellow.
-    fn lattice_shapes(&self, p: &deform::Params, session: &super::Session, hot: Option<Handle>, ppp: f32, out: &mut Vec<Shape>) {
+    fn lattice_shapes(
+        &self,
+        p: &deform::Params,
+        session: &super::Session,
+        hot: Option<Handle>,
+        ppp: f32,
+        out: &mut Vec<Shape>,
+    ) {
         let span = session.bounds.span(p.axis, p.range);
         let cage = &p.lattice;
         let at: Vec<Option<Vec2>> = (0..cage.len())
-            .map(|i| self.view.project(session.frame.to_world(lattice::point(cage, i, &session.bounds, p.axis, span)).as_vec3()))
+            .map(|i| {
+                self.view
+                    .project(session.frame.to_world(lattice::point(cage, i, &session.bounds, p.axis, span)).as_vec3())
+            })
             .collect();
         for i in 0..cage.len() {
             let ijk = cage.ijk(i);
@@ -231,7 +245,10 @@ impl Running {
             let picked = i == cage.picked;
             let size = if hot == Some(Handle::Point(i)) { 6.5 } else { 5.0 } * ppp;
             out.push(Shape::Fill { points: disc(c, size + 1.5 * ppp), color: [15, 15, 20, 255] });
-            out.push(Shape::Fill { points: disc(c, size), color: if picked { TIP_COLOR } else { [245, 245, 245, 255] } });
+            out.push(Shape::Fill {
+                points: disc(c, size),
+                color: if picked { TIP_COLOR } else { [245, 245, 245, 255] },
+            });
         }
     }
 }

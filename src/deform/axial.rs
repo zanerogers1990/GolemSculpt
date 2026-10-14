@@ -36,7 +36,11 @@ impl Axial {
             Anchor::Middle => 0.5,
             Anchor::End => 1.0,
         };
-        Axial { k, keep_volume: p.kind == Kind::Stretch && p.keep_volume, anchor_integral: profile.integral_t(anchor_t) }
+        Axial {
+            k,
+            keep_volume: p.kind == Kind::Stretch && p.keep_volume,
+            anchor_integral: profile.integral_t(anchor_t),
+        }
     }
 
     #[inline]

@@ -119,7 +119,14 @@ pub fn point(lattice: &Lattice, index: usize, bounds: &Bounds, axis: usize, span
 
 /// The fraction of the cage's size along each axis that puts point `index`
 /// at `at` (in the gizmo's frame): what a drag of it sets.
-pub fn moved_for(lattice: &Lattice, index: usize, bounds: &Bounds, axis: usize, span: (f64, f64), at: DVec3) -> [f32; 3] {
+pub fn moved_for(
+    lattice: &Lattice,
+    index: usize,
+    bounds: &Bounds,
+    axis: usize,
+    span: (f64, f64),
+    at: DVec3,
+) -> [f32; 3] {
     let (min, size) = cage_box(bounds, axis, span);
     let ijk = lattice.ijk(index);
     let grid = DVec3::from_array(std::array::from_fn(|c| ijk[c] as f64 / (lattice.count[c] - 1) as f64));
@@ -174,9 +181,10 @@ impl Cage {
         for c in 0..3 {
             bernstein(self.count[c], at[c], &mut weights[c]);
         }
-        let shift = self.moved.iter().fold(DVec3::ZERO, |sum, &([i, j, k], by)| {
-            sum + by * (weights[0][i] * weights[1][j] * weights[2][k])
-        });
+        let shift = self
+            .moved
+            .iter()
+            .fold(DVec3::ZERO, |sum, &([i, j, k], by)| sum + by * (weights[0][i] * weights[1][j] * weights[2][k]));
         Some(q + shift)
     }
 

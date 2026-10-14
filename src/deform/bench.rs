@@ -62,7 +62,8 @@ pub fn time_all(mesh: &mut Mesh) -> Vec<(Kind, f64, f64)> {
         .map(|kind| {
             let mut target = Target::begin(mesh, Mat4::IDENTITY, &frame_of);
             let bounds = target.bounds;
-            let times: Vec<(f64, f64)> = (0..FRAMES).map(|step| frame(&mut target, mesh, &dragged(kind, step), &bounds)).collect();
+            let times: Vec<(f64, f64)> =
+                (0..FRAMES).map(|step| frame(&mut target, mesh, &dragged(kind, step), &bounds)).collect();
             target.cancel(mesh);
             let _ = mesh.take_dirty();
             let best = |pick: fn(&(f64, f64)) -> f64| times.iter().map(pick).fold(f64::MAX, f64::min);

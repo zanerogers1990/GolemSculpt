@@ -1,8 +1,8 @@
 //! A deformer at work on a mesh: what one deformation keeps of each mesh it
 //! changes, and the pass that puts the mesh where the deformer has it.
 //!
-//! **One stroke.** A deformation runs as one stroke of the mesh, opened when
-//! it begins (`Target::begin`) and closed when it is applied or cancelled,
+//! **One stroke.** A deformation runs as one stroke of the mesh, opened by
+//! its first pass and closed when it is applied or cancelled,
 //! as the gizmo's drags of a masked object are (app/masked.rs). So every pass
 //! writes through the stroke calls, the stroke's snapshot keeps where each
 //! vertex was when the deformation began, and every pass works each vertex
@@ -12,6 +12,11 @@
 //! layers and subdivision levels are told of it as they are of any stroke.
 //! Cancelling puts every vertex back where the snapshot has it, which is the
 //! same bits it started from.
+//!
+//! The stroke is not opened when the deformation is set up (`Target::begin`,
+//! which only measures the mesh), so a mesh is in the middle of a stroke only
+//! while something has been done to it: a Deform card left open with nothing
+//! moved holds no mesh, and anything else that wants the mesh can have it.
 //!
 //! **What moves.** A vertex is moved by `1 - mask` of the way the deformer
 //! takes it, as the gizmo moves the unmasked part of an object: a fully
@@ -76,14 +81,16 @@ pub struct Target {
     visited: Vec<u32>,
     /// Each vertex's normal when the deformation began, for Inflate.
     normals: Option<Vec<Vec3>>,
+    /// Whether the stroke has been opened: whether a pass has moved anything.
+    started: bool,
     /// The box the mesh fills, in the frame.
     pub bounds: Bounds,
 }
 
 impl Target {
-    /// Opens the stroke on `mesh`, placed in the world by `model`, and
-    /// measures it in `frame`.
-    pub fn begin(mesh: &mut Mesh, model: Mat4, frame: &Frame) -> Target {
+    /// Sets a deformation up on `mesh`, placed in the world by `model`: it is
+    /// measured in `frame`. The stroke opens with the first pass that moves it.
+    pub fn begin(mesh: &Mesh, model: Mat4, frame: &Frame) -> Target {
         let into = frame.from_mesh(model);
         let leaves = &mesh.bvh.leaves;
         let (positions, mask) = (&mesh.positions, &mesh.mask);
@@ -114,7 +121,6 @@ impl Target {
             (min.min(lo), max.max(hi))
         });
         let free: Vec<&(u32, [(f64, f64); 3], bool)> = measured.iter().filter(|m| m.2).collect();
-        mesh.begin_stroke();
         Target {
             uid: mesh.uid,
             into,
@@ -124,8 +130,15 @@ impl Target {
             extents: free.iter().map(|m| m.1).collect(),
             visited: Vec::new(),
             normals: None,
+            started: false,
             bounds: if min.cmple(max).all() { Bounds::new(min, max) } else { Bounds::new(DVec3::ZERO, DVec3::ZERO) },
         }
+    }
+
+    /// Whether a pass has moved the mesh, which is then in the middle of a
+    /// stroke until the deformation is applied or cancelled.
+    pub fn holds(&self) -> bool {
+        self.started
     }
 
     /// Whether every vertex of the mesh is fully masked: nothing to deform.
@@ -158,8 +171,12 @@ impl Target {
             visit.sort_unstable();
             visit.dedup();
         }
-        if visit.is_empty() {
+        if visit.is_empty() || (!self.started && deformer.is_none()) {
             return;
+        }
+        if !self.started {
+            mesh.begin_stroke();
+            self.started = true;
         }
         if deformer.is_some_and(Deformer::needs_normals) && self.normals.is_none() {
             mesh.flush_normals();
@@ -203,7 +220,7 @@ impl Target {
     /// `None` if nothing ended up anywhere new. `ride` says how sculpt layers'
     /// offsets are carried by a deformation of the model underneath them.
     pub fn end(self, mesh: &mut Mesh, ride: Ride) -> Option<StrokeDelta> {
-        if mesh.uid != self.uid {
+        if mesh.uid != self.uid || !self.started {
             return None;
         }
         mesh.layer_ride = ride;
@@ -216,7 +233,7 @@ impl Target {
     /// Puts every vertex back where it was when the deformation began and
     /// closes the stroke, leaving nothing to undo.
     pub fn cancel(mut self, mesh: &mut Mesh) {
-        if mesh.uid != self.uid {
+        if mesh.uid != self.uid || !self.started {
             return;
         }
         self.apply(mesh, None, 0);

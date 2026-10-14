@@ -65,8 +65,16 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] =
-        [Kind::Bend, Kind::BendArc, Kind::Twist, Kind::Taper, Kind::Flatten, Kind::Inflate, Kind::Stretch, Kind::Lattice];
+    pub const ALL: [Kind; 8] = [
+        Kind::Bend,
+        Kind::BendArc,
+        Kind::Twist,
+        Kind::Taper,
+        Kind::Flatten,
+        Kind::Inflate,
+        Kind::Stretch,
+        Kind::Lattice,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -103,10 +111,14 @@ impl Kind {
                 "Bends the shape into a smooth arc that ends where you drag the tip handle: horns, tails, tubes."
             }
             Kind::Twist => "Turns the shape about the axis, more and more along it, like wringing a cloth.",
-            Kind::Taper => "Makes the shape thinner or fatter along the axis: one size at the start, another at the end.",
+            Kind::Taper => {
+                "Makes the shape thinner or fatter along the axis: one size at the start, another at the end."
+            }
             Kind::Flatten => "Squashes the shape along the axis, toward the end that stays put.",
             Kind::Inflate => "Puffs the surface out (or sucks it in) along the way it faces.",
-            Kind::Stretch => "Pulls the shape longer or shorter along the axis, thinning or thickening it to keep its bulk.",
+            Kind::Stretch => {
+                "Pulls the shape longer or shorter along the axis, thinning or thickening it to keep its bulk."
+            }
             Kind::Lattice => "A cage of points round the shape: drag a point and the clay inside follows smoothly.",
         }
     }

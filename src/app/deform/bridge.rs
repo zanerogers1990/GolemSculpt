@@ -38,7 +38,10 @@ pub(super) fn params_from(args: &Value) -> Result<Params, String> {
         p.axis = ["x", "y", "z"].iter().position(|a| *a == axis).ok_or("axis is x, y or z.")?;
     }
     if let Some(anchor) = word(args, "anchor") {
-        p.anchor = Anchor::ALL.into_iter().find(|a| a.name().to_lowercase() == anchor).ok_or("anchor is start, middle or end.")?;
+        p.anchor = Anchor::ALL
+            .into_iter()
+            .find(|a| a.name().to_lowercase() == anchor)
+            .ok_or("anchor is start, middle or end.")?;
     }
     let percent = |v: f32| v / 100.0;
     p.angle = number(args, "angle").unwrap_or(p.angle);
@@ -65,11 +68,16 @@ pub(super) fn params_from(args: &Value) -> Result<Params, String> {
         p.lattice = Lattice::default().with_count(count.map(|n| n.round().max(0.0) as usize));
     }
     for moved in args.get("lattice_moves").and_then(Value::as_array).into_iter().flatten() {
-        let point = numbers::<3>(moved, "point")?.ok_or("Each of lattice_moves needs a point: [x, y, z], counting from 1.")?;
-        let by = numbers::<3>(moved, "by")?.ok_or("Each of lattice_moves needs by: [x, y, z] in percent of the cage.")?;
+        let point =
+            numbers::<3>(moved, "point")?.ok_or("Each of lattice_moves needs a point: [x, y, z], counting from 1.")?;
+        let by =
+            numbers::<3>(moved, "by")?.ok_or("Each of lattice_moves needs by: [x, y, z] in percent of the cage.")?;
         let ijk = point.map(|n| (n.round() as i64 - 1).max(0) as usize);
         if (0..3).any(|c| ijk[c] >= p.lattice.count[c]) {
-            return Err(format!("The cage has {:?} points along X, Y and Z; there is no point {point:?}.", p.lattice.count));
+            return Err(format!(
+                "The cage has {:?} points along X, Y and Z; there is no point {point:?}.",
+                p.lattice.count
+            ));
         }
         let index = p.lattice.index(ijk);
         p.lattice.moved[index] = by.map(percent);
@@ -87,7 +95,12 @@ impl Running {
             // Through the card's own command, as the app's buttons go.
             self.transform.deform.ran = None;
             self.act(Action::Deform(Ask::Run(Box::new(params))));
-            return self.transform.deform.ran.take().unwrap_or_else(|| Err("The deformation could not be made now.".into()));
+            return self
+                .transform
+                .deform
+                .ran
+                .take()
+                .unwrap_or_else(|| Err("The deformation could not be made now.".into()));
         }
         // Left on the model, with the card and its handles up, for the person to judge.
         self.deform_commit();

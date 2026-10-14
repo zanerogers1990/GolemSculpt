@@ -6,9 +6,9 @@
 //! it into an undo step.
 //!
 //! **A session.** While a deformer is picked and the Transform tool is up, a
-//! session is open on the selected objects: each of their meshes is in a
-//! stroke (`deform::Target`), and the box they fill in the gizmo's frame has
-//! been measured. Every frame the card's settings have changed, every mesh
+//! session is open on the selected objects: the box they fill in the gizmo's
+//! frame has been measured, and from the first change on each of their meshes
+//! is in a stroke (`deform::Target`). Every frame the card's settings have changed, every mesh
 //! is put where the deformer has it, worked out from where it was when the
 //! session opened. Apply (Enter) closes the strokes and keeps them as the
 //! undo step; Cancel (Esc) puts every vertex back as it was, to the bit, and
@@ -54,9 +54,9 @@
 
 mod bridge;
 mod handles;
+mod play;
 #[cfg(test)]
 mod tests;
-mod play;
 
 use glam::{DVec3, Mat4};
 use rayon::prelude::*;
@@ -187,6 +187,12 @@ impl Running {
         self.transform.deform.session.as_ref().is_some_and(Session::pending)
     }
 
+    /// Whether a mesh is in the middle of a deformation's stroke, which
+    /// whatever would put another mesh in its place has to wait for.
+    pub(super) fn deform_holds_mesh(&self) -> bool {
+        self.transform.deform.session.as_ref().is_some_and(|s| s.parts.iter().any(|p| p.target.holds()))
+    }
+
     /// Runs every frame, before the mesh is sent to be drawn: opens, renews
     /// or closes the session, and puts the model where the card's settings
     /// have it if they have changed.
@@ -197,7 +203,12 @@ impl Running {
             return;
         }
         let key = key_now(&self.doc);
-        let stale = self.transform.deform.session.as_ref().is_some_and(|s| Some(&s.key) != key.as_ref());
+        let mut stale = self.transform.deform.session.as_ref().is_some_and(|s| Some(&s.key) != key.as_ref());
+        // A mesh put in another's place under the session (it should never be) is let go.
+        if let Some(session) = self.transform.deform.session.as_ref() {
+            let meshes: Vec<(u64, u64)> = session.parts.iter().map(|p| (p.mesh, p.target.uid)).collect();
+            stale |= meshes.into_iter().any(|(mesh, uid)| mesh_of(&mut self.doc, mesh).map(|m| m.uid) != Some(uid));
+        }
         if stale && self.transform.deform.grab.is_none() {
             self.deform_commit();
         }
@@ -221,7 +232,8 @@ impl Running {
             let Some(m) = mesh_of(doc, mesh) else { continue };
             parts.push(Part { object, mesh, model, target: Target::begin(m, model, &frame) });
         }
-        let Some(bounds) = parts.iter().map(|p| p.target.bounds).reduce(|a, b| Bounds::new(a.min.min(b.min), a.max.max(b.max)))
+        let Some(bounds) =
+            parts.iter().map(|p| p.target.bounds).reduce(|a, b| Bounds::new(a.min.min(b.min), a.max.max(b.max)))
         else {
             return;
         };
@@ -266,8 +278,11 @@ impl Running {
         if session.parts.iter().all(|p| p.target.is_pinned()) {
             let one = session.parts.len() == 1;
             return Some(
-                if one { "Everything of the object is masked, so nothing can move. Clear or invert the mask first." }
-                else { "Everything of the selected objects is masked, so nothing can move. Clear or invert the mask first." }
+                if one {
+                    "Everything of the object is masked, so nothing can move. Clear or invert the mask first."
+                } else {
+                    "Everything of the selected objects is masked, so nothing can move. Clear or invert the mask first."
+                }
                 .to_owned(),
             );
         }
@@ -350,6 +365,9 @@ impl Running {
         let mut text = format!("{}.", capitalised(&insert_name(&done_words(&params), &who)));
         if masked {
             text += " The masked part stayed where it was.";
+        }
+        if session.warned {
+            text += " The two halves of the mirrored model now differ.";
         }
         text += " Undo (Z) puts it back.";
         self.toast(params.kind.name());
@@ -475,12 +493,19 @@ fn capitalised(text: &str) -> String {
 /// The status line's warning that `kind` breaks the mirror across `planes`.
 fn asymmetry_words(kind: Kind, planes: &str, name: &str) -> String {
     let advice = match kind {
-        Kind::Twist => "A twist turns one half one way and its mirror image the other, so it cannot keep a mirrored model mirrored.",
-        Kind::Bend => "Bend along an axis that lies on the mirror plane, toward a direction along it (0° or 180°), to keep the halves alike.",
+        Kind::Twist => {
+            "A twist turns one half one way and its mirror image the other, so it cannot keep a mirrored model mirrored."
+        }
+        Kind::Bend => {
+            "Bend along an axis that lies on the mirror plane, toward a direction along it (0° or 180°), to keep the halves alike."
+        }
         Kind::Lattice => "Move the points of the cage in mirrored pairs to keep the halves alike.",
         _ => "Work along an axis that lies on the mirror plane to keep the halves alike.",
     };
-    format!("This {} is not mirror-symmetric across {planes}: the two halves of \"{name}\" will come out different. {advice}", kind.name().to_lowercase())
+    format!(
+        "This {} is not mirror-symmetric across {planes}: the two halves of \"{name}\" will come out different. {advice}",
+        kind.name().to_lowercase()
+    )
 }
 
 /// Whether `deformer` maps the mirror image (across mirror plane `axis`) of
@@ -497,7 +522,8 @@ fn keeps_mirror(mesh: &Mesh, target: &Target, deformer: &Deformer, model: Mat4, 
     let model = model.as_dmat4();
     let inverse = model.inverse();
     let reflect = |p: DVec3| if world { inverse.transform_point3(flip(model.transform_point3(p))) } else { flip(p) };
-    let reflect_dir = |n: DVec3| if world { inverse.transform_vector3(flip(model.transform_vector3(n))) } else { flip(n) };
+    let reflect_dir =
+        |n: DVec3| if world { inverse.transform_vector3(flip(model.transform_vector3(n))) } else { flip(n) };
     let n = mesh.vertex_count();
     let stride = (n / 256).max(1);
     let size = mesh.bounds().size().max_element().max(1e-12) as f64;

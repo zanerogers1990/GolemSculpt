@@ -193,7 +193,7 @@ impl Running {
             Err(why) => return self.status(&why, why.contains("cancelled")),
         };
         // A stroke or a gizmo drag has the mesh while it runs: it ends first.
-        if self.doc.sculptor.is_active() || self.transform_dragging() {
+        if self.doc.sculptor.is_active() || self.transform_dragging() || self.deform_holds_mesh() {
             return self.status("Decimate finished in the middle of a stroke, so its result was not used. Press Decimate again.", false);
         }
         let doc = &mut self.doc;

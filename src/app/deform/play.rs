@@ -97,7 +97,9 @@ impl Running {
 
     /// Masks everything of the active object below `y`, with a soft edge.
     fn deform_mask_below(&mut self, y: f32) {
-        if let Some(delta) = self.doc.mesh.remap_mask(|mesh, v, _| ((y + 0.1 - mesh.positions[v as usize].y) / 0.2).clamp(0.0, 1.0)) {
+        if let Some(delta) =
+            self.doc.mesh.remap_mask(|mesh, v, _| ((y + 0.1 - mesh.positions[v as usize].y) / 0.2).clamp(0.0, 1.0))
+        {
             self.doc.history.push_stroke(delta);
         }
     }
@@ -149,9 +151,13 @@ impl Running {
         self.deform_look();
         say("picking Bend brings the Transform tool up", self.doc.tool == Tool::Transform && self.deform_on());
         say("with the range's two handles where the gizmo's arrows were", {
-            self.demo_frame().is_none() && self.deform_handle(Handle::Start).is_some() && !self.deform_shapes().is_empty()
+            self.demo_frame().is_none()
+                && self.deform_handle(Handle::Start).is_some()
+                && !self.deform_shapes().is_empty()
         });
-        say("and nothing moved yet", bits(&self.doc.mesh.positions) == rest && !self.deform_pending());
+        say("and nothing moved yet, nor the mesh held", {
+            bits(&self.doc.mesh.positions) == rest && !self.deform_pending() && !self.deform_holds_mesh()
+        });
 
         // A slider: the model follows, and Esc puts it back to the bit.
         self.doc.opts.deform.params.angle = 60.0;
@@ -161,7 +167,10 @@ impl Running {
         self.deform_key(KeyCode::Escape);
         self.deform_frame();
         say("Esc puts every vertex back as it was", bits(&self.doc.mesh.positions) == rest);
-        say("leaving nothing to undo, and the angle at 0", steps(self) == count && self.doc.opts.deform.params.angle == 0.0);
+        say(
+            "leaving nothing to undo, and the angle at 0",
+            steps(self) == count && self.doc.opts.deform.params.angle == 0.0,
+        );
 
         // Enter keeps it; one Z takes it back exactly.
         self.doc.opts.deform.params.angle = 45.0;
@@ -233,7 +242,10 @@ impl Running {
             self.demo_drag(&[point, point + Vec3::Y * 0.3], true);
             self.deform_frame();
             let picked = self.doc.opts.deform.params.lattice.picked == top;
-            say("dragging the cage's top point picks it and raises the top", picked && self.doc.mesh.bounds().max.y > before + 0.05);
+            say(
+                "dragging the cage's top point picks it and raises the top",
+                picked && self.doc.mesh.bounds().max.y > before + 0.05,
+            );
             self.deform_cancel();
         } else {
             say("the cage has its points", false);
@@ -245,7 +257,10 @@ impl Running {
         self.doc.opts.deform.params.angle = 90.0;
         self.deform_frame();
         let warned = self.ui.status.0.contains("not mirror-symmetric");
-        say("a twist of a mirrored model is said to break the mirror", warned && self.ui.status.1 == crate::ui::theme::ERROR);
+        say(
+            "a twist of a mirrored model is said to break the mirror",
+            warned && self.ui.status.1 == crate::ui::theme::ERROR,
+        );
         self.deform_cancel();
         self.act(Action::Deform(Ask::Pick(Some(Kind::Bend))));
         self.doc.opts.deform.params.angle = 90.0;
