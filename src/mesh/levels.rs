@@ -292,7 +292,8 @@ impl MeshLevels {
     /// What every copy of the stack's tables holds, counted once: the figure
     /// to show a person, where [`Self::bytes`] is the figure to charge.
     pub fn whole_bytes(&self) -> usize {
-        self.stack.memory_bytes() + (self.vertex.len() + self.triangle.len()) * 4
+        let top_mesh = self.top_mesh.as_ref().map_or(0, |top| top.bytes());
+        self.stack.memory_bytes() + (self.vertex.len() + self.triangle.len()) * 4 + top_mesh
     }
 
     /// A number that is the same for the same sculpt on the same levels and,
