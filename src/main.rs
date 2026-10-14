@@ -4,6 +4,7 @@
 mod app;
 mod bench;
 mod bench_matched;
+mod bench_render;
 mod bridge_guard;
 mod brush_files;
 mod camera;
@@ -75,6 +76,14 @@ enum Errand {
     BenchMatched(Vec<usize>),
     /// `--bench-volume`: remesh and boolean costs, on the source the Unity engine benchmarks use.
     BenchVolume,
+    /// `--bench-render`, with triangle counts: the viewport's drawing (see bench_render.rs).
+    BenchRender(Vec<usize>),
+    /// `--bench-render-ab <other exe> [rounds] [triangles...]`: that bench, this build against another.
+    BenchRenderAb(Vec<String>),
+    /// `--render-shots <folder>`: a fixed set of viewport pictures, for comparing two builds.
+    RenderShots(PathBuf),
+    /// `--compare-shots <folder> <folder>`: two sets of those pictures, pixel by pixel.
+    CompareShots(PathBuf, PathBuf),
 }
 
 /// The errand the arguments ask for, if any; `None` is the app itself, with
@@ -92,6 +101,14 @@ fn errand(args: &[String]) -> Option<Errand> {
         Some(Errand::Bench(numbers(rest)))
     } else if let Some(rest) = after("--bench-matched") {
         Some(Errand::BenchMatched(numbers(rest)))
+    } else if let Some(rest) = after("--bench-render") {
+        Some(Errand::BenchRender(numbers(rest)))
+    } else if let Some(rest) = after("--bench-render-ab") {
+        Some(Errand::BenchRenderAb(rest.to_vec()))
+    } else if let Some(rest) = after("--render-shots") {
+        Some(Errand::RenderShots(rest.first().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("shots"))))
+    } else if let Some([a, b, ..]) = after("--compare-shots") {
+        Some(Errand::CompareShots(PathBuf::from(a), PathBuf::from(b)))
     } else {
         after("--bench-volume").map(|_| Errand::BenchVolume)
     }
@@ -126,6 +143,12 @@ fn main() {
         // 7 subdivisions (327k triangles) and 8 (1.3M) unless told otherwise.
         Some(Errand::BenchMatched(subdivisions)) => return bench_matched::run(&or(subdivisions, &[7, 8])),
         Some(Errand::BenchVolume) => return bench_matched::run_volume(),
+        Some(Errand::BenchRender(sizes)) => {
+            return bench_render::run(&or(sizes, &[1_000_000, 5_000_000, 10_000_000]));
+        }
+        Some(Errand::BenchRenderAb(args)) => return bench_render::run_ab(&args),
+        Some(Errand::RenderShots(folder)) => return bench_render::run_shots(&folder),
+        Some(Errand::CompareShots(a, b)) => return bench_render::compare(&a, &b),
         _ => {}
     }
 
