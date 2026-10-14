@@ -36,6 +36,9 @@
 //! come to call it: a block made in Blender and named `Cube` there is still
 //! the same block when this scene, which had a `Cube`, calls it `Cube (2)`.
 //!
+//! Paint goes too, as Blender colour attributes, and what is painted in
+//! Blender comes back as a paint layer: `blender/paint.rs`.
+//!
 //! A scripted run has no link to the user's Blender: it has no settings
 //! folder (or one of its own), it starts no Blender and it opens no file box.
 
@@ -59,6 +62,8 @@ use crate::mesh::Mesh;
 use crate::prefs::{self, Home};
 use crate::render::flash;
 use crate::scene::{Object, Scene};
+
+mod paint;
 
 /// The folder both programs know, in the settings folder.
 const FOLDER: &str = "blender_link";
@@ -239,6 +244,26 @@ fn blender_is_open(folder: &Path) -> bool {
     open
 }
 
+/// The first version of Blender's side of the link that takes paint
+/// (`LINK_VERSION` in the script).
+const PAINT_LINK: u64 = 2;
+
+/// Whether an open Blender has a copy of the link from before paint, which
+/// takes the shapes of a package and passes its paint over: each Blender's
+/// note says which version of the link it runs.
+fn blender_link_is_old(folder: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(folder) else { return false };
+    entries.filter_map(|entry| Some(entry.ok()?.path())).any(|path| {
+        let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let running = name
+            .strip_prefix("blender-")
+            .and_then(|rest| rest.strip_suffix(".json"))
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_some_and(process_is_running);
+        running && read_json(&path).is_some_and(|about| about["link"].as_u64().unwrap_or(1) < PAINT_LINK)
+    })
+}
+
 /// Whether any Blender at all is running, with the link or without: asked of
 /// the system's own list of programs, with no window put up to ask it.
 /// (Where that cannot be asked, the answer is no.)
@@ -356,13 +381,14 @@ fn put_script(folder: &Path) -> io::Result<PathBuf> {
 
 // ---- what goes, and what comes
 
-/// A mesh and where it stands, as one number: whether an object is still what
-/// was last exchanged for it.
+/// A mesh and where it stands, and its paint, as one number: whether an
+/// object is still what was last exchanged for it.
 fn print_of(mesh: &Mesh, place: Mat4) -> u64 {
     let mut print = std::collections::hash_map::DefaultHasher::new();
     print.write(bytemuck::cast_slice(&mesh.positions));
     print.write(bytemuck::cast_slice(&mesh.indices));
     print.write(bytemuck::cast_slice(&place.to_cols_array()));
+    print.write_u64(mesh.paint_print_by_place());
     print.finish()
 }
 
@@ -395,8 +421,8 @@ struct Outgoing {
 
 /// The selected objects as a package has them, in the list's order: each
 /// where it stands, with its live mirror and array copies after it, which are
-/// part of the model on screen. `slot` is `Doc::mesh`.
-fn outgoing(scene: &Scene, slot: &Mesh, link: &mut State) -> Outgoing {
+/// part of the model on screen, and each with its paint. `slot` is `Doc::mesh`.
+fn outgoing(scene: &Scene, slot: &Mesh, link: &mut State, colours: &io::ExportPaint) -> Outgoing {
     let mut out = Outgoing { objects: Vec::new(), prints: Vec::new(), names: Vec::new(), copies: 0, bare: 0, mended: 0 };
     for object in scene.objects.iter().filter(|o| scene.is_selected(o.id)) {
         let Some(mesh) = scene.mesh(object.mesh, slot).filter(|mesh| !mesh.indices.is_empty()) else {
@@ -404,8 +430,10 @@ fn outgoing(scene: &Scene, slot: &Mesh, link: &mut State) -> Outgoing {
             continue;
         };
         out.names.push(object.name.clone());
+        let painted = io::LinkPaint::of(mesh, colours);
         for (i, (copy_name, place)) in scene.export_places(object).into_iter().enumerate() {
             let (mut entry, mended) = LinkObject::placed(mesh, place);
+            entry.paint = painted.clone();
             entry.name = if i == 0 { object.name.clone() } else { copy_name };
             entry.reference = format!("{}:{}", link.run, object.id);
             entry.copy = i > 0;
@@ -523,8 +551,9 @@ impl Running {
         let opening = !open && self.blender.opening.is_some_and(|(pid, at)| at.elapsed() < OPENING && process_is_running(pid));
         let start = if open || opening || self.blender.scripted { None } else { Some(self.blender_program(&folder)?) };
 
+        let colours = self.export_paint();
         let doc = &self.doc;
-        let out = outgoing(&doc.scene, &doc.mesh, &mut self.blender);
+        let out = outgoing(&doc.scene, &doc.mesh, &mut self.blender, &colours);
         if out.objects.is_empty() {
             let whose = if out.bare > 1 { "no selected object has" } else { "this object has no" };
             return Err(format!("There is nothing to send to Blender: {whose} surface."));
@@ -579,6 +608,10 @@ impl Running {
         }
         if let Some(note) = io::note_saved(out.mended) {
             text += &format!(" {note}");
+        }
+        if matches!(up, Up::Open) && out.objects.iter().any(|o| o.paint.is_some()) && blender_link_is_old(&folder) {
+            text += " The Blender that is open has the link from before paint, so the paint stays here: close Blender \
+                     and press Send to Blender again, and GolemSculpt opens it with the new link.";
         }
         Ok(text)
     }
@@ -636,6 +669,7 @@ impl Running {
 
     /// Puts a package's objects into the scene as one undo step, and says what came.
     fn take_from_blender(&mut self, package: LinkPackage) {
+        let colours = self.export_paint();
         let scene = &self.doc.scene;
         let fates = fates(scene, &self.blender, &package.objects);
         // The meshes first: building one is the long part, and nothing has changed yet.
@@ -648,13 +682,15 @@ impl Running {
                 Fate::Bare => bare += 1,
                 Fate::Replace(id) => {
                     let Some(object) = scene.get(id) else { continue };
-                    let (mesh, mended) = entry.into_mesh(object.matrix().inverse());
+                    let (mut mesh, mended) = entry.into_mesh(object.matrix().inverse());
                     if mesh.indices.is_empty() {
                         bare += 1;
                         continue;
                     }
                     repaired += mended;
-                    replaced.push((id, object.name.clone(), mesh, mark));
+                    // Held against the object's own paint once that is on the new shape.
+                    let theirs = paint::take_colour(&mut mesh);
+                    replaced.push((id, object.name.clone(), mesh, mark, theirs));
                 }
                 Fate::Add => {
                     let (mesh, mended) = entry.into_mesh(Mat4::from_translation(-origin));
@@ -671,12 +707,15 @@ impl Running {
         let mut names = (Vec::new(), Vec::new());
         // Each object that arrived, with the mark it came under.
         let mut arrived: Vec<(u64, String)> = Vec::new();
+        // What became of each replaced object's colour from Blender, for the status line.
+        let mut painted: Vec<String> = Vec::new();
         if !replaced.is_empty() || !added.is_empty() {
             let mut new: Vec<u64> = Vec::new();
             self.edit_scene(|scene, slot| {
-                for (id, name, mesh, mark) in replaced {
-                    // The same model back from Blender keeps its face groups.
-                    let mesh = super::groups::taking_over(scene, slot, id, mesh);
+                for (id, name, mesh, mark, theirs) in replaced {
+                    // The same model back from Blender keeps its face groups and its paint layers.
+                    let mut mesh = super::groups::taking_over(scene, slot, id, mesh);
+                    painted.extend(paint::said(&name, paint::came_back(&mut mesh, theirs, &colours)));
                     scene.replace_mesh_of(id, mesh, slot);
                     names.0.push(name);
                     arrived.push((id, mark));
@@ -733,6 +772,12 @@ impl Running {
         }
         if changed && bare > 0 {
             text += &format!(" {} no surface and {} left out.", plural(bare, "had", "had"), if bare == 1 { "was" } else { "were" });
+        }
+        for line in &painted {
+            text += &format!(" {line}");
+        }
+        if package.paint_lost {
+            text += " The paint Blender sent could not be read, so the shapes came without it.";
         }
         if changed {
             text += " Undo (Z) puts the scene back as it was.";
@@ -1006,7 +1051,7 @@ mod tests {
         scene.select_also(ball);
 
         let mut link = link();
-        let out = outgoing(&scene, &slot, &mut link);
+        let out = outgoing(&scene, &slot, &mut link, &io::ExportPaint::default());
         let said: Vec<(&str, bool, &str)> = out.objects.iter().map(|o| (o.name.as_str(), o.copy, o.reference.as_str())).collect();
         let (ball_ref, block_ref) = (format!("run:{ball}"), format!("run:{block}"));
         assert_eq!(said, [("Ball", false, ball_ref.as_str()), ("Ball_MirrorX", true, ball_ref.as_str()), ("Tall Block", false, block_ref.as_str())]);
@@ -1022,7 +1067,7 @@ mod tests {
             link.known.insert(*key, Known { mark: entry.mark.clone(), print: *print });
         }
         scene.get_mut(block).unwrap().position = Vec3::new(4.0, 0.0, 0.0);
-        let again = outgoing(&scene, &slot, &mut link);
+        let again = outgoing(&scene, &slot, &mut link, &io::ExportPaint::default());
         let same: Vec<bool> = again.objects.iter().zip(&out.objects).map(|(now, was)| now.same_as == was.mark && now.mark == was.mark).collect();
         assert_eq!(same, [true, true, false]);
         assert!(again.objects[2].same_as.is_empty() && again.objects[2].mark != out.objects[2].mark);
@@ -1132,5 +1177,49 @@ mod tests {
             std::fs::write(tray.join(name), b"x").unwrap();
         }
         assert_eq!(packages(&tray), [tray.join("1.gslink"), tray.join("2.gslink")]);
+    }
+
+    #[test]
+    fn a_blender_with_the_link_from_before_paint_is_told_apart() {
+        let folder = std::env::temp_dir().join("sculpt_blender_link_version_tests");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(!blender_link_is_old(&folder));
+        let mine = folder.join(format!("blender-{}.json", std::process::id()));
+        std::fs::write(&mine, br#"{"pid": 1, "link": 2}"#).unwrap();
+        assert!(!blender_link_is_old(&folder));
+        // A note from before paint said link 1, or nothing at all.
+        std::fs::write(&mine, br#"{"pid": 1, "link": 1}"#).unwrap();
+        assert!(blender_link_is_old(&folder));
+        std::fs::write(&mine, br#"{"pid": 1}"#).unwrap();
+        assert!(blender_link_is_old(&folder));
+        // A Blender that has gone does not count.
+        std::fs::remove_file(&mine).unwrap();
+        std::fs::write(folder.join("blender-4294967290.json"), br#"{"link": 1}"#).unwrap();
+        assert!(!blender_link_is_old(&folder));
+    }
+
+    #[test]
+    fn painted_objects_go_with_their_paint_and_a_repaint_is_a_change() {
+        let mut slot = primitives::build(Primitive::Sphere, 1_000, 0.5);
+        let red = vec![crate::mesh::paint::Rgba8([200, 0, 0, 255]); slot.vertex_count()];
+        slot.set_paint(Some(crate::io::painted::imported_stack(red)));
+        let mut scene = Scene::new("Ball");
+        let ball = scene.active_id();
+        scene.select(ball, &mut slot);
+        let mut link = link();
+        let paint = io::ExportPaint::default();
+        let out = outgoing(&scene, &slot, &mut link, &paint);
+        let sent = out.objects[0].paint.as_ref().expect("its paint goes with it");
+        assert_eq!(sent.composite.len(), slot.vertex_count());
+        for (entry, (key, print)) in out.objects.iter().zip(&out.prints) {
+            link.known.insert(*key, Known { mark: entry.mark.clone(), print: *print });
+        }
+        // Painted again here, it is not what Blender has any more.
+        let mut stack = slot.paint_stack().unwrap().into_owned();
+        stack.layers[0].data.colour.as_mut().unwrap()[0] = crate::mesh::paint::Rgba8([1, 2, 3, 255]);
+        slot.set_paint(Some(stack));
+        let again = outgoing(&scene, &slot, &mut link, &paint);
+        assert!(again.objects[0].same_as.is_empty(), "a repaint is a change");
     }
 }

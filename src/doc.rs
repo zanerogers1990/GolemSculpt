@@ -64,6 +64,9 @@ pub struct Options {
     pub groups: crate::ui::groups::Card,
     /// The scene's material palette for painting, kept in the file (see mesh/paint/palette.rs).
     pub paint: crate::mesh::paint::palette::ScenePaint,
+    /// Export FBX also writes each painted object's material weights into
+    /// its UV sets, for game shaders (see io/fbx/paint.rs). Not kept between runs.
+    pub fbx_material_weights: bool,
 }
 
 impl Default for Options {
@@ -99,6 +102,7 @@ impl Default for Options {
             look: Look::default(),
             groups: Default::default(),
             paint: Default::default(),
+            fbx_material_weights: false,
         }
     }
 }
@@ -275,6 +279,8 @@ pub enum Action {
     /// The answer to the question about a copy a crash left behind.
     Recover(Recover),
     ExportObj,
+    /// Export PLY: the active object, with its paint (see app/exports.rs).
+    ExportPly,
     ExportFbx,
     /// Send the selected objects to Blender, opening it if it is not open
     /// (see app/blender.rs).

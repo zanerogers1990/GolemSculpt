@@ -654,14 +654,24 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             (
                 "Export OBJ...",
                 Action::ExportObj,
-                "Write the selected object as a Wavefront OBJ, placed as it is in the scene (position, rotation and scale included).",
+                "Write the selected object as a Wavefront OBJ, placed as it is in the scene (position, rotation and scale included). A painted object goes with its colour at every point; its materials need PLY or FBX.",
             ),
             (
                 "Export FBX...",
                 Action::ExportFbx,
-                "Write every selected object into one Autodesk FBX, for Blender, Unity and the like: each an object of its own under its name, placed as it is in the scene, Y up, at real size (1 unit is 1 cm). Ctrl + click rows of the Objects list to select more than one.",
+                "Write every selected object into one Autodesk FBX, for Blender, Unity and the like: each an object of its own under its name, placed as it is in the scene, Y up, at real size (1 unit is 1 cm). A painted object goes with its colour, and each face with the material most of it is painted with. Ctrl + click rows of the Objects list to select more than one.",
             ),
         ]);
+        row(ui, actions, &[(
+            "Export PLY...",
+            Action::ExportPly,
+            "Write the selected object as a PLY, placed as it is in the scene: the format most programs read painted colour from (MeshLab, colour 3D printing). A painted object goes with its colour and, for each material it is painted with, how much of it is at each point.",
+        )]);
+        tip(
+            theme::checkbox(ui, &mut doc.opts.fbx_material_weights, "FBX: material weights in UVs", ACCENT()),
+            tips,
+            "Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.",
+        );
         // The list that shows the selection is on another tab, so say here what the file would hold.
         let picked = doc.scene.selected().len();
         if picked > 1 {

@@ -212,8 +212,13 @@ impl ObjGroups {
     }
 }
 
-/// The mesh of a model read from a file, with the groups the file gave it.
+/// The mesh of a model read from a file, with the groups the file gave it,
+/// and its colours as a paint layer if it gave colours (`io/painted.rs`).
 pub fn imported_mesh(raw: RawMesh) -> Mesh {
+    if !raw.colours.is_empty() && raw.colours.len() == raw.positions.len() {
+        let stack = super::painted::imported_stack(raw.colours);
+        return crate::mesh::paint::built_with(raw.positions, raw.indices, None, &raw.groups, Some(&stack));
+    }
     built_with(raw.positions, raw.indices, None, &raw.groups)
 }
 

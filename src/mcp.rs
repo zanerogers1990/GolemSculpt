@@ -799,11 +799,13 @@ fn tools() -> Value {
         ),
         tool(
             "save_file",
-            "Save to a file, replacing it if it exists. A .sclp path saves the whole scene; an .obj or .stl path \
-             exports the active object where it stands in the scene (STL in millimetres, Z up, 1 unit = 10 mm); an \
-             .fbx path exports every selected object into the one file, each under its own name (centimetres, Y up).",
+            "Save to a file, replacing it if it exists. A .sclp path saves the whole scene; an .obj, .ply or .stl \
+             path exports the active object where it stands in the scene (STL in millimetres, Z up, 1 unit = 10 mm); \
+             an .fbx path exports every selected object into the one file, each under its own name (centimetres, Y \
+             up). A painted object's colour goes into OBJ, PLY and FBX (its materials into PLY and FBX too); STL is \
+             shape only.",
             json!({
-                "path": string("Full path to write, on this computer's own drives, ending in .sclp, .obj, .fbx or .stl."),
+                "path": string("Full path to write, on this computer's own drives, ending in .sclp, .obj, .ply, .fbx or .stl."),
             }),
             &["path"],
         ),

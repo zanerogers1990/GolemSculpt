@@ -90,17 +90,24 @@ impl Running {
             parts.iter().map(|part| part.places.iter().map(|(n, m)| (n.as_str(), *m)).collect()).collect();
         let objects: Vec<(&Mesh, &[(&str, Mat4)])> =
             parts.iter().zip(&places).map(|(part, places)| (part.mesh, places.as_slice())).collect();
-        let (result, mended) = Self::split_mended(io::export_fbx_objects(&objects, path));
+        let (result, mended) = Self::split_mended(io::export_fbx_painted(&objects, &self.export_paint(), path));
         result?;
 
         let names: Vec<&str> = parts.iter().map(|part| part.name).collect();
-        let what = match names.as_slice() {
+        let mut what = match names.as_slice() {
             [_] => format!("{}{}", named(&names), self.export_note()),
             _ => {
                 let copies = if parts.iter().any(|part| part.places.len() > 1) { " with their live copies" } else { "" };
                 format!("{} objects ({}){copies}", names.len(), named(&names))
             }
         };
+        if parts.iter().any(|part| part.mesh.has_paint()) {
+            what += ", paint included";
+            if self.doc.opts.fbx_material_weights {
+                what += " (material weights in UV sets 1 to 4)";
+            }
+            what += ",";
+        }
         let left = match left_out {
             0 => String::new(),
             1 => ". 1 selected object has no surface and was left out".to_owned(),

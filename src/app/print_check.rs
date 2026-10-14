@@ -207,6 +207,10 @@ impl Running {
         if let Some(faults) = &faults {
             text += &format!(" It has {faults}, so it may not print.");
         }
+        if self.doc.mesh.has_paint() {
+            // STL has no room for colour (`io/painted.rs` is what the other formats write).
+            text += " STL holds shape only: the paint is not in it (Export PLY, OBJ or FBX keep it).";
+        }
         self.status(text.clone(), faults.is_none());
         Ok(text)
     }

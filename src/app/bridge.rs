@@ -41,7 +41,6 @@ use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use super::{Drag, Running, is_native};
 use crate::bridge_guard::{self as guard, Key};
 use crate::doc::{Action, MaskOp, Options};
-use crate::io;
 use crate::mesh::bvh::Aabb;
 use crate::mesh::primitives::{self, Primitive};
 use crate::scene::Space;
@@ -1076,7 +1075,6 @@ impl Running {
 
     fn save_file(&mut self, args: &Value) -> Result<String, String> {
         let (path, extension) = Self::path(args)?;
-        let name = self.doc.scene.active().name.clone();
         match extension.as_str() {
             "sclp" => {
                 self.save_scene(&path)?;
@@ -1086,20 +1084,15 @@ impl Running {
                 self.doc.path = Some(path);
                 Ok(message)
             }
-            "obj" => {
-                let places = self.export_places();
-                let places: Vec<(&str, glam::Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
-                let (result, mended) = Self::split_mended(io::export_obj_placed(&self.doc.mesh, &places, &path));
-                result?;
-                Ok(format!("Exported \"{name}\"{} to {}{mended}", self.export_note(), path.display()))
-            }
+            "obj" => self.export_obj_to(&path),
+            "ply" => self.export_ply_to(&path),
             "stl" => {
                 // The same export as the button's, without its question: nobody is there to
                 // answer it, so the file is written and the answer says if it may not print.
                 self.export_stl_to(&path)
             }
             "fbx" => self.export_fbx_to(&path),
-            _ => Err("The path must end in .sclp (the whole scene), .obj or .stl (the active object), or .fbx (every selected object).".into()),
+            _ => Err("The path must end in .sclp (the whole scene), .obj, .ply or .stl (the active object), or .fbx (every selected object).".into()),
         }
     }
 
@@ -1193,7 +1186,7 @@ mod tests {
         let path = Path::new(FILE);
         assert_eq!(saved_words(path, "", false), format!("Saved {FILE}"));
         assert_eq!(saved_words(path, "", true), format!("Saved {FILE}. Sculpt is closing."));
-        let note = io::note_saved(2).map(|note| format!(". {note}")).expect("two points were mended");
+        let note = crate::io::note_saved(2).map(|note| format!(". {note}")).expect("two points were mended");
         let said = saved_words(path, &note, false);
         assert!(said.starts_with(&format!("Saved {FILE}. 2 points of the model have no position")), "{said}");
         let said = saved_words(path, &note, true);

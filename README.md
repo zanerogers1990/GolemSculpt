@@ -1813,6 +1813,41 @@ pair; after that they can be moved apart and the joints stay on them.
   lives in one place, `crates/geom/src/units.rs`. **Export STL for Printing**
   looks the object over first, and asks before writing one with holes in it
   (see Checking a model for printing).
+- **Export PLY** writes the selected object (and its live copies) as a binary
+  PLY, in the app's own units and axes like the OBJ: the format most programs
+  read painted colour from (MeshLab, CloudCompare, colour 3D printing).
+- **What each format carries of a painted model.** The colour that goes out
+  is the colour you see: the paint layers over the Base Colour of the Look
+  panel, so where nothing is painted the model goes out in the Base Colour,
+  and where paint is thin it is mixed with it. (A finish preset's own colours,
+  Clay or Metal, are not in it: no file format can carry a finish.)
+  - **OBJ**: each point's colour on its `v` line (`v x y z r g b`, 0 to 1),
+    which Blender, MeshLab, ZBrush and most others read. No materials: OBJ
+    keeps those in a separate `.mtl` file per face, which a painted blend of
+    materials does not fit. **Import** reads those colours back as a paint
+    layer, "Imported Colours".
+  - **PLY**: each point's colour (red, green, blue, alpha always full), and
+    for each material the object is painted with, how much of it is at each
+    point, 0 to 1, under the material's name (`mat_Metal___Rust`; the file's
+    header gives each one's full name).
+  - **FBX**: the colour as one colour set ("GolemSculpt Paint"), and each face
+    with the material that has most of it (the surface nothing was painted on
+    is "GolemSculpt Base"), each material named as in the palette and coloured
+    with its swatch. **Unity** reads the one colour set into the mesh's
+    vertex colours (a shader has to use them: Unity's standard ones do not)
+    and makes a sub-mesh, with a material slot, for each material, so a
+    material of Unity's own can be put on each painted region. **Blender**
+    reads the colour set as a colour attribute and the materials as material
+    slots. With **FBX: material weights in UVs** ticked on the File tab
+    (off unless ticked, and not remembered between runs), the FBX also holds
+    how much of each material is at each point, for a game shader of one's
+    own that blends textures: UV set 0 is all zero (a sculpt has no UVs),
+    UV sets 1 to 4 hold the weights two materials a set (U the first, V the
+    second, in the order the set's name says: "Weights Metal - Rust + Clay").
+    In Unity those are `uv2` to `uv5`.
+  - **STL** is shape alone: it has no room for colour, and the line after an
+    export says so when the object is painted.
+  - **Send to Blender** carries the most: see Blender.
 - **The app remembers how you left it**: interface size, the theme, tooltips
   on or off, which cards are open, which float over the view and where, which
   panels are folded away and which tab each is on, fullscreen, millimetres or inches, the remesh settings,
@@ -1946,8 +1981,27 @@ takes what was sent within a second, and is opened first if it is closed.
   is there however Blender is opened. Deleting that file removes it. A
   Blender that was already open the very first time does not have the link
   yet: a second one is started, and the status line says to close the other.
-- Colours and materials are not sent. In Blender, an object that is updated
-  keeps the materials it had there.
+- **Paint goes too.** A painted object arrives in Blender with colour
+  attributes on its points: "GolemSculpt Paint", the colour you see here (the
+  layers over the Base Colour), which is the one Blender shows (Solid shading,
+  Color: Attribute) and renders; then one for each paint layer that has
+  colour, under the layer's name, holding that layer alone (its coverage as
+  alpha); and for each material it is painted with, a number on each point
+  under the material's name, how much of it is there (a shader's Attribute
+  node of that name reads it). Paint in Blender on "GolemSculpt Paint"
+  (Vertex Paint mode) and send the object back: its paint layers here are
+  kept as they were, carried onto the shape Blender sent, and what was
+  painted in Blender comes in as a new top layer, "From Blender", covering
+  exactly the points that were painted there; nothing painted, no new layer.
+  Changes to the per-layer attributes in Blender do not come back. An object
+  made in Blender with colour on it arrives with that colour as its paint
+  layer "From Blender". Repainting here, or there, counts as a change, so
+  the object goes across again. In Blender, an object that is updated keeps
+  the materials it had there.
+- A Blender that was opened with the link from before paint (one already
+  open when GolemSculpt was updated) takes the shapes and passes the paint
+  over; the status line says so. Close Blender and press Send to Blender:
+  GolemSculpt opens it with the new link, which it keeps from then on.
 
 The two programs meet in a folder, `blender_link` in the settings folder
 (`%APPDATA%\Sculpt`): each leaves a file in the other's tray there and looks

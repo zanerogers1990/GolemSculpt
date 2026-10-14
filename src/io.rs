@@ -1,5 +1,7 @@
 //! Files: the app's own `.sclp` scenes, and mesh import and export as
-//! Wavefront OBJ and STL (binary and ASCII). Export as FBX is in `io/fbx.rs`.
+//! Wavefront OBJ and STL (binary and ASCII). Export as FBX is in `io/fbx.rs`,
+//! as PLY in `io/ply.rs`, and what every export writes of a model's paint
+//! (and an OBJ's colours read back) in `io/painted.rs`. STL has no colour.
 //!
 //! A `.sclp` keeps the whole scene exactly: every mesh as raw arrays, then
 //! one JSON section for everything else (objects, look, camera, tool state).
@@ -50,6 +52,8 @@ mod layers;
 mod levels;
 mod link;
 mod paint;
+pub(crate) mod painted;
+mod ply;
 mod tool_data;
 mod repair;
 #[cfg(test)]
@@ -57,10 +61,14 @@ mod damage_tests;
 
 #[cfg(test)]
 use fbx::export_fbx;
+#[allow(unused_imports)] // the app writes with the scene's paint settings; tests and older callers use the plain form
 pub use fbx::export_fbx_objects;
-pub use link::{LINK_ENDING, LinkObject, LinkPackage, read_link_package, write_link_package};
+pub use fbx::export_fbx_painted;
+pub use link::{FROM_BLENDER, LINK_ENDING, LinkObject, LinkPackage, LinkPaint, read_link_package, write_link_package};
 pub use groups::imported_mesh;
 pub use layers::Lost;
+pub use painted::ExportPaint;
+pub use ply::export_ply_placed;
 pub use repair::{note_saved, notes_opened};
 
 /// A model as read from a file, already in the app's axes and units.
@@ -74,6 +82,9 @@ pub struct RawMesh {
     /// The face group of each triangle, where the file named groups (an
     /// OBJ's `g` lines: see `io/groups.rs`); empty otherwise.
     pub groups: Vec<u16>,
+    /// The colour of each vertex, where the file gave colours (an OBJ's
+    /// `v x y z r g b` lines: see `io/painted.rs`); empty otherwise.
+    pub colours: Vec<crate::mesh::paint::Rgba8>,
 }
 
 pub fn import(path: &Path) -> Result<RawMesh> {
@@ -99,6 +110,7 @@ fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
     let mut indices: Vec<u32> = Vec::new();
     let mut face: Vec<u32> = Vec::new();
     let mut named = groups::ObjGroups::default();
+    let mut colours = painted::ObjColours::default();
     for line in text.lines() {
         let mut parts = line.split_ascii_whitespace();
         match parts.next() {
@@ -109,6 +121,8 @@ fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
                     *slot = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
                 }
                 positions.push(Vec3::from_array(c));
+                // `v x y z r g b`: the vertex's colour, which many programs write.
+                colours.vertex(parts);
             }
             Some("f") => {
                 face.clear();
@@ -131,10 +145,13 @@ fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
             _ => {}
         }
     }
-    let (positions, indices) = weld_exact(positions, indices);
+    let colours = colours.bytes();
+    let (positions, indices, first) = weld_exact(positions, indices);
+    // A welded vertex takes the colour of the first line that named its place.
+    let colours = if colours.is_empty() { colours } else { first.iter().map(|&i| colours[i as usize]).collect() };
     // The groups of the triangles `tidy` is about to keep.
     let groups = named.ids(|t| sound_triangle(&positions, &indices[t * 3..t * 3 + 3]));
-    Ok(RawMesh { groups, ..tidy(positions, indices, false) })
+    Ok(RawMesh { groups, ..tidy(positions, indices, false, colours) })
 }
 
 // ---------------------------------------------------------------- STL axes
@@ -161,7 +178,7 @@ fn parse_stl(bytes: &[u8]) -> Result<RawMesh> {
     }
     let (positions, indices) = weld_corners(&corners);
     drop(corners);
-    let mut raw = tidy(positions, indices, true);
+    let mut raw = tidy(positions, indices, true, Vec::new());
     if raw.indices.is_empty() {
         return Err("Every triangle in this STL has no area, so there is nothing to sculpt.".into());
     }
@@ -388,29 +405,33 @@ fn bounds_of(points: &[Vec3]) -> (Vec3, Vec3) {
 
 /// Merges vertices at exactly the same position. OBJ files often split
 /// vertices along seams; sculpting needs a connected surface or the mesh tears
-/// apart under the brush.
-fn weld_exact(positions: Vec<Vec3>, indices: Vec<u32>) -> (Vec<Vec3>, Vec<u32>) {
+/// apart under the brush. Also gives back, for each welded vertex, the first
+/// of the vertices it was made of.
+fn weld_exact(positions: Vec<Vec3>, indices: Vec<u32>) -> (Vec<Vec3>, Vec<u32>, Vec<u32>) {
     let mut map: HashMap<[u32; 3], u32> = HashMap::with_capacity(positions.len());
     let mut out: Vec<Vec3> = Vec::new();
+    let mut first = Vec::new();
     let mut remap = Vec::with_capacity(positions.len());
-    for p in &positions {
+    for (i, p) in positions.iter().enumerate() {
         // +0.0 so that -0.0 and 0.0 weld together.
         let key = [(p.x + 0.0).to_bits(), (p.y + 0.0).to_bits(), (p.z + 0.0).to_bits()];
         let id = *map.entry(key).or_insert_with(|| {
             out.push(*p);
+            first.push(i as u32);
             out.len() as u32 - 1
         });
         remap.push(id);
     }
     let indices = indices.iter().map(|&i| remap[i as usize]).collect();
-    (out, indices)
+    (out, indices, first)
 }
 
 /// Drops what could only hurt a sculpt: triangles that collapsed to a line or
 /// a point (no normal, and a NaN from one spreads to every neighbour at the
 /// first smooth) or that touch a coordinate which is not a number, then the
-/// vertices nothing uses any more. Order is otherwise kept.
-fn tidy(positions: Vec<Vec3>, indices: Vec<u32>, real_size: bool) -> RawMesh {
+/// vertices nothing uses any more (and their `colours`, if there are any).
+/// Order is otherwise kept.
+fn tidy(positions: Vec<Vec3>, indices: Vec<u32>, real_size: bool, colours: Vec<crate::mesh::paint::Rgba8>) -> RawMesh {
     let mut used = vec![false; positions.len()];
     let mut kept = Vec::with_capacity(indices.len());
     for t in indices.chunks_exact(3) {
@@ -432,7 +453,12 @@ fn tidy(positions: Vec<Vec3>, indices: Vec<u32>, real_size: bool) -> RawMesh {
     for i in &mut kept {
         *i = new_id[*i as usize];
     }
-    RawMesh { positions: out, indices: kept, real_size, groups: Vec::new() }
+    let colours = if colours.len() == positions.len() {
+        colours.into_iter().zip(&used).filter(|(_, used)| **used).map(|(c, _)| c).collect()
+    } else {
+        Vec::new()
+    };
+    RawMesh { positions: out, indices: kept, real_size, groups: Vec::new(), colours }
 }
 
 /// Whether [`tidy`] keeps triangle `t`: three different corners, each a number.
@@ -1567,8 +1593,18 @@ pub fn export_obj(mesh: &Mesh, model: Mat4, path: &Path) -> Result<usize> {
 /// Returns how many points of the mesh were not numbers and were written
 /// mended (see [`export_points`]), so the caller can say so.
 pub fn export_obj_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> Result<usize> {
+    export_obj_painted(mesh, places, &ExportPaint::default(), path)
+}
+
+/// [`export_obj_placed`] with the scene's paint settings: a painted mesh's
+/// vertices go out as `v x y z r g b`, the colour seen at each (the paint
+/// over the Base Colour, sRGB 0 to 1: `io/painted.rs`). That is the line
+/// Blender, MeshLab, ZBrush and most other programs read colour from.
+pub fn export_obj_painted(mesh: &Mesh, places: &[(&str, Mat4)], paint: &ExportPaint, path: &Path) -> Result<usize> {
     nothing_to_export(mesh)?;
     let (points, mended) = export_points(mesh);
+    let painted = painted::Painted::of(mesh, paint);
+    let colours = painted.as_ref().map(|p| p.seen.as_slice());
     replace_file(path, |w| {
         writeln!(w, "# Exported from Sculpt")?;
         // OBJ numbers its vertices through the whole file, so each place carries
@@ -1578,7 +1614,7 @@ pub fn export_obj_placed(mesh: &Mesh, places: &[(&str, Mat4)], path: &Path) -> R
             if places.len() > 1 {
                 writeln!(w, "o {name}")?;
             }
-            write_object_of(w, mesh, &points, model, base)?;
+            write_object_of(w, mesh, &points, colours, model, base)?;
             base += mesh.positions.len() as u32;
         }
         Ok(())
@@ -1624,14 +1660,29 @@ fn vertex_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
 /// [`write_object_of`] for a mesh whose points are all numbers.
 #[cfg(test)]
 fn write_object(w: &mut impl Write, mesh: &Mesh, model: Mat4, base: u32) -> std::io::Result<()> {
-    write_object_of(w, mesh, &export_points(mesh).0, model, base)
+    write_object_of(w, mesh, &export_points(mesh).0, None, model, base)
 }
 
-/// The vertices, normals and faces of `mesh` placed by `model`, numbered from `base`.
-fn write_object_of(w: &mut impl Write, mesh: &Mesh, points: &Points, model: Mat4, base: u32) -> std::io::Result<()> {
-    for p in points.positions.iter() {
+/// The vertices, normals and faces of `mesh` placed by `model`, numbered
+/// from `base`, with each vertex's colour after its place when there are `colours`.
+fn write_object_of(
+    w: &mut impl Write,
+    mesh: &Mesh,
+    points: &Points,
+    colours: Option<&[[u8; 3]]>,
+    model: Mat4,
+    base: u32,
+) -> std::io::Result<()> {
+    for (i, p) in points.positions.iter().enumerate() {
         let q = model.transform_point3(*p);
-        writeln!(w, "v {} {} {}", q.x, q.y, q.z)?;
+        match colours.and_then(|c| c.get(i)) {
+            // Four places are enough to come back as the same byte (1/255 is 0.0039).
+            Some(c) => {
+                let [r, g, b] = c.map(|x| x as f32 / 255.0);
+                writeln!(w, "v {} {} {} {r:.4} {g:.4} {b:.4}", q.x, q.y, q.z)?
+            }
+            None => writeln!(w, "v {} {} {}", q.x, q.y, q.z)?,
+        }
     }
     // Normals go through the inverse transpose: a plain rotation would leave
     // them skewed against a surface that has been stretched.
@@ -2222,6 +2273,7 @@ mod tests {
             indices: (0..36).collect(),
             real_size: false,
             groups: Vec::new(),
+            colours: Vec::new(),
         };
         let at = place_import(&mut obj, Some(Vec3::splat(0.5)));
         let (lo, hi) = bounds_of(&obj.positions);
@@ -2230,7 +2282,7 @@ mod tests {
         assert_close(at, -(lo + hi) * 0.5, 1e-6, "position puts the centre at the origin");
         assert_close(at, Vec3::new(-30.0 * 0.02, 0.0, 0.0), 1e-5, "centre was at x = 30, scaled by 0.02");
         // Nothing to fit to: size is left alone, but it is still centred.
-        let mut alone = RawMesh { positions: vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 4.0, 2.0), Vec3::ZERO], indices: vec![0, 1, 2], real_size: false, groups: Vec::new() };
+        let mut alone = RawMesh { positions: vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 4.0, 2.0), Vec3::ZERO], indices: vec![0, 1, 2], real_size: false, groups: Vec::new(), colours: Vec::new() };
         assert_close(place_import(&mut alone, None), Vec3::new(-10.0, -2.0, -1.0), 1e-6, "centred only");
         assert_eq!(alone.positions[1], Vec3::new(20.0, 4.0, 2.0));
         // An STL keeps the size it was written at.
