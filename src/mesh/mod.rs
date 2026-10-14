@@ -8,6 +8,8 @@ pub mod groups;
 pub mod layers;
 pub mod levels;
 mod lists;
+#[cfg(test)]
+mod normals_tests;
 pub mod primitives;
 pub mod visibility;
 
@@ -77,6 +79,8 @@ pub struct Mesh {
     stroke_leaves: BitSet,
 
     pending_normals: BitSet,
+    /// Where each leaf starts in the order `edit_leaves` counts vertices.
+    edit_starts: Vec<usize>,
     dirty_pos: BitSet,
     dirty_nrm: BitSet,
     dirty_mask: BitSet,
@@ -289,6 +293,7 @@ impl Mesh {
             touched: Vec::new(),
             stroke_leaves: BitSet::with_len(leaf_count),
             pending_normals: BitSet::with_len(leaf_count),
+            edit_starts: Vec::new(),
             dirty_pos: BitSet::with_len(leaf_count),
             dirty_nrm: BitSet::with_len(leaf_count),
             dirty_mask: BitSet::with_len(leaf_count),
@@ -560,6 +565,7 @@ impl Mesh {
         }
         self.touched.clear();
         self.stroke_leaves.clear();
+        self.bvh.begin_stroke();
         self.in_stroke = true;
     }
 
@@ -613,21 +619,28 @@ impl Mesh {
     /// offered to `f`, which is what keeps every brush off hidden parts. The
     /// loop is built twice so that the test is only in the copy that runs
     /// while something is hidden; the usual copy is the loop as it was.
+    ///
+    /// `near` sees only where a vertex is, before the rest of it is read: a
+    /// vertex it turns down is passed over as if `f` had left it alone. A
+    /// brush whose first test is the distance from its centre says so there,
+    /// and the vertices outside its ring cost one read instead of five.
     fn edit_leaves(
         &mut self,
         leaves: &[u32],
+        near: impl Fn(Vec3) -> bool + Sync,
         f: impl Fn(usize, &StrokeVertex) -> Option<(Vec3, f32)> + Sync,
     ) {
         if self.hidden.keeps_off() {
-            self.edit_leaves_as::<true>(leaves, f);
+            self.edit_leaves_as::<true>(leaves, near, f);
         } else {
-            self.edit_leaves_as::<false>(leaves, f);
+            self.edit_leaves_as::<false>(leaves, near, f);
         }
     }
 
     fn edit_leaves_as<const HIDING: bool>(
         &mut self,
         leaves: &[u32],
+        near: impl Fn(Vec3) -> bool + Sync,
         f: impl Fn(usize, &StrokeVertex) -> Option<(Vec3, f32)> + Sync,
     ) {
         // Threads may only share the work if no leaf is listed twice.
@@ -641,8 +654,9 @@ impl Mesh {
             sorted = copy;
             &sorted[..]
         };
+        let mut starts = std::mem::take(&mut self.edit_starts);
         let (arrays, ranges, touched) = self.stroke_arrays();
-        let mut starts = Vec::with_capacity(leaves.len());
+        starts.clear();
         let mut total = 0usize;
         for &l in leaves {
             let leaf = &ranges[l as usize];
@@ -653,6 +667,10 @@ impl Mesh {
             let leaf = &ranges[leaves[k] as usize];
             for (n, v) in (leaf.vert_start..leaf.vert_end).enumerate() {
                 if HIDING && arrays.hidden[v as usize] {
+                    continue;
+                }
+                // SAFETY: as below; this only reads the vertex's place.
+                if !near(unsafe { arrays.positions.read(v as usize) }) {
                     continue;
                 }
                 // SAFETY: the leaves are distinct and each owns its own run
@@ -679,6 +697,7 @@ impl Mesh {
                 touched.extend(first);
             }
         }
+        self.edit_starts = starts;
     }
 
     /// Moves the vertices owned by `leaves` during a stroke, on all threads.
@@ -693,13 +712,42 @@ impl Mesh {
         leaves: &[u32],
         f: impl Fn(usize, &StrokeVertex) -> Option<Vec3> + Sync,
     ) {
-        self.edit_leaves(leaves, |at, vertex| f(at, vertex).map(|pos| (pos, vertex.mask)));
+        self.edit_leaves(leaves, |_| true, |at, vertex| f(at, vertex).map(|pos| (pos, vertex.mask)));
+    }
+
+    /// [`Self::move_vertices`] for a brush that leaves alone every vertex
+    /// whose live position is `r2` (squared) or further from `center`: those
+    /// are passed over before the rest of them is read. `f` must return
+    /// `None` for them itself too, so that the result is the same either way.
+    pub fn move_within(
+        &mut self,
+        leaves: &[u32],
+        center: Vec3,
+        r2: f32,
+        f: impl Fn(usize, &StrokeVertex) -> Option<Vec3> + Sync,
+    ) {
+        let near = |pos: Vec3| !(pos.distance_squared(center) >= r2);
+        self.edit_leaves(leaves, near, |at, vertex| f(at, vertex).map(|pos| (pos, vertex.mask)));
     }
 
     /// As [`Self::move_vertices`], for the mask: `f` returns a vertex's new
-    /// mask value. Call [`Self::mask_changed`] afterwards.
+    /// mask value. Call [`Self::mask_changed`] afterwards. (The brush
+    /// paints through [`Self::paint_mask_within`]; tests paint with this.)
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn paint_mask(&mut self, leaves: &[u32], f: impl Fn(&StrokeVertex) -> Option<f32> + Sync) {
-        self.edit_leaves(leaves, |_, vertex| f(vertex).map(|mask| (vertex.pos, mask)));
+        self.edit_leaves(leaves, |_| true, |_, vertex| f(vertex).map(|mask| (vertex.pos, mask)));
+    }
+
+    /// As [`Self::move_within`], for the mask.
+    pub fn paint_mask_within(
+        &mut self,
+        leaves: &[u32],
+        center: Vec3,
+        r2: f32,
+        f: impl Fn(&StrokeVertex) -> Option<f32> + Sync,
+    ) {
+        let near = |pos: Vec3| !(pos.distance_squared(center) >= r2);
+        self.edit_leaves(leaves, near, |_, vertex| f(vertex).map(|mask| (vertex.pos, mask)));
     }
 
     /// As [`Self::move_vertices`], for a list of vertices: `f` gets each

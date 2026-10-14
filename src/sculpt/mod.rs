@@ -756,10 +756,28 @@ struct Stroke {
     relax: f32,
     /// What Clay's finishing pass measures curvature against.
     curvature: CurvatureBase,
-    /// Saved positions for dabs near a mirror plane. Kept between dabs, like
-    /// `scratch`: a fresh buffer per dab costs more than filling it.
-    saved: Vec<Vec3>,
+    /// What the walk over mirror images keeps between dabs, like `scratch`.
+    walk: Walked,
     scratch: kernels::Scratch,
+}
+
+/// The buffers of the walk over mirror images (`Sculptor::apply_symmetric`),
+/// kept between dabs: a fresh buffer per dab costs more than filling it.
+#[derive(Default)]
+struct Walked {
+    /// The copies of the set in hand.
+    group: Vec<SymOp>,
+    /// The leaves each of them reaches, one run per copy, and where each run
+    /// ends.
+    reached: Vec<u32>,
+    ends: Vec<usize>,
+    /// Every leaf the set reaches, ascending, and where each starts in
+    /// `saved`.
+    leaves: Vec<u32>,
+    starts: Vec<usize>,
+    /// Where the set's vertices were before the dab, for copies near a
+    /// mirror plane.
+    saved: Vec<Vec3>,
 }
 
 impl Stroke {
@@ -1227,7 +1245,7 @@ impl Sculptor {
             object_size: bounds.size().max_element().max(1e-6),
             relax,
             curvature,
-            saved: Vec::new(),
+            walk: Walked::default(),
             scratch: kernels::Scratch::default(),
         };
         self.last_hit = Some(hit.pos);
@@ -1306,7 +1324,7 @@ impl Sculptor {
         );
         if connected && verts.len() > 1 {
             let centres: Vec<Vec3> = copies.iter().map(|&(centre, _)| centre).collect();
-            keep_connected(mesh, &centres, &mut verts, &mut weights);
+            keep_connected(mesh, &centres, &mut verts, &mut weights, &mut Connected::default());
         }
         let leaves = mesh.leaves_of(&verts);
         let hold = share::Hold::of(weights.chunks(n_ops));
@@ -1755,73 +1773,82 @@ impl Sculptor {
             return walk.apply(mesh, &p, &dab, reach, &mut stroke.scratch);
         }
 
-        let mirrors = &stroke.mirrors;
+        let Stroke { ops, mirrors, scratch, walk, .. } = stroke;
+        let Walked { group, reached, ends, leaves, starts, saved } = walk;
         let near = mirrors.near(dab.center, 1.5 * reach);
-
-        let mut leaves: Vec<u32> = Vec::new();
-        let mut handled = vec![false; stroke.ops.len()];
-        for i in 0..stroke.ops.len() {
-            if handled[i] {
+        // Mirror images only come this way, eight at the most.
+        debug_assert!(ops.len() <= 64);
+        let mut handled = 0u64;
+        for i in 0..ops.len() {
+            if handled >> i & 1 != 0 {
                 continue;
             }
             // Group: copies that differ from this one only across near planes.
-            let group: Vec<SymOp> = stroke
-                .ops
-                .iter()
-                .enumerate()
-                .filter(|&(j, _)| {
-                    let same = (mirrors.across(j) ^ mirrors.across(i)) & !near == 0;
-                    if same {
-                        handled[j] = true;
-                    }
-                    same
-                })
-                .map(|(_, &o)| o)
-                .collect();
-
-            leaves.clear();
-            for &op in &group {
-                mesh.bvh.leaves_in_sphere(op.apply_point(dab.center), reach, &mut leaves);
+            group.clear();
+            for (j, &op) in ops.iter().enumerate() {
+                if (mirrors.across(j) ^ mirrors.across(i)) & !near == 0 {
+                    handled |= 1 << j;
+                    group.push(op);
+                }
             }
-            // Ascending, each leaf once: the order the saved copies below are
-            // laid out in, and what lets a dab's vertices be shared out
-            // between threads.
+
+            // The leaves each copy reaches, one ascending run per copy, as
+            // `radial::Walk` keeps them: each copy works on its own leaves
+            // only. Then all of them, ascending, each leaf once: the order
+            // the saved copies below are laid out in, and what lets a dab's
+            // vertices be shared out between threads.
+            reached.clear();
+            ends.clear();
+            for &op in group.iter() {
+                let from = reached.len();
+                mesh.bvh.leaves_in_sphere(op.apply_point(dab.center), reach, reached);
+                reached[from..].sort_unstable();
+                ends.push(reached.len());
+            }
+            leaves.clear();
+            leaves.extend_from_slice(reached);
             leaves.sort_unstable();
             leaves.dedup();
             if leaves.is_empty() {
                 continue;
             }
+            let own = |k: usize| &reached[if k == 0 { 0 } else { ends[k - 1] }..ends[k]];
 
             if group.len() == 1 || p.mask {
                 // Mask amounts all have the same sign and saturate, so order
                 // does not matter there.
-                for &op in &group {
-                    kernels::apply(mesh, &p, &dab.mirrored(op), &leaves, &mut stroke.scratch);
+                for (k, &op) in group.iter().enumerate() {
+                    if !own(k).is_empty() {
+                        kernels::apply(mesh, &p, &dab.mirrored(op), own(k), leaves, scratch);
+                    }
                 }
             } else {
                 // Copies that can meet: each applied to the surface as it
                 // stood before any of them, and what they did to a vertex
                 // shared out between them.
-                let (saved, sharing) = (&mut stroke.saved, p.sharing());
-                save(mesh, &leaves, saved);
-                let (starts, total) = kernels::layout(mesh, &leaves);
-                let mut shared = std::mem::take(&mut stroke.scratch.shared);
+                let sharing = p.sharing();
+                let total = kernels::layout(mesh, leaves, starts);
+                save(mesh, leaves, starts, total, saved);
+                let mut shared = std::mem::take(&mut scratch.shared);
                 shared.clear();
                 shared.resize(total, Shared::default());
                 let mut tally = Tally::default();
-                for &op in &group {
-                    kernels::apply(mesh, &p, &dab.mirrored(op), &leaves, &mut stroke.scratch);
-                    tally.add(share::bank(mesh, &leaves, &leaves, &starts, saved, &mut shared, sharing));
+                for (k, &op) in group.iter().enumerate() {
+                    if own(k).is_empty() {
+                        continue;
+                    }
+                    kernels::apply(mesh, &p, &dab.mirrored(op), own(k), leaves, scratch);
+                    tally.add(share::bank(mesh, own(k), leaves, starts, saved, &mut shared, sharing));
                 }
                 let (saved, settling) = (&*saved, Settling::of(sharing, &tally));
-                mesh.move_vertices(&leaves, |at, _| settling.step(&shared[at]).map(|step| saved[at] + step));
-                stroke.scratch.shared = shared;
+                mesh.move_vertices(leaves, |at, _| settling.step(&shared[at]).map(|step| saved[at] + step));
+                scratch.shared = shared;
             }
 
             if p.mask {
-                mesh.mask_changed(&leaves);
+                mesh.mask_changed(leaves);
             } else {
-                mesh.positions_changed(&leaves);
+                mesh.positions_changed(leaves);
             }
         }
     }
@@ -2006,11 +2033,11 @@ impl Sculptor {
 ///
 /// `weights` holds one weight per copy for every vertex of `verts`; vertices
 /// no copy holds afterwards are dropped from both.
-fn keep_connected(mesh: &Mesh, centres: &[Vec3], verts: &mut Vec<u32>, weights: &mut Vec<f32>) {
+fn keep_connected(mesh: &Mesh, centres: &[Vec3], verts: &mut Vec<u32>, weights: &mut Vec<f32>, walk: &mut Connected) {
     let n_ops = centres.len();
-    let mut grabbed = BitSet::with_len(mesh.vertex_count());
-    let mut reached = BitSet::with_len(mesh.vertex_count());
-    let mut queue: Vec<u32> = Vec::new();
+    let Connected { grabbed, reached, queue } = walk;
+    grabbed.grow(mesh.vertex_count());
+    reached.grow(mesh.vertex_count());
     for (k, &centre) in centres.iter().enumerate() {
         let held = |slot: usize| weights[slot * n_ops + k] > 0.0;
         let mut seed = None;
@@ -2060,13 +2087,22 @@ fn keep_connected(mesh: &Mesh, centres: &[Vec3], verts: &mut Vec<u32>, weights: 
     weights.truncate(kept * n_ops);
 }
 
+/// What [`keep_connected`] walks with: two flags per vertex of the mesh, and
+/// the queue. Made once for a grab, however many copies it has; each walk
+/// leaves the flags clear for the next.
+#[derive(Default)]
+struct Connected {
+    grabbed: BitSet,
+    reached: BitSet,
+    queue: Vec<u32>,
+}
+
 /// Copies the position of every vertex owned by `leaves` into `out`, leaf
-/// after leaf (see the buffer helpers in `kernels`).
-fn save(mesh: &Mesh, leaves: &[u32], out: &mut Vec<Vec3>) {
-    let (starts, total) = kernels::layout(mesh, leaves);
+/// after leaf from `starts`, `total` in all (see the buffer helpers in
+/// `kernels`).
+fn save(mesh: &Mesh, leaves: &[u32], starts: &[usize], total: usize, out: &mut Vec<Vec3>) {
     out.resize(total, Vec3::ZERO);
-    let parts = kernels::stretches(out, kernels::spans(&starts, total));
-    kernels::each_stretch(parts, total, |k, part| {
+    kernels::each_stretch(&mut out[..total], starts, |k, part| {
         part.copy_from_slice(&mesh.positions[kernels::owned(&mesh.bvh.leaves[leaves[k] as usize])]);
     });
 }

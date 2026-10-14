@@ -64,9 +64,78 @@ pub fn stroke(
     (sum / frames as f64, worst, changed)
 }
 
+/// A wavy sweep across the front of the sphere, crossing the mirror plane.
+fn across(t: f32) -> Vec2 {
+    Vec2::new(SIZE.x * 0.5 - 180.0 + 360.0 * t, SIZE.y * 0.5 + (t * 9.0).sin() * 60.0)
+}
+
+/// Up and down just beside the mirror plane, so that with the mirror on
+/// every dab overlaps its image (the walk that shares out what the two did).
+fn along_plane(t: f32) -> Vec2 {
+    Vec2::new(SIZE.x * 0.5 + 6.0 + (t * 11.0).sin() * 10.0, SIZE.y * 0.5 - 160.0 + 320.0 * t)
+}
+
+/// Whether the row `label` is to be run: all of them, unless
+/// `SCULPT_BENCH_ROWS` names some (comma separated, as the rows are labelled),
+/// which is for timing a few rows old against new without the rest.
+fn wanted(label: &str) -> bool {
+    match std::env::var("SCULPT_BENCH_ROWS") {
+        Ok(rows) if !rows.trim().is_empty() => rows.split(',').any(|row| row.trim() == label),
+        _ => true,
+    }
+}
+
+/// One row: a stroke along `path` at r=40px and r=150px, each without and
+/// with the mirror, with the sculptor `holding` makes for each.
+fn row(
+    mesh: &mut Mesh,
+    camera: &Camera,
+    label: &str,
+    path: fn(f32) -> Vec2,
+    holding: impl Fn(f32, bool) -> Sculptor,
+) {
+    if !wanted(label) {
+        return;
+    }
+    let mut line = format!("{label:>10}");
+    let mut changed = Vec::new();
+    for &radius_px in &[40.0f32, 150.0] {
+        for symmetry in [false, true] {
+            let mut sculptor = holding(radius_px, symmetry);
+            // 40 frames of 4 pointer samples.
+            let (mean, worst, verts) = stroke(mesh, &mut sculptor, camera, path, 40, 4);
+            line += &format!("  {mean:>6.2}/{worst:<6.2}");
+            changed.push(format!("{}k", verts / 1000));
+        }
+    }
+    // Vertex counts make a row that touched almost nothing obvious.
+    println!("{line}  verts changed: {}", changed.join(" / "));
+}
+
+/// A sculptor holding the library brush called `name`, as its preset has it.
+fn preset(name: &str, radius_px: f32, symmetry: bool) -> Sculptor {
+    let mut sculptor = Sculptor::default();
+    let found = sculptor.library.select_named(name, &mut sculptor.settings);
+    assert!(found, "no brush called {name}");
+    sculptor.settings.radius_px = radius_px;
+    sculptor.settings.symmetry = [symmetry, false, false];
+    sculptor
+}
+
+/// A sculptor holding the kernel `brush` at half strength.
+fn kernel(brush: Brush, radius_px: f32, symmetry: bool) -> Sculptor {
+    let mut sculptor = Sculptor::default();
+    sculptor.settings.brush = brush;
+    sculptor.settings.radius_px = radius_px;
+    sculptor.settings.symmetry = [symmetry, false, false];
+    sculptor.settings.per_brush[brush.index()].strength = 0.5;
+    sculptor
+}
+
 pub fn run(sizes: &[usize]) {
     println!("threads: {}", rayon::current_num_threads());
     println!("columns: mean/worst ms per frame for r=40px, r=40px+mirror, r=150px, r=150px+mirror");
+    println!("rows ending in | run up and down beside the mirror plane instead of across it");
     for &tris in sizes {
         let t = Instant::now();
         let mut mesh = primitives::build(Primitive::Sphere, tris, 0.5);
@@ -93,35 +162,38 @@ pub fn run(sizes: &[usize]) {
         );
 
         for brush in Brush::ALL {
-            let mut line = format!("{:>10}", brush.name());
-            let mut changed = Vec::new();
-            for &radius_px in &[40.0f32, 150.0] {
-                for symmetry in [false, true] {
-                    let mut sculptor = Sculptor::default();
-                    sculptor.settings.brush = brush;
-                    sculptor.settings.radius_px = radius_px;
-                    sculptor.settings.symmetry = [symmetry, false, false];
-                    sculptor.settings.per_brush[brush.index()].strength = 0.5;
-                    // A wavy sweep across the front of the sphere, crossing
-                    // the mirror plane, in 40 frames of 4 pointer samples.
-                    let path = |t: f32| {
-                        Vec2::new(
-                            SIZE.x * 0.5 - 180.0 + 360.0 * t,
-                            SIZE.y * 0.5 + (t * 9.0).sin() * 60.0,
-                        )
-                    };
-                    let (mean, worst, verts) =
-                        stroke(&mut mesh, &mut sculptor, &camera, path, 40, 4);
-                    line += &format!("  {mean:>6.2}/{worst:<6.2}");
-                    changed.push(format!("{}k", verts / 1000));
-                }
-            }
-            // Vertex counts make a row that touched almost nothing obvious.
-            println!("{line}  verts changed: {}", changed.join(" / "));
+            row(&mut mesh, &camera, brush.name(), across, |r, mirror| kernel(brush, r, mirror));
         }
+        // The shipped brushes that work a kernel another way: Clay's strips
+        // (an alpha, and the finishing pass), and Smooth's modes.
+        for (label, name) in [
+            ("ClayStrips", "Clay Strips"),
+            ("SmoothPeak", "Smooth Peaks"),
+            ("SmoothVall", "Smooth Valleys"),
+            ("Relax", "Relax"),
+            ("KeepVolume", "Keep Volume"),
+        ] {
+            row(&mut mesh, &camera, label, across, |r, mirror| preset(name, r, mirror));
+        }
+        // Strokes up and down beside the mirror plane, where with the mirror
+        // on each dab and its image overlap the whole way.
+        for (label, brush) in [
+            ("Clay|", Brush::Clay),
+            ("Smooth|", Brush::Smooth),
+            ("Standard|", Brush::Standard),
+            ("Layer|", Brush::Layer),
+            ("Flatten|", Brush::Flatten),
+            ("Inflate|", Brush::Inflate),
+        ] {
+            row(&mut mesh, &camera, label, along_plane, |r, mirror| kernel(brush, r, mirror));
+        }
+        row(&mut mesh, &camera, "ClayStrip|", along_plane, |r, mirror| preset("Clay Strips", r, mirror));
 
         // The voxel remesh of the same sphere, as the Remesh button runs it:
         // the rebuild itself and making a sculpt mesh of the result.
+        if !wanted("Remesh") {
+            continue;
+        }
         let mut line = format!("{:>10}", "Remesh");
         for resolution in [256, 512] {
             for symmetry in [false, true] {

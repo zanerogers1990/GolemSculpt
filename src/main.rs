@@ -5,6 +5,7 @@ mod app;
 mod bench;
 mod bench_matched;
 mod bench_render;
+mod brush_hash;
 mod bridge_guard;
 mod brush_files;
 mod camera;
@@ -84,6 +85,10 @@ enum Errand {
     RenderShots(PathBuf),
     /// `--compare-shots <folder> <folder>`: two sets of those pictures, pixel by pixel.
     CompareShots(PathBuf, PathBuf),
+    /// `--brush-hash`, with the main ball's triangle count if given: scripted
+    /// strokes and a hash of the mesh after each, to show a speed change
+    /// left every result as it was (see brush_hash.rs).
+    BrushHash(Vec<usize>),
 }
 
 /// The errand the arguments ask for, if any; `None` is the app itself, with
@@ -109,6 +114,8 @@ fn errand(args: &[String]) -> Option<Errand> {
         Some(Errand::RenderShots(rest.first().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("shots"))))
     } else if let Some([a, b, ..]) = after("--compare-shots") {
         Some(Errand::CompareShots(PathBuf::from(a), PathBuf::from(b)))
+    } else if let Some(rest) = after("--brush-hash") {
+        Some(Errand::BrushHash(numbers(rest)))
     } else {
         after("--bench-volume").map(|_| Errand::BenchVolume)
     }
@@ -149,6 +156,7 @@ fn main() {
         Some(Errand::BenchRenderAb(args)) => return bench_render::run_ab(&args),
         Some(Errand::RenderShots(folder)) => return bench_render::run_shots(&folder),
         Some(Errand::CompareShots(a, b)) => return bench_render::compare(&a, &b),
+        Some(Errand::BrushHash(tris)) => return brush_hash::run(&tris),
         _ => {}
     }
 

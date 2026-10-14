@@ -67,8 +67,10 @@ pub struct Walk {
     /// where each run ends.
     reached: Vec<u32>,
     ends: Vec<usize>,
-    /// Every leaf the set reaches, ascending.
+    /// Every leaf the set reaches, ascending, and where each starts in the
+    /// buffers below.
     leaves: Vec<u32>,
+    starts: Vec<usize>,
     /// Where the vertices of `leaves` were before the dab, and what the
     /// copies have done to each between them.
     saved: Vec<Vec3>,
@@ -87,6 +89,7 @@ impl Walk {
             reached: Vec::new(),
             ends: Vec::new(),
             leaves: Vec::new(),
+            starts: Vec::new(),
             saved: Vec::new(),
             moved: Vec::new(),
         })
@@ -129,7 +132,7 @@ impl Walk {
             if self.leaves.is_empty() {
                 continue;
             }
-            kernels::apply(mesh, p, &copy, &self.leaves, scratch);
+            kernels::apply(mesh, p, &copy, &self.leaves, &self.leaves, scratch);
             if p.mask {
                 mesh.mask_changed(&self.leaves);
             } else {
@@ -160,7 +163,7 @@ impl Walk {
         settling: Option<Settling>,
         scratch: &mut Scratch,
     ) -> Option<Settling> {
-        let Walk { group, subgroup, reached, ends, leaves, saved, moved, .. } = self;
+        let Walk { group, subgroup, reached, ends, leaves, starts, saved, moved, .. } = self;
         // More than one copy can meet only in a real group (see
         // `interacting_subgroup`), where every product is another copy.
         let copy = |h: usize| SymOp::from(group[group.product(representative, h).unwrap_or(representative)]);
@@ -182,8 +185,8 @@ impl Walk {
         }
 
         let sharing = p.sharing();
-        let (starts, total) = kernels::layout(mesh, leaves);
-        super::save(mesh, leaves, saved);
+        let total = kernels::layout(mesh, leaves, starts);
+        super::save(mesh, leaves, starts, total, saved);
         moved.clear();
         moved.resize(total, Shared::default());
         let mut tally = Tally::default();
@@ -194,8 +197,8 @@ impl Walk {
             if own.is_empty() {
                 continue;
             }
-            kernels::apply(mesh, p, &dab.mirrored(copy(h)), own, scratch);
-            tally.add(share::bank(mesh, own, leaves, &starts, saved, moved, sharing));
+            kernels::apply(mesh, p, &dab.mirrored(copy(h)), own, own, scratch);
+            tally.add(share::bank(mesh, own, leaves, starts, saved, moved, sharing));
         }
         // Moves rather than positions, so a vertex no copy touched is not
         // written at all and keeps its position to the bit.
@@ -235,6 +238,7 @@ pub fn grab(
 ) -> (Vec<u32>, Held) {
     let mut holds: Vec<(u32, u16, f32)> = Vec::new();
     let mut leaves = Vec::new();
+    let mut walk = super::Connected::default();
     for (k, &copy) in copies.iter().enumerate() {
         leaves.clear();
         mesh.bvh.leaves_in_sphere(copy.0, radius, &mut leaves);
@@ -246,7 +250,7 @@ pub fn grab(
         .into_iter()
         .unzip();
         if connected && verts.len() > 1 {
-            super::keep_connected(mesh, &[copy.0], &mut verts, &mut weights);
+            super::keep_connected(mesh, &[copy.0], &mut verts, &mut weights, &mut walk);
         }
         holds.extend(verts.iter().zip(&weights).map(|(&v, &w)| (v, k as u16, w)));
     }

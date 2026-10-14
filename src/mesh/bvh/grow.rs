@@ -129,8 +129,16 @@ impl Bvh {
     }
 
     /// Makes leaf `leaf`'s bounds, and those of everything above it, take in
-    /// `more`. Never shrinks anything, as during a stroke.
+    /// `more`. Never shrinks anything, as during a stroke. What the stroke's
+    /// refits keep in the leaf's box takes it in too (see `refit_leaves`):
+    /// `more` can hold where a vertex born mid-stroke counts as having
+    /// started, which is in neither the live surface nor the box the stroke
+    /// found.
     pub(crate) fn enclose(&mut self, leaf: u32, more: Aabb) {
+        if self.kept_in.get(leaf as usize) == Some(&self.stroke) {
+            let kept = &mut self.kept[leaf as usize];
+            *kept = Aabb::union(*kept, more);
+        }
         let mut at = self.leaves[leaf as usize].node;
         while at != NO_PARENT {
             let node = &mut self.nodes[at as usize];

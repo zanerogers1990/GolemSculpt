@@ -67,6 +67,7 @@ use rayon::prelude::*;
 
 use super::kernels;
 use crate::mesh::Mesh;
+use crate::util::SharedMut;
 
 /// How the copies of a dab that overlap share a vertex between them: see
 /// the top of this file. Which a brush is, is `Params::sharing`.
@@ -314,13 +315,16 @@ pub(super) fn bank(
 ) -> Tally {
     let ranges = &mesh.bvh.leaves;
     let owned = |leaf: u32| kernels::owned(&ranges[leaf as usize]);
-    let place = |leaf: u32| leaves.binary_search(&leaf).map_or(0, |k| starts[k]);
+    // Every leaf of `own` is one of `leaves`; a stretch of `shared` given
+    // to two leaves would be written by two threads at once.
+    let place = |leaf: u32| starts[leaves.binary_search(&leaf).expect("a copy's leaf is one of the set's")];
     let total: usize = own.iter().map(|&leaf| owned(leaf).len()).sum();
-    let live = kernels::stretches(&mut mesh.positions, own.iter().map(|&leaf| owned(leaf)));
-    let sums = kernels::stretches(shared, own.iter().map(|&leaf| place(leaf)..place(leaf) + owned(leaf).len()));
-    let work: Vec<(&mut [Vec3], &mut [Shared], usize)> =
-        live.into_iter().zip(sums).zip(own).map(|((live, sums), &leaf)| (live, sums, place(leaf))).collect();
-    let settle = |(live, sums, at): (&mut [Vec3], &mut [Shared], usize)| {
+    let (live, sums) = (SharedMut::new(&mut mesh.positions), SharedMut::new(shared));
+    let settle = |&leaf: &u32| {
+        let (verts, at) = (owned(leaf), place(leaf));
+        // SAFETY: `own` lists each leaf once, every leaf owns its own run of
+        // vertices, and `leaves` gives each its own stretch of `shared`.
+        let (live, sums) = unsafe { (live.slice(verts.clone()), sums.slice(at..at + verts.len())) };
         let mut tally = Tally::default();
         for ((pos, shared), &before) in live.iter_mut().zip(sums.iter_mut()).zip(&saved[at..]) {
             shared.add(sharing, *pos - before, &mut tally);
@@ -328,10 +332,11 @@ pub(super) fn bank(
         }
         tally
     };
+    debug_assert!(own.windows(2).all(|w| w[0] < w[1]));
     let by_leaf: Vec<Tally> = if total < kernels::PAR_MIN {
-        work.into_iter().map(settle).collect()
+        own.iter().map(settle).collect()
     } else {
-        work.into_par_iter().with_min_len(64).map(settle).collect()
+        own.par_iter().with_min_len(64).map(settle).collect()
     };
     let mut tally = Tally::default();
     by_leaf.into_iter().for_each(|leaf| tally.add(leaf));
