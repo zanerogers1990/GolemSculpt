@@ -527,4 +527,32 @@ impl Bvh {
             }
         }
     }
+
+    /// Appends every leaf whose bounds meet any of `spheres` (centre,
+    /// radius), each once: the leaves [`Self::leaves_in_sphere`] finds for
+    /// each, in one walk of the tree. (A box takes in its children's, so a
+    /// leaf one sphere finds, it finds all the way down.)
+    pub fn leaves_in_spheres(&self, spheres: impl Iterator<Item = (Vec3, f32)> + Clone, out: &mut Vec<u32>) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        // Kept by the same test as one sphere's walk, NaN included.
+        let meets = |bounds: &Aabb| spheres.clone().any(|(centre, radius)| !(bounds.dist_sq(centre) > radius * radius));
+        let mut stack = [0u32; 64];
+        let mut sp = 1;
+        while sp > 0 {
+            sp -= 1;
+            let node = &self.nodes[stack[sp] as usize];
+            if !meets(&node.bounds) {
+                continue;
+            }
+            if let Some(li) = node.leaf() {
+                out.push(li);
+            } else {
+                stack[sp] = node.a;
+                stack[sp + 1] = node.b;
+                sp += 2;
+            }
+        }
+    }
 }

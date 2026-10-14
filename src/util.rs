@@ -46,6 +46,17 @@ impl<'a, T> SharedMut<'a, T> {
         assert!(i < self.len, "SharedMut read at {i}, past the end ({})", self.len);
         unsafe { self.ptr.add(i).read() }
     }
+
+    /// The stretch `range` of the slice, to read and write as one task's own.
+    ///
+    /// # Safety
+    /// No other thread may touch any index of `range` while the stretch is held.
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn slice(&self, range: std::ops::Range<usize>) -> &'a mut [T] {
+        assert!(range.start <= range.end && range.end <= self.len, "SharedMut stretch {range:?} past the end ({})", self.len);
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.add(range.start), range.len()) }
+    }
 }
 
 /// Growable bitset used to accumulate dirty BVH leaves between GPU uploads.

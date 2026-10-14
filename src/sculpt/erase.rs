@@ -131,7 +131,9 @@ pub(super) fn dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch:
         // where each vertex is going is read off first.
         let mesh = &*mesh;
         let Some(offsets) = erased.offsets(mesh) else { return };
-        kernels::fill(mesh, leaves, &mut scratch.targets, |_, v| erased.without(mesh.start_pos(v), offsets[v as usize]));
+        kernels::fill(mesh, leaves, &mut scratch.starts, &mut scratch.targets, |_, v| {
+            erased.without(mesh.start_pos(v), offsets[v as usize])
+        });
     }
     let (r, targets, placed) = (p.radius, &scratch.targets, p.prints());
     let r2 = r * r;
