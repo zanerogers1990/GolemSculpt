@@ -10,6 +10,7 @@ pub mod alpha_preview;
 pub mod assets;
 mod brush_size;
 mod brushes;
+pub mod deform;
 mod dyntopo;
 mod falloff;
 pub mod groups;
@@ -249,6 +250,8 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
                 actions.push(Action::Tool(Tool::Sculpt));
             }
         });
+        // Bend, Twist and the other deformers the gizmo drives (app/deform.rs).
+        deform::card(ui, doc, &state.assets, actions);
     }
 
     let mut showing = doc.opts.tabs.sculpt;

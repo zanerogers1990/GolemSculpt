@@ -36,6 +36,7 @@ mod bridge;
 mod brushes;
 mod cut_mirror;
 mod decimate;
+mod deform;
 mod dyntopo;
 mod echo;
 mod export_fbx;
@@ -169,6 +170,9 @@ pub struct Args {
     /// Face groups: `play` works them and prints a line per check; the other
     /// words set up a picture (see app/groups/play.rs).
     pub demo_groups: Option<String>,
+    /// The gizmo's deformers: `play` works them and prints a line per check;
+    /// a deformer's name sets up a picture of it (see app/deform/play.rs).
+    pub demo_deform: Option<String>,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -677,6 +681,9 @@ impl Running {
         if let Some(what) = running.args.demo_groups.clone() {
             running.groups_demo(&what);
         }
+        if let Some(what) = running.args.demo_deform.clone() {
+            running.deform_demo(&what);
+        }
         if let Some((yaw, pitch)) = running.args.view {
             // Every object in the picture, from the side asked for.
             let aspect = running.view.size.x / running.view.size.y.max(1.0);
@@ -1006,7 +1013,7 @@ impl Running {
         if self.recording_key(code) {
             return;
         }
-        if self.spheres_key_pressed(code) || self.tools_key_pressed(code) {
+        if self.spheres_key_pressed(code) || self.tools_key_pressed(code) || self.deform_key(code) {
             return;
         }
         if let Some(&b) = Brush::ALL.iter().find(|&&b| brush_key(b) == Some(code)) {
@@ -1200,6 +1207,8 @@ impl Running {
         self.redraw = true;
         // A Strength slider of the Layers card that is still held is let go first.
         self.layers_before(&action);
+        // And a deformation on the model is applied (app/deform.rs).
+        self.deform_before(&action);
         // While the SSphere tool is up, Z steps its rig first.
         if matches!(action, Action::Undo | Action::Redo)
             && (self.spheres_undo(action == Action::Redo) || self.tools_undo(action == Action::Redo))
@@ -1212,25 +1221,40 @@ impl Running {
                 // Asked before the step: the step moves what the answer goes by.
                 let was_saved = !self.unsaved();
                 let doc = &mut self.doc;
-                let next = if undo { doc.history.next_undo() } else { doc.history.next_redo() };
-                let done = match next {
-                    Some(Next::Scene) => doc.history.step_scene(undo, &mut doc.scene, &mut doc.mesh),
-                    Some(Next::Mesh(id)) => {
-                        // The step may belong to an object that is not the
-                        // active one any more: go back to it first.
-                        doc.scene.focus_mesh(id, &mut doc.mesh);
-                        let step = if doc.scene.active_mesh() != id {
-                            None
-                        } else if undo {
-                            doc.history.undo(&mut doc.mesh)
-                        } else {
-                            doc.history.redo(&mut doc.mesh)
-                        };
-                        doc.mesh_replaced |= step == Some(true);
-                        step.is_some()
+                let (mut done, mut first) = (false, None);
+                loop {
+                    let next = if undo { doc.history.next_undo() } else { doc.history.next_redo() };
+                    if let Some(Next::Mesh(id)) = next {
+                        first.get_or_insert(id);
                     }
-                    None => false,
-                };
+                    let stepped = match next {
+                        Some(Next::Scene) => doc.history.step_scene(undo, &mut doc.scene, &mut doc.mesh),
+                        Some(Next::Mesh(id)) => {
+                            // The step may belong to an object that is not the
+                            // active one any more: go back to it first.
+                            doc.scene.focus_mesh(id, &mut doc.mesh);
+                            let step = if doc.scene.active_mesh() != id {
+                                None
+                            } else if undo {
+                                doc.history.undo(&mut doc.mesh)
+                            } else {
+                                doc.history.redo(&mut doc.mesh)
+                            };
+                            doc.mesh_replaced |= step == Some(true);
+                            step.is_some()
+                        }
+                        None => false,
+                    };
+                    done |= stepped;
+                    // One edit of several meshes is taken whole (`History::join_last`),
+                    // and leaves the object it began with active.
+                    if !stepped || !doc.history.joined(undo) {
+                        break;
+                    }
+                }
+                if let Some(first) = first.filter(|_| !undo) {
+                    doc.scene.focus_mesh(first, &mut doc.mesh);
+                }
                 if done {
                     self.scene_changed();
                     // Across an Open, the file comes with the scene.
@@ -1432,6 +1456,7 @@ impl Running {
             Action::MakeSkin => self.spheres_make_skin(),
             Action::Mirror(command) => self.mirror_command(command),
             Action::NewRig => self.spheres_new_rig(),
+            Action::Deform(ask) => self.deform_act(ask),
             // A new scene is in app/new_scene.rs.
             Action::NewScene => self.new_scene_action(),
             Action::NewSceneAs { save } => self.new_scene_as(save),
@@ -1809,6 +1834,8 @@ impl Running {
 
         // A gizmo drag around a mask reshapes the mesh once a frame.
         self.transform_apply();
+        // So does a deformer of the Deform card whose settings have changed (app/deform.rs).
+        self.deform_frame();
 
         // A Decimate that has finished in the background takes the model's place.
         self.decimate_frame();

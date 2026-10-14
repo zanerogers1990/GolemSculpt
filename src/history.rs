@@ -136,6 +136,9 @@ struct Step {
     /// Only on a step that put another scene in place of the one that was
     /// open: how the scene on its other side was seen (see `keep_seen`).
     seen: Option<Box<Details>>,
+    /// Whether the step was made together with the one before it, so that
+    /// Undo and Redo take the two as one (see `join_last`).
+    joined: bool,
 }
 
 /// What the next undo or redo step will touch.
@@ -361,7 +364,7 @@ impl History {
         crate::timelapse::activity::edited();
         self.edits += 1;
         let ended = std::mem::take(&mut self.redo);
-        self.undo.push_back(Step { edit, mesh: self.target, file: None, seen: None });
+        self.undo.push_back(Step { edit, mesh: self.target, file: None, seen: None, joined: false });
         self.gone(&ended);
         self.trim();
     }
@@ -407,8 +410,8 @@ impl History {
             return false;
         }
         let step = if undo { self.undo.pop_back() } else { self.redo.pop() };
-        let Some(Step { edit: Edit::Scene(state), mesh, file, seen }) = step else { return false };
-        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh, file, seen };
+        let Some(Step { edit: Edit::Scene(state), mesh, file, seen, joined }) = step else { return false };
+        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh, file, seen, joined };
         if undo { self.redo.push(step) } else { self.undo.push_back(step) }
         true
     }
@@ -464,6 +467,30 @@ impl History {
         self.undo.iter_mut().chain(&mut self.redo).filter_map(|step| step.file.as_mut())
     }
 
+    /// Ties the step just recorded to the one before it, so that one Undo or
+    /// Redo takes both: one edit that changed several meshes, each of which
+    /// keeps a step of its own (a gizmo deformation of several objects,
+    /// app/deform.rs). The app steps on while [`Self::joined`] says so.
+    pub fn join_last(&mut self) {
+        if self.undo.len() > 1 {
+            if let Some(step) = self.undo.back_mut() {
+                step.joined = true;
+            }
+        }
+    }
+
+    /// Call after a step back (`undo`) or forward: whether the next step in
+    /// that direction was made together with the one just taken.
+    pub fn joined(&self, undo: bool) -> bool {
+        match self.redo.last() {
+            // Back: the step just undone was tied to the one before it.
+            Some(taken) if undo => taken.joined && self.can_undo(),
+            // Forward: the next one to redo is tied to the one just redone.
+            Some(next) => next.joined,
+            None => false,
+        }
+    }
+
     /// Records that the whole mesh was replaced; `previous` is the old one.
     pub fn push_replace(&mut self, previous: Mesh) {
         self.push(Edit::Replace(Box::new(previous)));
@@ -503,7 +530,7 @@ impl History {
         }
         let step = self.undo.pop_back()?;
         let (edit, replaced) = Self::flip(step.edit, mesh, true);
-        self.redo.push(Step { edit, mesh: step.mesh, file: step.file, seen: step.seen });
+        self.redo.push(Step { edit, ..step });
         Some(replaced)
     }
 
@@ -513,7 +540,7 @@ impl History {
         }
         let step = self.redo.pop()?;
         let (edit, replaced) = Self::flip(step.edit, mesh, false);
-        self.undo.push_back(Step { edit, mesh: step.mesh, file: step.file, seen: step.seen });
+        self.undo.push_back(Step { edit, ..step });
         Some(replaced)
     }
 

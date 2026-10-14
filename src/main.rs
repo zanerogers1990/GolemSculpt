@@ -12,6 +12,7 @@ mod brush_files;
 mod camera;
 mod capture;
 mod decimate;
+mod deform;
 mod doc;
 mod gizmo;
 mod history;
@@ -92,6 +93,8 @@ enum Errand {
     BrushHash(Vec<usize>),
     /// `--bench-levels`, with what follows it: the finest level's triangles, e.g. `--bench-levels 1000000`.
     BenchLevels(Vec<usize>),
+    /// `--bench-deform`, with what follows it: triangle counts. One preview frame of each gizmo deformer.
+    BenchDeform(Vec<usize>),
 }
 
 /// The errand the arguments ask for, if any; `None` is the app itself, with
@@ -121,6 +124,8 @@ fn errand(args: &[String]) -> Option<Errand> {
         Some(Errand::BrushHash(numbers(rest)))
     } else if let Some(rest) = after("--bench-levels") {
         Some(Errand::BenchLevels(numbers(rest)))
+    } else if let Some(rest) = after("--bench-deform") {
+        Some(Errand::BenchDeform(numbers(rest)))
     } else {
         after("--bench-volume").map(|_| Errand::BenchVolume)
     }
@@ -163,6 +168,7 @@ fn main() {
         Some(Errand::CompareShots(a, b)) => return bench_render::compare(&a, &b),
         Some(Errand::BrushHash(tris)) => return brush_hash::run(&tris),
         Some(Errand::BenchLevels(sizes)) => return bench_levels::run(&or(sizes, &[1_000_000, 5_000_000, 10_000_000])),
+        Some(Errand::BenchDeform(sizes)) => return deform::bench::run(&or(sizes, &[1_000_000, 5_000_000, 10_000_000])),
         _ => {}
     }
 
@@ -233,6 +239,8 @@ fn window_options(args: &[String]) -> app::Args {
             "--demo-layers" => opts.demo_layers = it.next().cloned(),
             // Face groups: play (worked and checked), or a picture (see app/groups/play.rs).
             "--demo-groups" => opts.demo_groups = it.next().cloned(),
+            // bend | arc | twist | taper | flatten | inflate | stretch | lattice | play
+            "--demo-deform" => opts.demo_deform = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

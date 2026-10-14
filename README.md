@@ -1079,6 +1079,57 @@ The view gizmo in the top-right corner turns the camera to the front, back,
 left, right, top or bottom when a bubble is clicked (click the same one again
 for the opposite side). Top and bottom always come up straight.
 
+### Deform
+
+The **Deform** card under the Transform card reshapes the whole selected
+object along one of the gizmo's axes, the way ZBrush's gizmo deformers do.
+Pick one of its eight tiles and the gizmo's arrows give way to the
+deformer's own handles: a line along the axis with a round handle at each end
+of the range it works over.
+
+| Deformer | What it does to the clay |
+|---|---|
+| **Bend** | Bends the shape round by **Angle**, toward **Direction** (0° bends Y toward Z, Z toward X, X toward Y). |
+| **Bend Arc** | Bends it into the smooth arc that ends where you drag the yellow tip handle: horns, tails, tubes. |
+| **Twist** | Turns it about the axis, more and more along it, by **Angle** at the far end. |
+| **Taper** | Makes it thinner or fatter across: **Start Size** at the start of the range, **End Size** at the end. |
+| **Flatten** | Squashes it along the axis by **Amount**; 100% presses the range flat. |
+| **Inflate** | Puffs the surface out along the way it faces by **Amount** (a share of the model's size); below 0 sucks it in. |
+| **Stretch** | Makes the range **Length** long; with **Keep Volume** it thins as it lengthens, as clay does. |
+| **Lattice** | A cage of 2 to 6 points each way round the shape: drag a white point and the clay inside follows smoothly. |
+
+- **Along** X, Y or Z picks the gizmo axis (its red, green or blue arrow);
+  **Gizmo axes** above sets which way those point, as for the arrows.
+- **Range** Start and End (or the two round handles, dragged along the axis)
+  limit the deformation to part of the model; **Softness** eases it in and
+  out at the ends of the range so no crease is left there. Bend, Twist, Taper,
+  Flatten and Stretch carry the rest of the model beyond the range along with
+  them, as one piece; Inflate and Lattice change only what is inside it.
+- **Stays Put** picks the part that does not move: the start of the range,
+  its middle (both ends move alike) or its end.
+- Every value has a number box beside its slider: double-click it to type.
+- What you see is not kept until you press **Apply** (or Enter). **Cancel**
+  (or Esc) puts the model back exactly as it was; Esc again puts the
+  deformers away. Anything else you do (another tool, a click on another
+  object, Z, a save) applies it first, so Z right after a bend takes the bend
+  back and Shift+Z puts it on again. **Done** keeps it and brings the arrows
+  back. Each Apply is one undo step.
+- The masked part stays where it is and a half-masked part goes half way, so
+  mask the body to bend only an arm. Hidden parts stay where they are. Stay in
+  Group belongs to brushes; to deform one face group, use **Mask All But
+  Group** first.
+- With several objects selected they are deformed together, as one row or
+  group, about their shared centre; one Z takes them all back.
+- With sculpt layers, a deformation goes where a stroke would: into the layer
+  that records, or into the model underneath with the layers' detail carried
+  round with it. It is refused, as a stroke is, while the recording layer is
+  switched off or at 0%. On a coarser subdivision level it is carried up to
+  the finer levels like any sculpting there.
+- With a mirror ticked on the Symmetry card, the status line says in red if
+  the deformation would make the two halves differ: a bend that leans to one
+  side of the mirror plane, a twist (which always turns one half one way and its mirror image the
+  other), or a lattice point moved on one side only.
+
 ## SSpheres
 
 Press the **SSpheres** button to block out a form with connected spheres, then
@@ -2594,6 +2645,8 @@ sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-new   #
 sculpt.exe --screenshot out.png --demo-levels play          # works the Subdivision card, everything that drops levels, undo, saving and export, and prints a line per check; or a picture: base | fine | down | bent | up | card | quads (add --demo-ui "float=Subdivision@330:40" to see the card)
 sculpt.exe --screenshot out.png --demo-layers play          # works the Layers card, every brush on a layer, the model underneath, everything that merges layers, levels, the bridge, saving and a damaged file, and prints a line per check; or a picture: card | full | half | off | under | under-off | dyntopo | dyntopo-off | levels | levels-off | levels-low (add --demo-ui "float=Layers@330:60" to see the card)
 sculpt.exe --screenshot out.png --demo-groups play          # works the Face Groups card, the click on the model, Stay in Group for each kind of brush, everything that rebuilds a mesh, levels, saving, a damaged file, OBJ and the bridge, and prints a line per check and some timings; or a picture: parts | figure | figure-wire | figure-flat | figure-lit | isolate | stay | stay-off | quads | card (add --demo-ui "float=Face Groups@370:60" to see the card)
+sculpt.exe --screenshot out.png --demo-deform play          # works the Deform card's deformers through the pointer, the keys and undo: Esc and Undo to the bit, handles dragged, a mirrored model warned of, a hidden layer refusing, the bridge, three objects as one; prints a line per check; or a picture: bend | arc | twist | taper | flatten | inflate | stretch | lattice | masked | three (add --demo-ui "size=0.75,float=Deform@1240:40" to see the card)
+sculpt.exe --bench-deform 1000000 5000000 10000000         # one preview frame of each deformer (the pass over the mesh, its normals and the ranges to send), best of six, at each size
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --nocapture                 # quad remesh on six closed models at seven sizes, a line a run: every result must be closed
@@ -2708,6 +2761,15 @@ with neither the group picked last; `merge_groups` also takes `into_x` and
 object's `groups` (how many, whether the colours show, and the group picked),
 `pick` gives the `group` under a window position (0 for none), and
 `set_brush` takes `stay_in_group`.
+
+`deform` runs one of the Deform card's deformers on the selected objects:
+`kind` (bend, bend_arc, twist, taper, flatten, inflate, stretch, lattice),
+`axis` (x, y or z), and the card's values in the card's units: `angle` and
+`direction` in degrees, `start_size`, `end_size`, `length`, `amount`,
+`softness` and `range` (start and end) in percent, `tip` for Bend Arc and
+`lattice_points` and `lattice_moves` for Lattice. It is applied as one undo
+step, or with `preview: true` left on the model with the card up for the user
+to apply or cancel.
 
 There are two halves. The app listens on `127.0.0.1:47823` (`src/app/bridge.rs`;
 this machine only, and only the first copy of the app if several are open).

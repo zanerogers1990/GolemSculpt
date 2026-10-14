@@ -749,6 +749,39 @@ fn tools() -> Value {
             &["name"],
         ),
         tool(
+            "deform",
+            "Reshape the selected objects with one of the transform gizmo's deformers, along one of the gizmo's \
+             axes (the object's own axes for one object, the world's for several), over a range of it. Masked \
+             parts stay where they are; several selected objects are deformed together, as one. Applied as one \
+             undo step unless preview is true, which leaves it on the model, with the Deform card and its \
+             handles up, for the user to apply (Enter) or cancel (Esc). Bend bends the shape round by angle \
+             toward direction; bend_arc bends it into the arc that ends where tip says; twist turns it about \
+             the axis, by angle at the far end; taper sizes it across from start_size to end_size; flatten \
+             squashes it by amount; inflate pushes the surface out along its normals by amount (negative \
+             sucks it in); stretch makes it length long, thinner with keep_volume; lattice moves the points \
+             of a cage of lattice_points round it by lattice_moves. The status line says so if the result \
+             would not be mirror-symmetric where the object has mirror symmetry on.",
+            json!({
+                "kind": choice(&["bend", "bend_arc", "twist", "taper", "flatten", "inflate", "stretch", "lattice"], "The deformer."),
+                "axis": choice(&["x", "y", "z"], "The gizmo axis it works along. Default y."),
+                "angle": number("bend and twist: degrees, -720 to 720."),
+                "direction": number("bend: which way round the axis it bends, in degrees; 0 bends toward the next axis (y toward z, z toward x, x toward y)."),
+                "start_size": number("taper: percent across at the start of the range. Default 100."),
+                "end_size": number("taper: percent across at the end of the range. Default 100."),
+                "amount": number("flatten: 0 to 100 percent (100 presses the range flat). inflate: -25 to 25, percent of the model's size."),
+                "length": number("stretch: percent of the range's length, 5 to 2000. Default 100."),
+                "keep_volume": boolean("stretch: thin as it lengthens, so the bulk stays the same. Default true."),
+                "tip": xyz("bend_arc: where the tip goes from the end of the range, along the gizmo's x, y and z, in percent of the range's length."),
+                "range": json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Where along the axis the deformation starts and ends, percent of the selection's extent. Default [0, 100]." }),
+                "softness": number("0 to 100 percent: how gently it fades in and out at the ends of the range. Default 30."),
+                "anchor": choice(&["start", "middle", "end"], "bend, bend_arc, twist, flatten, stretch: which part of the range stays put. Default start."),
+                "lattice_points": xyz("lattice: control points along x, y and z, 2 to 6 each. Default [3, 3, 3]."),
+                "lattice_moves": json!({ "type": "array", "description": "lattice: points to move, each { \"point\": [x, y, z] counting from 1, \"by\": [x, y, z] in percent of the cage's size }.", "items": { "type": "object" } }),
+                "preview": boolean("true leaves it on the model for the user to apply or cancel. Default false: applied."),
+            }),
+            &["kind"],
+        ),
+        tool(
             "add_shape",
             "Add a new object to the scene and make it the active one.",
             json!({

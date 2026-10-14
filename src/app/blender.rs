@@ -612,6 +612,8 @@ impl Running {
         if self.doc.sculptor.is_active() || self.transform_dragging() || self.input.drag != Drag::None {
             return;
         }
+        // A mesh coming back may take the place of one a deformation holds: that is applied first.
+        self.deform_commit();
         let Some(tray) = self.blender.folder.as_ref().map(|folder| folder.join(TO_SCULPT)) else { return };
         for path in packages(&tray) {
             if older_than(&path, STALE) {

@@ -435,6 +435,10 @@ impl Running {
         if self.mid_stroke() {
             return Err("Someone is in the middle of a stroke or drag in the app. Try again in a moment.".into());
         }
+        // A deformation left on the model is applied, as before any command (app/deform.rs).
+        if tool != "deform" {
+            self.deform_commit();
+        }
         match tool {
             "set_brush" => self.set_brush(args),
             "stroke" => self.stroke(args),
@@ -459,6 +463,7 @@ impl Running {
             "open_file" => self.open_file(args),
             "save_file" => self.save_file(args),
             "set_options" => self.set_options(args),
+            "deform" => self.deform_call(args),
             other => Err(format!("Sculpt has no tool called \"{other}\".")),
         }
     }
