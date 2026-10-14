@@ -1479,7 +1479,7 @@ pub fn clay_relax(
                     *slot = if hidden.is_some_and(|hidden| hidden[v as usize]) {
                         0.0
                     } else {
-                        relax_weight(mesh, p, near, first, base, v)
+                        relax_weight(mesh, p.front_facing, near, first, base, v)
                     };
                 }
             });
@@ -1503,7 +1503,7 @@ pub fn clay_relax(
 /// weight either way. Comparisons that close to a tie are decided by
 /// rounding, which is why the margin is there.
 #[inline]
-fn relax_weight(mesh: &Mesh, p: &Params, centres: &[Centre], first: f32, base: CurvatureBase, v: u32) -> f32 {
+fn relax_weight(mesh: &Mesh, front_facing: bool, centres: &[Centre], first: f32, base: CurvatureBase, v: u32) -> f32 {
     let i = v as usize;
     let start = mesh.start_pos(v);
     // The dab the vertex is deepest inside: the nearest, or where the
@@ -1536,6 +1536,45 @@ fn relax_weight(mesh: &Mesh, p: &Params, centres: &[Centre], first: f32, base: C
     let w = band
         * gate
         * (1.0 - mesh.mask[i])
-        * facing(p.front_facing, mesh.normals[i], pos, cam);
+        * facing(front_facing, mesh.normals[i], pos, cam);
     if w > 1e-4 { w } else { 0.0 }
+}
+
+#[cfg(test)]
+mod relax_cull_tests {
+    use glam::Vec3;
+
+    use super::{CULL_MARGIN, Centre, curvature_base, relax_weight};
+    use crate::mesh::primitives::{self, Primitive};
+
+    /// Weighed against only the centres near its leaf, every vertex gets
+    /// the weight it gets against all of the frame's centres, to the bit:
+    /// dabs of two sizes, many of them, some overlapping and some apart.
+    #[test]
+    fn a_vertex_weighs_the_same_against_the_centres_near_its_leaf() {
+        let mesh = primitives::build(Primitive::Sphere, 40_000, 0.5);
+        let base = curvature_base(&mesh);
+        let centres: Vec<Centre> = (0..40)
+            .map(|i| {
+                let a = i as f32 * 0.7;
+                let at = Vec3::new(a.cos() * 0.4, (i as f32 * 0.37).sin() * 0.3, a.sin().abs() * 0.4).normalize() * 0.5;
+                Centre { at, cam: Vec3::new(0.0, 0.0, 3.0), radius: if i % 3 == 0 { 0.06 } else { 0.11 } }
+            })
+            .collect();
+        let first = centres[0].radius;
+        let mut weighted = 0;
+        for l in 0..mesh.bvh.leaves.len() as u32 {
+            let bounds = mesh.bvh.leaf_box(l);
+            let near: Vec<Centre> =
+                centres.iter().filter(|c| bounds.dist_sq(c.at) <= (c.radius * CULL_MARGIN).powi(2)).copied().collect();
+            let leaf = mesh.bvh.leaves[l as usize];
+            for v in leaf.vert_start..leaf.vert_end {
+                let all = relax_weight(&mesh, true, &centres, first, base, v);
+                let culled = relax_weight(&mesh, true, &near, first, base, v);
+                assert_eq!(all.to_bits(), culled.to_bits(), "vertex {v} of leaf {l}");
+                weighted += usize::from(all > 0.0);
+            }
+        }
+        assert!(weighted > 1000, "only {weighted} vertices had weight");
+    }
 }

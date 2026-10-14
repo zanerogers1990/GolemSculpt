@@ -87,3 +87,23 @@ fn what_a_leaf_is_made_to_take_in_stays_for_the_stroke() {
     let _ = mesh.end_stroke(false);
     assert!(!within(&far, &mesh.bvh.leaf_box(leaf)), "a finished stroke's box is exact again");
 }
+
+/// One walk for many spheres finds what a walk for each finds, each leaf
+/// once.
+#[test]
+fn one_walk_finds_the_leaves_of_every_sphere() {
+    let mesh = primitives::build(Primitive::Sphere, 20_000, 0.5);
+    let spheres: Vec<(Vec3, f32)> =
+        (0..12).map(|i| (Vec3::new((i as f32).cos(), (i as f32 * 1.3).sin(), 0.3).normalize() * 0.5, 0.02 + 0.01 * i as f32)).collect();
+    let mut each = Vec::new();
+    for &(centre, radius) in &spheres {
+        mesh.bvh.leaves_in_sphere(centre, radius, &mut each);
+    }
+    each.sort_unstable();
+    each.dedup();
+    let mut once = Vec::new();
+    mesh.bvh.leaves_in_spheres(spheres.iter().copied(), &mut once);
+    once.sort_unstable();
+    assert!(!once.is_empty() && once.windows(2).all(|w| w[0] < w[1]), "each leaf once");
+    assert_eq!(once, each);
+}
