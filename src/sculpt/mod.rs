@@ -1914,11 +1914,23 @@ impl Sculptor {
                 shared.clear();
                 shared.resize(total, Shared::default());
                 let mut tally = Tally::default();
+                // A copy moves the vertices of its own leaves only, unless
+                // they are too few for `Mesh::move_vertices` to share out
+                // between threads and the set's are not: then it is handed
+                // the set's, as every copy once was. The vertices beyond its
+                // reach it leaves alone either way, but a small dab of a
+                // brush that does a lot per vertex (Clay Strips sweeps its
+                // tip up to eight times over each one) took half as long
+                // again on one thread as on all of them.
+                let shares = total >= kernels::PAR_MIN;
                 for (k, &op) in group.iter().enumerate() {
                     if own(k).is_empty() {
                         continue;
                     }
-                    kernels::apply(mesh, &p, &dab.mirrored(op), own(k), leaves, scratch);
+                    let mine: usize = own(k).iter().map(|&l| kernels::owned(&mesh.bvh.leaves[l as usize]).len()).sum();
+                    let few = mine < kernels::PAR_MIN;
+                    let moves = if shares && few { &leaves[..] } else { own(k) };
+                    kernels::apply(mesh, &p, &dab.mirrored(op), moves, leaves, scratch);
                     tally.add(share::bank(mesh, own(k), leaves, starts, saved, &mut shared, sharing));
                 }
                 let (saved, settling) = (&*saved, Settling::of(sharing, &tally));
