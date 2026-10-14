@@ -1116,8 +1116,8 @@ of the range it works over.
   switched off or at 0%. On a coarser subdivision level it is carried up to
   the finer levels like any sculpting there.
 - With a mirror ticked on the Symmetry card, the status line says in red if
-  the deformation would make the two halves differ: a bend toward the mirror
-  plane, a twist (which always turns one half one way and its mirror image the
+  the deformation would make the two halves differ: a bend that leans to one
+  side of the mirror plane, a twist (which always turns one half one way and its mirror image the
   other), or a lattice point moved on one side only.
 
 ## SSpheres
