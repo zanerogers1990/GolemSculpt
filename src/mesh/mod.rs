@@ -916,6 +916,12 @@ impl Mesh {
         out
     }
 
+    /// Whether vertices have moved since the last [`Self::take_dirty`]: a
+    /// change the renderer has not been sent yet.
+    pub fn moved_since_upload(&self) -> bool {
+        self.dirty_pos.any()
+    }
+
     /// Vertex ranges whose GPU copies are stale. Clears the dirty state.
     pub fn take_dirty(&mut self) -> DirtyRanges {
         self.flush_normals();

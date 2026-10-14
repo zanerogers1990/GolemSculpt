@@ -66,6 +66,9 @@ pub struct Post {
     pipe_blur_v: wgpu::RenderPipeline,
     pipe_up: wgpu::RenderPipeline,
     pipe_composite: wgpu::RenderPipeline,
+    /// The same, into a plain target: for frames with no overlays, which
+    /// then need no multisampled copy of the picture at all.
+    pipe_composite_single: wgpu::RenderPipeline,
     targets: Option<Targets>,
     /// How open each pixel is (1 = fully), for the surface shader.
     pub ao: Option<wgpu::TextureView>,
@@ -163,6 +166,7 @@ impl Post {
             // The finished picture goes into the multisampled target the
             // overlays are then drawn on.
             pipe_composite: pipeline("fs_composite", gpu.format, MSAA_SAMPLES),
+            pipe_composite_single: pipeline("fs_composite", gpu.format, 1),
             uniform,
             layout,
             sampler,
@@ -321,8 +325,9 @@ impl Post {
         Self::pass(encoder, ao, &self.pipe_ssao_blur, &t.bind_ssao_down, 1);
     }
 
-    /// Turns the shaded scene into the finished picture in `to`.
-    pub fn finish(&self, encoder: &mut wgpu::CommandEncoder, to: &wgpu::TextureView, bloom: bool) {
+    /// Turns the shaded scene into the finished picture in `to`, which is
+    /// multisampled (for overlays to be drawn on) or, with `single`, not.
+    pub fn finish(&self, encoder: &mut wgpu::CommandEncoder, to: &wgpu::TextureView, bloom: bool, single: bool) {
         let Some(t) = &self.targets else { return };
         // Depth of field comes first, as it does in the Unity pipeline: what
         // glows is the scene as the lens sees it.
@@ -344,6 +349,7 @@ impl Post {
                 Self::pass(encoder, &t.bloom_up[levels - 2 - k], &self.pipe_up, group, 0);
             }
         }
-        Self::pass(encoder, to, &self.pipe_composite, bind_composite, 0);
+        let composite = if single { &self.pipe_composite_single } else { &self.pipe_composite };
+        Self::pass(encoder, to, composite, bind_composite, 0);
     }
 }

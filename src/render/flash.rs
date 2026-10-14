@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 
+use super::cache::Stamp;
 use super::{DEPTH_FORMAT, Gpu, MSAA_SAMPLES, MeshBuffers};
 
 /// What the pulse announces; sets its colour and length.
@@ -148,6 +149,8 @@ pub struct Layer {
     instances: wgpu::Buffer,
     /// The mesh of each instance written this frame; empty means no flash.
     meshes: Vec<u64>,
+    /// Moves when what is drawn changes (see cache.rs).
+    pub(super) stamp: Stamp,
 }
 
 impl Layer {
@@ -247,7 +250,7 @@ impl Layer {
             multiview_mask: None,
             cache: None,
         });
-        Layer { pipeline, uniforms, bind, instances, meshes: Vec::new() }
+        Layer { pipeline, uniforms, bind, instances, meshes: Vec::new(), stamp: Stamp::default() }
     }
 
     /// Sets what is drawn this frame: `items` is empty while nothing pulses,
@@ -255,6 +258,7 @@ impl Layer {
     pub fn show(&mut self, gpu: &Gpu, view_proj: &[[f32; 4]; 4], items: &[Item]) {
         self.meshes.clear();
         if items.is_empty() {
+            self.stamp.note(&[]);
             return;
         }
         let items = &items[..items.len().clamp(0, MAX_PULSES)];
@@ -262,6 +266,12 @@ impl Layer {
         gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(view_proj));
         gpu.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&data));
         self.meshes.extend(items.iter().map(|i| i.mesh));
+        self.stamp.note(&[bytemuck::bytes_of(view_proj), bytemuck::cast_slice(&data), bytemuck::cast_slice(&self.meshes)]);
+    }
+
+    /// Whether a pulse is drawn this frame.
+    pub(super) fn active(&self) -> bool {
+        !self.meshes.is_empty()
     }
 
     /// Draws into the overlay pass, after the scene and its depth.

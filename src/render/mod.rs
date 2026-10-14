@@ -13,6 +13,7 @@ use crate::doc::Options;
 use crate::look::{Finish, LookUniform, Tonemap, SHADOW_SIZE};
 use crate::mesh::Mesh;
 
+mod cache;
 mod dof;
 pub mod env;
 mod mips;
@@ -200,6 +201,11 @@ struct Targets {
     gbuf_depth: wgpu::TextureView,
     /// Eye depth of the nearest back face, for the lure plastic.
     back: wgpu::TextureView,
+    /// The finished picture with its overlays, kept for frames in which
+    /// nothing of it changes (see cache.rs), and what it was drawn from.
+    finished: wgpu::TextureView,
+    blit_finished: wgpu::BindGroup,
+    drawn: Option<cache::SceneKey>,
 }
 
 /// One object to draw: which mesh, and its per-object shader input (the
@@ -303,6 +309,16 @@ pub struct Renderer {
     /// Off, the pulses and the tools' previews are left out: the clean view,
     /// and pictures drawn for a recording.
     pub overlays: bool,
+    /// Set by anything that changes the picture in a way the scene key
+    /// cannot see (a new matcap or HDRI picture): the next frame is drawn
+    /// afresh rather than copied (see cache.rs).
+    pub scene_dirty: bool,
+    /// How many times `scene_dirty` has been set, for the scene key: a
+    /// picture kept on the side (a recording's) sees it too.
+    forced: u64,
+    /// Moves whenever a mesh's buffers are sent or let go.
+    uploads: cache::Stamp,
+    blit: cache::Blit,
 }
 
 /// The renderer's working textures for a second picture size: what a
@@ -656,6 +672,10 @@ impl Renderer {
             wire: wire::Layer::new(gpu),
             groups: groups::Layer::new(gpu),
             overlays: true,
+            scene_dirty: false,
+            forced: 0,
+            uploads: cache::Stamp::default(),
+            blit: cache::Blit::new(gpu),
         }
     }
 
@@ -672,11 +692,13 @@ impl Renderer {
     pub fn set_matcap(&mut self, gpu: &Gpu, image: &image::RgbaImage) {
         self.matcap = matcap_texture(&gpu.device, &gpu.queue, image);
         self.bind_main = None;
+        self.scene_dirty = true;
     }
 
     /// Takes a new HDRI picture for the environment, or drops the current one.
     pub fn set_hdri(&mut self, gpu: &Gpu, image: Option<crate::look::HdriImage>) {
         self.env.set_hdri(gpu, image);
+        self.scene_dirty = true;
     }
 
     fn ensure_targets(&mut self, gpu: &Gpu, size: (u32, u32)) {
@@ -684,6 +706,7 @@ impl Renderer {
             return;
         }
         let device = &gpu.device;
+        let finished = target_texture(device, "finished picture", size, self.format, 1, true);
         let targets = Targets {
             size,
             msaa: target_texture(device, "scene", size, HDR_FORMAT, MSAA_SAMPLES, false),
@@ -694,6 +717,9 @@ impl Renderer {
             gbuf: target_texture(device, "normals", size, GBUF_FORMAT, 1, true),
             gbuf_depth: target_texture(device, "normals depth", size, DEPTH_FORMAT, 1, false),
             back: target_texture(device, "back depth", size, BACK_FORMAT, 1, true),
+            blit_finished: self.blit.bind(gpu, &finished),
+            finished,
+            drawn: None,
         };
         self.post.resize(gpu, size, &targets.gbuf, &targets.scene, &targets.depth);
         self.targets = Some(targets);
@@ -723,9 +749,19 @@ impl Renderer {
         self.groups.sync(gpu, id, mesh, self.meshes.get(&id));
     }
 
+    /// Moves whenever any mesh's buffers are sent again or let go: the
+    /// meshes the picture was drawn from have changed.
+    pub fn uploads(&self) -> u64 {
+        self.uploads.count()
+    }
+
     /// Frees the buffers of meshes the scene no longer has.
     pub fn retain_meshes(&mut self, keep: impl Fn(u64) -> bool) {
+        let before = self.meshes.len();
         self.meshes.retain(|&id, _| keep(id));
+        if self.meshes.len() != before {
+            self.uploads.bump();
+        }
         let meshes = &self.meshes;
         self.wire.retain(|id| meshes.contains_key(&id));
         self.groups.retain(|id| meshes.contains_key(&id));
@@ -734,6 +770,7 @@ impl Renderer {
     /// Creates fresh buffers for a mesh whose topology changed.
     pub fn upload_mesh(&mut self, gpu: &Gpu, id: u64, mesh: &mut Mesh) {
         let _ = mesh.take_dirty();
+        self.uploads.bump();
         if mesh.vertex_count() == 0 {
             self.meshes.remove(&id);
             return;
@@ -835,7 +872,8 @@ impl Renderer {
         // triangles changed while some are hidden, since the list holds only
         // the ones that show and so has no fixed place for any of them.
         let split = buffers.topology != mesh.topology_version();
-        if buffers.visibility != mesh.visibility_version() || (split && mesh.any_hidden()) {
+        let shown_again = buffers.visibility != mesh.visibility_version();
+        if shown_again || (split && mesh.any_hidden()) {
             let shown = mesh.visible_indices();
             buffers.indices = index_buffer(gpu, &shown);
             buffers.index_count = shown.len() as u32;
@@ -865,6 +903,9 @@ impl Renderer {
             buffers.index_count = corners;
         }
         buffers.topology = mesh.topology_version();
+        if bytes > 0 || split || shown_again {
+            self.uploads.bump();
+        }
         if bytes > 0 {
             self.last_upload_bytes = bytes;
         }
@@ -885,6 +926,31 @@ impl Renderer {
         items: &[DrawItem],
     ) {
         self.ensure_targets(gpu, size);
+
+        // What this frame needs. A matcap carries its own lighting, so none
+        // of the lighting's helper passes run under one.
+        let settings = &opts.look;
+        let lit = globals.shading[0] < 0.5 && !items.is_empty();
+        let cavity = (globals.shading[2] > 0.0 || globals.shading[3] > 0.0) && !items.is_empty();
+        let hdri = settings.hdri.active();
+        let occlusion = lit && settings.ambient_occlusion;
+        let shadows = lit && look.light_params[1] > 0.5;
+        let plastic = lit && settings.finish == Finish::LurePlastic;
+        let source = lit.then(|| env_source(globals, look, opts));
+        let post_params = post_params(globals, look, settings);
+
+        // Nothing it is drawn from has changed: the picture is the one kept.
+        if std::mem::take(&mut self.scene_dirty) {
+            self.forced += 1;
+        }
+        let key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
+        let targets = self.targets.as_mut().unwrap();
+        if targets.drawn.as_ref() == Some(&key) {
+            self.blit.draw(encoder, &targets.blit_finished, target);
+            return;
+        }
+        targets.drawn = None;
+
         if !items.is_empty() {
             if self.objects.as_ref().is_none_or(|(_, room)| *room < items.len()) {
                 let room = items.len().next_power_of_two().max(16);
@@ -899,40 +965,8 @@ impl Renderer {
             let data: Vec<[[f32; 4]; 4]> = items.iter().map(|i| i.model).collect();
             gpu.queue.write_buffer(&self.objects.as_ref().unwrap().0, 0, bytemuck::cast_slice(&data));
         }
-
-        // What this frame needs. A matcap carries its own lighting, so none
-        // of the lighting's helper passes run under one.
-        let settings = &opts.look;
-        let lit = globals.shading[0] < 0.5 && !items.is_empty();
-        let cavity = (globals.shading[2] > 0.0 || globals.shading[3] > 0.0) && !items.is_empty();
-        let hdri = settings.hdri.active();
-        let occlusion = lit && settings.ambient_occlusion;
-        let shadows = lit && look.light_params[1] > 0.5;
-        let plastic = lit && settings.finish == Finish::LurePlastic;
-
-        if lit {
-            // What the model reflects: the HDRI, else the background
-            // gradient, else the default sky with the key light as its sun.
-            let mut source = env::EnvParams {
-                params: [0.0; 4],
-                bottom: [0.0; 4],
-                top: [0.0; 4],
-                sun_dir: [0.0; 4],
-                sun_color: [0.0; 4],
-            };
-            if hdri {
-                source.params = [2.0, look.bg_params[1], look.bg_params[2], 0.0];
-            } else if opts.gradient_background {
-                let rgb = |c: [f32; 4]| [c[0], c[1], c[2], 0.0];
-                source.params = [1.0, 0.0, 0.0, look.bg_params[3]];
-                source.bottom = rgb(globals.bg_bottom);
-                source.top = rgb(globals.bg_top);
-            } else {
-                let (dir, color) = settings.sky_sun();
-                source.sun_dir = [dir.x, dir.y, dir.z, 0.0];
-                source.sun_color = [color[0], color[1], color[2], 0.0];
-            }
-            self.env.update(gpu, encoder, &source);
+        if let Some(source) = &source {
+            self.env.update(gpu, encoder, source);
         }
 
         let mut look = *look;
@@ -945,37 +979,7 @@ impl Renderer {
         look.matcap_params[3] = if plastic { 1.0 } else { 0.0 };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
         gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&look));
-        let srgb_to_linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
-        self.post.set_params(
-            gpu,
-            &post::PostParams {
-                viewport: globals.viewport,
-                ao: [look.cam_params[0], AO_RADIUS, AO_INTENSITY, 0.0],
-                bloom: [
-                    if settings.bloom { settings.bloom_intensity.max(0.0) } else { 0.0 },
-                    srgb_to_linear(settings.bloom_threshold.max(0.0)),
-                    // The pipeline's scatter setting of 0.5, on its 0.05-0.95 scale.
-                    0.5,
-                    0.0,
-                ],
-                vignette: [
-                    if settings.vignette { settings.vignette_intensity.clamp(0.0, 1.0) * 3.0 } else { 0.0 },
-                    settings.vignette_smoothness.clamp(0.01, 1.0) * 5.0,
-                    0.0,
-                    0.0,
-                ],
-                grade: [
-                    match settings.tonemap {
-                        Tonemap::None => 0.0,
-                        Tonemap::Neutral => 1.0,
-                        Tonemap::Aces => 2.0,
-                    },
-                    if settings.grading { 1.0 } else { 0.0 },
-                    settings.saturation.clamp(-100.0, 100.0) / 100.0 + 1.0,
-                    settings.contrast.clamp(-100.0, 100.0) / 100.0 + 1.0,
-                ],
-            },
-        );
+        self.post.set_params(gpu, &post_params);
         // Depth of field: sets its lens, or puts its textures away if off.
         self.post.focus(gpu, settings, globals, look.cam_params[1]);
 
@@ -1091,8 +1095,21 @@ impl Renderer {
             }
         }
 
-        // Bloom, vignette and the tone curve, into the finished picture.
-        self.post.finish(encoder, &targets.ldr, settings.bloom && settings.bloom_intensity > 0.0);
+        // Bloom, vignette and the tone curve, into the finished picture:
+        // straight into the one kept when nothing goes over it, otherwise
+        // into a multisampled copy the overlays are drawn on.
+        let bloom = settings.bloom && settings.bloom_intensity > 0.0;
+        let overlaid = (self.overlays && (self.flash.active() || self.previews.active()))
+            || self.groups.active()
+            || self.wire.active()
+            || self.spheres.active();
+        if !overlaid {
+            self.post.finish(encoder, &targets.finished, bloom, true);
+            self.blit.draw(encoder, &targets.blit_finished, target);
+            self.targets.as_mut().unwrap().drawn = Some(key);
+            return;
+        }
+        self.post.finish(encoder, &targets.ldr, bloom, false);
 
         // Overlays go on the finished picture, hidden by whatever of the
         // scene is in front of them.
@@ -1101,7 +1118,7 @@ impl Renderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &targets.ldr,
                 depth_slice: None,
-                resolve_target: Some(target),
+                resolve_target: Some(&targets.finished),
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1122,8 +1139,131 @@ impl Renderer {
         if self.overlays {
             self.previews.draw(&mut pass);
         }
+        drop(pass);
+        self.blit.draw(encoder, &targets.blit_finished, target);
+        self.targets.as_mut().unwrap().drawn = Some(key);
+    }
+
+    /// The bytes of everything this frame's picture is drawn from (see
+    /// cache.rs). `source` and `post` are worked out from the others but
+    /// are cheap, and taking them in keeps any setting they read in the key.
+    #[allow(clippy::too_many_arguments)]
+    fn scene_key(
+        &self,
+        size: (u32, u32),
+        globals: &Globals,
+        look: &LookUniform,
+        opts: &Options,
+        items: &[DrawItem],
+        source: Option<&env::EnvParams>,
+        post: &post::PostParams,
+    ) -> cache::SceneKey {
+        let settings = &opts.look;
+        let mut key = cache::SceneKey::default();
+        key.push(&[size.0, size.1]).push(globals).push(&look_without_clock(look)).push(post);
+        key.push(&(items.len() as u64));
+        for item in items {
+            key.push(&item.mesh).push(&item.model);
+        }
+        if let Some(source) = source {
+            key.push(source);
+        }
+        let flag = |on: bool| if on { 1.0f32 } else { 0.0 };
+        key.push(&[
+            flag(settings.hdri.active()),
+            settings.hdri.ambient,
+            flag(settings.depth_of_field),
+            settings.focus_distance,
+            settings.aperture,
+            flag(settings.bloom),
+            flag(self.overlays),
+            flag(self.wire.enabled),
+            flag(self.groups.enabled),
+        ]);
+        key.push(&[
+            self.forced,
+            self.uploads.count(),
+            self.env.generation as u64,
+            self.flash.stamp.count(),
+            self.spheres.stamp.count(),
+            self.previews.stamp.count(),
+            self.wire.stamp.count(),
+            self.groups.stamp.count(),
+        ]);
+        key
     }
 }
+
+/// `look` with the clock zeroed unless a glow is moving: nothing else reads
+/// it, and a clock that changes every frame would keep any picture from
+/// being reused.
+fn look_without_clock(look: &LookUniform) -> LookUniform {
+    let mut out = *look;
+    let glow_on = look.glow_p0[0] > 0.5;
+    let moving = look.glow_p1[2] != 0.0;
+    if !(glow_on && moving) {
+        out.light_params[3] = 0.0;
+    }
+    out
+}
+
+/// What the model reflects: the HDRI, else the background gradient, else
+/// the default sky with the key light as its sun.
+fn env_source(globals: &Globals, look: &LookUniform, opts: &Options) -> env::EnvParams {
+    let mut source = env::EnvParams {
+        params: [0.0; 4],
+        bottom: [0.0; 4],
+        top: [0.0; 4],
+        sun_dir: [0.0; 4],
+        sun_color: [0.0; 4],
+    };
+    if opts.look.hdri.active() {
+        source.params = [2.0, look.bg_params[1], look.bg_params[2], 0.0];
+    } else if opts.gradient_background {
+        let rgb = |c: [f32; 4]| [c[0], c[1], c[2], 0.0];
+        source.params = [1.0, 0.0, 0.0, look.bg_params[3]];
+        source.bottom = rgb(globals.bg_bottom);
+        source.top = rgb(globals.bg_top);
+    } else {
+        let (dir, color) = opts.look.sky_sun();
+        source.sun_dir = [dir.x, dir.y, dir.z, 0.0];
+        source.sun_color = [color[0], color[1], color[2], 0.0];
+    }
+    source
+}
+
+/// The post effects' settings for this frame.
+fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Look) -> post::PostParams {
+    let srgb_to_linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+    post::PostParams {
+        viewport: globals.viewport,
+        ao: [look.cam_params[0], AO_RADIUS, AO_INTENSITY, 0.0],
+        bloom: [
+            if settings.bloom { settings.bloom_intensity.max(0.0) } else { 0.0 },
+            srgb_to_linear(settings.bloom_threshold.max(0.0)),
+            // The pipeline's scatter setting of 0.5, on its 0.05-0.95 scale.
+            0.5,
+            0.0,
+        ],
+        vignette: [
+            if settings.vignette { settings.vignette_intensity.clamp(0.0, 1.0) * 3.0 } else { 0.0 },
+            settings.vignette_smoothness.clamp(0.01, 1.0) * 5.0,
+            0.0,
+            0.0,
+        ],
+        grade: [
+            match settings.tonemap {
+                Tonemap::None => 0.0,
+                Tonemap::Neutral => 1.0,
+                Tonemap::Aces => 2.0,
+            },
+            if settings.grading { 1.0 } else { 0.0 },
+            settings.saturation.clamp(-100.0, 100.0) / 100.0 + 1.0,
+            settings.contrast.clamp(-100.0, 100.0) / 100.0 + 1.0,
+        ],
+    }
+}
+
 
 /// A depth buffer cleared to `clear` and kept after the pass.
 fn depth_attachment(view: &wgpu::TextureView, clear: f32) -> Option<wgpu::RenderPassDepthStencilAttachment<'_>> {

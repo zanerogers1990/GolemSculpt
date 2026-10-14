@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use rayon::prelude::*;
 
+use super::cache::Stamp;
 use super::{DEPTH_FORMAT, DrawItem, Globals, Gpu, MSAA_SAMPLES, MeshBuffers};
 use crate::mesh::Mesh;
 
@@ -45,6 +46,8 @@ pub struct Layer {
     pipeline: wgpu::RenderPipeline,
     /// Keyed by the scene's mesh id.
     lines: HashMap<u64, Lines>,
+    /// Moves when lines are built or let go (see cache.rs).
+    pub(super) stamp: Stamp,
 }
 
 impl Layer {
@@ -127,7 +130,7 @@ impl Layer {
             multiview_mask: None,
             cache: None,
         });
-        Layer { enabled: false, uniforms, bind, pipeline, lines: HashMap::new() }
+        Layer { enabled: false, uniforms, bind, pipeline, lines: HashMap::new(), stamp: Stamp::default() }
     }
 
     /// Builds the lines of mesh `id` if the overlay is on and they are
@@ -137,6 +140,7 @@ impl Layer {
             return;
         }
         let lines = lines_of(mesh);
+        self.stamp.bump();
         if lines.is_empty() {
             self.lines.remove(&id);
             return;
@@ -153,7 +157,16 @@ impl Layer {
 
     /// Frees the lines of meshes the scene no longer has.
     pub(super) fn retain(&mut self, keep: impl Fn(u64) -> bool) {
+        let before = self.lines.len();
         self.lines.retain(|&id, _| self.enabled && keep(id));
+        if self.lines.len() != before {
+            self.stamp.bump();
+        }
+    }
+
+    /// Whether anything of the wireframe is drawn.
+    pub(super) fn active(&self) -> bool {
+        self.enabled && !self.lines.is_empty()
     }
 
     /// Draws into the overlay pass, over the finished picture and behind

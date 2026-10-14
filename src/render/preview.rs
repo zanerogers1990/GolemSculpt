@@ -12,6 +12,7 @@ use std::ops::Range;
 use bytemuck::{Pod, Zeroable};
 use sculpt_toolkit::{Look, PreviewDraw};
 
+use super::cache::Stamp;
 use super::{DEPTH_FORMAT, Gpu, MSAA_SAMPLES};
 use crate::camera::View;
 
@@ -61,6 +62,8 @@ pub struct Layer {
     meshes: HashMap<u64, GpuMesh>,
     instances: Option<(wgpu::Buffer, u64)>,
     batches: Vec<Batch>,
+    /// Moves when what is drawn changes (see cache.rs).
+    pub(super) stamp: Stamp,
 }
 
 const LOOKS: [Look; 3] = [Look::Solid, Look::Shell, Look::Unlit];
@@ -174,7 +177,15 @@ impl Layer {
             })
         };
         let pipelines = LOOKS.iter().flat_map(|&look| [pipeline(look, false), pipeline(look, true)]).collect();
-        Layer { uniforms, bind, pipelines, meshes: HashMap::new(), instances: None, batches: Vec::new() }
+        Layer {
+            uniforms,
+            bind,
+            pipelines,
+            meshes: HashMap::new(),
+            instances: None,
+            batches: Vec::new(),
+            stamp: Stamp::default(),
+        }
     }
 
     /// Sets what the layer draws this frame. A mesh is only sent again when
@@ -183,6 +194,7 @@ impl Layer {
         self.batches.clear();
         if draws.is_empty() {
             self.meshes.clear();
+            self.stamp.note(&[]);
             return;
         }
         let ortho = if view.ortho_half_height.is_some() { 1.0 } else { 0.0 };
@@ -233,6 +245,20 @@ impl Layer {
         if let Some((buffer, _)) = &self.instances {
             gpu.queue.write_buffer(buffer, 0, bytes);
         }
+        let batches: Vec<[u64; 5]> = self
+            .batches
+            .iter()
+            .map(|b| {
+                let version = self.meshes.get(&b.mesh).map_or(u64::MAX, |m| m.version);
+                [b.mesh, version, b.pipeline as u64, b.instances.start as u64, b.instances.end as u64]
+            })
+            .collect();
+        self.stamp.note(&[bytemuck::bytes_of(&uniforms), bytes, bytemuck::cast_slice(&batches)]);
+    }
+
+    /// Whether any preview is drawn this frame.
+    pub(super) fn active(&self) -> bool {
+        !self.batches.is_empty()
     }
 
     fn sync_mesh(&mut self, gpu: &Gpu, id: u64, mesh: &sculpt_toolkit::Preview) {

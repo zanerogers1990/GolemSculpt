@@ -46,6 +46,7 @@ mod file_undo;
 mod files;
 mod focus;
 mod groups;
+mod hover;
 mod layers;
 mod levels;
 mod live_copies;
@@ -238,6 +239,8 @@ struct Input {
     last_f: Option<Instant>,
     gauge: Option<Gauge>,
     hover: Option<Vec3>,
+    /// What `hover` was last worked out from (app/hover.rs).
+    hover_last: hover::Last,
     /// Keys that went down and have not come up, so a lost focus can let go of them (app/focus.rs).
     held: Vec<KeyCode>,
     /// The point on the model the turn of the view under way goes about (app/turn.rs).
@@ -556,6 +559,7 @@ impl Running {
                 last_f: None,
                 gauge: None,
                 hover: None,
+                hover_last: Default::default(),
                 held: Vec::new(),
                 turn_about: None,
             },
@@ -1795,7 +1799,7 @@ impl Running {
             && self.hover_on_active()
         {
             let (o, d) = self.local.ray(self.input.pointer);
-            self.input.hover = self.doc.mesh.raycast(o, d).map(|h| h.pos);
+            self.input.hover = self.hover_at(o, d);
         }
         // The brush's size on screen and its size on the model, kept in step.
         let depth = self.input.hover.map_or(self.view_depth, |h| self.local.depth_of(h));

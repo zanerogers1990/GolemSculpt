@@ -30,6 +30,7 @@ use std::collections::HashMap;
 
 use rayon::prelude::*;
 
+use super::cache::Stamp;
 use super::{DEPTH_FORMAT, DrawItem, Gpu, MSAA_SAMPLES, MeshBuffers};
 use crate::mesh::Mesh;
 use crate::mesh::groups::colour;
@@ -83,6 +84,8 @@ pub struct Layer {
     pipeline: wgpu::RenderPipeline,
     /// Keyed by the scene's mesh id. Only meshes that have groups are here.
     tints: HashMap<u64, Tint>,
+    /// Moves when colours are built or let go (see cache.rs).
+    pub(super) stamp: Stamp,
 }
 
 /// The colour of group `id` as the shader unpacks it: red, green, blue and
@@ -198,7 +201,7 @@ impl Layer {
             multiview_mask: None,
             cache: None,
         });
-        Layer { enabled: false, uniforms, bind, mesh_layout, pipeline, tints: HashMap::new() }
+        Layer { enabled: false, uniforms, bind, mesh_layout, pipeline, tints: HashMap::new(), stamp: Stamp::default() }
     }
 
     /// Builds the colours of mesh `id` if they are shown and are missing or
@@ -206,13 +209,13 @@ impl Layer {
     /// brought up to date.
     pub(super) fn sync(&mut self, gpu: &Gpu, id: u64, mesh: &Mesh, buffers: Option<&MeshBuffers>) {
         let (true, true, Some(buffers)) = (self.enabled, mesh.has_groups(), buffers) else {
-            self.tints.remove(&id);
+            self.forget(id);
             return;
         };
         // A mesh too large for the device to hand a shader its buffers goes uncoloured.
         let most = gpu.device.limits().max_storage_buffer_binding_size as u64;
         if buffers.positions.size() > most || buffers.indices.size() > most {
-            self.tints.remove(&id);
+            self.forget(id);
             return;
         }
         let built = Built::of(mesh);
@@ -242,12 +245,28 @@ impl Layer {
         // Never more corners than there are colours for, whatever the two were built from.
         let count = buffers.index_count.min(colours.len() as u32 * 3);
         self.tints.insert(id, Tint { built, positions, indices, bind, count });
+        self.stamp.bump();
+    }
+
+    fn forget(&mut self, id: u64) {
+        if self.tints.remove(&id).is_some() {
+            self.stamp.bump();
+        }
+    }
+
+    /// Whether anything of the colours is drawn.
+    pub(super) fn active(&self) -> bool {
+        self.enabled && !self.tints.is_empty()
     }
 
     /// Frees the colours of meshes the scene no longer has, and all of them
     /// once the colours are switched off.
     pub(super) fn retain(&mut self, keep: impl Fn(u64) -> bool) {
+        let before = self.tints.len();
         self.tints.retain(|&id, _| self.enabled && keep(id));
+        if self.tints.len() != before {
+            self.stamp.bump();
+        }
     }
 
     /// Draws into the overlay pass, over the finished picture and under the

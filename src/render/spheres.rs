@@ -6,6 +6,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 
+use super::cache::Stamp;
 use super::{DEPTH_FORMAT, Gpu, MSAA_SAMPLES};
 use crate::camera::View;
 use crate::ssphere::skin::Skin;
@@ -84,6 +85,8 @@ pub struct Layer {
     skin_generation: Option<u64>,
     look: SkinLook,
     visible: bool,
+    /// Moves when what is drawn changes (see cache.rs).
+    pub(super) stamp: Stamp,
 }
 
 impl Layer {
@@ -197,12 +200,19 @@ impl Layer {
             skin_generation: None,
             look: SkinLook::Hidden,
             visible: false,
+            stamp: Stamp::default(),
         }
     }
 
     /// Nothing of the tool is drawn until the next [`Self::show`].
     pub fn hide(&mut self) {
         self.visible = false;
+        self.stamp.note(&[]);
+    }
+
+    /// Whether anything of the tool is drawn this frame.
+    pub(super) fn active(&self) -> bool {
+        self.visible
     }
 
     /// Sets what the layer draws this frame. The skin is only re-sent when
@@ -251,6 +261,14 @@ impl Layer {
             None => self.look = SkinLook::Hidden,
         }
         self.visible = true;
+        let skin = self.skin_generation.unwrap_or(u64::MAX);
+        self.stamp.note(&[
+            bytemuck::bytes_of(&uniforms),
+            bytemuck::cast_slice(&armature.vertices),
+            bytemuck::cast_slice(&armature.indices),
+            bytemuck::bytes_of(&[armature.opaque, self.skin_count, self.look as u32]),
+            bytemuck::bytes_of(&skin),
+        ]);
     }
 
     /// Draws into the main viewport pass, after the scene.
