@@ -315,7 +315,9 @@ pub(super) fn bank(
 ) -> Tally {
     let ranges = &mesh.bvh.leaves;
     let owned = |leaf: u32| kernels::owned(&ranges[leaf as usize]);
-    let place = |leaf: u32| leaves.binary_search(&leaf).map_or(0, |k| starts[k]);
+    // Every leaf of `own` is one of `leaves`; a stretch of `shared` given
+    // to two leaves would be written by two threads at once.
+    let place = |leaf: u32| starts[leaves.binary_search(&leaf).expect("a copy's leaf is one of the set's")];
     let total: usize = own.iter().map(|&leaf| owned(leaf).len()).sum();
     let (live, sums) = (SharedMut::new(&mut mesh.positions), SharedMut::new(shared));
     let settle = |&leaf: &u32| {

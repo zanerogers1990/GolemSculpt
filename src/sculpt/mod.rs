@@ -26,7 +26,6 @@ mod modes;
 mod pace;
 mod pose;
 mod radial;
-mod relax;
 mod share;
 #[cfg(test)]
 mod kernel_tests;

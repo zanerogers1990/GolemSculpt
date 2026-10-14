@@ -20,7 +20,6 @@ use super::alpha::{Frame, Stamp};
 use super::erase::{self, Erased};
 use super::falloff::Falloff;
 use super::modes::{FlattenMode, SmoothMode};
-use super::relax::{Passes, Relaxing};
 use super::share::{Shared, Sharing};
 use crate::mesh::Mesh;
 use crate::mesh::bvh::Leaf;
@@ -503,10 +502,10 @@ pub(super) fn fill<T: Copy + Default + Send>(
 pub struct Scratch {
     weights: Vec<f32>,
     pub(super) targets: Vec<Vec3>,
+    /// Where a Smooth dab found its vertices, for Keep Volume.
+    before: Vec<Vec3>,
     /// Where each leaf of the dab in hand starts in those (see [`layout`]).
     pub(super) starts: Vec<usize>,
-    /// Smooth's and Clay's relaxation passes (`relax.rs`).
-    relax: Relaxing,
     /// The leaves under the dabs of a frame, for Clay's finishing pass.
     frame_leaves: Vec<u32>,
     /// For the walk over mirror images that can meet
@@ -990,13 +989,78 @@ fn crease(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     });
 }
 
+/// Mean of a vertex's edge neighbours, summed in double (see module docs).
+#[inline]
+fn neighbour_mean(mesh: &Mesh, v: u32) -> Option<Vec3> {
+    let ring = mesh.neighbours(v);
+    if ring.is_empty() {
+        return None;
+    }
+    let mut sum = DVec3::ZERO;
+    for &o in ring {
+        sum += mesh.positions[o as usize].as_dvec3();
+    }
+    Some((sum / ring.len() as f64).as_vec3())
+}
+
+/// Jacobi relaxation passes over the vertices of `leaves` that
+/// `scratch.weights` gives a weight above zero: every target is computed from
+/// the pass's starting positions, then all are written. (Updating in place is
+/// order dependent and breaks mirror symmetry.) Each vertex goes all the way
+/// toward the mean of its neighbours by its weight.
+fn relax_passes(mesh: &mut Mesh, leaves: &[u32], scratch: &mut Scratch, amount: f32, min_move2: f32) {
+    stepped_passes(mesh, leaves, scratch, amount, min_move2, |_, _, pos, mean, k| pos + (mean - pos) * k);
+}
+
+/// [`relax_passes`] with the step a vertex takes left to `step`: it is given
+/// the mesh as the pass found it, the vertex, where it is, the mean of its
+/// neighbours and its weight for this pass (0 to 1), and says where it goes.
+fn stepped_passes(
+    mesh: &mut Mesh,
+    leaves: &[u32],
+    scratch: &mut Scratch,
+    amount: f32,
+    min_move2: f32,
+    step: impl Fn(&Mesh, u32, Vec3, Vec3, f32) -> Vec3 + Sync,
+) {
+    let full = amount.floor() as usize;
+    let frac = amount - full as f32;
+    let passes = full + usize::from(frac > 0.001);
+    let Scratch { weights, targets, starts, .. } = scratch;
+    let weights = &*weights;
+    for pass in 0..passes {
+        let factor = if pass < full { 1.0 } else { frac };
+        {
+            let mesh = &*mesh;
+            fill(mesh, leaves, starts, targets, |at, v| {
+                let w = weights[at];
+                if w <= 0.0 {
+                    return Vec3::ZERO;
+                }
+                let pos = mesh.positions[v as usize];
+                match neighbour_mean(mesh, v) {
+                    Some(avg) => step(mesh, v, pos, avg, (w * factor).clamp(0.0, 1.0)),
+                    None => pos,
+                }
+            });
+        }
+        let targets = &*targets;
+        mesh.move_vertices(leaves, |at, vt| {
+            if weights[at] <= 0.0 {
+                return None;
+            }
+            let new = targets[at];
+            (new.distance_squared(vt.pos) > min_move2).then_some(new)
+        });
+    }
+}
+
 fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let r2 = r * r;
-    let Scratch { weights, starts, relax, .. } = scratch;
-    let total = {
+    {
         let mesh = &*mesh;
-        fill(mesh, leaves, starts, weights, |_, v| {
+        fill(mesh, leaves, &mut scratch.starts, &mut scratch.weights, |_, v| {
             let i = v as usize;
             let pos = mesh.positions[i];
             let d2 = pos.distance_squared(d.center);
@@ -1007,36 +1071,33 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mu
                 * (1.0 - mesh.mask[i])
                 * facing(p.front_facing, mesh.normals[i], pos, d.cam);
             if w > 0.0 { w * 4.0 * 0.1 } else { 0.0 }
-        })
-    };
-    // Each pass is Jacobi: every vertex's step is worked out from where the
-    // pass found them all, then all are moved. (Updating in place is order
-    // dependent and breaks mirror symmetry.)
-    let keep = if p.smooth_mode == SmoothMode::All { p.keep_volume.clamp(0.0, 1.0) } else { 0.0 };
-    let passes = Passes { amount: p.e(d.pressure) * 10.0 * p.dose, min_move2: 0.0, keep };
-    let (starts, weights) = (&starts[..], &weights[..total]);
+        });
+    }
+    let amount = p.e(d.pressure) * 10.0 * p.dose;
     match p.smooth_mode {
-        // All the way toward the mean of its neighbours, by its weight.
-        SmoothMode::All => relax.run(mesh, leaves, starts, total, weights, &passes, |_, _, pos, mean, k, _| {
-            pos + (mean - pos) * k
-        }),
+        SmoothMode::All if p.keep_volume > 0.0 => {
+            fill(mesh, leaves, &mut scratch.starts, &mut scratch.before, |_, v| mesh.positions[v as usize]);
+            relax_passes(mesh, leaves, scratch, amount, 0.0);
+            give_back(mesh, leaves, scratch, p.keep_volume.min(1.0));
+        }
+        SmoothMode::All => relax_passes(mesh, leaves, scratch, amount, 0.0),
         // Along the normal only, and one way only. What a vertex would have
         // slid sideways is left out, so nothing jumps where the surface
         // passes from standing up to lying low.
-        SmoothMode::Peaks => relax.run(mesh, leaves, starts, total, weights, &passes, |mesh, v, pos, mean, k, _| {
+        SmoothMode::Peaks => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
             let n = mesh.normals[v as usize];
             pos + n * ((mean - pos).dot(n).min(0.0) * k)
         }),
-        SmoothMode::Valleys => relax.run(mesh, leaves, starts, total, weights, &passes, |mesh, v, pos, mean, k, _| {
+        SmoothMode::Valleys => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
             let n = mesh.normals[v as usize];
             pos + n * ((mean - pos).dot(n).max(0.0) * k)
         }),
         // Within the surface only: the part of the way to the mean that lies
         // across the normal, and then back down on to the surface.
-        SmoothMode::Relax => relax.run(mesh, leaves, starts, total, weights, &passes, |mesh, v, pos, mean, k, live| {
+        SmoothMode::Relax => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
             let n = mesh.normals[v as usize];
             let toward = mean - pos;
-            slid(mesh, v, pos, n, (toward - n * toward.dot(n)) * k, |o| live.pos(o))
+            slid(mesh, v, pos, n, (toward - n * toward.dot(n)) * k)
         }),
     }
 }
@@ -1052,16 +1113,16 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mu
 /// direction, and counts by how nearly it lies along the step. So a step
 /// along a cylinder is not corrected at all and a step round it is, which
 /// the mean curvature alone would get half wrong each way. Summed in double
-/// (see the module docs). `at` says where each neighbour is.
+/// (see the module docs).
 #[inline]
-pub(super) fn slid(mesh: &Mesh, v: u32, pos: Vec3, n: Vec3, across: Vec3, at: impl Fn(u32) -> Vec3) -> Vec3 {
+pub(super) fn slid(mesh: &Mesh, v: u32, pos: Vec3, n: Vec3, across: Vec3) -> Vec3 {
     let step2 = across.length_squared();
     if step2 <= 0.0 {
         return pos;
     }
     let (mut fall, mut count) = (0.0f64, 0.0f64);
     for &o in mesh.neighbours(v) {
-        let to = at(o) - pos;
+        let to = mesh.positions[o as usize] - pos;
         let height = to.dot(n);
         let flat = to - n * height;
         let reach2 = flat.length_squared();
@@ -1080,6 +1141,60 @@ pub(super) fn slid(mesh: &Mesh, v: u32, pos: Vec3, n: Vec3, across: Vec3, at: im
     // bad patch is slid over and not flung away.
     let most = 0.5 * step2.sqrt();
     pos + across + n * lift.clamp(-most, most)
+}
+
+/// Keep Volume: gives back `keep` of what a Smooth dab took from the form
+/// under it.
+///
+/// Smoothing a curved surface draws it in: every vertex moves toward the
+/// middle of its neighbours, which on a ball, a finger or a fin's edge is
+/// inward, so each stroke leaves the form thinner. What the dab did to the
+/// form's bulk is how far it moved its vertices along their normals, added
+/// up; that much is put back, spread over the same vertices by the brush's
+/// own weights. The bumps a dab flattened stay flattened (pushing every
+/// vertex out a little does not bring one back), and on a flat surface,
+/// where smoothing moves as much up as down, nothing is put back at all.
+///
+/// One number for the whole dab, so it cannot ring or roughen the surface
+/// the way undoing the shrinkage vertex by vertex does (Taubin's inflating
+/// pass sharpens what the smoothing pass has just blunted, and on a form
+/// only a few vertices round it reads the whole form as a detail and lets
+/// it shrink regardless).
+fn give_back(mesh: &mut Mesh, leaves: &[u32], scratch: &Scratch, keep: f32) {
+    let Scratch { weights, before, starts, .. } = scratch;
+    // How far the dab moved the surface along its normals, and the weights,
+    // leaf by leaf and then in the leaves' order: the same total whatever
+    // threads did the adding.
+    let total = {
+        let mesh = &*mesh;
+        let hidden = mesh.hidden_vertices();
+        let of_leaf = |(k, &l): (usize, &u32)| {
+            let (mut moved, mut weight) = (0.0f64, 0.0f64);
+            for (n, v) in owned(&mesh.bvh.leaves[l as usize]).enumerate() {
+                let w = weights[starts[k] + n];
+                if w > 0.0 && !hidden.is_some_and(|hidden| hidden[v]) {
+                    moved += (mesh.positions[v] - before[starts[k] + n]).dot(mesh.normals[v]) as f64;
+                    weight += w as f64;
+                }
+            }
+            (moved, weight)
+        };
+        let sums: Vec<(f64, f64)> = if leaf_vertex_total(mesh, leaves) < PAR_MIN {
+            leaves.iter().enumerate().map(of_leaf).collect()
+        } else {
+            leaves.par_iter().enumerate().with_min_len(8).map(of_leaf).collect()
+        };
+        sums.into_iter().fold((0.0, 0.0), |(moved, weight), (m, w)| (moved + m, weight + w))
+    };
+    let (moved, weight) = total;
+    if weight <= 1e-12 || moved == 0.0 {
+        return;
+    }
+    let back = (-(keep as f64) * moved / weight) as f32;
+    mesh.move_vertices(leaves, |at, vt| {
+        let w = weights[at];
+        (w > 0.0).then(|| vt.pos + vt.normal * (w * back))
+    });
 }
 
 /// How much of the way to the stroke's line one Pinch dab at full strength
@@ -1457,11 +1572,12 @@ pub fn clay_relax(
     if centres.is_empty() || relax <= 0.0 {
         return;
     }
-    let Scratch { weights, starts, relax: relaxing, frame_leaves: leaves, .. } = scratch;
+    let mut leaves = std::mem::take(&mut scratch.frame_leaves);
+    let Scratch { weights, starts, .. } = scratch;
     leaves.clear();
-    mesh.bvh.leaves_in_spheres(centres.iter().map(|c| (c.at, c.radius)), leaves);
+    mesh.bvh.leaves_in_spheres(centres.iter().map(|c| (c.at, c.radius)), &mut leaves);
     leaves.sort_unstable();
-    let total = layout(mesh, leaves, starts);
+    let total = layout(mesh, &leaves, starts);
     weights.resize(total, 0.0);
     {
         let (mesh, leaves) = (&*mesh, &leaves[..]);
@@ -1485,10 +1601,11 @@ pub fn clay_relax(
             });
         });
     }
+    let amount = (relax * 4.0 * dab_count as f32).min(16.0);
     let min_move = object_size / 20_000.0;
-    let passes = Passes { amount: (relax * 4.0 * dab_count as f32).min(16.0), min_move2: min_move * min_move, keep: 0.0 };
-    relaxing.run(mesh, leaves, starts, total, &weights[..total], &passes, |_, _, pos, mean, k, _| pos + (mean - pos) * k);
-    mesh.positions_changed(leaves);
+    relax_passes(mesh, &leaves, scratch, amount, min_move * min_move);
+    mesh.positions_changed(&leaves);
+    scratch.frame_leaves = leaves;
 }
 
 /// How much of Clay's finishing pass vertex `v` gets from the dabs `centres`
@@ -1576,5 +1693,61 @@ mod relax_cull_tests {
             }
         }
         assert!(weighted > 1000, "only {weighted} vertices had weight");
+    }
+}
+
+#[cfg(test)]
+mod relax_cull_timing {
+    use std::time::Instant;
+
+    use glam::Vec3;
+
+    use super::{CULL_MARGIN, Centre, curvature_base, relax_weight};
+    use crate::mesh::primitives::{self, Primitive};
+
+    /// Weighing Clay's finishing pass against every centre of a busy frame,
+    /// against weighing each leaf's vertices against the centres near it.
+    #[test]
+    #[ignore]
+    fn timing_of_weighing_against_a_frames_centres() {
+        let mesh = primitives::build(Primitive::Sphere, 5_000_000, 0.5);
+        let base = curvature_base(&mesh);
+        for count in [2usize, 8, 24] {
+            // A frame's dabs along a stroke, each with its mirror image.
+            let centres: Vec<Centre> = (0..count)
+                .map(|i| {
+                    let at = Vec3::new(0.05 + 0.01 * (i / 2) as f32, 0.0, 0.5).normalize() * 0.5;
+                    let at = if i % 2 == 0 { at } else { at * Vec3::new(-1.0, 1.0, 1.0) };
+                    Centre { at, cam: Vec3::new(0.0, 0.0, 3.0), radius: 0.1 }
+                })
+                .collect();
+            let mut leaves = Vec::new();
+            mesh.bvh.leaves_in_spheres(centres.iter().map(|c| (c.at, c.radius)), &mut leaves);
+            let (mut all, mut near) = (f64::MAX, f64::MAX);
+            let mut sum = 0.0f32;
+            for _ in 0..3 {
+                let t = Instant::now();
+                for &l in &leaves {
+                    let leaf = mesh.bvh.leaves[l as usize];
+                    for v in leaf.vert_start..leaf.vert_end {
+                        sum += relax_weight(&mesh, true, &centres, 0.1, base, v);
+                    }
+                }
+                all = all.min(t.elapsed().as_secs_f64() * 1000.0);
+                let t = Instant::now();
+                let mut kept = Vec::new();
+                for &l in &leaves {
+                    let bounds = mesh.bvh.leaf_box(l);
+                    kept.clear();
+                    kept.extend(centres.iter().filter(|c| bounds.dist_sq(c.at) <= (c.radius * CULL_MARGIN).powi(2)));
+                    let leaf = mesh.bvh.leaves[l as usize];
+                    for v in leaf.vert_start..leaf.vert_end {
+                        sum += relax_weight(&mesh, true, &kept, 0.1, base, v);
+                    }
+                }
+                near = near.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            println!("{count} centres, {} leaves: all {all:.2} ms, near its leaf {near:.2} ms ({sum})", leaves.len());
+        }
     }
 }
