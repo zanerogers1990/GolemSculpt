@@ -49,6 +49,8 @@ pub(super) struct Dragging {
 #[derive(Default)]
 pub(super) struct State {
     dragging: Option<Dragging>,
+    /// The Deform card's deformation, while a deformer is picked (app/deform.rs).
+    pub(super) deform: super::deform::State,
     /// Whether the pointer rests on a handle of the gizmo a tool asked for (a
     /// hosted tool, or the SSpheres). A press there is the gizmo's, so the
     /// tool is told the pointer is not free (`Env::hovering`) and keeps its
@@ -158,6 +160,10 @@ impl Running {
             return None;
         }
         if self.transform_active() {
+            // A deformer's handles take the arrows' place (app/deform.rs).
+            if self.deform_on() {
+                return None;
+            }
             let (ids, targets) = selection_targets(&self.doc.scene, &self.doc.mesh);
             let orientation = self.doc.opts.gizmo_axes;
             return (!targets.is_empty()).then(|| Setup {
@@ -243,7 +249,7 @@ impl Running {
     /// Whether a handle drag is under way. Nothing else may edit the scene
     /// until it ends: the drag holds the state its undo step goes back to.
     pub(super) fn transform_dragging(&self) -> bool {
-        self.transform.dragging.is_some()
+        self.transform.dragging.is_some() || self.transform.deform.grabbing()
     }
 
     /// Whether a drag is reshaping the active mesh, which is then inside a
@@ -254,6 +260,9 @@ impl Running {
 
     /// A button went down on the viewport while the Transform tool is up.
     pub(super) fn transform_pressed(&mut self, button: MouseButton) -> Drag {
+        if let Some(drag) = self.deform_pressed(button) {
+            return drag;
+        }
         if button != MouseButton::Left {
             return Drag::Ui;
         }
@@ -275,6 +284,9 @@ impl Running {
     pub(super) fn transform_moved(&mut self, pos: Vec2) -> bool {
         if self.input.drag != Drag::Gizmo {
             return false;
+        }
+        if self.deform_moved(pos) {
+            return true;
         }
         let Some(mut d) = self.transform.dragging.take() else { return true };
         d.drag.update(&self.view, pos);
@@ -304,7 +316,7 @@ impl Running {
 
     /// Ends a handle drag, leaving one undo step if it changed anything.
     pub(super) fn transform_released(&mut self) {
-        if !self.transform_dragging() {
+        if self.deform_released() || !self.transform_dragging() {
             return;
         }
         // Whatever the pointer did since the last frame still counts.
@@ -353,6 +365,8 @@ impl Running {
     /// Drops a drag without finishing it (the tool was put away mid-drag).
     pub(super) fn transform_leave(&mut self) {
         self.transform_released();
+        // A deformation on the model is kept, as any other command would keep it.
+        self.deform_commit();
         self.transform.on_tool_handle = false;
         self.ui.gizmo.clear();
     }
@@ -391,7 +405,8 @@ impl Running {
                 (frame, hot)
             }
         };
-        let shapes = frame.map_or(Vec::new(), |f| f.shapes(&self.view, hot, ppp));
+        let mut shapes = frame.map_or(Vec::new(), |f| f.shapes(&self.view, hot, ppp));
+        shapes.extend(self.deform_shapes());
         // The interface, which draws these, was built earlier in the frame:
         // a gizmo that has changed needs one more frame to be seen where it
         // now is.

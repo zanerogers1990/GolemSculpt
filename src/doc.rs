@@ -62,6 +62,8 @@ pub struct Options {
     pub look: Look,
     /// The Face Groups card: whether group colours show, and the group picked (see ui/groups.rs).
     pub groups: crate::ui::groups::Card,
+    /// The Deform card: the deformer picked and its settings (see ui/deform.rs). Not kept between runs.
+    pub deform: crate::ui::deform::Card,
 }
 
 impl Default for Options {
@@ -96,6 +98,7 @@ impl Default for Options {
             gizmo_axes: Default::default(),
             look: Look::default(),
             groups: Default::default(),
+            deform: Default::default(),
         }
     }
 }
@@ -367,4 +370,7 @@ pub enum Action {
     Mirror(crate::scene::MirrorCommand),
     /// Bring the SSphere tool up with a first sphere in the middle of the view.
     NewRig,
+    /// A command of the Deform card: Bend, Twist and the other deformers the
+    /// gizmo drives (see app/deform.rs).
+    Deform(crate::ui::deform::Ask),
 }

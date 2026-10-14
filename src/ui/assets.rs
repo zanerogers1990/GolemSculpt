@@ -72,6 +72,15 @@ const ICONS: &[(&str, &[u8])] = icons![
     "check",
     "close",
     "join",
+    // The Deform card's deformers (`deform::Kind::icon`).
+    "deform_bend",
+    "deform_arc",
+    "deform_twist",
+    "deform_taper",
+    "deform_flatten",
+    "deform_inflate",
+    "deform_stretch",
+    "deform_lattice",
 ];
 
 const DEFAULT_MATCAP: &[u8] = include_bytes!("../../assets/matcaps/Ben Simonds/MatCap_BS1.jpg");
