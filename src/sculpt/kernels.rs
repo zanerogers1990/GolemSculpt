@@ -614,7 +614,7 @@ fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
     let ease = p.e_off(d.pressure) * 4.0 * 0.1;
     let target = d.center + d.normal * (0.6 * r * p.sign);
-    mesh.move_vertices(leaves, |_, vt| {
+    mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {
@@ -641,7 +641,7 @@ fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
     let height = p.sign * 0.3 * r;
     let ease = p.share((p.e_off(d.pressure) * 4.0 * 0.1).clamp(0.0, 1.0));
-    mesh.move_vertices(leaves, |_, vt| {
+    mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {
@@ -693,7 +693,7 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let dir = footprint_normal(mesh, d.center, r, false).unwrap_or(d.normal);
     let height = p.sign * r * p.layer_height;
     let ease = p.share((p.e_off(d.pressure) * 40.0 * 0.1).clamp(0.0, 1.0));
-    mesh.move_vertices(leaves, |_, vt| {
+    mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {
@@ -808,7 +808,8 @@ fn flatten(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
     let locked = d.plane.is_some();
     let mode = p.flatten_mode.inverted(p.sign < 0.0);
     let e = p.e(d.pressure) * 4.0 * 0.1;
-    mesh.move_vertices(leaves, |_, vt| {
+    // `flatten_weight` turns down the same vertices first.
+    mesh.move_within(leaves, d.center, r * r, |_, vt| {
         let pos = vt.pos;
         let fit_w = flatten_weight(p, d, pos, vt.normal);
         if fit_w <= 0.0 {
@@ -946,7 +947,7 @@ fn crease(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let dir = d.dir;
     let e_off = (p.e_off(d.pressure) * 4.0 * 0.2).max(0.0);
     let e_acc = p.e_acc(d.pressure) * 4.0 * 0.2 * p.dose;
-    mesh.move_vertices(leaves, |_, vt| {
+    mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {
@@ -1104,7 +1105,7 @@ fn pinch(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r2 = r * r;
     let (n, dir) = (d.normal, d.dir);
     let rate = p.e(d.pressure) * PINCH_RATE;
-    mesh.move_vertices(leaves, |_, vt| {
+    mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {
@@ -1281,7 +1282,7 @@ fn nudge(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
     // With no cap to go by (next to nothing under the ring) nothing is
     // moved: there is no surface to slide along.
     let Some(cap) = Cap::fit(mesh, p, d, fit) else { return };
-    mesh.move_vertices(leaves, |_, vt| {
+    mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {
@@ -1297,7 +1298,7 @@ fn nudge(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
 fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
     let r2 = r * r;
-    mesh.move_vertices(leaves, |_, vt| {
+    mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {
@@ -1315,7 +1316,7 @@ fn mask_paint(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r2 = r * r;
     let h = p.mask_hardness.clamp(0.0, 0.999);
     let amount = p.sign * p.e(d.pressure) * (4.0 + 36.0 * h) * 0.1;
-    mesh.paint_mask(leaves, |vt| {
+    mesh.paint_mask_within(leaves, d.center, r2, |vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
         if d2 >= r2 {

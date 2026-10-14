@@ -238,6 +238,7 @@ pub fn grab(
 ) -> (Vec<u32>, Held) {
     let mut holds: Vec<(u32, u16, f32)> = Vec::new();
     let mut leaves = Vec::new();
+    let mut walk = super::Connected::default();
     for (k, &copy) in copies.iter().enumerate() {
         leaves.clear();
         mesh.bvh.leaves_in_sphere(copy.0, radius, &mut leaves);
@@ -249,7 +250,7 @@ pub fn grab(
         .into_iter()
         .unzip();
         if connected && verts.len() > 1 {
-            super::keep_connected(mesh, &[copy.0], &mut verts, &mut weights);
+            super::keep_connected(mesh, &[copy.0], &mut verts, &mut weights, &mut walk);
         }
         holds.extend(verts.iter().zip(&weights).map(|(&v, &w)| (v, k as u16, w)));
     }

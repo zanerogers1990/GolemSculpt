@@ -1325,7 +1325,7 @@ impl Sculptor {
         );
         if connected && verts.len() > 1 {
             let centres: Vec<Vec3> = copies.iter().map(|&(centre, _)| centre).collect();
-            keep_connected(mesh, &centres, &mut verts, &mut weights);
+            keep_connected(mesh, &centres, &mut verts, &mut weights, &mut Connected::default());
         }
         let leaves = mesh.leaves_of(&verts);
         let hold = share::Hold::of(weights.chunks(n_ops));
@@ -2034,11 +2034,11 @@ impl Sculptor {
 ///
 /// `weights` holds one weight per copy for every vertex of `verts`; vertices
 /// no copy holds afterwards are dropped from both.
-fn keep_connected(mesh: &Mesh, centres: &[Vec3], verts: &mut Vec<u32>, weights: &mut Vec<f32>) {
+fn keep_connected(mesh: &Mesh, centres: &[Vec3], verts: &mut Vec<u32>, weights: &mut Vec<f32>, walk: &mut Connected) {
     let n_ops = centres.len();
-    let mut grabbed = BitSet::with_len(mesh.vertex_count());
-    let mut reached = BitSet::with_len(mesh.vertex_count());
-    let mut queue: Vec<u32> = Vec::new();
+    let Connected { grabbed, reached, queue } = walk;
+    grabbed.grow(mesh.vertex_count());
+    reached.grow(mesh.vertex_count());
     for (k, &centre) in centres.iter().enumerate() {
         let held = |slot: usize| weights[slot * n_ops + k] > 0.0;
         let mut seed = None;
@@ -2086,6 +2086,16 @@ fn keep_connected(mesh: &Mesh, centres: &[Vec3], verts: &mut Vec<u32>, weights: 
     }
     verts.truncate(kept);
     weights.truncate(kept * n_ops);
+}
+
+/// What [`keep_connected`] walks with: two flags per vertex of the mesh, and
+/// the queue. Made once for a grab, however many copies it has; each walk
+/// leaves the flags clear for the next.
+#[derive(Default)]
+struct Connected {
+    grabbed: BitSet,
+    reached: BitSet,
+    queue: Vec<u32>,
 }
 
 /// Copies the position of every vertex owned by `leaves` into `out`, leaf
