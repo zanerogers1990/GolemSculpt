@@ -558,7 +558,7 @@ mod tests {
         match delta {
             Some(StrokeDelta::Positions { verts, .. }) | Some(StrokeDelta::Mask { verts, .. }) => verts,
             // These meshes have no sculpt layers.
-            Some(StrokeDelta::Layered { .. }) | None => &[],
+            Some(StrokeDelta::Layered { .. } | StrokeDelta::Paint(_) | StrokeDelta::Painted { .. }) | None => &[],
         }
     }
 

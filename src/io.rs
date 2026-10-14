@@ -49,6 +49,7 @@ mod groups;
 mod layers;
 mod levels;
 mod link;
+mod paint;
 mod tool_data;
 mod repair;
 #[cfg(test)]
@@ -497,6 +498,8 @@ pub fn place_import(raw: &mut RawMesh, first_half_size: Option<Vec3>) -> Vec3 {
 //         shape, with every layer in it.
 //   GRPS  after its mesh, if it has face groups: the mesh's number (u32),
 //         then what `io/groups.rs` sets out: the group of every triangle.
+//   PNTL  after its mesh, if it has paint layers: the mesh's number (u32),
+//         then what `io/paint.rs` sets out.
 //   INFO  last, once: everything else, as JSON (see `Details`). What a hosted
 //         tool keeps for an object (an array) is a field of that object's
 //         entry named by the tool's id: see `io/tool_data.rs`.
@@ -511,6 +514,13 @@ pub fn place_import(raw: &mut RawMesh, first_half_size: Option<Vec3>) -> Vec3 {
 //
 // The older layouts ("SCLP0001" to "SCLP0003": fixed records, with no room
 // to grow) are still read, never written.
+//
+// The JSON section's `format` says which additions the writer knew of
+// (`FORMAT`): 5 is paint. Nothing reads it to decide anything, since every
+// addition is a block or a field an older reader steps over; it is there for
+// a person, or a later version, wondering what wrote a file. The magic stays
+// "SCLP0004": a new magic would make every older app refuse a file it can
+// open perfectly well, model and all, without the parts it does not know.
 
 const NATIVE_MAGIC: &[u8; 8] = b"SCLP0001";
 /// Scenes from before objects could be turned or scaled.
@@ -527,7 +537,11 @@ const HIDE: &[u8; 4] = b"HIDE";
 const LVLS: &[u8; 4] = b"LVLS";
 const LAYR: &[u8; 4] = b"LAYR";
 const GRPS: &[u8; 4] = b"GRPS";
+const PNTL: &[u8; 4] = b"PNTL";
 const INFO: &[u8; 4] = b"INFO";
+
+/// The format the files written today are in (see above).
+pub const FORMAT: u32 = 5;
 
 // ---- writing a file without harming the one already there
 
@@ -674,6 +688,9 @@ pub mod slot {
     pub const CAMERA: &str = "camera";
     /// [`super::Mirror`]: the brush mirror axes, radial symmetry and their guides.
     pub const MIRROR: &str = "mirror";
+    /// `mesh::paint::palette::ScenePaint`: the scene's material palette for
+    /// painting, and whether painted colour and materials show.
+    pub const PAINT: &str = "paint";
 
     // Per object, under its row of the object list. `SYMMETRY` is written and
     // read by `scene/symmetry.rs` and `MIRROR_COPIES` by `scene/mirror.rs`.
@@ -690,7 +707,7 @@ pub mod slot {
 }
 
 /// Fields of the JSON that [`Details`] does not hand out: the file's own.
-const SCENE_FIELDS: [&str; 4] = ["app", "saved", "active", "objects"];
+const SCENE_FIELDS: [&str; 5] = ["app", "saved", "active", "objects", "format"];
 const OBJECT_FIELDS: [&str; 6] = ["name", "visible", "mesh", "position", "rotation", "scale"];
 
 /// Everything a `.sclp` file keeps that is not a mesh or an object's place
@@ -776,6 +793,7 @@ impl Details {
         // Who wrote it and when, for a person reading the file; nothing reads these back.
         root.insert("app".into(), concat!("Sculpt ", env!("CARGO_PKG_VERSION")).into());
         root.insert("saved".into(), time_stamp().into());
+        root.insert("format".into(), FORMAT.into());
         root.insert("active".into(), active.into());
         let entries = objects
             .iter()
@@ -1128,6 +1146,10 @@ fn write_scene(w: &mut impl Write, meshes: &[&Mesh], info: &[u8]) -> std::io::Re
             block(w, GRPS, groups::length(&saved))?;
             groups::write(w, u32::from_le_bytes(number), &saved)?;
         }
+        if let Some(stack) = mesh.paint_stack() {
+            block(w, PNTL, paint::length(&stack))?;
+            paint::write(w, u32::from_le_bytes(number), &stack)?;
+        }
     }
     block(w, INFO, info.len())?;
     w.write_all(info)
@@ -1149,9 +1171,11 @@ struct LoadedMesh {
     layers: Option<crate::mesh::layers::SavedLayers>,
     /// The mesh's face groups, if it was saved with any.
     groups: Option<groups::SavedGroups>,
-    /// Whether the file had levels, layers, and face groups, for this mesh
-    /// that could not be read.
-    lost: [bool; 3],
+    /// The mesh's paint layers, if it was saved with any.
+    paint: Option<crate::mesh::paint::PaintStack>,
+    /// Whether the file had levels, layers, face groups, and paint, for this
+    /// mesh that could not be read.
+    lost: [bool; 4],
 }
 
 impl LoadedMesh {
@@ -1164,9 +1188,9 @@ impl LoadedMesh {
         (mesh, repaired, left_out)
     }
 
-    /// [`Self::build`], also saying whether the mesh's levels, its layers
-    /// and its face groups were lost on the way.
-    fn build_noting(mut self) -> (Mesh, usize, usize, [bool; 3]) {
+    /// [`Self::build`], also saying whether the mesh's levels, its layers,
+    /// its face groups and its paint were lost on the way.
+    fn build_noting(mut self) -> (Mesh, usize, usize, [bool; 4]) {
         let mut no_mask = Vec::new();
         let repaired = repair::repair_points(
             &mut self.positions,
@@ -1174,7 +1198,7 @@ impl LoadedMesh {
             self.mask.as_deref_mut().unwrap_or(&mut no_mask),
         );
         let left_out = stray_triangles(&self.indices, self.positions.len());
-        if self.levels.is_some() || self.layers.is_some() || self.groups.is_some() {
+        if self.levels.is_some() || self.layers.is_some() || self.groups.is_some() || self.paint.is_some() {
             let (mesh, lost) = levels::build(self);
             return (mesh, repaired, left_out, lost);
         }
@@ -1241,7 +1265,7 @@ impl Loaded {
         let repaired = built.iter().map(|(_, points, ..)| points).sum();
         let left_out = built.iter().map(|(_, _, triangles, _)| triangles).sum();
         let count = |which: usize| built.iter().filter(|(.., lost)| lost[which]).count();
-        let lost = Lost { levels: count(0), layers: count(1), groups: count(2) };
+        let lost = Lost { levels: count(0), layers: count(1), groups: count(2), paint: count(3) };
         let meshes = built.into_iter().map(|(mesh, ..)| mesh).collect();
         let (objects, active, details) = (self.objects, self.active, self.details);
         SavedScene { meshes, objects, active, details, repaired, left_out, lost }
@@ -1280,8 +1304,8 @@ fn read_mesh(r: &mut impl Read, length: u64) -> Option<LoadedMesh> {
     }
     let positions = read_array::<Vec3>(r, verts as usize).ok()?;
     let indices = read_array::<u32>(r, indices as usize).ok()?;
-    let (levels, layers, groups, lost) = (None, None, None, [false; 3]);
-    Some(LoadedMesh { positions, indices, mask: None, polys: None, hidden: None, levels, layers, groups, lost })
+    let (levels, layers, groups, paint, lost) = (None, None, None, None, [false; 4]);
+    Some(LoadedMesh { positions, indices, mask: None, polys: None, hidden: None, levels, layers, groups, paint, lost })
 }
 
 /// The body of a `QUAD` block, and the mesh it belongs to.
@@ -1368,7 +1392,7 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
             }
             let flags: Vec<u8> = read_array(&mut r, triangles).map_err(|_| bad())?;
             mesh.hidden = Some(flags.iter().map(|&flag| flag != 0).collect());
-        } else if tag == LVLS || tag == LAYR || tag == GRPS {
+        } else if tag == LVLS || tag == LAYR || tag == GRPS || tag == PNTL {
             // Read through a counter, so that a block this version cannot
             // make sense of is stepped over like any unknown one: the mesh
             // opens without its levels (or with its layers part of its
@@ -1383,6 +1407,9 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
                 } else if tag == LAYR {
                     mesh.layers = layers::read(&mut body, length, mesh.positions.len());
                     mesh.lost[1] = mesh.layers.is_none();
+                } else if tag == PNTL {
+                    mesh.paint = paint::read(&mut body, length, mesh.positions.len());
+                    mesh.lost[3] = mesh.paint.is_none();
                 } else {
                     mesh.groups = groups::read(&mut body, length, mesh.indices.len() / 3);
                     mesh.lost[2] = mesh.groups.is_none();

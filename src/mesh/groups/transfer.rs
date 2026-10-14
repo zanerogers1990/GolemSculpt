@@ -54,7 +54,7 @@ impl Fit {
     /// as on it, as a share of the new mesh's size. A rebuild drifts off the
     /// surface by about the size of its own triangles; a piece's triangles
     /// are the old ones, or cut from them, and lie in them exactly.
-    fn on_surface(self) -> f32 {
+    pub(crate) fn on_surface(self) -> f32 {
         match self {
             Fit::Whole => 0.02,
             Fit::Part => 0.002,
@@ -140,20 +140,72 @@ pub fn carry(new: &mut Mesh, sources: &[Source], fit: Fit) -> Carried {
 /// many of the centres lie on a source's surface.
 fn nearest_groups(new: &Mesh, sources: &[&Source], fit: Fit) -> (Vec<u16>, usize) {
     let within = (new.bounds().size().length() * fit.on_surface()).powi(2);
-    let back: Vec<Affine3A> = sources.iter().map(|s| s.place.inverse()).collect();
     let p = &new.positions;
-    let runs: Vec<(Vec<u16>, usize)> = new
+    let centres: Vec<Vec3> = new
         .indices
-        .par_chunks(RUN * 3)
+        .par_chunks_exact(3)
+        .with_min_len(RUN)
+        .map(|t| (p[t[0] as usize] + p[t[1] as usize] + p[t[2] as usize]) / 3.0)
+        .collect();
+    let found = nearest_points(&centres, sources);
+    let group = |n: &Nearest| match n.source {
+        Nearest::NONE => 0,
+        k => sources[k as usize].ids.get(n.tri as usize).copied().unwrap_or(0),
+    };
+    let on_surface = found.iter().filter(|n| n.apart <= within).count();
+    let ids = found.iter().map(|n| if n.apart <= within || fit == Fit::Whole { group(n) } else { 0 }).collect();
+    (ids, on_surface)
+}
+
+/// Where the surface of the sources nearest a point is: which source, which
+/// of its triangles, the point there (in the source's own space) and how far
+/// away it is (squared, measured in the new mesh's space).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Nearest {
+    /// Which of the sources; [`Nearest::NONE`] where none has a surface.
+    pub source: u32,
+    pub tri: u32,
+    pub at: Vec3,
+    pub apart: f32,
+}
+
+impl Nearest {
+    pub const NONE: u32 = u32::MAX;
+
+    /// The barycentric weights of `at` on its triangle of `mesh`.
+    pub fn bary(&self, mesh: &Mesh) -> [f32; 3] {
+        let i = self.tri as usize * 3;
+        let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[mesh.indices[i + k] as usize]);
+        let (v0, v1, v2) = (b - a, c - a, self.at - a);
+        let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
+        let den = d00 * d11 - d01 * d01;
+        if den.abs() < 1e-30 || !den.is_finite() {
+            return [1.0, 0.0, 0.0];
+        }
+        let v = ((d11 * d20 - d01 * d21) / den).clamp(0.0, 1.0);
+        let w = ((d00 * d21 - d01 * d20) / den).clamp(0.0, 1.0 - v);
+        [1.0 - v - w, v, w]
+    }
+}
+
+/// For each of `points` (in the new mesh's own space), the nearest point of
+/// the sources' surfaces: what face groups (by triangle centre) and paint (by
+/// vertex) are carried by. Points are taken in runs, in their own order, each
+/// search starting from the answer to the last; nearer than an earlier
+/// source's answer wins, and on a tie the earlier source does.
+pub(crate) fn nearest_points(points: &[Vec3], sources: &[&Source]) -> Vec<Nearest> {
+    let back: Vec<Affine3A> = sources.iter().map(|s| s.place.inverse()).collect();
+    let none = Nearest { source: Nearest::NONE, tri: 0, at: Vec3::ZERO, apart: f32::INFINITY };
+    let runs: Vec<Vec<Nearest>> = points
+        .par_chunks(RUN)
         .map(|run| {
             let mut last: Vec<Option<u32>> = vec![None; sources.len()];
-            let (mut ids, mut near) = (Vec::with_capacity(run.len() / 3), 0);
-            for t in run.chunks_exact(3) {
-                let centre = (p[t[0] as usize] + p[t[1] as usize] + p[t[2] as usize]) / 3.0;
+            let mut out = Vec::with_capacity(run.len());
+            for &point in run {
                 // The nearest of every source, compared in the new mesh's own space.
-                let mut best = (f32::INFINITY, 0u16);
+                let mut best = none;
                 for (k, source) in sources.iter().enumerate() {
-                    let q = source.placed(centre);
+                    let q = source.placed(point);
                     // No further than the last answer is from here, with room for rounding.
                     let reach =
                         last[k].map_or(f32::INFINITY, |t| source.nearest_on(t, q).distance_squared(q) * 1.001 + 1e-12);
@@ -164,31 +216,29 @@ fn nearest_groups(new: &Mesh, sources: &[&Source], fit: Fit) -> (Vec<u16>, usize
                         continue;
                     };
                     last[k] = Some(found);
-                    let (mut on, mut here) = (source.nearest_on(found, q), q);
+                    let at = source.nearest_on(found, q);
+                    let (mut on, mut here) = (at, q);
                     if source.place != Affine3A::IDENTITY {
                         // A source may be scaled: measure where the new mesh is.
                         (on, here) = (back[k].transform_point3(on), back[k].transform_point3(here));
                     }
                     let apart = on.distance_squared(here);
-                    if apart < best.0 {
-                        best = (apart, source.ids.get(found as usize).copied().unwrap_or(0));
+                    if apart < best.apart {
+                        best = Nearest { source: k as u32, tri: found, at, apart };
                     }
                 }
-                let on = best.0 <= within;
-                near += usize::from(on);
-                ids.push(if on || fit == Fit::Whole { best.1 } else { 0 });
+                out.push(best);
             }
-            (ids, near)
+            out
         })
         .collect();
-    let on_surface = runs.iter().map(|(_, near)| near).sum();
-    (runs.into_iter().flat_map(|(ids, _)| ids).collect(), on_surface)
+    runs.into_iter().flatten().collect()
 }
 
 /// A triangle whose three neighbours are all in one group that is not its
 /// own joins them. Worked out from the list as it stands, so the answer does
 /// not depend on the order the triangles are taken in.
-pub(super) fn tidy_specks(mesh: &Mesh, ids: &mut Vec<u16>) {
+pub(crate) fn tidy_specks(mesh: &Mesh, ids: &mut Vec<u16>) {
     let neighbours = edge_neighbours(mesh);
     let before = &*ids;
     let after: Vec<u16> = neighbours

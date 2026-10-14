@@ -115,13 +115,15 @@ impl Scene {
         let mask = mesh.mask.clone();
         // A copy's faces are the object's own, in the same order, so they are in the same face groups.
         let groups = mesh.group_ids().to_vec();
+        // And each vertex its own paint.
+        let paint = mesh.paint_stack().map(std::borrow::Cow::into_owned);
         // No normals to carry across: a mesh works its own out when it is built.
         let baked = repeater.bake(&mesh.positions, None, &mesh.indices, &source.placement());
 
         let mut made = Vec::with_capacity(baked.len());
         for bake in baked {
             let (points, corners) = (bake.geometry.positions, bake.geometry.indices);
-            let mesh = crate::mesh::groups::built_with(points, corners, Some(mask.clone()), &groups);
+            let mesh = crate::mesh::paint::built_with(points, corners, Some(mask.clone()), &groups, paint.as_ref());
             let name = self.unique_name(&format!("{} Mirror {}", source.name, bake.copy.axis_name()));
             let new = self.add(&name, mesh, slot);
             if let Some(object) = self.get_mut(new) {

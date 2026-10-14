@@ -66,6 +66,8 @@ pub struct Options {
     pub look: Look,
     /// The Face Groups card: whether group colours show, and the group picked (see ui/groups.rs).
     pub groups: crate::ui::groups::Card,
+    /// The scene's material palette for painting, kept in the file (see mesh/paint/palette.rs).
+    pub paint: crate::mesh::paint::palette::ScenePaint,
 }
 
 impl Default for Options {
@@ -101,6 +103,7 @@ impl Default for Options {
             gizmo_axes: Default::default(),
             look: Look::default(),
             groups: Default::default(),
+            paint: Default::default(),
         }
     }
 }

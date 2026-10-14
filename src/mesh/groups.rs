@@ -58,7 +58,10 @@ mod transfer;
 mod tests;
 
 pub use make::{Made, by_angle, masked, merged, parts, visible};
-pub use transfer::{Carried, Fit, Source, carry, copies, kept_apart};
+pub use transfer::{Carried, Fit, Nearest, Source, carry, copies, kept_apart};
+pub(crate) use transfer::nearest_points;
+#[cfg(test)]
+pub(crate) use transfer::tidy_specks;
 
 /// The most groups a mesh can have: every number a `u16` can hold but 0.
 pub const MOST_GROUPS: usize = u16::MAX as usize;

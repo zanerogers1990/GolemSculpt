@@ -587,6 +587,9 @@ pub fn sound(meshes: &[&Mesh]) -> Result<(), String> {
         if mesh.indices.par_iter().any(|&corner| corner as usize >= verts) {
             return Err(format!("mesh {number} has a triangle on a vertex it does not have"));
         }
+        if let Err(why) = mesh.paint_sound() {
+            return Err(format!("mesh {number}'s paint {why}"));
+        }
     }
     Ok(())
 }
@@ -626,6 +629,11 @@ pub fn fingerprint(meshes: &[&Mesh], objects: &[SavedObject]) -> u64 {
             })
             .reduce(|| 0, u64::wrapping_add);
         total = total.wrapping_add(mix(verts ^ mix(tris)));
+        // Its paint, by place as the rest is; nothing at all for a mesh without.
+        let paint = mesh.paint_print_by_place();
+        if paint != 0 {
+            total = mix(total ^ paint);
+        }
     }
     for (row, o) in objects.iter().enumerate() {
         let (position, rotation, scale) = (o.position.to_array(), o.rotation.to_array(), o.scale.to_array());
