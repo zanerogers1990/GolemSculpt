@@ -121,9 +121,9 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
             p.circle_filled(center, 52.0, Color32::from_black_alpha(102));
         }
         if response.dragged() {
-            // Same feel as orbiting in the viewport.
+            // Same feel as orbiting in the viewport, and about the model as there.
             let d = response.drag_delta() * ui.ctx().pixels_per_point();
-            doc.camera.orbit(glam::Vec2::new(d.x, d.y), None);
+            actions.push(Action::Turn { by: [d.x, d.y], begins: response.drag_started() });
         }
 
         let inv = doc.camera.rotation().inverse();

@@ -24,24 +24,32 @@
 use sculpt_symmetry::{Axis, ops};
 
 use super::Running;
+#[cfg(test)]
+use super::symmetry_repair::DEFAULT_TOLERANCE;
+use super::symmetry_repair::tolerance_scale;
 use crate::mesh::Mesh;
 use crate::printable::Cure;
-
-/// How far off the plane a vertex may sit and still be taken as on it, as a
-/// multiple of the default: the Unity app's Match Tolerance slider where it
-/// starts. One is half a triangle's width, about.
-const TOLERANCE_SCALE: f32 = 1.0;
 
 /// `mesh` cut at its own `axis` plane and rebuilt as the side that is kept
 /// and its mirror image: the positive side when `from_positive`. Returns the
 /// new mesh, with the mask carried across, and the line that says what was
 /// done; or why nothing was.
-pub(crate) fn cut_and_mirrored(mesh: &Mesh, axis: Axis, from_positive: bool) -> Result<(Mesh, String), String> {
+///
+/// `tolerance_scale` is the card's Match Tolerance: here, how far off the
+/// plane a vertex may sit and still be taken as on it, so that the slider
+/// means one thing to every button under it. One is half a triangle's
+/// width, about.
+pub(crate) fn cut_and_mirrored_at(
+    mesh: &Mesh,
+    axis: Axis,
+    tolerance_scale: f32,
+    from_positive: bool,
+) -> Result<(Mesh, String), String> {
     if mesh.triangle_count() == 0 {
         return Err("Nothing to cut and mirror.".into());
     }
     let built =
-        ops::mirror_and_weld(&mesh.positions, &mesh.indices, Some(&mesh.mask), axis, TOLERANCE_SCALE, from_positive)?;
+        ops::mirror_and_weld(&mesh.positions, &mesh.indices, Some(&mesh.mask), axis, tolerance_scale, from_positive)?;
     let mut text = format!("{}.", built.message());
     if mesh.any_hidden() {
         text += " Its hidden parts were cut with the rest, and everything is showing again.";
@@ -52,11 +60,20 @@ pub(crate) fn cut_and_mirrored(mesh: &Mesh, axis: Axis, from_positive: bool) -> 
     Ok((cut, text))
 }
 
+/// [`cut_and_mirrored_at`] with Match Tolerance where the slider starts: what
+/// the checks of other parts of the app cut their models with.
+#[cfg(test)]
+pub(crate) fn cut_and_mirrored(mesh: &Mesh, axis: Axis, from_positive: bool) -> Result<(Mesh, String), String> {
+    cut_and_mirrored_at(mesh, axis, DEFAULT_TOLERANCE, from_positive)
+}
+
 impl Running {
     /// The Cut & Mirror buttons: rebuilds the selected object as one side of
-    /// its own `axis` plane and that side's mirror image. One undo step.
+    /// its own `axis` plane and that side's mirror image, at the card's Match
+    /// Tolerance. One undo step.
     pub(super) fn cut_and_mirror(&mut self, axis: Axis, from_positive: bool) {
-        match cut_and_mirrored(&self.doc.mesh, axis, from_positive) {
+        let tolerance = tolerance_scale(self.doc.opts.symmetry_tolerance);
+        match cut_and_mirrored_at(&self.doc.mesh, axis, tolerance, from_positive) {
             Ok((mesh, text)) => {
                 self.replace_mesh(mesh, true);
                 self.toast("Cut & Mirror");
@@ -111,6 +128,22 @@ mod tests {
             let (from, to) = if from_positive { ("+X", "-X") } else { ("-X", "+X") };
             assert!(text.starts_with(&format!("Cut & mirrored {from} onto {to}: kept ")), "{text}");
             assert!(text.ends_with(&format!("now {} vertices.", cut.vertex_count())), "{text}");
+        }
+    }
+
+    /// Match Tolerance is how wide the band is that counts as the plane: a
+    /// wider one takes more of the model's own vertices for the seam, where a
+    /// narrow one cuts new ones beside them.
+    #[test]
+    fn match_tolerance_reaches_the_cut() {
+        let model = lopsided();
+        let vertices = |scale: f32| cut_and_mirrored_at(&model, Axis::X, scale, true).unwrap().0.vertex_count();
+        let (tight, usual, loose) = (vertices(0.25), vertices(DEFAULT_TOLERANCE), vertices(8.0));
+        assert!(tight > loose, "{tight} vertices at the tight end, {loose} at the loose end");
+        assert_eq!(usual, cut_and_mirrored(&model, Axis::X, true).unwrap().0.vertex_count());
+        for scale in [0.25, 8.0] {
+            let (cut, text) = cut_and_mirrored_at(&model, Axis::X, scale, true).unwrap();
+            assert!(printable::census(&cut).is_closed(), "x{scale}: {text}");
         }
     }
 

@@ -61,8 +61,10 @@ mod recovery;
 mod selection;
 mod spheres;
 mod symmetry;
+pub(crate) mod symmetry_repair;
 pub(crate) mod tools;
 mod transform;
+mod turn;
 mod undo;
 mod ui_demo;
 mod unity;
@@ -238,6 +240,8 @@ struct Input {
     hover: Option<Vec3>,
     /// Keys that went down and have not come up, so a lost focus can let go of them (app/focus.rs).
     held: Vec<KeyCode>,
+    /// The point on the model the turn of the view under way goes about (app/turn.rs).
+    turn_about: Option<Vec3>,
 }
 
 struct Running {
@@ -553,6 +557,7 @@ impl Running {
                 gauge: None,
                 hover: None,
                 held: Vec::new(),
+                turn_about: None,
             },
             view,
             local: view,
@@ -835,10 +840,7 @@ impl Running {
             return;
         }
         match self.input.drag {
-            Drag::Orbit => {
-                let anchor = self.anchor();
-                self.doc.camera.orbit(delta, anchor);
-            }
+            Drag::Orbit => self.turn_by(delta),
             Drag::Pan => {
                 let wpp = self.view.world_per_pixel(self.view_depth);
                 self.doc.camera.pan(delta, wpp);
@@ -938,7 +940,7 @@ impl Running {
             _ => Drag::Ui,
         };
         if matches!(self.input.drag, Drag::Orbit | Drag::Pan | Drag::Zoom) {
-            self.doc.camera.cancel_glide();
+            self.navigation_began();
         }
     }
 
@@ -1331,6 +1333,10 @@ impl Running {
                 }
             }
             Action::CutAndMirror { axis, from_positive } => self.cut_and_mirror(axis, from_positive),
+            // The rest of the Symmetry card's repairs are in app/symmetry_repair.rs.
+            Action::CheckSymmetry { axis } => self.check_symmetry(axis),
+            Action::MakeSymmetric { axis, from_positive } => self.make_symmetric(axis, from_positive),
+            Action::SymmetryCleanup { axis } => self.symmetry_cleanup(axis),
             // Subdivision levels are in app/levels.rs.
             Action::Subdivide => self.subdivide(),
             Action::Level(level) => self.level_to(level),
@@ -1413,10 +1419,8 @@ impl Running {
                 hdri.status = "No HDRI loaded.".into();
             }
             Action::Frame => self.frame_view(),
-            Action::Snap(yaw, pitch) => {
-                self.doc.camera.ortho = true;
-                self.doc.camera.snap_to(yaw, pitch);
-            }
+            Action::Snap(yaw, pitch) => self.snap_view(yaw, pitch),
+            Action::Turn { by, begins } => self.turn_from_gizmo(Vec2::from_array(by), begins),
             Action::Tool(tool) => self.set_tool(tool),
             Action::ResetTransform => self.reset_transform(),
             Action::SetOriginToMesh => self.set_origin_to_mesh(),

@@ -24,6 +24,11 @@ fn delta_angle(from: f32, to: f32) -> f32 {
     if d > 180.0 { d - 360.0 } else { d }
 }
 
+/// The camera's turn for a yaw and a pitch in degrees.
+fn rotation_of(yaw: f32, pitch: f32) -> Quat {
+    Quat::from_rotation_y(-yaw.to_radians()) * Quat::from_rotation_x(-pitch.to_radians())
+}
+
 // The projections use reverse depth (near plane = 1, far = 0) with a float
 // depth buffer, which keeps precision even when zoomed right into a surface.
 
@@ -63,6 +68,8 @@ struct Snap {
     from: (f32, f32),
     to: (f32, f32),
     t: f32,
+    /// The point the turn goes about, when that is not the pivot.
+    about: Option<Vec3>,
 }
 
 struct Glide {
@@ -203,7 +210,7 @@ impl Default for Camera {
 
 impl Camera {
     pub fn rotation(&self) -> Quat {
-        Quat::from_rotation_y(-self.yaw.to_radians()) * Quat::from_rotation_x(-self.pitch.to_radians())
+        rotation_of(self.yaw, self.pitch)
     }
 
     pub fn position(&self) -> Vec3 {
@@ -266,18 +273,52 @@ impl Camera {
         (0.05 * s, 20.0 * s, 0.001 * s)
     }
 
+    /// Where the pivot goes when the view turns to `yaw` and `pitch` about
+    /// `about`: round that point by the same turn, so the point stays on its
+    /// pixel. With no such point the turn is about the pivot, which stays.
+    fn pivot_turned(&self, yaw: f32, pitch: f32, about: Option<Vec3>) -> Vec3 {
+        let Some(about) = about else { return self.pivot };
+        about + rotation_of(yaw, pitch) * self.rotation().inverse() * (self.pivot - about)
+    }
+
+    fn turn_to(&mut self, yaw: f32, pitch: f32, about: Option<Vec3>) {
+        self.pivot = self.pivot_turned(yaw, pitch, about);
+        (self.yaw, self.pitch) = (yaw, pitch);
+    }
+
     /// Orbits by a pixel delta. With an anchor, the anchor point stays on its
     /// pixel instead of the pivot.
     pub fn orbit(&mut self, delta: Vec2, anchor: Option<Vec3>) {
         self.snap = None;
         self.glide = None;
-        let old = self.rotation();
-        self.yaw += delta.x * ORBIT_DEG_PER_PX;
-        self.pitch = (self.pitch + delta.y * ORBIT_DEG_PER_PX).clamp(-89.0, 89.0);
-        if let Some(anchor) = anchor {
-            let delta_rot = self.rotation() * old.inverse();
-            self.pivot = anchor + delta_rot * (self.pivot - anchor);
+        let yaw = self.yaw + delta.x * ORBIT_DEG_PER_PX;
+        let pitch = (self.pitch + delta.y * ORBIT_DEG_PER_PX).clamp(-89.0, 89.0);
+        self.turn_to(yaw, pitch, anchor);
+    }
+
+    /// Moves the pivot along the line of sight until it is level with `at`,
+    /// which changes nothing in the picture. The pivot is only where the
+    /// last pan, zoom or anchored turn left it, and that can be well in front
+    /// of the model or behind it; a turn about it, or a switch to
+    /// orthographic (which shows at their true size the things level with
+    /// it), then throws the model out of view. Called with a point on the
+    /// model before either.
+    pub fn seat_pivot(&mut self, at: Vec3) {
+        let forward = self.rotation() * Vec3::NEG_Z;
+        let shift = (at - self.pivot).dot(forward);
+        if !shift.is_finite() {
+            return;
         }
+        if !self.ortho {
+            // The eye stays where it is, so the distance takes up the move.
+            // A point behind the eye is not one to look at.
+            let distance = self.distance + shift;
+            if distance < 1e-5 {
+                return;
+            }
+            self.distance = distance;
+        }
+        self.pivot += forward * shift;
     }
 
     /// Grab-style pan: the surface under the cursor follows it 1:1.
@@ -358,9 +399,16 @@ impl Camera {
         self.glide = Some(Glide { from: (self.pivot, self.distance), to: (pivot, distance.max(1e-5)), t: 0.0 });
     }
 
-    /// Animated turn to an exact yaw/pitch (axis views).
-    pub fn snap_to(&mut self, yaw: f32, pitch: f32) {
-        self.snap = Some(Snap { from: (self.yaw, self.pitch), to: (yaw, pitch), t: 0.0 });
+    /// Animated turn to an exact yaw/pitch (axis views), about `about` if
+    /// there is one (see [`Self::orbit`]) and else about the pivot.
+    pub fn snap_to(&mut self, yaw: f32, pitch: f32, about: Option<Vec3>) {
+        self.snap = Some(Snap { from: (self.yaw, self.pitch), to: (yaw, pitch), t: 0.0, about });
+    }
+
+    /// True in the instant between a glide being asked for and its first
+    /// step: the press that asked for it is still being handled.
+    pub fn glide_is_new(&self) -> bool {
+        self.glide.as_ref().is_some_and(|glide| glide.t == 0.0)
     }
 
     pub fn cancel_glide(&mut self) {
@@ -385,15 +433,15 @@ impl Camera {
 
     /// Advances animations. Returns true while something is still moving.
     pub fn update(&mut self, dt: f32) -> bool {
-        if let Some(snap) = &mut self.snap {
+        if let Some(mut snap) = self.snap.take() {
             snap.t += dt / SNAP_SECONDS;
             let k = smoothstep(snap.t);
-            self.yaw = snap.from.0 + delta_angle(snap.from.0, snap.to.0) * k;
-            self.pitch = snap.from.1 + (snap.to.1 - snap.from.1) * k;
             if snap.t >= 1.0 {
-                self.yaw = snap.to.0.rem_euclid(360.0);
-                self.pitch = snap.to.1;
-                self.snap = None;
+                self.turn_to(snap.to.0.rem_euclid(360.0), snap.to.1, snap.about);
+            } else {
+                let yaw = snap.from.0 + delta_angle(snap.from.0, snap.to.0) * k;
+                self.turn_to(yaw, snap.from.1 + (snap.to.1 - snap.from.1) * k, snap.about);
+                self.snap = Some(snap);
             }
         }
         if let Some(glide) = &mut self.glide {
@@ -436,7 +484,9 @@ impl Camera {
     /// where it is going, not the point it happens to have reached.
     pub fn saved_view(&self) -> SavedView {
         let (yaw, pitch) = self.snap.as_ref().map_or((self.yaw, self.pitch), |snap| snap.to);
-        let (pivot, distance) = self.glide.as_ref().map_or((self.pivot, self.distance), |glide| glide.to);
+        let about = self.snap.as_ref().and_then(|snap| snap.about);
+        let turned = (self.pivot_turned(yaw, pitch, about), self.distance);
+        let (pivot, distance) = self.glide.as_ref().map_or(turned, |glide| glide.to);
         SavedView { yaw, pitch, distance, pivot: pivot.to_array(), ortho: self.ortho, fov_y: self.fov_y }
     }
 

@@ -9,7 +9,7 @@
 
 use egui::{Color32, vec2};
 use glam::Vec3;
-use sculpt_symmetry::Axis;
+use sculpt_symmetry::{Axis, ops};
 
 use super::theme::{self, ACCENT, ButtonStyle};
 use super::tip;
@@ -60,7 +60,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
         radial(ui, &mut symmetry.radial, symmetry.space, tips, down_the_view);
         let guides = theme::checkbox(ui, &mut doc.opts.symmetry_guides, "Show Symmetry Guides", ACCENT());
         tip(guides, tips, "Draws the selected object's mirror planes and radial sectors on it.");
-        cut_and_mirror(ui, before.space, tips, actions);
+        repair(ui, before.space, &mut doc.opts.symmetry_tolerance, tips, actions);
     });
     if symmetry != before {
         doc.scene.set_symmetry(doc.scene.active_id(), symmetry);
@@ -163,14 +163,22 @@ fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, whose: &str, tips: bo
     });
 }
 
-/// Cut & Mirror: the plane to cut at, and a button for each side that can be
-/// the one kept. The repair for a model whose two sides no longer match.
+/// Symmetry Repair, laid out as the Unity app's panel of that name is: the
+/// plane, Match Tolerance, Check Symmetry, then the two ways of making one
+/// side the mirror image of the other, and Symmetry Cleanup. For a model
+/// whose two sides no longer match.
+///
+/// Make Symmetric stands above Cut & Mirror because it is the one to try
+/// first: it only moves vertices, so the triangles, the mask and the levels
+/// are all as they were. It is also the one that can refuse, and its refusal
+/// names the row under it.
 ///
 /// The plane chosen is the card's own and no object's (the Unity app's
 /// Symmetry Plane): it starts at X and is not kept between runs.
-fn cut_and_mirror(ui: &mut egui::Ui, space: Space, tips: bool, actions: &mut Vec<Action>) {
-    theme::heading(ui, "Cut & Mirror");
-    theme::hint(ui, "Throws one side of the selected object away and rebuilds it as the mirror image of the other.");
+fn repair(ui: &mut egui::Ui, space: Space, tolerance: &mut f32, tips: bool, actions: &mut Vec<Action>) {
+    theme::heading(ui, "Symmetry Repair");
+    theme::hint(ui, "For a selected object whose two sides no longer match.");
+    theme::hint(ui, "Symmetry Plane");
     let id = egui::Id::new("cut_and_mirror_axis");
     let mut axis = ui.data(|d| d.get_temp::<usize>(id)).and_then(Axis::from_index).unwrap_or(Axis::X);
     ui.horizontal(|ui| {
@@ -179,7 +187,8 @@ fn cut_and_mirror(ui: &mut egui::Ui, space: Space, tips: bool, actions: &mut Vec
             let active = (axis == choice).then_some(theme::AXIS[choice.index()]);
             let style = ButtonStyle { active, ..Default::default() };
             let help = format!(
-                "Cut at the object's own {} plane: the one Mirror {} sculpts across in Local space.",
+                "The buttons below work across the object's own {} plane: the one Mirror {} sculpts across in Local \
+                 space.",
                 choice.name(),
                 choice.name()
             );
@@ -189,28 +198,99 @@ fn cut_and_mirror(ui: &mut egui::Ui, space: Space, tips: bool, actions: &mut Vec
         }
     });
     ui.data_mut(|d| d.insert_temp(id, axis.index()));
-    ui.horizontal(|ui| {
-        let w = theme::row_width(ui, 2, 6.0);
-        for from_positive in [true, false] {
-            let (kept, rebuilt) = cut_sides(axis, from_positive);
-            let help = format!(
-                "Keeps the {kept} side of the selected object and rebuilds its {rebuilt} side as the exact mirror \
-                 image of it, across the object's own {} plane. What was on the {rebuilt} side is thrown away. The \
-                 mask comes across; hidden parts are cut too and show again. One undo step (Z).",
-                axis.name()
-            );
-            let label = format!("{kept} to {rebuilt}");
-            if tip(theme::button(ui, w, &label, ButtonStyle::default()), tips, &help).clicked() {
-                actions.push(Action::CutAndMirror { axis, from_positive });
-            }
-        }
+
+    match_tolerance(ui, tolerance, tips);
+    let check = theme::button(ui, ui.available_width(), "Check Symmetry", ButtonStyle::default());
+    let help = "Says on the status line how many of the selected object's vertices pair up across the plane, and how \
+                many have no partner. Changes nothing.";
+    if tip(check, tips, help).clicked() {
+        actions.push(Action::CheckSymmetry { axis });
+    }
+
+    theme::heading(ui, "Make Symmetric");
+    theme::hint(ui, "Moves one side onto the mirror image of the other. Keeps every triangle and what is masked.");
+    let make = |from_positive| Action::MakeSymmetric { axis, from_positive };
+    side_buttons(ui, axis, tips, actions, make, |copied, moved| {
+        format!(
+            "Moves the {moved} side's vertices onto the mirror image of the {copied} side, each onto its own partner \
+             across the object's own {} plane. No triangle changes. With a mask painted only the unmasked part \
+             moves. Where too much of the model has no partner nothing is changed and the status line says so: \
+             Cut & Mirror is for that. One undo step (Z).",
+            axis.name()
+        )
     });
+
+    theme::heading(ui, "Cut & Mirror");
+    theme::hint(ui, "Throws one side of the selected object away and rebuilds it as the mirror image of the other.");
+    let cut = |from_positive| Action::CutAndMirror { axis, from_positive };
+    side_buttons(ui, axis, tips, actions, cut, |kept, rebuilt| {
+        format!(
+            "Keeps the {kept} side of the selected object and rebuilds its {rebuilt} side as the exact mirror \
+             image of it, across the object's own {} plane. What was on the {rebuilt} side is thrown away. The \
+             mask comes across; hidden parts are cut too and show again. One undo step (Z).",
+            axis.name()
+        )
+    });
+
+    ui.add_space(4.0);
+    let cleanup = theme::button(ui, ui.available_width(), "Symmetry Cleanup", ButtonStyle::default());
+    let help = "Puts the vertices that sit close to the plane exactly on it, and merges the doubled ones that leaves: \
+                two halves joined along the plane become one surface. Neither side is moved as a whole. One undo \
+                step (Z).";
+    if tip(cleanup, tips, help).clicked() {
+        actions.push(Action::SymmetryCleanup { axis });
+    }
     if space == Space::World {
-        theme::hint(ui, "This cuts at the object's own plane, not the world's.");
+        theme::hint(ui, "These work across the object's own plane, not the world's.");
     }
 }
 
-/// The side Cut & Mirror keeps and the side it rebuilds, as the buttons name
+/// The Match Tolerance slider. Equal travel doubles the tolerance, so the
+/// setting it starts at sits where there is room to go either way.
+fn match_tolerance(ui: &mut egui::Ui, tolerance: &mut f32, tips: bool) {
+    let range = ops::MIN_TOLERANCE_SCALE..=ops::MAX_TOLERANCE_SCALE;
+    let mut log = tolerance.clamp(*range.start(), *range.end()).log2();
+    let ends = range.start().log2()..=range.end().log2();
+    let slider = theme::slider(ui, "Match Tolerance", &mut log, ends, |v| tolerance_text(v.exp2()));
+    let help = "How far apart two vertices may be and still count as a mirrored pair, from tight to loose. Widen it \
+                if halves that were built separately are not matching up. For Cut & Mirror it is how near the plane \
+                a vertex must be to be kept as part of the seam.";
+    if tip(slider, tips, help).changed() {
+        *tolerance = log.exp2().clamp(*range.start(), *range.end());
+    }
+}
+
+/// Match Tolerance as the slider shows it: a multiple of the tolerance the
+/// mesh itself suggests, to two decimals without trailing zeros.
+fn tolerance_text(scale: f32) -> String {
+    let text = format!("{scale:.2}");
+    format!("{}x", text.trim_end_matches('0').trim_end_matches('.'))
+}
+
+/// A button for each side of the plane that can be the one a repair copies:
+/// "+X to -X" and "-X to +X". `help` is given the side copied and the side
+/// changed, in that order.
+fn side_buttons(
+    ui: &mut egui::Ui,
+    axis: Axis,
+    tips: bool,
+    actions: &mut Vec<Action>,
+    action: impl Fn(bool) -> Action,
+    help: impl Fn(&str, &str) -> String,
+) {
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 2, 6.0);
+        for from_positive in [true, false] {
+            let (from, to) = cut_sides(axis, from_positive);
+            let label = format!("{from} to {to}");
+            if tip(theme::button(ui, w, &label, ButtonStyle::default()), tips, &help(&from, &to)).clicked() {
+                actions.push(action(from_positive));
+            }
+        }
+    });
+}
+
+/// The side a repair copies and the side it changes, as the buttons name
 /// them: "+X" and "-X".
 fn cut_sides(axis: Axis, from_positive: bool) -> (String, String) {
     let (plus, minus) = (format!("+{}", axis.name()), format!("-{}", axis.name()));
@@ -254,6 +334,15 @@ mod tests {
     fn the_cut_and_mirror_buttons_name_the_side_kept_first() {
         assert_eq!(cut_sides(Axis::X, true), ("+X".to_owned(), "-X".to_owned()));
         assert_eq!(cut_sides(Axis::Z, false), ("-Z".to_owned(), "+Z".to_owned()));
+    }
+
+    #[test]
+    fn match_tolerance_reads_as_a_multiple_without_trailing_zeros() {
+        assert_eq!(tolerance_text(1.0), "1x");
+        assert_eq!(tolerance_text(ops::MIN_TOLERANCE_SCALE), "0.25x");
+        assert_eq!(tolerance_text(ops::MAX_TOLERANCE_SCALE), "8x");
+        assert_eq!(tolerance_text(2.828_427), "2.83x");
+        assert_eq!(tolerance_text(0.5), "0.5x");
     }
 
     #[test]

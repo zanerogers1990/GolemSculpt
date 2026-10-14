@@ -34,12 +34,18 @@
 //! | --- | --- |
 //! | Drag (anywhere on the viewport) | Draw the shape; it acts on release |
 //! | Ctrl, or drag with the right button | Reverse: unmask; show; trim keeps the covered part |
-//! | Shift | Box, lasso: act on everything outside. Line: turn in 15 degree steps |
+//! | Shift | Box, lasso: act on everything outside. Line: snap (or, with Snap ticked, do not) |
 //! | Click | Mask: clear the mask. Hide: show everything |
 //! | Esc | Cancel the drag in progress, else put the tool away |
 //! | N / K | Next shape, and after the last put the tool away |
 //! | Space (hold) | Shape wheel |
 //! | 1 - 9 | Back to sculpting |
+//!
+//! A snapping line (the panel's Snap tick, or Shift) is for a cut that has to
+//! be exact: it turns in steps of 15 degrees and, where it passes close to
+//! the middle of the selected object or to its origin, is moved sideways to
+//! go exactly through it. Both points are marked while Snap is on, and the
+//! line's angle is read off beside it.
 //!
 //! The one place these differ from the rest of the app: with a region tool
 //! up, a drag on empty background draws a region instead of orbiting,

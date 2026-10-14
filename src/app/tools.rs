@@ -1156,6 +1156,9 @@ impl Running {
         if what == "focus" {
             return self.focus_demo(index);
         }
+        if what == "turn" {
+            return self.turn_demo();
+        }
         if self.demo_with_array(index, id, what) {
             return;
         }

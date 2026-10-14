@@ -27,6 +27,10 @@ pub struct Options {
     pub background: [f32; 3],
     pub background_top: [f32; 3],
     pub symmetry_guides: bool,
+    /// The Symmetry card's Match Tolerance: how far apart two vertices may be
+    /// and still count as a mirrored pair, as a multiple of what the mesh
+    /// itself suggests (see app/symmetry_repair.rs). Not kept between runs.
+    pub symmetry_tolerance: f32,
     /// Orbit and zoom around the last sculpted point.
     pub stroke_pivot: bool,
     pub tooltips: bool,
@@ -76,6 +80,7 @@ impl Default for Options {
             background: [0.10, 0.11, 0.14],
             background_top: [0.35, 0.42, 0.55],
             symmetry_guides: true,
+            symmetry_tolerance: crate::app::symmetry_repair::DEFAULT_TOLERANCE,
             stroke_pivot: true,
             tooltips: true,
             ui_scale: 1.0,
@@ -306,6 +311,16 @@ pub enum Action {
     /// side as the mirror image of the side kept: the positive side when
     /// `from_positive` (see app/cut_mirror.rs).
     CutAndMirror { axis: sculpt_symmetry::Axis, from_positive: bool },
+    /// Say on the status line how much of the active object pairs up across
+    /// one of its own planes. Changes nothing (see app/symmetry_repair.rs).
+    CheckSymmetry { axis: sculpt_symmetry::Axis },
+    /// Move one side of the active object onto the mirror image of the
+    /// other, vertex for vertex: the positive side is the one copied when
+    /// `from_positive`. Refused, in words, where that would tear the model.
+    MakeSymmetric { axis: sculpt_symmetry::Axis, from_positive: bool },
+    /// Put the active object's near-centreline vertices exactly on the plane
+    /// and merge the doubled ones a seam of two joined halves leaves there.
+    SymmetryCleanup { axis: sculpt_symmetry::Axis },
     Mask(MaskOp),
     /// Mask the active object's recesses or its peaks, this much of them
     /// (0 to 1): a mask made from the surface's own shape (sculpt/cavity.rs).
@@ -336,6 +351,9 @@ pub enum Action {
     Frame,
     /// Turn to an axis view (yaw, pitch in degrees) and switch to orthographic.
     Snap(f32, f32),
+    /// Turn the view by a drag of this many pixels on the view gizmo;
+    /// `begins` on the first of each drag (see app/turn.rs).
+    Turn { by: [f32; 2], begins: bool },
     Tool(Tool),
     /// Put the active object's turn and size back to none.
     ResetTransform,

@@ -496,12 +496,49 @@ across Z keeps both, with nothing to re-tick on the way from one to the other.
   as a tick that did not work. (The Unity app drew every object's planes at
   once; here only the selected object's guides are drawn.)
 
-**Cut & Mirror**, at the foot of the Symmetry card, is the repair for a model
-whose two sides no longer match: one sculpted with the mirror off, joined
-from odd parts, or imported lopsided. Pick the plane (**X**, **Y** or **Z**),
-then press **+X to -X** or **-X to +X**. The side named first is kept, the
-other is thrown away, and the model is rebuilt as the kept side and its exact
-mirror image, the two joined along one row of points on the plane.
+**Symmetry Repair**, at the foot of the Symmetry card, is for a model whose
+two sides no longer match: one sculpted with the mirror off, joined from odd
+parts, or imported lopsided. It is the Unity app's panel of that name. Pick
+the **Symmetry Plane** (**X**, **Y** or **Z**) and the buttons under it work
+across that plane of the selected object:
+
+- **Check Symmetry** changes nothing and says on the status line how the
+  two sides compare: how many vertices pair up across the plane, how many
+  sit on it, and how many have no partner. Pairing up is not the same as
+  matching: a model with a lump on one side pairs up perfectly, so the line
+  goes on to say how many pairs are not mirror images of each other and how
+  far out the worst is, or that every pair is. It ends with the button that
+  helps. It is worked out when pressed, not kept up to date: every stroke
+  would make it stale.
+- **Make Symmetric** (**+X to -X**, **-X to +X**) moves the vertices of the
+  side named second onto the mirror image of the side named first, each onto
+  its own partner. No triangle changes, so the mask, the face groups and the
+  subdivision levels are all as they were, and it is recorded as an ordinary
+  stroke: one undo step, taken by a sculpt layer that is recording as a
+  brush stroke would be. With a mask painted only the
+  unmasked part moves. Hidden vertices are left where they are, as by a
+  brush, and the line says how many. Where more than a twentieth of the
+  model has no partner it changes nothing and says why ("Too asymmetric to
+  match up ... use Cut & Mirror +X to -X instead"): moving the half that
+  pairs and leaving the half that does not would tear the surface.
+- **Cut & Mirror** (below) is the one that always works.
+- **Symmetry Cleanup** puts the vertices that sit close to the plane exactly
+  on it, and merges the doubled ones that leaves: two halves joined along
+  the plane and never welded become one closed surface. Where nothing needed
+  merging it is a stroke like Make Symmetric; where vertices were merged it
+  is a new mesh, as after Cut & Mirror. One undo step either way, and none
+  when the model was clean already.
+- **Match Tolerance** is how far apart two vertices may be and still count
+  as a pair, from a quarter of what the mesh itself suggests to eight times
+  it (the slider reads `1x` where it starts). Widen it when halves that were
+  built separately will not pair. For Cut & Mirror it is how near the plane a
+  vertex must be to be kept as part of the seam. It belongs to the card, not
+  to an object, and starts at `1x` on every run.
+
+**Cut & Mirror** keeps one side and throws the other away. Press **+X to -X**
+or **-X to +X**: the side named first is kept, and the model is rebuilt as
+the kept side and its exact mirror image, the two joined along one row of
+points on the plane.
 
 - The plane is the object's own, through its own centre along its own axes:
   the one a Local mirror sculpts across. That is so whatever Symmetry space
@@ -2456,11 +2493,10 @@ Ported from the Unity app, each described in its own section above:
 A quad remesh ignores symmetry. A remesh, a join, a boolean and a tube merge
 each start with a clear mask and everything showing.
 
-Of the Unity app's Symmetry Repair panel only Cut & Mirror has buttons (see
-Symmetry). Check Symmetry, Match Up and Symmetry Cleanup are ported and
-tested (`crates/symmetry/src/ops.rs`) and no button reaches them yet, nor is
-there a Match Tolerance slider: Cut & Mirror uses the setting that slider
-starts at.
+The Unity app's Symmetry Repair panel is all here, at the foot of the
+Symmetry card (see Symmetry). Its Match Up row is called Make Symmetric, the
+name the status lines use. Check Symmetry says one thing more than the Unity
+app's did: whether the pairs it counts are mirror images of each other.
 
 SSpheres, unmerged tubes, rulers, planned keys and the lathe's outline are
 scaffolds: they are not kept in `.sclp` files or in recovery copies, so make
@@ -2481,6 +2517,7 @@ cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic 
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --screenshot out.png --size 1600x960 --demo   # scripted strokes (SCULPT_DEMO_BRUSH=focal=-0.8,curve=plateau,fixed sets the brushes up first; spacing=150, scatter=50 and jitter=40 set every brush's Spacing, Scatter and Size Jitter in percent, and alpha=scales+random180 an alpha with Random Rotation)
 SCULPT_DEMO_BRUSH=radial=6,axis=z,mirror=off sculpt.exe --screenshot out.png --demo   # the same strokes six times round Z, seen down the axis (axis=x | y | z; leave mirror=off out for Mirror X as well; space=world fixes the symmetry in the world; radial= also works with --demo-mirror and --demo-dyntopo)
+SCULPT_DEMO_SYMMETRY=repair sculpt.exe --screenshot out.png --demo-symmetry --demo-ui "float=Symmetry@640:20"   # Check Symmetry, Make Symmetric and Symmetry Cleanup pressed in turn on a model made lopsided for them, each undone and redone; prints the status lines and a line per check (ok / FAIL)
 sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut presses Cut & Mirror on a copy of a lumpy model, then Undo and Redo, and shows the model before and after in wireframe, printing the status line and a line per check, and cut:alone shows the result by itself (add --demo-ui "float=Symmetry@640:20" to see the whole card, buttons and all); corner presses Layer once where Mirror X and Y cross and once clear of the crossing, seen from the side, where both steps should be one height, and corner:front shows the same from where the dabs were made; even draws five short strokes down a ball with Mirror X, on the plane, 0.2, 0.4 and 0.75 of a brush radius from it and well clear of it, which should all stand as tall with no hard line down the middle, and even:clay or even:inflate:0.3 draws them with that brush at that strength)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo --decimate 8000 --look "wire=on"   # the scripted sculpt decimated to that many triangles by the routine under the Decimate button (it waits for the job), status line printed; add --demo-ui "float=Remesh@440:20" to see the card
@@ -2501,6 +2538,7 @@ sculpt.exe --screenshot out.png --demo-tool hide:array    # a shape drawn over o
 sculpt.exe --screenshot out.png --demo-tool array:point   # the gizmo's arrows on the end point of the path; array:arrows drags them sideways, array:start puts them on the square start point and drags that; array:arrow drags an arrow with the pointer and Z, printing a line per check
 sculpt.exe --demo-tool array:stroke                       # brush strokes begun on an array's copies by way of the pointer routines; prints a line per check (ok / FAIL), add --screenshot out.png to see the result
 sculpt.exe --demo-tool measure:focus                    # a stroke, a camera drag and a tool's drag cut off by the window losing focus; prints a line per check (ok / FAIL), add --screenshot out.png to see the result
+sculpt.exe --demo-tool measure:turn                     # the view turned by a drag, the view gizmo and an axis view with the camera's pivot left far behind the model, then a double-click on the background: the model stays where it is on screen; prints a line per check (ok / FAIL)
 sculpt.exe --screenshot out.png --demo-tool array:several --demo-files array   # three arrays (a ring, a curve, a mirrored column) saved, opened, undone, redone, added and exported; prints a line per check; the picture is the reopened scene
 sculpt.exe --screenshot out.png --demo-tool array:as-is some.sculpt            # the Array tool up on the arrays a file brought with it (a Unity sculpt that has one): the first object with an array is selected, its path and handles show
 sculpt.exe --screenshot out.png --demo-tool tube:radial   # a horn repeated six times round Y; also tube:mirror, tube:radial-mirror (three repeats and a mirror), tube:surface, tube:object (kept separate), tube:merged, tube:radial-merged

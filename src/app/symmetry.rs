@@ -79,13 +79,17 @@ impl Running {
     /// turned and astride the world's X plane, with Mirror X fixed in the
     /// world, and leaves that selected. `select:<name>` builds nothing: it
     /// selects the object of that name in the scene as it is (a file opened
-    /// on the command line), for a look at that object's own symmetry. `cut`
-    /// and `corner` are different checks altogether: see
-    /// [`Self::cut_and_mirror_demo`] and [`Self::corner_demo`].
+    /// on the command line), for a look at that object's own symmetry. `cut`,
+    /// `repair` and `corner` are different checks altogether: see
+    /// [`Self::cut_and_mirror_demo`], `symmetry_repair_demo`
+    /// (app/symmetry_repair/demo.rs) and [`Self::corner_demo`].
     pub(super) fn symmetry_demo(&mut self) {
         let what = std::env::var("SCULPT_DEMO_SYMMETRY").unwrap_or_default();
         if let Some(rest) = what.strip_prefix("cut") {
             return self.cut_and_mirror_demo(rest == ":alone");
+        }
+        if what == "repair" {
+            return self.symmetry_repair_demo();
         }
         if let Some(view) = what.strip_prefix("corner") {
             return self.corner_demo(view == ":front");

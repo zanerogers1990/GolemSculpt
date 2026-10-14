@@ -431,6 +431,31 @@ fn ctrl_keeps_the_covered_part_instead() {
 }
 
 #[test]
+fn a_snapping_line_cuts_exactly_through_the_middle_and_shift_frees_it() {
+    let (mut bench, mut tool, ball) = bench(trim_tool(Shape::Line));
+    // Two degrees off upright and 8 pixels to the right of the ball's middle.
+    let (from, to) = (Vec2::new(CENTRE.x + 8.0, 30.0), Vec2::new(CENTRE.x + 30.0, 570.0));
+    tool.snap = true;
+    bench.drag(&mut tool, from, to);
+    assert_closed(&bench, ball);
+    let cut = bench.doc.bounds(ball).max.x;
+    assert!(cut.abs() < 1e-4, "upright and through the middle: the cut face is at x = {cut}");
+
+    // Shift held with Snap ticked: the line as it was dragged.
+    assert!(bench.undo(&mut tool));
+    bench.env.mods.shift = true;
+    bench.drag(&mut tool, from, to);
+    let cut = bench.doc.bounds(ball).max.x;
+    assert!(cut > 0.1, "to the right of the middle, where it was drawn: {cut}");
+
+    // A box has nothing to snap: the tick is the line's alone.
+    let (mut bench, mut tool, ball) = self::bench(trim_tool(Shape::Box));
+    tool.snap = true;
+    bench.drag(&mut tool, Vec2::new(CENTRE.x + 8.0, 0.0), Vec2::new(800.0, 600.0));
+    assert!(bench.doc.bounds(ball).max.x > 0.05);
+}
+
+#[test]
 fn a_mirrored_trim_cuts_both_sides() {
     let (mut bench, mut tool, ball) = bench(trim_tool(Shape::Box));
     let whole = volume_of(&bench, ball);

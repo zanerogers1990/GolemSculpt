@@ -18,7 +18,7 @@ use sculpt_toolkit::{Button, Ctx, Draw, Event, Info, Job, Key, Mods, RadialItem,
 
 use crate::action::{Action, REMOVE};
 use crate::cut::{self, Cut, Landed, Outcome, Snapshot};
-use crate::gesture::{Drag, Marquee, Shape, mixed};
+use crate::gesture::{Drag, LineSnap, Marquee, Shape, mixed};
 use crate::{hide, mask, panel};
 
 /// Above this many triangles a cut runs as a background job. The geometry
@@ -31,11 +31,19 @@ const JOB_TRIANGLES: usize = 100_000;
 const CROSSHAIR_GAP: f32 = 5.0;
 const CROSSHAIR_ARM: f32 = 9.0;
 
+/// How near (points) a snapping line has to pass to the object's middle or
+/// origin to be moved onto it. Wide enough to catch without aiming, narrow
+/// enough that a cut meant to miss the middle is not hard to make.
+const SNAP_REACH: f32 = 12.0;
+
 /// One of the region tools.
 pub struct Region {
     info: Info,
     pub(crate) action: Action,
     pub(crate) shape: Shape,
+    /// Lines snap (the panel's Snap tick). Shift turns it the other way for
+    /// as long as it is held.
+    pub(crate) snap: bool,
     /// The region being dragged out.
     pub(crate) drag: Option<Drag>,
     /// A cut being worked out off the interface thread.
@@ -55,6 +63,7 @@ impl Region {
             info,
             action,
             shape: action.shapes()[0],
+            snap: false,
             drag: None,
             job: None,
             covered: Vec::new(),
@@ -147,6 +156,32 @@ impl Region {
         cx.status(self.action.prompt(shape), true);
     }
 
+    pub(crate) fn set_snap(&mut self, cx: &mut Ctx, on: bool) {
+        self.snap = on;
+        cx.toast(if on { "Snap On" } else { "Snap Off" });
+        let says = if on {
+            "Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object."
+        } else {
+            "Snap off: a line goes exactly where it is dragged. Hold Shift to snap one."
+        };
+        cx.status(says, true);
+    }
+
+    /// What a line drawn now, seen through `view`, snaps to: the Snap tick,
+    /// turned the other way while Shift is held.
+    pub(crate) fn line_snap(&self, cx: &Ctx, view: &View) -> LineSnap {
+        if self.shape != Shape::Line || self.snap == cx.mods.shift {
+            return LineSnap::OFF;
+        }
+        let scene = cx.scene();
+        let bounds = scene.bounds(scene.active());
+        let middle = (!bounds.is_empty()).then(|| view.project(bounds.center())).flatten();
+        let origin = scene.active_info().and_then(|info| view.project(info.placement.position));
+        // One mark where the two are the same point, as on a fresh object.
+        let origin = origin.filter(|&at| middle.is_none_or(|middle| middle.distance(at) > 1.0));
+        LineSnap { on: true, anchors: [middle, origin], reach: SNAP_REACH * view.pixels_per_point }
+    }
+
     /// The tool's own key steps through its shapes. Past the last it is not
     /// taken, so the app puts the tool away: Box, Lasso, off, as in the Unity
     /// app.
@@ -224,8 +259,8 @@ impl Region {
             return self.click(cx);
         }
         let line = drag.shape == Shape::Line;
-        match drag.region(cx.mods.shift) {
-            // Shift turns a line rather than choosing the outside: a line
+        match drag.region(self.line_snap(cx, view)) {
+            // Shift snaps a line rather than choosing the outside: a line
             // has no inside, only two sides, which Ctrl already swaps.
             Ok(region) => self.apply(cx, view, region, drag.inverted || cx.mods.ctrl, cx.mods.shift && !line),
             Err(why) => self.say(cx, why, false),
@@ -480,13 +515,17 @@ impl Tool for Region {
                     tint: self.tint(drag, cx.mods),
                     viewport: cx.view.size,
                     pixels_per_point: cx.view.pixels_per_point,
-                    snap: cx.mods.shift,
+                    snap: self.line_snap(cx, &cx.view),
                     // A line trim with Ctrl cuts the other side: shade that.
                     other_side: self.action == Action::Trim && removes,
                 };
                 drag.draw(&mut draw.overlay, look);
             }
-            None if cx.hovering && self.refusal(cx).is_none() => self.draw_crosshair(cx, draw),
+            None if cx.hovering && self.refusal(cx).is_none() => {
+                // Where a line would catch, before it is drawn.
+                self.line_snap(cx, &cx.view).draw_anchors(&mut draw.overlay, self.action.tint(), None);
+                self.draw_crosshair(cx, draw);
+            }
             None => {}
         }
     }

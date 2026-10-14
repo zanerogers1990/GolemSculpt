@@ -33,6 +33,9 @@ pub fn panel(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
         theme::heading(ui, "Shape");
         shape_row(tool, ui, cx);
         theme::hint(ui, tool.action.prompt(tool.shape));
+        if tool.shape == Shape::Line {
+            snap_row(tool, ui, cx);
+        }
 
         if tool.action.cuts() && cx.radial_count > 1 {
             theme::line(ui, "Radial symmetry is on: the cut repeats all the way round.", theme::HINT());
@@ -82,7 +85,7 @@ fn shape_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
     let help = |shape: Shape| match shape {
         Shape::Box => "Drag from one corner to the opposite one.",
         Shape::Lasso => "Draw freehand round what you want; the outline closes itself back to where it began.",
-        Shape::Line => "Drag a straight line; it carries on past both ends. Shift turns it in steps of 15 degrees.",
+        Shape::Line => "Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.",
     };
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, shapes.len(), 6.0);
@@ -94,6 +97,20 @@ fn shape_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
             }
         }
     });
+}
+
+/// The Snap tick of a line cut, for a pen with no Shift under the other hand.
+fn snap_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
+    let mut on = tool.snap;
+    let help = "For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes \
+                close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite \
+                of this tick while it is held.";
+    if theme::tip(theme::checkbox(ui, &mut on, "Snap", ACCENT()), cx.tips, help).changed() {
+        tool.set_snap(cx, on);
+    }
+    if tool.snap {
+        theme::hint(ui, "15 degree steps, and through the marked middle or origin when close. Shift frees a line.");
+    }
 }
 
 /// Two buttons that act on the whole object: the counterparts of the
@@ -109,6 +126,11 @@ fn whole_object_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx, buttons:
             }
         }
     });
+}
+
+/// Shift does the opposite of the Snap tick.
+fn shift_on_a_line(tool: &Region) -> &'static str {
+    if tool.snap { "Draw it free, no snap" } else { "Snap: 15 degrees, middle" }
 }
 
 fn shortcuts(tool: &Region) -> Vec<(&'static str, &'static str)> {
@@ -127,9 +149,9 @@ fn shortcuts(tool: &Region) -> Vec<(&'static str, &'static str)> {
         Action::Trim => {
             rows.push(("Ctrl, or right drag", "Keep the covered part"));
             rows.push(("Shift (box, lasso)", "Keep the covered part"));
-            rows.push(("Shift (line)", "Turn in 15 degree steps"));
+            rows.push(("Shift (line)", shift_on_a_line(tool)));
         }
-        Action::Split => rows.push(("Shift (line)", "Turn in 15 degree steps")),
+        Action::Split => rows.push(("Shift (line)", shift_on_a_line(tool))),
     }
     rows.push(("Esc", "Cancel the drag, else leave"));
     match tool.hotkey() {

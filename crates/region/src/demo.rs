@@ -167,7 +167,8 @@ fn over_the_copy(tool: &mut Region, cx: &mut Ctx, what: &str) {
 /// `drag`: a box mid-drag). Trim: a straight cut showing its flat face
 /// (`lasso`: a bite showing a curved one; `drag`: the line mid-drag). Split:
 /// the model cut in two with the piece moved aside (`drag`: the line
-/// mid-drag). All four: `mirror` draws the shape over the live mirror copy of
+/// mid-drag). Both: `snap`, a snapping line mid-drag, caught on the middle of
+/// the object. All four: `mirror` draws the shape over the live mirror copy of
 /// the object, which is put on the other side of the world's middle first;
 /// `array` draws it over a copy of an array of the object, which the app has
 /// the Array tool lay out first (`--demo-tool hide:array`).
@@ -209,6 +210,14 @@ pub fn region(tool: &mut Region, cx: &mut Ctx, what: &str) {
             tool.set_shape(cx, Shape::Line);
             let r = target.radius;
             drag(tool, cx, &[target.at + Vec2::new(-0.5, 1.3) * r, target.at + Vec2::new(0.35, -1.25) * r]);
+        }
+        (Action::Trim | Action::Split, "snap") => {
+            // Drawn a little off upright and a little off the middle, as a
+            // hand would: it shows upright and through the middle.
+            tool.set_shape(cx, Shape::Line);
+            tool.set_snap(cx, true);
+            let r = target.radius;
+            drag(tool, cx, &[target.at + Vec2::new(0.06, 1.3) * r, target.at + Vec2::new(-0.04, -1.25) * r]);
         }
         (Action::Trim, "lasso") => {
             tool.set_shape(cx, Shape::Lasso);
