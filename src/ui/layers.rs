@@ -69,11 +69,13 @@ pub fn card(ui: &mut Ui, doc: &mut Doc, assets: &Assets, actions: &mut Vec<Actio
     let mesh = &doc.mesh;
     let rows = mesh.layer_rows();
     theme::category(ui, "Layers", TINT, &summary(&rows), true, |ui| {
-        theme::hint(
+        theme::about(
             ui,
             "Passes of sculpting kept apart from the model. Each can be turned down, hidden or deleted without \
              touching the rest. The red dot marks the layer that records what you sculpt; with no dot lit you sculpt \
-             the model underneath, and the layers ride on it.",
+             the model underneath, and the layers ride on it.\n\n\
+             Remesh, Decimate, Join, a boolean and the other commands that rebuild the mesh merge the layers into the \
+             model first. Undo (Z) brings them back.",
         );
         new_layer(ui, rows.len(), tips, actions);
         if rows.is_empty() {
@@ -335,10 +337,5 @@ fn cost(ui: &mut Ui, mesh: &Mesh, count: usize) {
     theme::hint(
         ui,
         &format!("A layer takes 12 bytes for each vertex: {} for {layers} on this object.", megabytes(own + finest)),
-    );
-    theme::hint(
-        ui,
-        "Remesh, Decimate, Join, a boolean and the other commands that rebuild the mesh merge the layers into the \
-         model first. Undo (Z) brings them back.",
     );
 }

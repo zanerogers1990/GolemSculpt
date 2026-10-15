@@ -38,7 +38,7 @@
 //! marked as the one it uses. When that brush is not the live Smooth,
 //! strokes are handed its record apart (`Settings::shift`).
 
-mod shipped;
+pub mod shipped;
 
 use std::ops::RangeInclusive;
 
@@ -218,7 +218,8 @@ pub struct Entry {
     pub kernel: Brush,
     pub origin: Origin,
     /// On the hold-Space wheel. A base brush starts on it or off it as its
-    /// kernel says (`Brush::starts_on_wheel`); every other brush starts off.
+    /// kernel says (`Brush::starts_on_wheel`), a shipped one as
+    /// `shipped::ON_WHEEL` says; the user's own start off.
     pub pinned: bool,
     /// Its settings, as of when it was last live (see the top of this file).
     record: Record,
@@ -228,9 +229,19 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// A brush that ships with the app, as it ships: off the wheel.
+    /// A brush that ships with the app, as it ships.
     fn shipped(name: &str, kernel: Brush, record: Record) -> Entry {
-        Entry { name: name.to_owned(), kernel, origin: Origin::Shipped, pinned: false, made: record.clone(), record }
+        let pinned = shipped::ON_WHEEL.contains(&name);
+        Entry { name: name.to_owned(), kernel, origin: Origin::Shipped, pinned, made: record.clone(), record }
+    }
+
+    /// Whether the brush is on the wheel as the app starts out.
+    fn starts_pinned(&self) -> bool {
+        match self.origin {
+            Origin::Base => self.kernel.starts_on_wheel(),
+            Origin::Shipped => shipped::ON_WHEEL.contains(&self.name.as_str()),
+            Origin::User => false,
+        }
     }
 
     /// How the brush was when it shipped or was made.
@@ -253,6 +264,8 @@ pub enum Ask {
     Delete(usize),
     Reset(usize),
     Pin(usize, bool),
+    /// Put the wheel back to the brushes it starts with.
+    ResetWheel,
     /// Shift smooths with this brush from now on.
     ShiftUses(usize),
     /// Pick a brush file and bring it in. Opens a file box.
@@ -413,6 +426,13 @@ impl Library {
     pub fn set_pinned(&mut self, i: usize, pinned: bool) {
         if let Some(entry) = self.entries.get_mut(i) {
             entry.pinned = pinned;
+        }
+    }
+
+    /// Puts every brush back on the wheel or off it as the app starts out.
+    pub fn reset_pins(&mut self) {
+        for entry in &mut self.entries {
+            entry.pinned = entry.starts_pinned();
         }
     }
 

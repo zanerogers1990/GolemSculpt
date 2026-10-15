@@ -12,6 +12,13 @@ use super::Record;
 use crate::sculpt::alpha::{self, AlphaSettings};
 use crate::sculpt::{Brush, FalloffCurve, FalloffPreset, FlattenMode, SmoothMode};
 
+/// The shipped brushes that start on the hold-Space wheel: Clay Strips, in
+/// the plain Clay's place, as the brush a sculptor blocks in with.
+pub const ON_WHEEL: [&str; 1] = ["Clay Strips"];
+
+/// The shipped brush a fresh app starts with in hand.
+pub const IN_HAND: &str = "Clay Strips";
+
 /// One shipped brush: its name, its kernel, what it is for (the panel's
 /// tip), and what it changes of its kernel's base brush.
 struct Shipped {

@@ -102,6 +102,10 @@ fn radial(ui: &mut egui::Ui, radial: &mut Radial, space: Space, tips: bool, down
     );
     tip(on, tips, &help);
 
+    // Its settings only while it is on.
+    if !radial.on {
+        return;
+    }
     let mut count = radial.count as f32;
     let range = Radial::MIN_COUNT as f32..=Radial::MAX_COUNT as f32;
     let slider = theme::slider(ui, "Radial Repeats", &mut count, range, |v| format!("{:.0}", v.round()));
@@ -176,8 +180,14 @@ fn custom_axis_row(ui: &mut egui::Ui, radial: &mut Radial, whose: &str, tips: bo
 /// The plane chosen is the card's own and no object's (the Unity app's
 /// Symmetry Plane): it starts at X and is not kept between runs.
 fn repair(ui: &mut egui::Ui, space: Space, tolerance: &mut f32, tips: bool, actions: &mut Vec<Action>) {
-    theme::heading(ui, "Symmetry Repair");
-    theme::hint(ui, "For a selected object whose two sides no longer match.");
+    // Folded away until wanted: it is for mending, not for every session.
+    if !theme::fold(ui, "Symmetry Repair", false, false) {
+        return;
+    }
+    theme::about(
+        ui,
+        "For a selected object whose two sides no longer match. Check Symmetry counts the vertices that pair up across the plane. Make Symmetric moves one side onto the mirror image of the other and keeps every triangle and the mask; Cut & Mirror throws one side away and rebuilds it as the mirror image of the other. Symmetry Cleanup puts the vertices near the plane exactly on it.",
+    );
     theme::hint(ui, "Symmetry Plane");
     let id = egui::Id::new("cut_and_mirror_axis");
     let mut axis = ui.data(|d| d.get_temp::<usize>(id)).and_then(Axis::from_index).unwrap_or(Axis::X);
@@ -208,7 +218,6 @@ fn repair(ui: &mut egui::Ui, space: Space, tolerance: &mut f32, tips: bool, acti
     }
 
     theme::heading(ui, "Make Symmetric");
-    theme::hint(ui, "Moves one side onto the mirror image of the other. Keeps every triangle and what is masked.");
     let make = |from_positive| Action::MakeSymmetric { axis, from_positive };
     side_buttons(ui, axis, tips, actions, make, |copied, moved| {
         format!(
@@ -221,7 +230,6 @@ fn repair(ui: &mut egui::Ui, space: Space, tolerance: &mut f32, tips: bool, acti
     });
 
     theme::heading(ui, "Cut & Mirror");
-    theme::hint(ui, "Throws one side of the selected object away and rebuilds it as the mirror image of the other.");
     let cut = |from_positive| Action::CutAndMirror { axis, from_positive };
     side_buttons(ui, axis, tips, actions, cut, |kept, rebuilt| {
         format!(

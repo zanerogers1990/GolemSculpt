@@ -1079,7 +1079,7 @@ impl Running {
             _ => {
                 // The Objects card shut, as if it had been left that way, so
                 // the File card under it is in view.
-                let shut = std::collections::BTreeMap::from([("Objects".to_owned(), false)]);
+                let shut = std::collections::BTreeMap::from(["Add Object", "Objects", "Selected Object", "Combine"].map(|card| (card.to_owned(), false)));
                 prefs::cards::restore(&self.egui_ctx, &shut);
                 // The same sculpt saved from four sides, under four names.
                 let names = ["base mesh", "crab claw", "dragon head", "lure v3"];

@@ -228,7 +228,7 @@ impl Running {
     ///   - `play` works through all of it and prints a line per check.
     pub(super) fn print_demo(&mut self, what: &str) {
         // The Objects card shut, so the File card and its buttons are in view.
-        let shut = std::collections::BTreeMap::from([("Objects".to_owned(), false)]);
+        let shut = std::collections::BTreeMap::from(["Add Object", "Objects", "Selected Object", "Combine"].map(|card| (card.to_owned(), false)));
         crate::prefs::cards::restore(&self.egui_ctx, &shut);
         if what != "closed" {
             let damaged = damaged(&self.doc.mesh);

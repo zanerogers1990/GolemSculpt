@@ -48,7 +48,7 @@ pub fn section(ui: &mut Ui, s: &mut Settings, tips: bool) {
     let Some(curve) = s.falloff[slot].as_mut() else { return };
 
     graph(ui, curve, focal);
-    theme::hint(
+    theme::about(
         ui,
         "Left: brush centre. Right: edge. Drag a point; click to add one; right-click one, or drag it off the graph, to remove it.",
     );

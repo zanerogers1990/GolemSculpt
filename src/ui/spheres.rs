@@ -228,7 +228,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
                 });
             }
         });
-        theme::hint(
+        theme::about(
             ui,
             "An attached rig goes with its object when that is moved, turned or resized evenly. Stretching the object along one axis leaves the spheres as they are.",
         );
@@ -301,7 +301,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
                 actions.push(Action::MakeSkin);
             }
         });
-        theme::hint(
+        theme::about(
             ui,
             "The skin does not follow the spheres afterwards: change them and you need a new skin, so settle the overall shape before sculpting detail.",
         );

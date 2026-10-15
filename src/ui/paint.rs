@@ -90,7 +90,7 @@ pub fn card(ui: &mut Ui, doc: &mut Doc, assets: &Assets, actions: &mut Vec<Actio
     let rows = mesh.paint_rows();
     let active = mesh.paint_active();
     theme::category(ui, "Paint Layers", TINT, &summary(&rows, active), false, |ui| {
-        theme::hint(
+        theme::about(
             ui,
             "Colour and materials painted on the model, in layers like a painting program's. The lit dot marks the \
              layer the Paint brush paints on (P takes the brush up). Drag a row by its grip to move it up or down.",
@@ -645,7 +645,7 @@ pub fn brush_settings(
             paint.zadd_brush = ZADD_BRUSHES[k];
         }
     }
-    theme::hint(ui, "Ctrl erases, Shift blurs the paint, I picks up the colour under the pointer, P puts the brush down.");
+    theme::about(ui, "Ctrl erases, Shift blurs the paint, I picks up the colour under the pointer, P puts the brush down.");
 }
 
 /// The colours painted with lately: a click takes one up again.

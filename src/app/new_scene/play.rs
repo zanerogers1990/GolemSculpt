@@ -84,7 +84,7 @@ impl Running {
         let (first, second) = (folder.join("first sculpt.sclp"), folder.join("second sculpt.sclp"));
         if what != "new" {
             // The Objects card shut, so the File card under it is in view.
-            let shut = std::collections::BTreeMap::from([("Objects".to_owned(), false)]);
+            let shut = std::collections::BTreeMap::from(["Add Object", "Objects", "Selected Object", "Combine"].map(|card| (card.to_owned(), false)));
             prefs::cards::restore(&self.egui_ctx, &shut);
             let saved = self.save_to(first.clone());
             self.new_scene_action();

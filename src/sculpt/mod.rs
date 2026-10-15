@@ -195,13 +195,14 @@ impl Brush {
         )
     }
 
-    /// Whether the brush is on the hold-Space wheel until the user says
+    /// Whether the base brush is on the hold-Space wheel until the user says
     /// otherwise. Erase Layer is not: it is for one job, does nothing until
     /// a layer records, and the wheel is what a sculptor's hand knows. It is
     /// pinned from the Brush Library card like any other. Nor is Paint, so
-    /// that the wheel stays as the hand knows it: P takes it up.
+    /// that the wheel stays as the hand knows it: P takes it up. Nor is the
+    /// plain Clay: Clay Strips has its place (`library::shipped::ON_WHEEL`).
     pub fn starts_on_wheel(self) -> bool {
-        !matches!(self, Brush::EraseLayer | Brush::Paint)
+        !matches!(self, Brush::Clay | Brush::EraseLayer | Brush::Paint)
     }
 
     /// Whether the brush works across the way its stroke is going, and so

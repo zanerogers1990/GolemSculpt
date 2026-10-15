@@ -170,12 +170,15 @@ Layer), one for each kind of stroke the app can make. Every other brush is one o
 own settings: Dam Standard is a Crease that tapers with the pen, Trim is a
 Flatten that only scrapes, Rake is a Standard with the Rake alpha.
 
-**Picking a brush.** The base fourteen are the tiles at the top of the Brush
-tab, with their number keys. The rest are in the **Brush Library** card under
-it, each a row with its kind's icon and its name: the ones that came with the
-app first, then **Yours**. Click a row and that brush is in hand; its name is
-in the card's header and on its settings card, and the tile of its kind is
-ringed in the grid above.
+**Picking a brush.** Every brush is a row of the **Brushes** card on the
+Brush tab, with its kind's icon, its name and, for the base brushes, its
+number key in gold. The rows are sorted into kinds under small headings
+(**Clay & Build**, **Smooth & Flatten**, **Cut & Pinch**, **Move & Pose**,
+**Paint & Layers**, then **Yours**); press a heading to fold its kind away,
+and the app remembers it. Click a row and that brush is in hand; its name is
+in the card's header and on its settings card. Add, Sub, Mask, Size,
+Strength and Focal Shift sit on a plate above the card, always in view,
+whatever is folded.
 
 **Every brush keeps its own settings**, and a change sticks as you make it:
 there is no save button. What a brush keeps is everything in its settings
@@ -189,29 +192,31 @@ you come back. What is NOT a brush's own: the size of the ring (one size for
 every brush, so changing brush never resizes it), Lazy Mouse, Build Up on
 Hold, the pen's Pressure Curve, symmetry and dynamic topology.
 
-**Under the list**, for the brush in hand:
+**Right-click a brush** (or press the pen's barrel button on it) for
+everything else that can be done with it:
 
 - **Duplicate** makes a brush of your own that starts as this one is now, and
   puts it in hand. This is how to make a brush: duplicate the nearest one,
   name it, change it.
-- **Name** (your own brushes only): type a new name and press Enter. The
-  brushes that came with the app keep their names.
+- **Name** (your own brushes only, under the list while one is in hand):
+  type a new name and press Enter. The brushes that came with the app keep
+  their names.
 - **Reset** puts the brush back as it came with the app or, for one of your
   own, as it was when you made it.
 - **Delete** takes it out of the library. The fourteen base brushes stay. A
   brush of your own that is deleted is not destroyed: its file is moved to a
   `deleted` folder inside the brushes folder, and Import Brush brings it
   back. A deleted brush that came with the app comes back with **Restore
-  Shipped Brushes**, which appears once one is gone.
-- **On the Space Wheel** puts the brush on the wheel that opens while Space
-  is held, or takes it off. The base brushes start on it, all but Erase
-  Layer (turn this on for it if you use it often). A dot on a row marks a
-  brush that is on the wheel.
-- **Shift Uses This Brush** (smoothing brushes only): holding Shift with any
-  brush smooths with the one brush that has this on, marked with an S in the
-  list. It starts on Smooth. Turn it on for Relax, say, and Shift relaxes.
-- **Import Brush...** brings in a brush from a file, and **Export Brush...**
-  writes the brush in hand to one, to keep or to give to someone. A brush
+  Shipped**, under the list, which appears once one is gone.
+- **Put On / Take Off the Space Wheel** puts the brush on the wheel that
+  opens while Space is held, or takes it off, and **Reset the Space Wheel**
+  goes back to the brushes it started with. A dot on a row marks a brush
+  that is on the wheel.
+- **Shift Smooths With This** (smoothing brushes only): holding Shift with
+  any brush smooths with the one brush that has this on, marked with an S in
+  the list. It starts on Smooth. Turn it on for Relax, say, and Shift relaxes.
+- **Import Brush...** (under the list) brings in a brush from a file, and
+  **Export Brush...** writes this brush to one, to keep or to give to someone. A brush
   that uses an alpha the other computer does not have comes in with no
   alpha, and the status line says which one it wanted.
 
@@ -503,7 +508,8 @@ across Z keeps both, with nothing to re-tick on the way from one to the other.
   as a tick that did not work. (The Unity app drew every object's planes at
   once; here only the selected object's guides are drawn.)
 
-**Symmetry Repair**, at the foot of the Symmetry card, is for a model whose
+**Symmetry Repair**, folded under its own heading at the foot of the
+Symmetry card (press the heading to open it), is for a model whose
 two sides no longer match: one sculpted with the mirror off, joined from odd
 parts, or imported lopsided. It is the Unity app's panel of that name. Pick
 the **Symmetry Plane** (**X**, **Y** or **Z**) and the buttons under it work
@@ -1865,6 +1871,8 @@ pair; after that they can be moved apart and the joints stay on them.
   this app knows, is refused with a message and the scene stays as it was.
   How the Unity app's axes map onto this app's is set out in
   `src/unity_import.rs`.
+- **Export...** in the File card opens a menu of the formats: OBJ, FBX,
+  PLY and STL for Printing, and the FBX material weights setting.
 - **Export OBJ / Export STL for Printing** write the selected object where it
   stands in the scene, with its position, rotation and scale baked in, so an
   instance exports as its own placed copy. The STL is binary, in millimetres,
@@ -2389,7 +2397,16 @@ again.
 
 ## Objects
 
-The **Objects** card at the top of the Scene panel is the scene graph.
+The Scene tab has four cards: **Add Object**, **Objects** (the scene graph's
+list), **Selected Object** (its name, Clone and Instance, position and scale,
+and its Live Mirror) and **Combine** (the booleans, Join and exporting the
+selection, shown once two or more objects are selected). A button that would
+do nothing is left out rather than greyed: Reset Shape appears once the
+object has been sculpted, Make Unique on an instance, Reset Rotation and
+Scale once it is turned or resized, Set Origin to Mesh once its centre is
+off its mesh. Live Mirror is three buttons, **Mirror X**, **Mirror Y** and
+**Mirror Z**, until the object is mirrored; then ticks for the planes it is
+mirrored across, with Validate and Remove.
 
 - **Add** puts a new cube, sphere, cylinder, capsule, cone or wedge at the
   centre and selects it. It arrives a little smaller than the top object of
@@ -2651,9 +2668,12 @@ Windows comes with).
 ## The wheel, the panels and their cards
 
 **The wheel shows the brushes pinned to it**, with Mask at the bottom. It
-starts with twelve of the base brushes (all but Erase Layer and Paint); **On the Space Wheel** in the Brush
-Library card puts any other brush on it or takes one off, and the wheel makes
-room for however many there are. Brushes of one kind sit together. A brush
+starts with eleven of the base brushes and Clay Strips in the plain Clay's
+place (Clay, Erase Layer and Paint start off it). **Right-click a tile** on
+the wheel to take that brush off it; the wheel stays open. **Right-click any
+brush in the Brushes card** to put it on, and the wheel makes room for
+however many there are.
+A first run starts with Clay Strips in hand. Brushes of one kind sit together. A brush
 that is not one of the base fourteen has its initials in the corner of its
 tile, since it shares its kind's picture, and a long name is cut short on the
 tile and shown whole in the middle of the wheel when the pen is over it.
@@ -2679,8 +2699,11 @@ size; on one smaller than the wheel, part of it is off the edge.
 **Each panel shows a tab's worth of its cards at a time**, so no card is a
 long scroll away.
 
-- The **Sculpt** panel keeps Undo, Redo and the tools at its top. Under them
-  are two tabs: **Brush** (the brushes, the settings of the one in hand, the
+- The **Sculpt** panel keeps Undo, Redo and the tools at its top: Sculpt,
+  Transform and SSpheres, and the rest under three headings that fold away
+  (**Make**: Tube, Muscle, Lathe, Array, Extract; **Mask, Hide & Cut**: Mask,
+  Hide, Trim, Split; **Print & Measure**: Measure, Keys). The heading of the
+  tool that is up stays open. Under them are two tabs: **Brush** (the brushes, the settings of the one in hand, the
   stroke) and **Mesh** (Symmetry, Remesh with Dynamic Topology, Quad Remesh
   and Decimate, Subdivision, Masking, Hidden Parts). A tool with a panel of its own
   (SSpheres, Tube, Lathe...) shows that in place of the tabs while it is up.
@@ -2689,7 +2712,8 @@ long scroll away.
   Size), **Look** (Material, Lighting, Backdrop & Effects), **File** (the
   file buttons and recent files, Turntable, Timelapse) and **Settings**
   (Theme, Interface, Keyboard Shortcuts, Performance). The status line is
-  under the tabs whichever is showing, and each tab keeps its own place in
+  under the tabs whichever is showing (and takes no room until there is
+  something to say), and each tab keeps its own place in
   its scroll.
 - A card that floats over the view stays up whichever tab is showing. Put it
   back while its tab is not the one showing and the panel turns to that tab,

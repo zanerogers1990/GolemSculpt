@@ -96,9 +96,18 @@ impl Running {
                 Ok(format!("{name} is back as {how}."))
             }
             Ask::Pin(i, pinned) => {
-                name(library, i)?;
+                let name = name(library, i)?;
+                let was = library.entries()[i].pinned;
                 library.set_pinned(i, pinned);
-                Ok(String::new())
+                Ok(match (was, pinned) {
+                    (false, true) => format!("{name} is on the Space wheel."),
+                    (true, false) => format!("{name} is off the Space wheel."),
+                    _ => String::new(),
+                })
+            }
+            Ask::ResetWheel => {
+                library.reset_pins();
+                Ok("The Space wheel has the brushes it started with.".to_owned())
             }
             Ask::ShiftUses(i) => {
                 let name = name(library, i)?;

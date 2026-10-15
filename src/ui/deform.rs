@@ -237,7 +237,7 @@ pub fn card(ui: &mut Ui, doc: &mut Doc, assets: &Assets, actions: &mut Vec<Actio
     let card = &mut doc.opts.deform;
     let summary = if card.on { card.params.kind.name() } else { "" };
     theme::category(ui, "Deform", theme::lit(ACCENT_DEFORM), summary, true, |ui| {
-        theme::hint(
+        theme::about(
             ui,
             "Bend, twist or reshape the whole selected object along one of the gizmo's axes. Masked parts stay where they are.",
         );

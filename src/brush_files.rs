@@ -59,6 +59,8 @@ const MAX_BYTES: u64 = 1 << 20;
 pub struct Kept {
     /// The brush in hand. Empty in a file from before there was a library:
     /// the kernel it names (`BrushPrefs::brush`) is then the base brush.
+    /// With no settings file at all it is the brush a fresh app starts with
+    /// (`Prefs::fresh`).
     pub selected: String,
     /// The brush Shift smooths with.
     pub shift: String,

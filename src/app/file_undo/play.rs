@@ -140,7 +140,7 @@ impl Running {
         say("two different sculpts are on disk", made.is_ok() && first == start.2 && second != first && second != 0);
         if what != "open-undo" {
             // The Objects card shut, so the File card under it is in view.
-            let shut = std::collections::BTreeMap::from([("Objects".to_owned(), false)]);
+            let shut = std::collections::BTreeMap::from(["Add Object", "Objects", "Selected Object", "Combine"].map(|card| (card.to_owned(), false)));
             prefs::cards::restore(&self.egui_ctx, &shut);
             self.first_open(&files);
             self.load(files.second.clone(), true);

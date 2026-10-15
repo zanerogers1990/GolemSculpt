@@ -42,7 +42,7 @@ use crate::doc::{Action, Doc, MaskOp, Tool};
 use crate::sculpt::Brush;
 use assets::Assets;
 pub use overlay::{Cursor, brush_wheel_ring, brush_wheel_tile};
-/// The Brush Library card's controls, for the interface's self-check.
+/// The Brushes card's controls, for the interface's self-check.
 pub mod library_card {
     pub use super::brushes::{place, watch};
 }
@@ -84,7 +84,8 @@ impl UiState {
         Self {
             assets: Assets::load(ctx),
             toast: None,
-            status: ("Import adds a model (.obj / .stl).".into(), theme::HINT()),
+            // Nothing to say until something happens: the line takes no room.
+            status: (String::new(), theme::HINT()),
             status_seen: Default::default(),
             radial: None,
             graph: Default::default(),
@@ -193,7 +194,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
 
     // Title and mesh size.
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "Sculpt", theme::bold(19.0), theme::TEXT());
+    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "GolemSculpt", theme::bold(19.0), theme::TEXT());
     ui.painter().text(
         rect.right_center(),
         Align2::RIGHT_CENTER,
@@ -235,9 +236,13 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         let count = doc.scene.selected().len();
         let summary = if count > 1 { format!("{count} objects") } else { doc.scene.active().name.clone() };
         theme::category(ui, "Transform", theme::lit(ACCENT()), &summary, true, |ui| {
-            theme::hint(ui, "Drag an arrow to move, a ring to turn, a cube on an arm to stretch that way, or the white cube to resize.");
-            theme::hint(ui, "Click another object to select it; Shift or Ctrl + click adds it to the selection or takes it out. Several selected objects go together, about their shared centre. Drag anywhere else to orbit.");
-            theme::hint(ui, "If part of the object is masked, the gizmo reshapes the rest and leaves the masked part where it is.");
+            theme::about(
+                ui,
+                "Drag an arrow to move, a ring to turn, a cube on an arm to stretch that way, or the white cube to resize.\n\n\
+                 Click another object to select it; Shift or Ctrl + click adds it to the selection or takes it out. Several \
+                 selected objects go together, about their shared centre. Drag anywhere else to orbit.\n\n\
+                 If part of the object is masked, the gizmo reshapes the rest and leaves the masked part where it is.",
+            );
             // Which way the arrows and rings point.
             theme::hint(ui, "Gizmo axes (arrows and rings)");
             ui.horizontal(|ui| {
@@ -280,39 +285,10 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
     // The brush in hand is one of the library's, over that kernel.
     let in_hand = library.selected(s);
     let name = library.entries()[in_hand].name.clone();
-    let summary = if s.mask_mode { "Mask" } else { name.as_str() };
-    theme::category(ui, "Brushes", theme::lit(ACCENT()), summary, true, |ui| {
-        // However many brushes there are, in rows of six.
-        const PER_ROW: usize = 6;
-        let w = theme::row_width(ui, PER_ROW, 4.0);
-        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        for row in Brush::ALL.chunks(PER_ROW) {
-            ui.horizontal(|ui| {
-                for &b in row {
-                    // The fourteen base brushes; the rest are in the card below.
-                    let base = crate::sculpt::library::Library::base(b);
-                    let active = (base == in_hand && !s.mask_mode).then_some(ACCENT());
-                    // A brush with no number key has no badge.
-                    let badge = b.hotkey().map(String::from).unwrap_or_default();
-                    let r = theme::tile(ui, vec2(w, 40.0), icon(b.icon()), "", &badge, active);
-                    // A brush of the library in hand: its kernel's tile is
-                    // ringed, so the grid still shows what kind it is.
-                    if b == brush && base != in_hand && !s.mask_mode {
-                        ui.painter().rect_stroke(r.rect, 5.0, egui::Stroke::new(1.5, ACCENT()), egui::StrokeKind::Inside);
-                    }
-                    let text = match b.hotkey() {
-                        Some(key) => format!("{} ({key})\n{}", b.name(), b.description()),
-                        None => format!("{}\n{}", b.name(), b.description()),
-                    };
-                    if tip(r, tips, &text).clicked() {
-                        // Picking a brush always leaves mask mode, so the
-                        // click never looks dead.
-                        library.select(base, s);
-                    }
-                }
-            });
-        }
-        ui.add_space(2.0);
+
+    // What every brush has, always in view above the list: which way it
+    // works, its size and strength.
+    theme::plate(ui, |ui| {
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 3, 4.0);
             let positive = s.current().positive;
@@ -350,7 +326,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
         let strength = if brush == Brush::Move && !s.mask_mode {
             "How far the surface follows the pen: at 100% it stays under it, lower is a gentler pull. Hold F and drag."
         } else if brush == Brush::Paint && !s.mask_mode {
-            "Flow: how much of the Opacity each dab of paint lays. Low builds paint up softly as you go over a place.              Hold F and drag."
+            "Flow: how much of the Opacity each dab of paint lays. Low builds paint up softly as you go over a place. Hold F and drag."
         } else {
             "How hard the brush works. Hold F and drag."
         };
@@ -427,8 +403,8 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
                 modes::flatten(ui, s.current_mut(), tips);
             }
             Brush::Smooth => modes::smooth(ui, s.current_mut(), tips),
-            Brush::Pinch => theme::hint(ui, "Draws the surface in to the line of the stroke. Ctrl or the right button spreads it apart."),
-            Brush::Nudge => theme::hint(ui, "Strength is how far the surface follows the pen: at 100% what is under the middle of the ring stays under it."),
+            Brush::Pinch => theme::about(ui, "Draws the surface in to the line of the stroke. Ctrl or the right button spreads it apart."),
+            Brush::Nudge => theme::about(ui, "Strength is how far the surface follows the pen: at 100% what is under the middle of the ring stays under it."),
             Brush::EraseLayer => brushes::erase_layer_note(ui, &doc.mesh),
             Brush::Paint => paint::brush_settings(ui, &mut s.paint, &doc.opts.paint, &doc.mesh, &mut doc.opts.tabs, tips, actions),
             Brush::Layer => {
@@ -440,7 +416,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
                     tips,
                     "Grab only the surface joined to the point under the pointer: moving one finger leaves the one next to it alone.",
                 );
-                theme::hint(ui, "Ctrl or the right button pushes the surface in or pulls it out, the way it faces: drag up for out, down for in. At the outline, drag the way it faces.");
+                theme::about(ui, "Ctrl or the right button pushes the surface in or pulls it out, the way it faces: drag up for out, down for in. At the outline, drag the way it faces.");
             }
             Brush::Pose => pose::settings(ui, s, tips),
             _ => theme::hint(ui, "No extra settings for this brush."),
@@ -461,7 +437,6 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
 
     let summary = fmt_count(doc.mesh.triangle_count());
     theme::category(ui, "Remesh", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {
-        theme::hint(ui, "Rebuilds the surface with even triangles. Use it after big shape changes, or to add detail.");
         // Log slider: equal travel doubles the resolution.
         let mut log = doc.opts.remesh_resolution.log2();
         if theme::slider(ui, "Resolution", &mut log, 4f32.log2()..=1024f32.log2(), |v| format!("{:.0}", v.exp2())).changed() {
@@ -471,7 +446,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         if tip(
             theme::button(ui, ui.available_width(), "Remesh", style),
             tips,
-            "Voxel remesh at this resolution (R).",
+            "Rebuilds the surface with even triangles at this resolution. Use it after big shape changes, or to add detail (R).",
         )
         .clicked()
         {
@@ -481,7 +456,6 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         levels::dyntopo_note(ui, &doc.mesh);
 
         ui.add_space(6.0);
-        theme::hint(ui, "Quad Remesh rebuilds it as even quads that follow the form. Export keeps the quads.");
         let range = crate::quadremesh::TARGET_RANGE;
         let mut log = doc.opts.quad_target.log2();
         if theme::slider(ui, "Quads", &mut log, range.start().log2()..=range.end().log2(), |v| fmt_count(v.exp2() as usize)).changed() {
@@ -493,7 +467,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         if tip(
             theme::button(ui, ui.available_width(), "Quad Remesh", style),
             tips,
-            "Rebuild as about this many quads.",
+            "Rebuilds the surface as about this many even quads that follow the form. Export keeps the quads.",
         )
         .clicked()
         {
@@ -533,7 +507,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     let hidden = doc.mesh.hidden_triangle_count();
     let summary = if hidden == 0 { String::new() } else { format!("{} hidden", fmt_count(hidden)) };
     theme::category(ui, "Hidden Parts", Color32::from_rgb(120, 190, 235), &summary, false, |ui| {
-        theme::hint(ui, "A hidden part is not drawn, and brushes pass over it. Remesh, Join and Export still use the whole model.");
+        theme::about(ui, "A hidden part is not drawn, and brushes pass over it. Remesh, Join and Export still use the whole model.");
         ui.add_enabled_ui(hidden > 0, |ui| {
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, 2, 6.0);
@@ -566,7 +540,6 @@ fn rounded_to_two_figures(value: f32) -> f32 {
 /// Decimate, at the foot of the Remesh card: the count to come down to, a
 /// row of fractions of what the object has now that set it, and the button.
 fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Action>) {
-    theme::hint(ui, "Decimate takes triangles off and keeps the shape, for a game model that has to fit a budget (200k to 500k triangles, say).");
     let range = crate::decimate::TARGET_RANGE;
     let now = doc.mesh.triangle_count();
     let mut log = doc.opts.decimate_target.clamp(*range.start(), *range.end()).log2();
@@ -592,7 +565,7 @@ fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Acti
     let target = doc.opts.decimate_target.round() as usize;
     ui.add_enabled_ui(now > target, |ui| {
         let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
-        let help = "Brings the selected object down to about Target Triangles, taking them from where the surface is flat and keeping them where it bends. A closed model stays closed. Fully masked surface is left as it is; hidden parts are decimated too and stay hidden. It works in the background on a large model, with its progress and a Cancel at the bottom of the view. It asks first if the object has symmetry on, which it does not keep exactly. Undo (Z) brings the triangles back.";
+        let help = "Takes triangles off and keeps the shape, for a game model that has to fit a budget (200k to 500k triangles, say). Brings the selected object down to about Target Triangles, taking them from where the surface is flat and keeping them where it bends. A closed model stays closed. Fully masked surface is left as it is; hidden parts are decimated too and stay hidden. It works in the background on a large model, with its progress and a Cancel at the bottom of the view. It asks first if the object has symmetry on, which it does not keep exactly. Undo (Z) brings the triangles back.";
         if tip(theme::button(ui, ui.available_width(), "Decimate", style), tips, help).clicked() {
             actions.push(Action::Decimate);
         }
@@ -606,6 +579,9 @@ fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Acti
 /// tabs, and the status line.
 fn scene_head(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState) {
     tabs::scene_strip(ui, &mut doc.opts.tabs.scene, doc.opts.tooltips);
+    if state.status.0.is_empty() {
+        return;
+    }
     ui.add(
         egui::Label::new(
             egui::RichText::new(&state.status.0).font(theme::font(11.0)).color(state.status.1),
@@ -666,43 +642,16 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             ("Save", Action::Save, "Save this sculpt (Ctrl+S)."),
             ("Save As...", Action::SaveAs, "Save under a new name (Ctrl+Shift+S)."),
         ]);
-        row(ui, actions, &[
-            (
-                "Import...",
-                Action::Import,
-                "Add an .obj or .stl model to the scene. An STL comes in at its real size (millimetres, Z up); an OBJ is fitted to the first object's size. Either lands at the centre. A .sclp, or a .sculpt from the Unity app, adds its objects where they were saved.",
-            ),
-            (
-                "Export OBJ...",
-                Action::ExportObj,
-                "Write the selected object as a Wavefront OBJ, placed as it is in the scene (position, rotation and scale included). A painted object goes with its colour at every point; its materials need PLY or FBX.",
-            ),
-            (
-                "Export FBX...",
-                Action::ExportFbx,
-                "Write every selected object into one Autodesk FBX, for Blender, Unity and the like: each an object of its own under its name, placed as it is in the scene, Y up, at real size (1 unit is 1 cm). A painted object goes with its colour, and each face with the material most of it is painted with. Ctrl + click rows of the Objects list to select more than one.",
-            ),
-        ]);
-        row(ui, actions, &[(
-            "Export PLY...",
-            Action::ExportPly,
-            "Write the selected object as a PLY, placed as it is in the scene: the format most programs read painted colour from (MeshLab, colour 3D printing). A painted object goes with its colour and, for each material it is painted with, how much of it is at each point.",
-        )]);
-        tip(
-            theme::checkbox(ui, &mut doc.opts.fbx_material_weights, "FBX: material weights in UVs", ACCENT()),
-            tips,
-            "Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.",
-        );
-        // The list that shows the selection is on another tab, so say here what the file would hold.
-        let picked = doc.scene.selected().len();
-        if picked > 1 {
-            theme::hint(ui, &format!("{picked} objects are selected. Export FBX writes them all into one file; OBJ and STL write the bright one only."));
-        }
-        row(ui, actions, &[(
-            "Export STL for Printing (mm)...",
-            Action::ExportStl,
-            "Write the selected object as a binary STL for a slicer: placed as it is in the scene, upright (Z up), in millimetres at real size (1 unit is 10 mm). If the object has holes it says so first, and asks.",
-        )]);
+        ui.horizontal(|ui| {
+            let w = theme::row_width(ui, 2, 6.0);
+            let help = "Add an .obj or .stl model to the scene. An STL comes in at its real size (millimetres, Z up); an OBJ is fitted to the first object's size. Either lands at the centre. A .sclp, or a .sculpt from the Unity app, adds its objects where they were saved.";
+            if tip(theme::button(ui, w, "Import...", ButtonStyle::default()), tips, help).clicked() {
+                actions.push(Action::Import);
+            }
+            let help = "Write the selected object to a file for another program: OBJ, FBX, PLY, or STL for a 3D printer.";
+            let export = tip(theme::button(ui, w, "Export...", ButtonStyle::default()), tips, help);
+            export_menu(&export, doc, actions);
+        });
         row(ui, actions, &[(
             "Check for Printing",
             Action::CheckForPrinting,
@@ -723,6 +672,50 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     });
     crate::turntable::card(ui, doc);
     crate::timelapse::card(ui, doc);
+}
+
+/// The menu under the File card's Export button: a line per format, each
+/// opening its own save box, and the one setting an export has.
+fn export_menu(button: &egui::Response, doc: &mut Doc, actions: &mut Vec<Action>) {
+    egui::Popup::menu(button).show(|ui| {
+        ui.set_min_width(230.0);
+        let formats = [
+            (
+                "OBJ...",
+                Action::ExportObj,
+                "Write the selected object as a Wavefront OBJ, placed as it is in the scene (position, rotation and scale included). A painted object goes with its colour at every point; its materials need PLY or FBX.",
+            ),
+            (
+                "FBX (Blender, Unity)...",
+                Action::ExportFbx,
+                "Write every selected object into one Autodesk FBX, for Blender, Unity and the like: each an object of its own under its name, placed as it is in the scene, Y up, at real size (1 unit is 1 cm). A painted object goes with its colour, and each face with the material most of it is painted with. Ctrl + click rows of the Objects list to select more than one.",
+            ),
+            (
+                "PLY (painted colour)...",
+                Action::ExportPly,
+                "Write the selected object as a PLY, placed as it is in the scene: the format most programs read painted colour from (MeshLab, colour 3D printing). A painted object goes with its colour and, for each material it is painted with, how much of it is at each point.",
+            ),
+            (
+                "STL for Printing (mm)...",
+                Action::ExportStl,
+                "Write the selected object as a binary STL for a slicer: placed as it is in the scene, upright (Z up), in millimetres at real size (1 unit is 10 mm). If the object has holes it says so first, and asks.",
+            ),
+        ];
+        for (label, action, help) in formats {
+            if ui.button(label).on_hover_text(help).clicked() {
+                actions.push(action);
+                ui.close();
+            }
+        }
+        ui.separator();
+        let help = "Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.";
+        ui.checkbox(&mut doc.opts.fbx_material_weights, "FBX: material weights in UVs").on_hover_text(help);
+        // The list that shows the selection is on another tab, so say here what the file would hold.
+        let picked = doc.scene.selected().len();
+        if picked > 1 {
+            theme::hint(ui, &format!("{picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only."));
+        }
+    });
 }
 
 /// The Scene panel's Look tab: material, lighting, backdrop and effects.

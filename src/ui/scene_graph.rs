@@ -130,8 +130,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<A
         summary += &format!(", {picked} selected");
     }
     let (assets, st) = (&state.assets, &mut state.graph);
-    theme::category(ui, "Objects", theme::lit(ACCENT()), &summary, true, |ui| {
-        theme::heading(ui, "Add");
+    theme::category(ui, "Add Object", Color32::from_rgb(115, 217, 128), "", true, |ui| {
         for row in Primitive::ALL.chunks(3) {
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, row.len(), 4.0);
@@ -154,7 +153,9 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<A
             doc.opts.new_shape_tris = 10f32.powf(log);
         }
         super::spheres::new_rig_button(ui, assets.icon("tool_sspheres"), tips, actions);
-        theme::hint(ui, "Ctrl + click adds to the selection. Double-click renames. Hold a row, then drag, to reorder.");
+    });
+    theme::category(ui, "Objects", theme::lit(ACCENT()), &summary, true, |ui| {
+        theme::about(ui, "Ctrl + click adds to the selection. Double-click renames. Hold a row, then drag, to reorder.");
         if doc.scene.in_local_view() {
             // Stays up for as long as it is on: a scene with most of its
             // objects missing should say why.
@@ -163,10 +164,14 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<A
         }
 
         list(ui, &doc.scene, assets, st, tips, actions);
-
-        theme::heading(ui, "Selected Object");
+    });
+    let name = doc.scene.active().name.clone();
+    theme::category(ui, "Selected Object", Color32::from_rgb(120, 190, 255), &name, true, |ui| {
         selected(ui, doc, assets, st, tips, actions);
         super::mirror_copies::show(ui, doc, assets, tips, actions);
+    });
+    let summary = if picked > 1 { format!("{picked} selected") } else { String::new() };
+    theme::category(ui, "Combine", Color32::from_rgb(230, 160, 90), &summary, true, |ui| {
         combine(ui, doc, assets, st, tips, actions);
     });
 }
@@ -478,33 +483,35 @@ fn selected(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: b
     let w = theme::row_width(ui, 2, 6.0);
     ui.horizontal(|ui| {
         let style = ButtonStyle { icon: assets.icon("clone"), height: 26.0, ..Default::default() };
-        if tip(theme::button(ui, w, "Clone", style), tips, "Duplicates the selected object as a new, independent copy.").clicked() {
+        let help = "Duplicates the selected object as a new, independent copy, in the same place as the original.";
+        if tip(theme::button(ui, w, "Clone", style), tips, help).clicked() {
             actions.push(Action::CloneObject);
         }
-        // Greyed until the object has been sculpted: before that it is
-        // already the shape this goes back to.
-        ui.add_enabled_ui(doc.scene.can_reset(&doc.mesh), |ui| {
-            let style = ButtonStyle { height: 26.0, ..Default::default() };
-            let help = "Puts the selected object back to the shape it had before any sculpting: as it was made, loaded or last remeshed. Undo (Z) brings the sculpt back.";
-            if tip(theme::button(ui, w, "Reset Shape", style), tips, help).clicked() {
-                actions.push(Action::ResetShape);
-            }
-        });
-    });
-    ui.horizontal(|ui| {
         let style = ButtonStyle { icon: assets.icon("instance"), height: 26.0, ..Default::default() };
         let help = "Adds a linked copy that shares this object's mesh: sculpt any one of them and they all change. Each has its own position, name and visibility. It lands on top of the original.";
         if tip(theme::button(ui, w, "Instance", style), tips, help).clicked() {
             actions.push(Action::InstanceObject);
         }
-        ui.add_enabled_ui(doc.scene.users(active.mesh) > 1, |ui| {
+    });
+    // Only once they would do something: Reset Shape after the object has
+    // been sculpted (before that it is the shape this goes back to), Make
+    // Unique on an instance.
+    let (reset, unique) = (doc.scene.can_reset(&doc.mesh), doc.scene.users(active.mesh) > 1);
+    if reset || unique {
+        ui.horizontal(|ui| {
+            let w = theme::row_width(ui, usize::from(reset) + usize::from(unique), 6.0);
+            let style = ButtonStyle { height: 26.0, ..Default::default() };
+            let help = "Puts the selected object back to the shape it had before any sculpting: as it was made, loaded or last remeshed. Undo (Z) brings the sculpt back.";
+            if reset && tip(theme::button(ui, w, "Reset Shape", style), tips, help).clicked() {
+                actions.push(Action::ResetShape);
+            }
             let style = ButtonStyle { height: 26.0, ..Default::default() };
             let help = "Gives the selected instance its own copy of the mesh, so sculpting it no longer changes the others.";
-            if tip(theme::button(ui, w, "Make Unique", style), tips, help).clicked() {
+            if unique && tip(theme::button(ui, w, "Make Unique", style), tips, help).clicked() {
                 actions.push(Action::MakeUnique);
             }
         });
-    });
+    }
 
     theme::heading(ui, "Position");
     let mut position = active.position.to_array();
@@ -561,23 +568,23 @@ fn selected(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: b
     if !busy {
         st.moving = false;
     }
+    // Each only while it would do something: the object turned or resized,
+    // its centre away from the middle of its mesh.
     let placed = active.rotation != glam::Quat::IDENTITY || active.scale != glam::Vec3::ONE;
-    ui.add_enabled_ui(placed, |ui| {
+    if placed {
         let style = ButtonStyle { height: 26.0, ..Default::default() };
         let help = "Puts the object back to its original turn and size. It stays where it is.";
         if tip(theme::button(ui, ui.available_width(), "Reset Rotation and Scale", style), tips, help).clicked() {
             actions.push(Action::ResetTransform);
         }
-    });
-    // Greyed while the centre is in the middle of the mesh already.
-    ui.add_enabled_ui(doc.scene.origin_off_mesh(&doc.mesh).is_some(), |ui| {
+    }
+    if doc.scene.origin_off_mesh(&doc.mesh).is_some() {
         let style = ButtonStyle { height: 26.0, ..Default::default() };
-        let help = "Moves the object's centre to the middle of its mesh without moving the object: nothing changes                     on screen. The centre is where the gizmo sits, what the object turns and resizes about, and                     where its own (Local) mirror planes and radial axis pass, so those come with it. For a piece                     cut off a model, which keeps the model's centre. Instances, live mirror copies and arrays                     stay where they are. Undo (Z) puts the centre back.";
+        let help = "Moves the object's centre to the middle of its mesh without moving the object: nothing changes on screen. The centre is where the gizmo sits, what the object turns and resizes about, and where its own (Local) mirror planes and radial axis pass, so those come with it. For a piece cut off a model, which keeps the model's centre. Instances, live mirror copies and arrays stay where they are. Undo (Z) puts the centre back.";
         if tip(theme::button(ui, ui.available_width(), "Set Origin to Mesh", style), tips, help).clicked() {
             actions.push(Action::SetOriginToMesh);
         }
-    });
-    theme::hint(ui, "New shapes, clones and instances start at the same place as the original.");
+    }
 }
 
 /// The booleans and Join: what they would do to the selection, their
@@ -586,15 +593,15 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
     use sculpt_volume::BooleanOp::{Intersect, Subtract, Union};
 
     let count = doc.scene.selected().len();
-    theme::heading(ui, "Combine (select 2+ objects)");
-    if count > 1 {
-        // Names the survivor: the result keeps that object's centre, and
-        // with it the plane mirrored strokes reflect across.
-        let name = &doc.scene.active().name;
-        theme::hint(ui, &format!("\"{name}\", the bright one, is kept, with its centre and symmetry plane. Whatever else is selected cuts it or goes into it."));
-    } else {
-        theme::hint(ui, "Ctrl + click rows to select more. The bright one is the one kept.");
+    if count < 2 {
+        // Nothing to combine yet: only how to get there.
+        theme::hint(ui, "Ctrl + click two or more objects in the list to cut one with the others, weld them or join them.");
+        return;
     }
+    // Names the survivor: the result keeps that object's centre, and
+    // with it the plane mirrored strokes reflect across.
+    let name = &doc.scene.active().name;
+    theme::hint(ui, &format!("\"{name}\", the bright one, is kept, with its centre and symmetry plane. Whatever else is selected cuts it or goes into it."));
 
     // The booleans keep a resolution of their own: cutting fine detail out
     // of a big block wants a far higher number than remeshing the block, and
@@ -607,18 +614,16 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
         (Union, "bool_union", "Union", "Welds the selected objects into the bright one as one solid. Unlike Join, this leaves no geometry inside the overlap."),
         (Intersect, "bool_intersect", "Intersect", "Keeps only the volume the bright object shares with every other selected object."),
     ];
-    ui.add_enabled_ui(count > 1, |ui| {
-        ui.horizontal(|ui| {
-            let w = theme::row_width(ui, tiles.len(), 4.0);
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for (op, icon, label, what) in tiles {
-                let r = theme::tile(ui, vec2(w, 46.0), assets.icon(icon), label, "", None);
-                let help = format!("{what} The others are {after}. It clears the mask, as a remesh does. Undo (Z) restores the shape and the others.");
-                if tip(r, tips, &help).clicked() {
-                    actions.push(Action::Boolean { op, resolution: resolution as u32, delete: st.bool_delete });
-                }
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, tiles.len(), 4.0);
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (op, icon, label, what) in tiles {
+            let r = theme::tile(ui, vec2(w, 46.0), assets.icon(icon), label, "", None);
+            let help = format!("{what} The others are {after}. It clears the mask, as a remesh does. Undo (Z) restores the shape and the others.");
+            if tip(r, tips, &help).clicked() {
+                actions.push(Action::Boolean { op, resolution: resolution as u32, delete: st.bool_delete });
             }
-        });
+        }
     });
     let mut log = resolution.log2();
     let slider = theme::slider(ui, "Voxel Resolution (across the target)", &mut log, 4f32.log2()..=1024f32.log2(), |v| {
@@ -647,23 +652,21 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
             doc.opts.remesh_resolution = log.exp2().round();
         }
     }
-    ui.add_enabled_ui(count > 1, |ui| {
-        let style = ButtonStyle { icon: assets.icon("join"), ..Default::default() };
-        let help = "Merges every selected object into the bright one, as one mesh. Each shell is kept as it is, masks included. Undo (Z) brings the separate objects back.";
-        if tip(theme::button(ui, ui.available_width(), "Join", style), tips, help).clicked() {
-            actions.push(Action::Join { remesh: st.join_remesh });
-        }
-    });
+    let style = ButtonStyle { icon: assets.icon("join"), ..Default::default() };
+    let help = "Merges every selected object into the bright one, as one mesh. Each shell is kept as it is, masks included. Undo (Z) brings the separate objects back.";
+    if tip(theme::button(ui, ui.available_width(), "Join", style), tips, help).clicked() {
+        actions.push(Action::Join { remesh: st.join_remesh });
+    }
 
     // Not a way of combining, but it takes the same selection, and this is where that is made.
     ui.add_space(6.0);
-    ui.add_enabled_ui(count > 1, |ui| {
-        let label = if count > 1 { format!("Export {count} Objects as FBX...") } else { "Export Selected as FBX...".to_owned() };
+    {
+        let label = format!("Export {count} Objects as FBX...");
         let help = "Writes every selected object into one Autodesk FBX, for Blender, Unity and the like. They arrive together, each an object of its own under its name, standing to one another as they do here, with their live mirror and array copies. Nothing in the scene changes. The same as Export FBX on the File tab.";
         if tip(theme::button(ui, ui.available_width(), &label, ButtonStyle::default()), tips, help).clicked() {
             actions.push(Action::ExportFbx);
         }
-    });
+    }
 }
 
 /// The question that is up (the Delete key's, or one about unsaved work),

@@ -310,6 +310,8 @@ fn brush_tile(library: &Library, tile: Option<usize>) -> (&str, &'static str, St
 
 /// Hold-Space wheel: the brushes when sculpting, the edit modes while the
 /// SSphere tool is up. Tiles are clicked; letting go of Space closes it.
+/// A right-click takes a brush's tile off the wheel and leaves the wheel
+/// open (a right-click on a brush in the panel puts it back).
 /// Under it is a bar for the one value worth setting from here: the brush's
 /// strength, or the next sphere's size.
 pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
@@ -347,6 +349,8 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
         library.entries()[in_hand].name.as_str()
     };
     let mut clicked = None;
+    let mut unpinned = None;
+    let tips = doc.opts.tooltips;
     egui::Area::new(Id::new("radial_menu"))
         .order(Order::Foreground)
         .fixed_pos(center - Vec2::splat(half))
@@ -388,8 +392,11 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
                 // A long name a size down, and the longest cut short, so it
                 // stays on its own tile (the middle of the wheel has it whole).
                 let letters = if name.len() > 8 { 8.0 } else { 10.0 };
-                let shown = shortened(name, 10);
-                p.text(at + vec2(0.0, 18.0 * k), Align2::CENTER_CENTER, shown, theme::bold(letters * k.max(0.95)), fade(theme::TEXT()));
+                let font = theme::bold(letters * k.max(0.95));
+                let fits = |text: &str| p.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE).size().x <= tile_size * scale - 4.0;
+                let count = name.chars().count();
+                let shown = (0..=count).rev().map(|n| shortened(name, n)).find(|text| fits(text)).unwrap_or_default();
+                p.text(at + vec2(0.0, 18.0 * k), Align2::CENTER_CENTER, shown, font, fade(theme::TEXT()));
                 if let Some(badge) = badges.get(i).filter(|badge| !badge.is_empty()) {
                     let corner = tile.right_top() + vec2(-4.0, 3.0);
                     p.text(corner, Align2::RIGHT_TOP, badge, theme::bold(9.0 * k.max(0.95)), fade(theme::KEY));
@@ -399,10 +406,20 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
                     if response.clicked() {
                         clicked = Some(i);
                     }
+                    if response.secondary_clicked() {
+                        unpinned = Some(i);
+                    }
                 }
             }
             p.circle_filled(c, 40.0 * scale, fade(theme::CARD()));
             p.text(c, Align2::CENTER_CENTER, hovered_name.unwrap_or(current), theme::bold(14.0), fade(theme::TEXT()));
+            // Under the middle, while a brush's tile is pointed at: how to
+            // take it off the wheel. Only with the tooltips on.
+            let brush_hovered = !spheres && hovered_name.is_some_and(|name| name != "Mask");
+            if tips && brush_hovered {
+                let at = c + vec2(0.0, 52.0 * scale);
+                p.text(at, Align2::CENTER_CENTER, "Right-click: off the wheel", theme::font(9.0), fade(theme::KEY));
+            }
         });
     if spheres {
         // The size of the next sphere, set from under the wheel.
@@ -410,6 +427,9 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
     } else {
         let name = doc.sculptor.library.entries()[in_hand].name.clone();
         strength_bar(ctx, &mut doc.sculptor.settings, &name, center, half, open);
+    }
+    if let Some(Some(brush)) = unpinned.filter(|_| !spheres).map(|i| brushes[i]) {
+        doc.sculptor.library.set_pinned(brush, false);
     }
     if let Some(i) = clicked {
         if spheres {

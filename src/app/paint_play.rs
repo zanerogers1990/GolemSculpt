@@ -324,7 +324,7 @@ impl Running {
             vec![("Paint Layers", true), ("Symmetry", false), ("Remesh", false), ("Subdivision Levels", false), ("Layers", false)]
         } else {
             self.doc.opts.tabs.sculpt = crate::ui::tabs::Sculpt::Brush;
-            vec![("Brush Library", false), ("Brush Settings", true)]
+            vec![("Brushes", false), ("Brush Settings", true)]
         };
         let cards = cards.into_iter().map(|(card, open)| (card.to_owned(), open)).collect();
         crate::prefs::cards::restore(&self.egui_ctx, &cards);

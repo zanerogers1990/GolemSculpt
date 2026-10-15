@@ -160,7 +160,7 @@ pub fn section(ui: &mut Ui, s: &mut Settings, tips: bool, actions: &mut Vec<Acti
         tips,
         "Swap black and white: bumps become pits.",
     );
-    theme::hint(
+    theme::about(
         ui,
         "The brush's soft edge still fades the picture toward the ring: slide Focal Shift toward Hard to print more of it. A stroke smears a picture along itself; Drag to Place prints it once, whole.",
     );

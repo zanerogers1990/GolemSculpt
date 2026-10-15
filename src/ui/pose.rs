@@ -90,7 +90,7 @@ pub fn settings(ui: &mut Ui, s: &mut Settings, tips: bool) {
         tips,
         "How sharply the limb bends at a joint: low bends in a long soft curve, high like a hinge.",
     );
-    theme::hint(
+    theme::about(
         ui,
         "The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that \
          stays put. The brush size sets how far up the limb the joint is.",

@@ -37,10 +37,12 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
     let place = mesh.levels.as_ref().map(|l| (l.current(), l.count()));
     let summary = place.map_or(String::new(), |(level, count)| format!("Level {} of {count}", level + 1));
     theme::category(ui, "Subdivision", TINT, &summary, true, |ui| {
-        theme::hint(
+        theme::about(
             ui,
             "Levels of the same model, each with four times the triangles of the one below. Shape the big forms on a \
-             low level and the detail on a high one: what is sculpted on one is kept on the others.",
+             low level and the detail on a high one: what is sculpted on one is kept on the others.\n\n\
+             A big change made on a low level comes back up with the fine detail riding on it. One point pulled out by \
+             itself on a low level comes back up as a softer, lower swelling: the finer levels round it off.",
         );
         subdivide(ui, mesh, &mut doc.opts.subdivide_flat, tips, actions);
         let Some((level, count)) = place else { return };
@@ -53,11 +55,6 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
         }
         let bytes = mesh.levels.as_ref().map_or(0, |l| l.whole_bytes());
         theme::hint(ui, &format!("The levels take {} of memory beside the model itself.", megabytes(bytes)));
-        theme::hint(
-            ui,
-            "A big change made on a low level comes back up with the fine detail riding on it. One point pulled out by \
-             itself on a low level comes back up as a softer, lower swelling: the finer levels round it off.",
-        );
     });
 }
 

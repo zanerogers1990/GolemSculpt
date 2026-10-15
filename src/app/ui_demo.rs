@@ -230,6 +230,14 @@ impl Running {
         }
     }
 
+    /// The right button (a pen's barrel button) pressed or let go at `at`,
+    /// for the interface only: what it does over the model is not tried here.
+    fn ui_demo_right_button(&mut self, at: Pos2, pressed: bool) {
+        self.ui_demo_move(at);
+        let (button, modifiers) = (egui::PointerButton::Secondary, egui::Modifiers::default());
+        self.egui_state.egui_input_mut().events.push(egui::Event::PointerButton { pos: at, button, pressed, modifiers });
+    }
+
     /// Where an area of the interface was last drawn, if it is showing.
     fn ui_demo_area(&self, id: impl std::hash::Hash + std::fmt::Debug, order: Order) -> Option<egui::Rect> {
         let id = Id::new(id);
@@ -503,7 +511,10 @@ impl Running {
                 self.ui_demo_button(here, false);
             }
             7 => {
-                expect("but it is the card's own: the tap picked the brush under it", self.doc.sculptor.settings.brush == Brush::Move);
+                // The first row of the card: plain Clay (Clay Strips starts in hand).
+                let (library, s) = (&self.doc.sculptor.library, &self.doc.sculptor.settings);
+                let clay = library.selected(s) == crate::sculpt::library::Library::base(Brush::Clay);
+                expect("but it is the card's own: the tap picked the brush under it", clay);
                 self.ui_demo.kept = (size, zoom);
                 self.wheel(1.0);
                 self.wheel(-3.0);
@@ -813,10 +824,12 @@ impl Running {
         false
     }
 
-    /// The steps of `play` on the Brush Library card and the brush wheel,
-    /// worked with the pen: pick a row, duplicate, rename through the Name
-    /// box, pin, pick the pinned brush's tile on the wheel, mark the brush
-    /// Shift uses, Reset, Delete and Restore Shipped Brushes. (Never Import
+    /// The steps of `play` on the Brushes card and the brush wheel, worked
+    /// with the pen: pick a row, duplicate it from its right-click menu,
+    /// rename the copy through the Name box, put it on the wheel from the
+    /// menu, pick its tile on the wheel, mark the brush Shift uses, Reset,
+    /// Delete and Restore Shipped, then take a tile off the wheel with a
+    /// right-click and put it back from its row's menu. (Never Import
     /// Brush... or Export Brush...: those open file boxes.)
     ///
     /// The card floats while this runs, at the interface size the app is
@@ -833,11 +846,17 @@ impl Running {
         let (library, s) = (&self.doc.sculptor.library, &self.doc.sculptor.settings);
         let in_hand = library.entries()[library.selected(s)].clone();
         let found = |name: &str| self.doc.sculptor.library.named(name);
+        let pinned = |name: &str| found(name).is_some_and(|i| self.doc.sculptor.library.entries()[i].pinned);
         let wheel = self.ui_demo_area("radial_menu", Order::Foreground);
-        // Even steps past the first few are the pen coming up where it went down.
+        let missing = |name: &str| println!("     (the control called {name} is not on the window)");
+        // The pen pressed on a control, or its barrel button on one.
         let presses = |running: &mut Running, name: &str| match at(name) {
             Some(at) => running.ui_demo_button(at, true),
-            None => println!("     (the control called {name} is not on the window)"),
+            None => missing(name),
+        };
+        let right = |running: &mut Running, name: &str| match at(name) {
+            Some(at) => running.ui_demo_right_button(at, true),
+            None => missing(name),
         };
         match step {
             0 => {
@@ -848,26 +867,30 @@ impl Running {
                 let sculptor = &mut self.doc.sculptor;
                 sculptor.library.select(Library::base(Brush::Clay), &mut sculptor.settings);
                 watch(&ctx, true);
-                floating::float(&ctx, "Brush Library", pos2(330.0, 8.0));
+                floating::float(&ctx, "Brushes", pos2(330.0, 8.0));
             }
             1 => {
-                let up = floating::window(&ctx, "Brush Library").is_some_and(|card| screen.contains_rect(card.shrink(1.0)));
-                expect("the Brush Library card floats, all of it on the window", up);
+                let up = floating::window(&ctx, "Brushes").is_some_and(|card| screen.contains_rect(card.shrink(1.0)));
+                expect("the Brushes card floats, all of it on the window", up);
                 expect("with a row for every brush that ships", at("row:Trim").zip(at("row:Spread")).is_some());
                 presses(self, "row:Trim");
             }
             3 => {
                 let picked = in_hand.name == "Trim" && s.brush == Brush::Flatten && s.current().flatten_mode == crate::sculpt::FlattenMode::Scrape;
                 expect("a tap on a row takes that brush in hand, with its own settings", picked);
-                presses(self, "Duplicate");
+                right(self, "row:Trim");
             }
             5 => {
+                expect("a right-click on a row offers its menu", at("menu:Duplicate").is_some());
+                presses(self, "menu:Duplicate");
+            }
+            7 => {
                 let copied = in_hand.name == "Trim Copy" && in_hand.origin == Origin::User;
                 expect("Duplicate makes a brush of your own from it and puts that in hand", copied);
                 expect("which has a Name box and a row under Yours", at("Name").zip(at("row:Trim Copy")).is_some());
                 presses(self, "Name");
             }
-            7 => {
+            9 => {
                 // Select what is there, type over it, Enter.
                 let key = |key: egui::Key, pressed: bool, modifiers: egui::Modifiers| egui::Event::Key {
                     key,
@@ -886,78 +909,100 @@ impl Running {
                 ];
                 self.egui_state.egui_input_mut().events.extend(typed);
             }
-            8 => {
+            10 => {
                 expect("a name typed in the box and Enter renames it", in_hand.name == "Knife" && found("Trim Copy").is_none());
                 expect("and its row goes by the new name", at("row:Knife").is_some());
-                presses(self, "Pin");
+                right(self, "row:Knife");
             }
-            10 => {
-                expect("a tap on On the Space Wheel pins it", in_hand.name == "Knife" && in_hand.pinned);
+            12 => presses(self, "menu:Wheel"),
+            14 => {
+                expect("Put On the Space Wheel in its menu pins it", in_hand.name == "Knife" && pinned("Knife"));
                 presses(self, "row:Clay Tubes");
             }
-            12 => {
+            16 => {
                 expect("another row takes another brush in hand", in_hand.name == "Clay Tubes");
                 // Clear of the card.
                 self.ui_demo_wheel(Vec2::new(0.72, 0.5));
             }
-            13 => {
+            17 => {
                 let tile = found("Knife").and_then(|knife| crate::ui::brush_wheel_tile(&self.doc.sculptor.library, knife));
                 expect("the wheel has a tile for the pinned brush", wheel.zip(tile).is_some());
                 if let Some((wheel, tile)) = wheel.zip(tile) {
                     self.ui_demo_button(wheel.center() + tile, true);
                 }
             }
-            15 => {
+            19 => {
                 expect("a tap on that tile takes the brush in hand and closes the wheel", in_hand.name == "Knife" && self.ui.radial.is_none());
                 presses(self, "row:Relax");
             }
-            17 => {
-                expect("a smoothing brush in hand has a Shift tick", in_hand.name == "Relax" && at("Shift").is_some());
-                presses(self, "Shift");
-            }
-            19 => {
-                let marked = found("Relax") == Some(self.doc.sculptor.library.shift());
-                expect("a tap on Shift Uses This Brush marks it as the one Shift smooths with", marked);
-                self.doc.sculptor.settings.current_mut().strength = 0.93;
-                presses(self, "Reset");
-            }
             21 => {
-                let back = in_hand.name == "Relax" && s.current().strength == in_hand.made().settings.strength;
-                expect("Reset puts the brush in hand back as it shipped", back && s.current().strength != 0.93);
-                presses(self, "row:Knife");
+                expect("a smoothing brush can be picked", in_hand.name == "Relax");
+                right(self, "row:Relax");
             }
             23 => {
-                expect("the brush of your own is in hand again", in_hand.name == "Knife");
-                presses(self, "Delete");
+                expect("and its menu offers Shift Smooths With This", at("menu:Shift").is_some());
+                presses(self, "menu:Shift");
             }
             25 => {
-                expect("Delete takes it out, and its kind's base brush is in hand", found("Knife").is_none() && in_hand.name == "Flatten");
-                presses(self, "row:Fill");
+                let marked = found("Relax") == Some(self.doc.sculptor.library.shift());
+                expect("which marks it as the one Shift smooths with", marked);
+                self.doc.sculptor.settings.current_mut().strength = 0.93;
+                right(self, "row:Relax");
             }
-            27 => {
-                expect("a brush that ships can be picked", in_hand.name == "Fill");
-                presses(self, "Delete");
-            }
+            27 => presses(self, "menu:Reset"),
             29 => {
+                let back = in_hand.name == "Relax" && s.current().strength == in_hand.made().settings.strength;
+                expect("Reset puts the brush back as it shipped", back && s.current().strength != 0.93);
+                right(self, "row:Knife");
+            }
+            31 => presses(self, "menu:Delete"),
+            33 => {
+                expect("Delete takes a brush of your own out", found("Knife").is_none() && in_hand.name == "Relax");
+                right(self, "row:Fill");
+            }
+            35 => presses(self, "menu:Delete"),
+            37 => {
                 let gone = found("Fill").is_none() && self.doc.sculptor.library.removed() == ["Fill".to_owned()];
-                expect("and deleted, which is remembered", gone);
-                expect("and a Restore Shipped Brushes button appears", at("Restore").is_some());
+                expect("and a brush that ships, which is remembered", gone);
+                expect("and a Restore Shipped button appears", at("Restore").is_some());
                 presses(self, "Restore");
             }
-            31 => {
+            39 => {
                 let back = found("Fill").is_some() && self.doc.sculptor.library.removed().is_empty();
                 expect("a tap on it brings the brush back", back);
+                self.ui_demo_wheel(Vec2::new(0.72, 0.5));
+            }
+            40 => {
+                let tile = found("Clay Strips").and_then(|strips| crate::ui::brush_wheel_tile(&self.doc.sculptor.library, strips));
+                expect("Clay Strips starts on the wheel", wheel.zip(tile).is_some());
+                if let Some((wheel, tile)) = wheel.zip(tile) {
+                    self.ui_demo_right_button(wheel.center() + tile, true);
+                }
+            }
+            42 => {
+                expect("a right-click on its tile takes it off the wheel", !pinned("Clay Strips"));
+                expect("and the wheel stays up", self.ui.radial.is_some());
+                self.ui.radial = None;
+                right(self, "row:Clay Strips");
+            }
+            44 => {
+                expect("its row's menu offers to put it back", at("menu:Wheel").is_some());
+                presses(self, "menu:Wheel");
+            }
+            46 => {
+                expect("and Put On the Space Wheel does", pinned("Clay Strips"));
                 // As it was found.
                 let sculptor = &mut self.doc.sculptor;
                 sculptor.library.set_shift(Library::base(Brush::Smooth), &mut sculptor.settings);
                 sculptor.library.select(Library::base(Brush::Clay), &mut sculptor.settings);
                 watch(&ctx, false);
-                floating::dock(&ctx, "Brush Library");
+                floating::dock(&ctx, "Brushes");
                 self.doc.opts.ui_scale = self.ui_demo.kept.0;
             }
-            // The pen comes up where it went down.
-            2 | 4 | 6 | 9 | 11 | 14 | 16 | 18 | 20 | 22 | 24 | 26 | 28 | 30 => self.ui_demo_button(here, false),
-            _ => return self.ui_demo_pen_step(step - 32, expect),
+            // The pen, or its barrel button, comes up where it went down.
+            4 | 11 | 22 | 26 | 30 | 34 | 41 | 43 => self.ui_demo_right_button(here, false),
+            2 | 6 | 8 | 13 | 15 | 18 | 20 | 24 | 28 | 32 | 36 | 38 | 45 => self.ui_demo_button(here, false),
+            _ => return self.ui_demo_pen_step(step - 47, expect),
         }
         false
     }

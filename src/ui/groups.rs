@@ -119,10 +119,12 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
     let count = doc.mesh.group_count();
     let summary = if count == 0 { String::new() } else { counted(count) };
     theme::category(ui, "Face Groups", TINT, &summary, false, |ui| {
-        theme::hint(
+        theme::about(
             ui,
             "Regions of the surface, each with a colour of its own, to hide, mask and sculpt one at a time. Make one \
-             from the mask, from what shows, or let the model's own parts and edges split it.",
+             from the mask, from what shows, or let the model's own parts and edges split it.\n\n\
+             Stay in Group, on the Brush tab, keeps a brush inside the group its stroke begins on. Groups are saved \
+             with the scene and written to OBJ files.",
         );
         let help = "Tints every face with the colour of its group, over whatever material is showing. A group keeps \
                     its colour for good; surface in no group keeps the material's own colour.";
@@ -140,11 +142,6 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
                 actions.push(Action::Groups(Ask::Clear));
             }
         });
-        theme::hint(
-            ui,
-            "Stay in Group, on the Brush tab, keeps a brush inside the group its stroke begins on. Groups are saved \
-             with the scene and written to OBJ files.",
-        );
     });
 }
 

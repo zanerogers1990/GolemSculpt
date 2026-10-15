@@ -99,10 +99,10 @@ impl Home {
     /// The settings as they were last saved. Anything that cannot be read
     /// comes back as the built-in value; this never fails.
     pub fn load(&self) -> Prefs {
-        let Some(file) = self.settings_file() else { return Prefs::default() };
+        let Some(file) = self.settings_file() else { return Prefs::fresh() };
         match std::fs::read_to_string(&file) {
             Ok(text) => Prefs::parse(&text),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Prefs::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Prefs::fresh(),
             Err(e) => {
                 log::warn!("could not read {}: {e}", file.display());
                 Prefs::default()
@@ -569,6 +569,16 @@ impl Default for Prefs {
 }
 
 impl Prefs {
+    /// The settings of a first run, with no settings file yet: the built-in
+    /// ones, with the brush a fresh app starts with in hand. (Not
+    /// `Default`: that also fills in what an older file lacks, and a file
+    /// from before there was a library keeps the brush it was left on.)
+    pub fn fresh() -> Prefs {
+        let mut prefs = Prefs::default();
+        prefs.library.selected = crate::sculpt::library::shipped::IN_HAND.to_owned();
+        prefs
+    }
+
     /// Reads the text of a settings file written by any version of the app.
     pub fn parse(text: &str) -> Prefs {
         let defaults = Prefs::default();
@@ -736,14 +746,16 @@ mod tests {
 
     #[test]
     fn a_missing_or_unreadable_file_gives_the_built_in_settings() {
+        // No file at all is a first run: Clay Strips is in hand.
         let (home, dir) = settings_in("missing");
-        assert_eq!(home.load(), Prefs::default());
+        assert_eq!(home.load(), Prefs::fresh());
+        assert_eq!(Prefs::fresh().library.selected, "Clay Strips");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE_NAME), "{ this is not json").unwrap();
         assert_eq!(home.load(), Prefs::default());
         std::fs::write(dir.join(FILE_NAME), "[1, 2, 3]").unwrap();
         assert_eq!(home.load(), Prefs::default());
-        assert_eq!(Home::nowhere().load(), Prefs::default());
+        assert_eq!(Home::nowhere().load(), Prefs::fresh());
         // And a run that may not write leaves no file behind.
         let (_, dir) = settings_in("read_only");
         std::fs::create_dir_all(&dir).unwrap();

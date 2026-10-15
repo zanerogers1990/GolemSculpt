@@ -14,27 +14,53 @@ use crate::doc::Doc;
 /// Tool buttons to a row, as in the row of the app's own tools above them.
 const PER_ROW: usize = 3;
 
-/// A button per hosted tool, under the app's own tool buttons.
+/// The groups the hosted tools' buttons are sorted into, by the tools' ids,
+/// each under a heading that folds it away. A tool in none of them (one
+/// added later, say) goes under the last.
+const GROUPS: [(&str, &[&str]); 3] = [
+    ("Make", &["tube", "muscle", "lathe", "array", "extract"]),
+    ("Mask, Hide & Cut", &["mask", "hide", "trim", "split"]),
+    ("Print & Measure", &["measure", "keys"]),
+];
+
+/// Which of `GROUPS` the tool `id` is under.
+fn group_of(id: &str) -> usize {
+    GROUPS.iter().position(|(_, ids)| ids.contains(&id)).unwrap_or(GROUPS.len() - 1)
+}
+
+/// A button per hosted tool, under the app's own tool buttons, in groups.
+/// The group of the tool that is up stays open.
 pub fn buttons(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState) {
     let active = doc.tools.active(doc.tool);
-    let all: Vec<usize> = (0..doc.tools.len()).collect();
-    for row in all.chunks(PER_ROW) {
-        ui.horizontal(|ui| {
-            let w = theme::row_width(ui, PER_ROW, 6.0);
-            for &index in row {
-                let Some(info) = doc.tools.info(index) else { continue };
-                let style = ButtonStyle {
-                    icon: state.assets.icon(info.icon),
-                    active: (active == Some(index)).then_some(ACCENT()),
-                    // No hotkey badge: at a third of the panel it would sit
-                    // on the name. The tooltip gives the key.
-                    ..Default::default()
-                };
-                if tip(theme::button(ui, w, info.name, style), doc.opts.tooltips, info.tip).clicked() {
-                    doc.tools.toggle(index, doc.tool);
+    for (g, (title, _)) in GROUPS.iter().enumerate() {
+        let members: Vec<usize> = (0..doc.tools.len()).filter(|&i| doc.tools.info(i).is_some_and(|info| group_of(info.id) == g)).collect();
+        if members.is_empty() {
+            continue;
+        }
+        let up = active.is_some_and(|i| members.contains(&i));
+        if !theme::fold(ui, title, true, up) {
+            continue;
+        }
+        // Four short names fit four to a row.
+        let per_row = if members.len() == 4 { 4 } else { PER_ROW };
+        for row in members.chunks(per_row) {
+            ui.horizontal(|ui| {
+                let w = theme::row_width(ui, per_row, 6.0);
+                for &index in row {
+                    let Some(info) = doc.tools.info(index) else { continue };
+                    let style = ButtonStyle {
+                        icon: state.assets.icon(info.icon),
+                        active: (active == Some(index)).then_some(ACCENT()),
+                        // No hotkey badge: at a third of the panel it would sit
+                        // on the name. The tooltip gives the key.
+                        ..Default::default()
+                    };
+                    if tip(theme::button(ui, w, info.name, style), doc.opts.tooltips, info.tip).clicked() {
+                        doc.tools.toggle(index, doc.tool);
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 }
 

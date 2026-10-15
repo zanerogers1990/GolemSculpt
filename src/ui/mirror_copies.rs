@@ -1,16 +1,17 @@
-//! The Mirror section of the Objects card: live copies of the selected object
+//! The Live Mirror section of the Selected Object card: live copies of the selected object
 //! across the world's X, Y and Z planes, drawn from its own mesh, so sculpting
 //! or moving either side shows on both. Wording follows the Unity app's
 //! Mirror & Combine card.
 //!
-//! The ticks pick the axes for the next press of Mirror. Once the object is
-//! mirrored they show that mirror's axes instead, and a tick changes it at
-//! once, like Nomad's repeater panel; unticking the last axis would delete the
-//! mirror without saying so, and Remove is for that. Validate turns the copies
+//! Until the object is mirrored there is a button per world plane, and one
+//! press makes the live copy. Once it is mirrored, ticks show that mirror's
+//! axes and a tick changes it at once, like Nomad's repeater panel; unticking
+//! the last axis would delete the mirror without saying so, and Remove is for
+//! that. Validate turns the copies
 //! into objects of their own. Below them, when there are copies, is the side
 //! the transform gizmo is on: the object or one of its copies.
 
-use egui::{Id, Ui};
+use egui::Ui;
 use sculpt_symmetry::MirrorRepeater;
 
 use super::assets::Assets;
@@ -19,20 +20,36 @@ use super::tip;
 use crate::doc::{Action, Doc};
 use crate::scene::MirrorCommand;
 
-/// Axes ticked, for the next press of Mirror, when the object has no mirror.
-const TICKED: &str = "mirror_axes";
 /// X, Y and Z by their bit in the mask.
 const AXES: [(u8, &str); 3] = [(1, "X"), (2, "Y"), (4, "Z")];
 
 pub fn show(ui: &mut Ui, doc: &Doc, assets: &Assets, tips: bool, actions: &mut Vec<Action>) {
     let scene = &doc.scene;
     let object = scene.active();
-    let mirror = object.mirror;
-    theme::heading(ui, "Mirror (across the world origin)");
+    theme::heading(ui, "Live Mirror (across the world origin)");
+    let Some(mirror) = object.mirror else {
+        // Nothing mirrored yet: a button per plane, and one press makes the copy.
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let w = theme::row_width(ui, 3, 4.0);
+            for (i, (bit, name)) in AXES.into_iter().enumerate() {
+                let style = ButtonStyle { icon: (i == 0).then(|| assets.icon("mirror")).flatten(), height: 26.0, ..Default::default() };
+                let help = format!(
+                    "Adds a live mirrored copy of the selected object across the world {name} plane. It is the same mesh \
+                     drawn again, so sculpting, remeshing or cutting either side shows on both, and moving one moves \
+                     the other. More planes can be ticked afterwards. Click a copy to work from its side."
+                );
+                if tip(theme::button(ui, w, &format!("Mirror {name}"), style), tips, &help).clicked() {
+                    actions.push(Action::Mirror(MirrorCommand::Set(bit)));
+                }
+            }
+        });
+        theme::hint(ui, "A live copy: sculpt or move either side and the other follows.");
+        return;
+    };
 
-    let memory = Id::new(TICKED);
-    let kept: u8 = ui.data(|d| d.get_temp(memory)).unwrap_or(1);
-    let shown = mirror.map_or(kept, |m| m.axis_mask);
+    // Mirrored: the ticks are the planes it is mirrored across, and change it at once.
+    let shown = mirror.axis_mask;
     let mut axes = shown;
     ui.horizontal(|ui| {
         for (i, (bit, name)) in AXES.into_iter().enumerate() {
@@ -43,53 +60,29 @@ pub fn show(ui: &mut Ui, doc: &Doc, assets: &Assets, tips: bool, actions: &mut V
             }
         }
     });
-    // Unticking the last axis of a live mirror leaves it as it is.
-    if mirror.is_some() && axes == 0 {
-        axes = shown;
-    }
-    if mirror.is_some() && axes != shown {
+    // Unticking the last axis leaves the mirror as it is: Remove is for that.
+    if axes != 0 && axes != shown {
         actions.push(Action::Mirror(MirrorCommand::Set(axes)));
     }
-    ui.data_mut(|d| d.insert_temp(memory, axes));
-
-    let w = theme::row_width(ui, 3, 4.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.add_enabled_ui(mirror.is_none() && axes != 0, |ui| {
-            let style = ButtonStyle { icon: assets.icon("mirror"), height: 26.0, ..Default::default() };
-            let help = "Adds a live mirrored copy of the selected object across the ticked world planes. It is the same mesh drawn again, so sculpting, remeshing or cutting either side shows on both, and moving one moves the other. Click a copy to work from its side.";
-            if tip(theme::button(ui, w, "Mirror", style), tips, help).clicked() {
-                actions.push(Action::Mirror(MirrorCommand::Set(axes)));
-            }
-        });
-        ui.add_enabled_ui(mirror.is_some(), |ui| {
-            let style = ButtonStyle { height: 26.0, ..Default::default() };
-            let help = "Turns the live mirror copies into real, separate objects, exactly where they are. Undo (Z) makes them live again.";
-            if tip(theme::button(ui, w, "Validate", style), tips, help).clicked() {
-                actions.push(Action::Mirror(MirrorCommand::Validate));
-            }
-            let style = ButtonStyle { height: 26.0, ..Default::default() };
-            let help = "Removes the selected object's live mirror copies. Undo (Z) brings them back.";
-            if tip(theme::button(ui, w, "Remove", style), tips, help).clicked() {
-                actions.push(Action::Mirror(MirrorCommand::Remove));
-            }
-        });
-    });
-
-    match mirror {
-        None => theme::hint(ui, "A live copy: sculpt or move either side and the other follows."),
-        Some(mirror) => {
-            let (name, copies) = (&object.name, mirror.copy_count());
-            let across = MirrorRepeater::axis_name_of(mirror.axis_mask);
-            let live = if copies == 1 { "1 live copy" } else { &format!("{copies} live copies") };
-            theme::line(
-                ui,
-                &format!("\"{name}\" is mirrored across {across} ({live}). Validate to make them real."),
-                theme::OK,
-            );
-            sides(ui, doc, tips, &mirror, actions);
+        let w = theme::row_width(ui, 2, 4.0);
+        let style = ButtonStyle { height: 26.0, ..Default::default() };
+        let help = "Turns the live mirror copies into real, separate objects, exactly where they are. Undo (Z) makes them live again.";
+        if tip(theme::button(ui, w, "Validate", style), tips, help).clicked() {
+            actions.push(Action::Mirror(MirrorCommand::Validate));
         }
-    }
+        let style = ButtonStyle { height: 26.0, ..Default::default() };
+        let help = "Removes the selected object's live mirror copies. Undo (Z) brings them back.";
+        if tip(theme::button(ui, w, "Remove", style), tips, help).clicked() {
+            actions.push(Action::Mirror(MirrorCommand::Remove));
+        }
+    });
+    let (name, copies) = (&object.name, mirror.copy_count());
+    let across = MirrorRepeater::axis_name_of(mirror.axis_mask);
+    let live = if copies == 1 { "1 live copy" } else { &format!("{copies} live copies") };
+    theme::line(ui, &format!("\"{name}\" is mirrored across {across} ({live}). Validate to make them real."), theme::OK);
+    sides(ui, doc, tips, &mirror, actions);
 }
 
 /// Which side of the object the transform gizmo is on: the object, or one of

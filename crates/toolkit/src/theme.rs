@@ -281,6 +281,19 @@ fn paint_window_button(ui: &Ui, rect: Rect, dock: bool, response: &Response) {
 }
 
 /// A card's contents under its header, with the card's margins.
+/// A card with no header: a plate for what is always shown, so it cannot
+/// be folded away or floated (the brush's size and strength, say).
+pub fn plate(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
+    let width = ui.available_width();
+    egui::Frame::new().fill(CARD()).corner_radius(7.0).show(ui, |ui| {
+        ui.set_width(width);
+        egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 10 }).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            body(ui);
+        });
+    });
+}
+
 pub(crate) fn card_body(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 12 }).show(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
@@ -346,6 +359,56 @@ pub fn heading(ui: &mut Ui, text: &str) {
 
 pub fn hint(ui: &mut Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).font(font(11.0)).italics().color(HINT())).wrap());
+}
+
+/// A small heading that folds what is under it away when pressed: a
+/// triangle (down while open, right while folded) and the title. Whether it
+/// is open is kept by title, under the id a [`category`] of that title would
+/// have, so an app that remembers its cards remembers these the same way.
+/// It starts open or not as `default_open` says. `open_anyway` shows it open
+/// whatever was last chosen (the group of the tool that is up, say). Gives
+/// back whether to draw what is under it.
+pub fn fold(ui: &mut Ui, title: &str, default_open: bool, open_anyway: bool) -> bool {
+    let id = ui.make_persistent_id(("category", title));
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open));
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
+    if response.clicked() {
+        open = !open || open_anyway;
+        ui.data_mut(|d| d.insert_persisted(id, open));
+    }
+    let shown = open || open_anyway;
+    let ink = if response.hovered() { TEXT() } else { HINT() };
+    let c = pos2(rect.left() + 5.0, rect.center().y);
+    let points = if shown {
+        vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
+    } else {
+        vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(points, ink, Stroke::NONE));
+    ui.painter().text(pos2(rect.left() + 13.0, rect.center().y), Align2::LEFT_CENTER, title, bold(11.0), ink);
+    shown
+}
+
+/// What a card, or a part of one, is for and how to use it, kept out of the
+/// way: one faint line, "How it works", that shows `text` when pointed at.
+/// It shows whatever the Tooltips setting says, since the line is there to
+/// be pointed at. For what a single button does, its own tip is the place.
+pub fn about(ui: &mut Ui, text: &str) {
+    const LABEL: &str = "How it works";
+    let width = ui.painter().layout_no_wrap(LABEL.to_owned(), font(11.0), HINT()).size().x;
+    let (rect, response) = ui.allocate_exact_size(vec2(18.0 + width, 16.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let ink = if response.hovered() { TEXT() } else { HINT() };
+        let p = ui.painter();
+        let mark = pos2(rect.left() + 7.0, rect.center().y);
+        p.circle_stroke(mark, 6.0, Stroke::new(1.0, ink));
+        p.text(mark + vec2(0.0, 0.5), Align2::CENTER_CENTER, "i", bold(9.0), ink);
+        p.text(pos2(rect.left() + 18.0, rect.center().y), Align2::LEFT_CENTER, LABEL, font(11.0), ink);
+    }
+    response.on_hover_ui(|ui| {
+        ui.set_max_width(280.0);
+        ui.label(egui::RichText::new(text).font(font(12.0)));
+    });
 }
 
 pub struct ButtonStyle<'a> {

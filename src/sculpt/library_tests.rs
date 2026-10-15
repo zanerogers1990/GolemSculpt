@@ -53,14 +53,16 @@ fn the_library_starts_as_the_fourteen_base_brushes_then_the_shipped_ones() {
     for (i, kernel) in Brush::ALL.into_iter().enumerate() {
         let entry = &library.entries()[i];
         assert_eq!((entry.name.as_str(), entry.kernel, entry.origin), (kernel.name(), kernel, Origin::Base));
-        // All but Erase Layer and Paint, which are pinned by whoever wants them there.
+        // All but Erase Layer and Paint, which are pinned by whoever wants
+        // them there, and Clay, whose place Clay Strips has.
         assert_eq!(entry.pinned, kernel.starts_on_wheel(), "{}: the base brushes start on the wheel", entry.name);
-        assert_eq!(kernel.starts_on_wheel(), !matches!(kernel, Brush::EraseLayer | Brush::Paint));
+        assert_eq!(kernel.starts_on_wheel(), !matches!(kernel, Brush::Clay | Brush::EraseLayer | Brush::Paint));
         assert!(library.record(i, &s) == Record::base(kernel), "{} starts as its kernel does", entry.name);
     }
     let shipped = &library.entries()[Brush::COUNT..];
     assert!(shipped.len() >= 10, "a starter library ships");
-    assert!(shipped.iter().all(|e| e.origin == Origin::Shipped && !e.pinned));
+    // Off the wheel, but for Clay Strips in the plain Clay's place.
+    assert!(shipped.iter().all(|e| e.origin == Origin::Shipped && e.pinned == (e.name == "Clay Strips")));
     for name in ["Clay Strips", "Dam Standard", "Trim", "Smooth Peaks", "Rake"] {
         assert!(library.named(name).is_some(), "{name} ships");
     }
