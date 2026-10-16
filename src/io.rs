@@ -1844,7 +1844,7 @@ pub(crate) fn time_stamp() -> String {
 
 /// A Unix time (seconds, UTC) in the same form as [`time_stamp`].
 #[cfg_attr(windows, allow(dead_code))] // Windows asks the system for local time instead
-fn stamp_from_unix(seconds: u64) -> String {
+pub(crate) fn stamp_from_unix(seconds: u64) -> String {
     let (days, rest) = ((seconds / 86_400) as i64, seconds % 86_400);
     // Days since 1970-01-01 to a calendar date (Howard Hinnant's civil_from_days).
     let z = days + 719_468;

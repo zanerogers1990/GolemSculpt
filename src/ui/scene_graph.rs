@@ -7,7 +7,7 @@
 //! work on is bright, the others selected with it grey. Join merges them
 //! into the bright one, and Subtract, Union and Intersect cut it with them
 //! or weld them into it; Export as FBX writes them all into one file. The
-//! question the Delete key asks is drawn here too.
+//! question the Delete key and a row's bin ask is drawn here too.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -419,12 +419,14 @@ fn rows(ui: &mut Ui, scene: &Scene, assets: &Assets, st: &mut State, tips: bool,
             let response = ui.interact(trash, Id::new(("object_trash", o.id)), Sense::click());
             look.hover[2] = response.hovered();
             let help = if look.linked {
-                "Deletes this object. The mesh and its other copies stay. Undo (Z) restores it."
+                "Deletes this object, after asking. The mesh and its other copies stay. Undo (Z) restores it."
             } else {
-                "Deletes this object. Undo (Z) restores it."
+                "Deletes this object, after asking. Undo (Z) restores it."
             };
+            // It asks, as the Delete key does: the bin sits at the end of
+            // every row, and one click on the wrong one cost the Door.
             if tip(response, tips, help).clicked() && look.can_delete {
-                actions.push(Action::DeleteObject(o.id));
+                st.ask_delete(o.id);
             }
         }
         paint_row(ui.painter(), rect, o, &look, assets);

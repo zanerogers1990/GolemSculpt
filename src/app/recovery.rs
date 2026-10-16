@@ -571,9 +571,30 @@ impl Running {
     /// this run's copies go, and those the user said to discard. Closed any
     /// other way over unsaved work, they stay, and the next start offers
     /// them.
+    ///
+    /// Closing properly over unsaved work is "Exit Without Saving". That
+    /// work gets one last copy first, if the newest does not hold it yet: the
+    /// newest copy is kept for a week (`recovery/kept.rs`), so the answer can
+    /// still be taken back from the File tab's Older Versions.
     pub(super) fn recovery_exit(&mut self) {
         let settled = self.close_settled();
+        let mark = self.history_mark();
+        if settled && copy_owed(self.recovery.store.keeps(), self.unsaved_at(mark), self.recovery.held, mark) {
+            if let Err(e) = self.keep_copy(false) {
+                log::warn!("no last copy was kept of the work closed without saving: {e}");
+            }
+        }
         self.recovery.closed(settled);
+    }
+
+    /// The recovery copies kept for a week, newest first.
+    pub(super) fn recovery_kept(&self) -> Vec<recovery::kept::Copy> {
+        self.recovery.store.kept_copies()
+    }
+
+    /// The folder they are kept in.
+    pub(super) fn recovery_kept_folder(&self) -> Option<PathBuf> {
+        self.recovery.store.kept_folder()
     }
 
     // ---- stopping on a fault

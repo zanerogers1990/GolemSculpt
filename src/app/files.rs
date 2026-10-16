@@ -501,7 +501,7 @@ impl Running {
         match self.save_scene(&path) {
             Ok(()) => {
                 let size = std::fs::metadata(&path).map_or(String::new(), |m| format!(" ({:.1} MB)", m.len() as f64 / 1e6));
-                let note = self.saved_note();
+                let note = self.saved_note() + &self.older_saved_note();
                 self.status(format!("Saved {}{size}{note}", path.display()), true);
                 self.toast("Saved");
                 self.doc.path = Some(path);
@@ -517,11 +517,15 @@ impl Running {
     /// Writes every object to a native file, with the look, the view and the
     /// mirror settings; instances keep sharing a mesh. The file already there
     /// is only replaced once the new one is whole.
+    /// The file that was there before is kept as an earlier save first
+    /// (app/older.rs).
     pub(super) fn save_scene(&mut self, path: &Path) -> io::Result<()> {
-        let mended = {
-            let (meshes, objects, active) = self.scene_for_file()?;
-            io::save_scene_with(&meshes, &objects, active, &self.details(), path)?
-        };
+        let backup = self.older_before_save(path);
+        let written = self.scene_for_file().and_then(|(meshes, objects, active)| {
+            io::save_scene_with(&meshes, &objects, active, &self.details(), path)
+        });
+        self.older_after_save(path, backup, written.is_ok());
+        let mended = written?;
         self.files.mended_on_save = mended;
         let now = self.history_mark();
         let restored = self.file().written(path, now);

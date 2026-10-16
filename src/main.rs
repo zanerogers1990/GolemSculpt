@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod backups;
 mod bench;
 mod bench_levels;
 mod bench_matched;

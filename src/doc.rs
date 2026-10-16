@@ -335,6 +335,14 @@ pub enum Action {
     Quit { save: bool },
     /// The answer to the question about a copy a crash left behind.
     Recover(Recover),
+    /// The File tab's Older Versions: the earlier saves of the scene and the
+    /// recovery copies kept for a week (see app/older.rs).
+    OlderVersions,
+    /// One of those: its objects added to the scene (`add`), or the whole of
+    /// it in place of the scene, with no file of its own.
+    OpenOlder { file: PathBuf, add: bool },
+    /// Show a folder in Explorer.
+    ShowFolder(PathBuf),
     ExportObj,
     /// Export PLY: the active object, with its paint (see app/exports.rs).
     ExportPly,

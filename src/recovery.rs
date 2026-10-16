@@ -27,7 +27,10 @@
 //!   with the question about closing answered.
 //!
 //! (A run also drops its own regular copies beyond the newest three as it
-//! writes new ones.) Nothing else removes a copy: not restoring it, not this
+//! writes new ones. When (a) or (c) removes a run's own copies, the newest
+//! is first moved aside and kept for a week, one per run of the app, where
+//! the File tab's Older Versions can open it: `recovery/kept.rs`. Nothing
+//! asks about those at start-up.) Nothing else removes a copy: not restoring it, not this
 //! run writing a copy of its own, not Not Now, not Undo, and not an answer
 //! about another run's copies. Where it cannot be told, the copy stays and
 //! the next start asks again. This file only has the means ([`Store::clear`]
@@ -62,6 +65,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::SavedObject;
 use crate::mesh::Mesh;
+
+pub mod kept;
 
 /// Regular copies kept in a run's folder.
 pub const KEEP: usize = 3;
@@ -198,6 +203,10 @@ pub struct Store {
     number: u32,
     /// The name for this run's folder where a test has given it one.
     name: Option<String>,
+    /// This run of the app, for the copy it keeps for a week (`kept.rs`):
+    /// when it started and its process number. Its folders here are named
+    /// anew after every save; this stays.
+    run: String,
 }
 
 /// The number in `copy-0007.sclp`, and whether it is a `stopped-` one.
@@ -362,7 +371,8 @@ impl Store {
     /// Copies under `settings` (the folder the settings file is in).
     /// `writable` is whether this run may write there.
     pub fn at(settings: Option<&Path>, writable: bool) -> Store {
-        Store { root: settings.map(|dir| dir.join(FOLDER)), writable, session: None, number: 0, name: None }
+        let run = format!("{}-{}", crate::io::time_stamp(), std::process::id());
+        Store { root: settings.map(|dir| dir.join(FOLDER)), writable, session: None, number: 0, name: None, run }
     }
 
     /// Keeps nothing and finds nothing.
@@ -376,6 +386,7 @@ impl Store {
     #[cfg(test)]
     pub fn named(mut self, name: &str) -> Store {
         self.name = Some(name.to_owned());
+        self.run = name.to_owned();
         self
     }
 
@@ -384,6 +395,17 @@ impl Store {
     #[cfg(test)]
     pub fn crash(&mut self) {
         drop(self.session.take());
+    }
+
+    /// The copies kept for a week after their runs were done with them,
+    /// newest first (`kept.rs`).
+    pub fn kept_copies(&self) -> Vec<kept::Copy> {
+        self.root.as_deref().map_or(Vec::new(), kept::list)
+    }
+
+    /// The folder those are kept in, where this run has one.
+    pub fn kept_folder(&self) -> Option<PathBuf> {
+        self.root.as_deref().map(kept::folder)
     }
 
     /// Whether this run writes copies at all.
@@ -482,10 +504,15 @@ impl Store {
     }
 
     /// Removes this run's own copies and its folder: the scene is in a file
-    /// of the user's now, or the app is closing properly. The next copy, if
-    /// there is one, starts a new folder.
+    /// of the user's now, or the app is closing properly. The newest of them
+    /// is first moved to the copies kept for a week (`kept.rs`), in place of
+    /// the one this run kept there before. The next copy, if there is one,
+    /// starts a new folder.
     pub fn clear(&mut self) {
         let Some(session) = self.session.take() else { return };
+        if let (Some(root), Some(newest)) = (&self.root, copies_in(&session.dir).first()) {
+            kept::keep(root, &self.run, newest, &crate::io::time_stamp());
+        }
         for copy in copies_in(&session.dir) {
             remove_copy(&copy.file);
         }

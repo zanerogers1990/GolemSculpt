@@ -25,7 +25,7 @@ use crate::doc::{Action, Doc, OpenHow, Recover};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Question {
-    /// The Delete key: delete this object?
+    /// The Delete key, or the bin on an object's row: delete this object?
     Delete(u64),
     /// The app was asked to close. `unsaved` says the scene has changes that
     /// have not been saved; `lost` names the work that is in no file and
@@ -204,6 +204,38 @@ fn recover_words(when: Option<&str>, what: &str, stopped: bool, earlier: Option<
     )
 }
 
+/// "2.1 million triangles", "45 thousand triangles", "800 triangles".
+fn triangle_words(count: usize) -> String {
+    match count {
+        n if n >= 1_000_000 => format!("{:.1} million triangles", n as f64 / 1e6),
+        n if n >= 1_000 => format!("{} thousand triangles", n / 1_000),
+        1 => "1 triangle".to_owned(),
+        n => format!("{n} triangles"),
+    }
+}
+
+/// The question before an object is deleted (`Question::Delete`), by the
+/// Delete key or the bin on its row. It says what the object holds: its
+/// triangles, and the strokes it has had since the app started, so that a
+/// click on the wrong row is seen for what it would cost. And it says how
+/// far Undo reaches: it was the app closing, after a save, that took the
+/// Door of 2026-10-15 for good. `linked`: the mesh stays, shown by another
+/// object, and nothing of the work goes.
+fn delete_words(name: &str, linked: bool, triangles: usize, strokes: usize) -> String {
+    if linked {
+        return format!("Delete \"{name}\"? The mesh and its other copies stay. Undo (Z) restores it.");
+    }
+    let work = match strokes {
+        0 => triangle_words(triangles),
+        1 => format!("{}, and 1 stroke since GolemSculpt started", triangle_words(triangles)),
+        n => format!("{}, and {n} strokes since GolemSculpt started", triangle_words(triangles)),
+    };
+    format!(
+        "Delete \"{name}\"? It has {work}.\n\nUndo (Z) restores it, but only until GolemSculpt is closed. \
+         A save after this leaves it out of the file; the save before is kept in Older Versions (File tab)."
+    )
+}
+
 impl Question {
     /// The question in words, or `None` if it no longer applies (the object
     /// it asks about has gone).
@@ -211,11 +243,9 @@ impl Question {
         Some(match self {
             Question::Delete(id) => {
                 let object = doc.scene.get(*id)?;
-                if doc.scene.users(object.mesh) > 1 {
-                    format!("Delete \"{}\"? The mesh and its other copies stay. Undo (Z) restores it.", object.name)
-                } else {
-                    format!("Delete \"{}\"? Undo (Z) restores it.", object.name)
-                }
+                let linked = doc.scene.users(object.mesh) > 1;
+                let triangles = doc.scene.mesh(object.mesh, &doc.mesh).map_or(0, |mesh| mesh.triangle_count());
+                delete_words(&object.name, linked, triangles, doc.history.strokes_on(object.mesh))
             }
             Question::Exit { unsaved, lost } => exit_words(doc.path.as_deref(), *unsaved, lost),
             Question::Open { path, unsaved, lost } => open_words(path, *unsaved, lost),
@@ -558,6 +588,22 @@ mod tests {
             let saving = choices.iter().filter(|choice| choice.action == saves).count();
             assert_eq!(saving, unsaved as usize, "saving first is offered exactly when there is something to save");
         }
+    }
+
+    #[test]
+    fn the_delete_question_says_what_the_object_holds_and_how_far_undo_reaches() {
+        let door = delete_words("Door", false, 1_234_567, 34);
+        assert!(door.starts_with("Delete \"Door\"? It has 1.2 million triangles, and 34 strokes since GolemSculpt started."));
+        assert!(door.contains("only until GolemSculpt is closed"));
+        assert!(door.contains("Older Versions"));
+        let fresh = delete_words("Sphere 2", false, 20_480, 0);
+        assert!(fresh.starts_with("Delete \"Sphere 2\"? It has 20 thousand triangles.\n"));
+        assert!(delete_words("Cube", false, 12, 1).contains("12 triangles, and 1 stroke since"));
+        // An instance: the mesh stays with its other copies, and so does the work.
+        let linked = delete_words("Door copy", true, 1_234_567, 34);
+        assert_eq!(linked, "Delete \"Door copy\"? The mesh and its other copies stay. Undo (Z) restores it.");
+        let question = Question::Delete(7);
+        assert_eq!(labels(&question), ["Delete", "Cancel"]);
     }
 
     #[test]

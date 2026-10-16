@@ -60,6 +60,7 @@ mod paint_play;
 mod masked;
 mod mirror_copies;
 mod new_scene;
+mod older;
 mod origin;
 mod pen;
 mod pose;
@@ -300,6 +301,8 @@ struct Running {
     files: files::State,
     /// The copies kept against a crash (see app/recovery.rs).
     recovery: recovery::State,
+    /// Earlier saves, and the objects deleted since the last save (see app/older.rs).
+    older: older::State,
     /// The interface's self-check, while one runs (see app/ui_demo.rs).
     ui_demo: ui_demo::State,
     /// What has gone to Blender and come back (see app/blender.rs).
@@ -596,6 +599,7 @@ impl Running {
             recording: Default::default(),
             files,
             recovery,
+            older: Default::default(),
             ui_demo: Default::default(),
             blender: blender::State::new(args.screenshot.is_some()),
             args,
@@ -1313,6 +1317,7 @@ impl Running {
             Action::DeleteObject(id) => {
                 let name = self.doc.scene.get(id).map(|o| o.name.clone()).unwrap_or_default();
                 if self.edit_scene(|scene, slot| scene.remove(id, slot)) {
+                    self.older_deleted(id, &name);
                     self.status(format!("Deleted \"{name}\". Undo (Z) restores it."), true);
                 } else if self.doc.scene.objects.len() < 2 {
                     self.status("The last object cannot be deleted.", false);
@@ -1494,6 +1499,10 @@ impl Running {
             Action::Exit => self.exit_action(),
             Action::Quit { save } => self.quit(save),
             Action::Recover(answer) => self.recover(answer),
+            // Earlier saves and kept recovery copies are in app/older.rs.
+            Action::OlderVersions => self.older_versions_action(),
+            Action::OpenOlder { file, add } => self.open_older(file, add),
+            Action::ShowFolder(folder) => self.show_folder(&folder),
             // Export OBJ and PLY are in app/exports.rs.
             Action::ExportObj => self.export_obj_action(),
             Action::ExportPly => self.export_ply_action(),

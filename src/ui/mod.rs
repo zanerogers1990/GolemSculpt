@@ -21,6 +21,7 @@ pub mod materials;
 mod masking;
 mod mirror_copies;
 mod modes;
+pub mod older;
 mod overlay;
 mod paint;
 mod panels;
@@ -77,6 +78,8 @@ pub struct UiState {
     pub pose: Vec<Vec<Pos2>>,
     /// The Materials card's thumbnails (see materials.rs).
     pub materials: materials::Thumbs,
+    /// The Older Versions window, while it is up (see older.rs).
+    pub older: older::State,
 }
 
 impl UiState {
@@ -93,6 +96,7 @@ impl UiState {
             recent: Default::default(),
             pose: Vec::new(),
             materials: Default::default(),
+            older: Default::default(),
         }
     }
 }
@@ -178,6 +182,7 @@ pub fn build(
     tools::radial(&ctx, doc, state);
     tools::jobs(&ctx, doc);
     scene_graph::confirm(&ctx, doc, state, &mut actions);
+    older::show(&ctx, doc, state, &mut actions);
     overlay::toast(&ctx, state, time);
     if doc.opts.clean_view {
         overlay::clean_hint(&ctx, crate::turntable::HINT, doc.turntable.hint_alpha(time));
@@ -661,6 +666,11 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             "Send to Blender",
             Action::SendToBlender,
             "Send every selected object to Blender as it stands, at its real size, and open Blender if it is not open. No file to save or find. In Blender, Send to GolemSculpt (the GolemSculpt tab of the sidebar, N) brings an object back: one that came from here returns as itself, with its new shape, and anything made there arrives as a new object.",
+        )]);
+        row(ui, actions, &[(
+            "Older Versions...",
+            Action::OlderVersions,
+            "Earlier saves of this scene, and the recovery copies of the past week, even after Exit Without Saving. Add an older version's objects to the scene to get back something that was deleted, or open it in place of the scene.",
         )]);
         crate::recent::tiles(ui, &mut state.recent, tips, actions);
         // Last, and away from the buttons that are pressed all day.

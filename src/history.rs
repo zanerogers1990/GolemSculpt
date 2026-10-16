@@ -205,6 +205,10 @@ pub struct History {
     /// With `steps`, it tells whether anything changed since the scene was
     /// last saved: see `Running::unsaved` in app/files.rs.
     pub edits: u64,
+    /// How many strokes each mesh has had since the app started, undone ones
+    /// included, for the question before an object is deleted: undo keeps
+    /// only so many steps, and this counts them all.
+    strokes: HashMap<u64, usize>,
 }
 
 impl Default for History {
@@ -220,6 +224,7 @@ impl Default for History {
             let_go: 0,
             let_go_at: None,
             edits: 0,
+            strokes: HashMap::new(),
         }
     }
 }
@@ -377,7 +382,13 @@ impl History {
     }
 
     pub fn push_stroke(&mut self, delta: StrokeDelta) {
+        *self.strokes.entry(self.target).or_default() += 1;
         self.push(Edit::Stroke(delta));
+    }
+
+    /// How many strokes `mesh` has had since the app started.
+    pub fn strokes_on(&self, mesh: u64) -> usize {
+        self.strokes.get(&mesh).copied().unwrap_or(0)
     }
 
     /// Records a hide, show or invert of the mesh's faces (what
