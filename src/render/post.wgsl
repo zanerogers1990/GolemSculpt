@@ -6,7 +6,8 @@
 struct PostU {
     // xy viewport px, z tan(half fov) (0 = orthographic), w aspect
     viewport: vec4<f32>,
-    // x orthographic half height, y occlusion radius, z occlusion intensity
+    // x orthographic half height, y occlusion radius, z occlusion intensity,
+    // w which sample of a refined picture (the noise moves on with it)
     ao: vec4<f32>,
     // x intensity (0 = off), y threshold, z scatter
     bloom: vec4<f32>,
@@ -91,7 +92,7 @@ fn fs_ssao(in: PostOut) -> @location(0) vec4<f32> {
     let n = normalize(vec3<f32>(centre.x, centre.y, -centre.z));
     let p = view_pos(in.pos.xy, depth);
     let radius = post.ao.y;
-    let noise = gradient_noise(in.pos.xy);
+    let noise = gradient_noise(in.pos.xy + 5.588238 * post.ao.w);
     const SAMPLES: i32 = 8;
     var ao = 0.0;
     for (var s = 0; s < SAMPLES; s++) {

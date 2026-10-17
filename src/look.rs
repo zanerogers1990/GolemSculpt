@@ -2004,7 +2004,8 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// preset); `tonemap` (none, neutral, aces, pbr, agx); `brightness`, `rotation`, `exposure`,
 /// `metallic`, `smoothness`, `normal`, `focus`, `aperture`, `softness`
 /// (numbers); `shadowmap`, `reflections` (the shadow map's and the
-/// reflection cube's sides); `hdri` (a file).
+/// reflection cube's sides); `refine` (on / off) and `samples` (how many);
+/// `hdri` (a file).
 pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Option<PathBuf> {
     let mut hdri = None;
     for item in spec.split(',') {
@@ -2026,6 +2027,8 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "softness" => look.shadow_softness = number.unwrap_or(1.0),
             "shadowmap" => opts.quality.shadow_map = number.map_or(2048, |n| n as u32),
             "reflections" => opts.quality.reflections = number.map_or(256, |n| n as u32),
+            "refine" => opts.quality.refine = on,
+            "samples" => opts.quality.samples = number.map_or(64, |n| n as u32),
             "ao" => look.ambient_occlusion = on,
             "bloom" => look.bloom = on,
             "vignette" => look.vignette = on,

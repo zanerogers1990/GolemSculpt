@@ -452,6 +452,23 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
             tips,
             "Soft contact shadows in creases and where forms meet (lit shading only).",
         );
+        // How the still picture is refined: settings of this computer.
+        theme::heading(ui, "Still Picture");
+        let quality = &mut o.quality;
+        tip(
+            theme::checkbox(ui, &mut quality.refine, "Refine When Still", ACCENT()),
+            tips,
+            "When nothing moves, keep drawing the picture a little differently and average it: smooth edges, clean soft shadows. Never during a stroke or an orbit.",
+        );
+        if quality.refine {
+            let counts = crate::render::quality::SAMPLE_COUNTS;
+            let at = counts.iter().position(|&n| n == quality.refine_samples()).unwrap_or(1);
+            let labels = counts.map(|n| n.to_string());
+            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+            if let Some(i) = choice(ui, &labels, at) {
+                quality.samples = counts[i];
+            }
+        }
         // The space the last row's hover needs before the card's edge.
         let _ = ui.allocate_exact_size(vec2(1.0, 2.0), Sense::hover());
     });

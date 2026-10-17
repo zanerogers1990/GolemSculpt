@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub const SHADOW_SIZES: [u32; 3] = [512, 2048, 4096];
 /// The sides the reflection cube can have.
 pub const REFLECTION_SIZES: [u32; 2] = [256, 512];
+/// How many samples a still picture can be refined to.
+pub const SAMPLE_COUNTS: [u32; 3] = [16, 64, 256];
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -18,11 +20,17 @@ pub struct Quality {
     /// Side of the cube of surroundings the model reflects: one of
     /// [`REFLECTION_SIZES`].
     pub reflections: u32,
+    /// Refine the picture while nothing changes: the edges smoothed and
+    /// the soft shadows and occlusion cleaned up, sample by sample
+    /// (render/refine.rs).
+    pub refine: bool,
+    /// How many samples a still picture is refined to: one of [`SAMPLE_COUNTS`].
+    pub samples: u32,
 }
 
 impl Default for Quality {
     fn default() -> Self {
-        Self { shadow_map: 2048, reflections: 256 }
+        Self { shadow_map: 2048, reflections: 256, refine: true, samples: 64 }
     }
 }
 
@@ -42,9 +50,19 @@ impl Quality {
         nearest(&REFLECTION_SIZES, self.reflections)
     }
 
+    /// How many samples a still picture is refined to: 1 for none.
+    pub fn refine_samples(&self) -> u32 {
+        if self.refine { nearest(&SAMPLE_COUNTS, self.samples) } else { 1 }
+    }
+
     /// The same settings, each brought to a value the renderer has.
     pub fn sanitized(self) -> Quality {
-        Quality { shadow_map: self.shadow_size(), reflections: self.reflection_size() }
+        Quality {
+            shadow_map: self.shadow_size(),
+            reflections: self.reflection_size(),
+            refine: self.refine,
+            samples: nearest(&SAMPLE_COUNTS, self.samples),
+        }
     }
 }
 
@@ -59,6 +77,9 @@ mod tests {
             assert_eq!(Quality { shadow_map: asked, ..Default::default() }.shadow_size(), got, "{asked}");
         }
         assert_eq!(Quality::default().reflection_size(), 256);
+        assert_eq!(Quality::default().refine_samples(), 64);
+        assert_eq!(Quality { refine: false, ..Default::default() }.refine_samples(), 1);
+        assert_eq!(Quality { samples: 0, ..Default::default() }.refine_samples(), 16);
         assert_eq!(Quality { reflections: 1024, ..Default::default() }.sanitized().reflections, 512);
     }
 

@@ -2002,7 +2002,12 @@ impl Running {
             .collect();
         self.redraw |= self.flash.animating();
         self.renderer.flash.show(&self.gpu, &globals.view_proj, &pulses);
+        // A still picture refines (render/refine.rs), but not between the
+        // dabs of a stroke: a pause there is not the end of it.
+        let quality = &self.doc.opts.quality;
+        self.renderer.refine_to = if self.doc.sculptor.is_active() { 1 } else { quality.refine_samples() };
         self.renderer.draw(&self.gpu, &mut encoder, &target, size, &globals, &look, &self.doc.opts, &items);
+        self.redraw |= self.renderer.refining();
 
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [size.0, size.1],

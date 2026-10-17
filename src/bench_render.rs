@@ -270,6 +270,7 @@ impl Stage {
     /// Draws one frame into the target and waits for the card to finish it.
     fn draw(&mut self, gpu: &Gpu) {
         self.sync(gpu);
+        self.renderer.refine_to = self.opts.quality.refine_samples();
         let (globals, look, items) = self.inputs();
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         self.renderer.draw(gpu, &mut encoder, &self.view_target, self.size, &globals, &look, &self.opts, &items);
@@ -299,7 +300,7 @@ impl Motion {
 }
 
 /// The looks timed on every size: name and look setting (see `look::apply_spec`).
-const LOOKS: [(&str, &str); 7] = [
+const LOOKS: [(&str, &str); 8] = [
     ("lit", "matcap=off"),
     // The smallest shadow map (Shadow Detail: Fast).
     ("lit 512", "matcap=off,shadowmap=512"),
@@ -308,7 +309,17 @@ const LOOKS: [(&str, &str); 7] = [
     ("clay", "matcap=off,finish=clay"),
     ("wood", "matcap=off,finish=wood"),
     ("matcap", "matcap=on"),
+    // Still, refining: each cursor frame is one more sample (refine.rs).
+    ("lit refining", "matcap=off,refine,samples=256"),
 ];
+
+/// The usual options with refining off: a picture is drawn once, as in a
+/// build from before there was refining. A spec's `refine` turns it on.
+fn unrefined() -> Options {
+    let mut opts = Options::default();
+    opts.quality.refine = false;
+    opts
+}
 
 /// Median milliseconds per frame over the timed frames.
 fn time_frames(gpu: &Gpu, stage: &mut Stage, motion: Motion) -> f64 {
@@ -342,7 +353,7 @@ pub fn run(sizes: &[usize]) {
             let row = |stage: &mut Stage, name: &str, spec: &str, motions: &[Motion]| {
                 let mut cells = Vec::new();
                 for &motion in motions {
-                    stage.opts = Options::default();
+                    stage.opts = unrefined();
                     look::apply_spec(&mut stage.opts, spec, 2.0);
                     stage.frame_camera(30.0, -15.0);
                     let ms = time_frames(gpu, stage, motion);
@@ -359,7 +370,7 @@ pub fn run(sizes: &[usize]) {
             let mut half = Stage::new(gpu, BENCH_SIZE);
             half.meshes.push(stage.meshes.pop().unwrap());
             half.objects.push((1, Mat4::IDENTITY));
-            half.opts = Options::default();
+            half.opts = unrefined();
             look::apply_spec(&mut half.opts, "matcap=off", 2.0);
             half.frame_camera(30.0, -15.0);
             let aspect = BENCH_SIZE.0 as f32 / BENCH_SIZE.1 as f32;
@@ -443,7 +454,7 @@ fn painted_rows(gpu: &Gpu, n: usize) {
     for (name, spec, shown, motions) in cases {
         let mut cells = Vec::new();
         for &motion in motions {
-            stage.opts = Options::default();
+            stage.opts = unrefined();
             look::apply_spec(&mut stage.opts, spec, 2.0);
             stage.opts.paint.palette = paint.palette.clone();
             (stage.opts.paint.show_polypaint, stage.opts.paint.show_materials) = (shown, shown);
@@ -636,6 +647,7 @@ pub fn run_shots(folder: &Path) {
             stage.objects.push((1, Mat4::IDENTITY));
             let mirror = Mat4::from_translation(Vec3::new(2.6, 0.0, 0.0)) * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
             stage.objects.push((1, mirror * Mat4::from_rotation_y(0.6)));
+            stage.opts = unrefined();
             look::apply_spec(&mut stage.opts, &shot.spec, 2.0);
             set_backfaces(&mut stage.opts, shot.backfaces);
             stage.renderer.groups.enabled = shot.groups;
@@ -683,12 +695,15 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 5] = [
+const STUDIO: [(&str, &str); 7] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
     ("studio_shadowmap_512", "matcap=off,shadowmap=512"),
     ("studio_metal", "matcap=off,metallic=1,smoothness=0.85"),
+    // Refined to 64 samples, as the viewport is when it holds still.
+    ("studio_refined", "matcap=off,refine,samples=64"),
+    ("studio_metal_refined", "matcap=off,metallic=1,smoothness=0.85,refine,samples=64"),
 ];
 
 /// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is
@@ -712,6 +727,7 @@ fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
     stage.objects.push((1, at(0.0, -0.05, 0.0, Vec3::new(2.0, 0.05, 1.5))));
     stage.objects.push((3, at(0.6, 0.3, -0.3, Vec3::splat(0.15))));
     stage.objects.push((4, at(0.3, 0.9, 0.6, Vec3::splat(0.2))));
+    stage.opts = unrefined();
     if let Some(path) = look::apply_spec(&mut stage.opts, spec, 2.0) {
         match look::load_hdri(&path) {
             Ok(image) => {
@@ -725,6 +741,13 @@ fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
     stage.frame_camera(-25.0, 28.0);
     stage.camera.distance *= 0.75;
     stage.draw(gpu);
+    // A refined picture: drawn again until it has all its samples.
+    for _ in 0..1024 {
+        if !stage.renderer.refining() {
+            break;
+        }
+        stage.draw(gpu);
+    }
     let picture = crate::render::read_texture(gpu, &stage.target);
     let path = folder.join(format!("{name}.png"));
     match picture.save(&path) {

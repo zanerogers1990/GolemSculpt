@@ -19,7 +19,8 @@ const MAX_BLOOM_LEVELS: usize = 6;
 pub struct PostParams {
     /// xy viewport px, z tan(half fov) (0 = orthographic), w aspect
     pub viewport: [f32; 4],
-    /// x orthographic half height, y occlusion radius, z occlusion intensity
+    /// x orthographic half height, y occlusion radius, z occlusion intensity,
+    /// w which sample of a refined picture (its noise turns with it)
     pub ao: [f32; 4],
     /// x intensity (0 = off), y threshold, z scatter
     pub bloom: [f32; 4],
@@ -264,7 +265,8 @@ impl Post {
     /// its working textures away if it is off. `eye_offset` is how far behind
     /// its perspective position the camera is parked (orthographic views).
     /// Call after `resize`.
-    pub fn focus(&mut self, gpu: &Gpu, look: &Look, globals: &Globals, eye_offset: f32) {
+    /// `turn` turns the blur's disc of taps, for a refined picture's samples.
+    pub fn focus(&mut self, gpu: &Gpu, look: &Look, globals: &Globals, eye_offset: f32, turn: f32) {
         if !look.depth_of_field {
             if let Some(dof) = &mut self.dof {
                 dof.release();
@@ -277,7 +279,7 @@ impl Post {
         let Some(t) = &self.targets else { return };
         let mut dof = self.dof.take().unwrap_or_else(|| Dof::new(gpu));
         let fresh = dof.resize(gpu, t.size, &t.scene, &t.depth);
-        dof.set_params(gpu, look, globals, eye_offset);
+        dof.set_params(gpu, look, globals, eye_offset, turn);
         let bind_focused = match dof.focused() {
             // Bloom and the finished picture read the blurred scene in place
             // of the sharp one.
@@ -355,5 +357,13 @@ impl Post {
         }
         let composite = if single { &self.pipe_composite_single } else { &self.pipe_composite };
         Self::pass(encoder, to, composite, bind_composite, 0);
+    }
+}
+
+#[cfg(test)]
+mod shader_tests {
+    #[test]
+    fn the_post_shader_compiles() {
+        crate::render::paint::validate(include_str!("post.wgsl")).unwrap();
     }
 }

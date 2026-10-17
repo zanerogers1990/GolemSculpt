@@ -27,6 +27,7 @@ pub mod groups;
 pub mod post;
 pub mod preview;
 pub mod quality;
+mod refine;
 pub mod spheres;
 pub mod wire;
 
@@ -216,6 +217,9 @@ struct Targets {
     finished: wgpu::TextureView,
     blit_finished: wgpu::BindGroup,
     drawn: Option<cache::SceneKey>,
+    /// The running average of the still picture's samples (refine.rs),
+    /// made the first time this size refines.
+    refine: Option<refine::Buffers>,
 }
 
 /// One object to draw: which mesh, and its per-object shader input (the
@@ -417,6 +421,13 @@ pub struct Renderer {
     /// Set while drawing a picture to keep (a recording's frame): every pass
     /// at its own quality, never the quick versions used while things move.
     pub picture: bool,
+    /// How many samples a still picture is refined to (refine.rs); 1 for
+    /// none. The app sets it every frame: off during a stroke.
+    pub refine_to: u32,
+    refine: refine::Refine,
+    /// The last frame left the picture short of `refine_to` samples, so
+    /// the next one will refine it further.
+    refine_pending: bool,
     blit: cache::Blit,
     /// Painted objects' pipelines, the palette and the local tables (paint.rs).
     pub painted: paint::Painted,
@@ -748,6 +759,9 @@ impl Renderer {
             shadow_quick: false,
             shadow_moving: false,
             picture: false,
+            refine_to: 1,
+            refine: refine::Refine::new(gpu, HDR_FORMAT),
+            refine_pending: false,
             blit: cache::Blit::new(gpu),
             painted,
         }
@@ -814,6 +828,7 @@ impl Renderer {
             blit_finished: self.blit.bind(gpu, &finished),
             finished,
             drawn: None,
+            refine: None,
         };
         self.post.resize(gpu, size, &targets.gbuf, &targets.scene, &targets.depth);
         self.targets = Some(targets);
@@ -841,6 +856,12 @@ impl Renderer {
         }
         self.wire.sync(gpu, id, mesh);
         self.groups.sync(gpu, id, mesh, self.meshes.get(&id));
+    }
+
+    /// Whether the picture is still being refined: the app should draw
+    /// another frame even if nothing changes.
+    pub fn refining(&self) -> bool {
+        self.refine_pending
     }
 
     /// Moves whenever any mesh's buffers are sent again or let go: the
@@ -1090,12 +1111,34 @@ impl Renderer {
         }
         let mut key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
         key.push(&(moving as u32));
+        // A picture kept but with fewer samples than asked for is refined
+        // instead (refine.rs). Never under the matcap, which stays exactly
+        // as it was.
+        let wanted = if lit { self.refine_to.max(1) } else { 1 };
         let targets = self.targets.as_mut().unwrap();
-        if targets.drawn.as_ref() == Some(&key) {
+        let same = targets.drawn.as_ref() == Some(&key);
+        let shown = targets.refine.as_ref().map_or(1, refine::Buffers::shown);
+        let refining = same && shown < wanted;
+        self.refine_pending = false;
+        if same && !refining {
             self.blit.draw(encoder, &targets.blit_finished, target);
             return;
         }
-        targets.drawn = None;
+        if !same {
+            targets.drawn = None;
+            if let Some(buffers) = &mut targets.refine {
+                buffers.count = 0;
+            }
+        }
+        // Which sample this frame draws: 0 for a picture drawn afresh, then
+        // each refining one with the camera moved a little.
+        let sample = if refining { shown } else { 0 };
+        if refining && targets.refine.is_none() {
+            targets.refine = Some(self.refine.buffers(gpu, size, &targets.scene, HDR_FORMAT));
+        }
+        let mut globals = *globals;
+        globals.view_proj = refine::jittered(globals.view_proj, refine::jitter(sample), size);
+        let globals = &globals;
 
         if !items.is_empty() {
             if self.objects.as_ref().is_none_or(|(_, room)| *room < items.len()) {
@@ -1135,11 +1178,15 @@ impl Renderer {
         }
         look.env_params[2] = if occlusion { 1.0 } else { 0.0 };
         look.matcap_params[3] = if plastic { 1.0 } else { 0.0 };
+        // Every noisy filter turns its own way for each sample.
+        look.cam_params[2] = sample as f32;
+        let mut post_params = post_params;
+        post_params.ao[3] = sample as f32;
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
         gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&look));
         self.post.set_params(gpu, &post_params);
         // Depth of field: sets its lens, or puts its textures away if off.
-        self.post.focus(gpu, settings, globals, look.cam_params[1]);
+        self.post.focus(gpu, settings, globals, look.cam_params[1], sample as f32 * GOLDEN_ANGLE);
 
         let targets = self.targets.as_ref().unwrap();
         let generations = (self.env.generation, self.shadow_generation);
@@ -1304,7 +1351,11 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &targets.msaa,
                     depth_slice: None,
-                    resolve_target: Some(&targets.scene),
+                    // A refining sample goes beside the scene, to be folded in.
+                    resolve_target: Some(match (sample, &targets.refine) {
+                        (1.., Some(buffers)) => &buffers.sample,
+                        _ => &targets.scene,
+                    }),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Discard,
@@ -1324,6 +1375,18 @@ impl Renderer {
                 draw_items(&mut pass, &in_view, *cull, Some(*with_paint));
             }
         }
+        // The sample into the average, which then stands in the scene's
+        // place for the post effects.
+        if sample > 0 {
+            let targets = self.targets.as_mut().unwrap();
+            if let Some(buffers) = &mut targets.refine {
+                self.refine.fold(gpu, encoder, buffers, &targets.scene);
+                self.refine_pending = buffers.shown() < wanted;
+            }
+        } else {
+            self.refine_pending = wanted > 1;
+        }
+        let targets = self.targets.as_ref().unwrap();
 
         // Bloom, vignette and the tone curve, into the finished picture:
         // straight into the one kept when nothing goes over it, otherwise
@@ -1471,6 +1534,10 @@ fn look_without_clock(look: &LookUniform) -> LookUniform {
     }
     out
 }
+
+/// A turn by the golden angle, in radians: each sample's filters turn this
+/// far from the last one's, which spreads any number of them evenly.
+const GOLDEN_ANGLE: f32 = 2.399_963;
 
 /// What the model reflects: the HDRI, else the background gradient, else
 /// the default sky with the key light as its sun.

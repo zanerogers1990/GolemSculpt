@@ -557,6 +557,7 @@ impl Running {
         self.show_skin_only(&view);
         self.renderer.overlays = false;
         self.renderer.picture = true;
+        let refine_to = std::mem::replace(&mut self.renderer.refine_to, 1);
         // This goes out as its own batch of work: the renderer's settings
         // are shared with the window's frame, and each batch reads them as
         // they were last written.
@@ -576,6 +577,7 @@ impl Running {
         self.gpu.queue.submit([encoder.finish()]);
         self.renderer.overlays = !self.doc.opts.clean_view;
         self.renderer.picture = false;
+        self.renderer.refine_to = refine_to;
     }
 
     /// Whether the graphics card can hold a picture this large.

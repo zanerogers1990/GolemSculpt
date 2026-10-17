@@ -435,3 +435,11 @@ impl Env {
         }
     }
 }
+
+#[cfg(test)]
+mod shader_tests {
+    #[test]
+    fn the_environment_shader_compiles() {
+        crate::render::paint::validate(include_str!("env.wgsl")).unwrap();
+    }
+}
