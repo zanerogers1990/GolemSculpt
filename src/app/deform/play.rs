@@ -267,6 +267,27 @@ impl Running {
         self.deform_frame();
         say("a bend toward Z is not", !self.ui.status.0.contains("not mirror-symmetric"));
         self.deform_cancel();
+
+        // A point of the Lattice's cage takes its mirror image across X with it.
+        self.act(Action::Deform(Ask::Pick(Some(Kind::Lattice))));
+        self.deform_frame();
+        self.sync_view();
+        let cage = &self.doc.opts.deform.params.lattice;
+        let (side, other) = (cage.index([0, 2, 1]), cage.index([2, 2, 1]));
+        if let Some(point) = self.deform_handle(Handle::Point(side)) {
+            self.demo_drag(&[point, point + Vec3::new(-0.15, 0.2, 0.0)], true);
+            self.deform_frame();
+            let cage = &self.doc.opts.deform.params.lattice;
+            let [a, b] = [cage.moved[side], cage.moved[other]];
+            println!("     the point moved {a:?}, its mirror image {b:?}");
+            say("a cage point dragged takes its mirror image across X with it", a[0] != 0.0 && b == [-a[0], a[1], a[2]]);
+            say("and the mirrored model is not said to come out lopsided", !self.ui.status.0.contains("not mirror-symmetric"));
+            self.deform_cancel();
+        } else {
+            say("the cage has its points", false);
+        }
+        // The bend is what the next steps go on with.
+        self.act(Action::Deform(Ask::Pick(Some(Kind::Bend))));
         self.doc.edit_symmetry(|symmetry| symmetry.mirror[0] = false);
 
         // A sculpt layer that records but is switched off refuses it, as it refuses a stroke.

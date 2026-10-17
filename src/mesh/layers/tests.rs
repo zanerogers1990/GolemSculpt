@@ -656,3 +656,30 @@ fn what_carried_the_layers_keeps_step_with_dynamic_topology() {
     let frame = mesh.layers.as_ref().unwrap();
     assert!((0..grown).all(|v| frame.frame_at(v) == Mat3::IDENTITY), "nothing is left to carry back");
 }
+
+/// The gizmo under mirror symmetry moves each half by its own matrix, the
+/// mirror image of the other's: each half's offsets go by its own.
+#[test]
+fn a_move_by_a_matrix_each_side_its_own_carries_each_sides_offsets_by_its_own() {
+    let mut mesh = ball();
+    let (layer, _) = mesh.add_layer(None);
+    stroke(&mut mesh, |p| Some(p + p.normalize() * 0.02 * (p.y * 40.0).sin()));
+    mesh.record_on_layer(None);
+    let held = offsets(&mesh, layer);
+    let plus = Mat3::from_quat(Quat::from_rotation_z(0.7)) * Mat3::from_diagonal(Vec3::new(2.0, 1.5, 1.0));
+    let flip = Mat3::from_diagonal(Vec3::new(-1.0, 1.0, 1.0));
+    let minus = flip * plus * flip;
+    let by = |start: Vec3| if start.x < 0.0 { minus } else { plus };
+    let all: Vec<u32> = (0..mesh.vertex_count() as u32).collect();
+    let leaves = mesh.leaves_of(&all);
+    let start = mesh.positions.clone();
+    mesh.begin_stroke();
+    mesh.move_listed(&all, |_, vertex| Some(by(vertex.start) * vertex.start));
+    mesh.positions_changed(&leaves);
+    mesh.end_stroke_carried(&by).unwrap();
+    let now = offsets(&mesh, layer);
+    for v in 0..held.len() {
+        assert!(now[v].distance(by(start[v]) * held[v]) < 1e-6, "vertex {v}");
+    }
+    assert!(start.iter().any(|p| p.x < 0.0) && start.iter().any(|p| p.x > 0.0));
+}

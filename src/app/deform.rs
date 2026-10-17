@@ -46,7 +46,8 @@
 //! (`Ride::Turned`), as the Pose brush does, except Inflate, which pushes
 //! the surface along and leaves it standing (`Ride::Still`).
 //!
-//! **Symmetry.** The result is mirror-symmetric when the deformation is: when
+//! **Symmetry.** A point of the Lattice's cage takes its mirror images with
+//! it (mirror.rs). The result is mirror-symmetric when the deformation is: when
 //! it maps every point's mirror image to the mirror image of where it maps the
 //! point. That is checked on the model itself for each mirror plane the
 //! object has ticked, the moment the settings change, and the status line
@@ -54,6 +55,7 @@
 
 mod bridge;
 mod handles;
+mod mirror;
 mod play;
 #[cfg(test)]
 mod tests;
@@ -244,6 +246,8 @@ impl Running {
     /// changed since the last time. The first change of a session is where a
     /// deformation can be refused.
     fn deform_preview(&mut self) {
+        // A point of the cage takes its mirror images with it (mirror.rs).
+        self.deform_mirror_lattice();
         let params = self.doc.opts.deform.params.sanitized();
         let Some(session) = self.transform.deform.session.as_ref() else { return };
         if session.shown.as_ref() == Some(&params) {
@@ -499,7 +503,9 @@ fn asymmetry_words(kind: Kind, planes: &str, name: &str) -> String {
         Kind::Bend => {
             "Bend along an axis that lies on the mirror plane, toward a direction along it (0° or 180°), to keep the halves alike."
         }
-        Kind::Lattice => "Move the points of the cage in mirrored pairs to keep the halves alike.",
+        Kind::Lattice => {
+            "The cage is not even about the mirror plane (the model is wider on one side, or the gizmo's axes are turned from the plane), so its points cannot move in mirrored pairs."
+        }
         _ => "Work along an axis that lies on the mirror plane to keep the halves alike.",
     };
     format!(

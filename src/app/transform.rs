@@ -15,7 +15,7 @@ use sculpt_toolkit as kit;
 use winit::event::MouseButton;
 use winit::keyboard::ModifiersState;
 
-use super::masked::Deform;
+use super::masked::{Deform, Mirror};
 use super::mirror_copies::{place_shown, shown_target};
 use super::{Drag, Running};
 use crate::doc::{Action, Tool};
@@ -23,7 +23,7 @@ use crate::gizmo::{self, Frame, Handles, Orientation, Placement, Target};
 use crate::history::History;
 use crate::mesh::Mesh;
 use crate::mesh::primitives::Primitive;
-use crate::scene::{Scene, SceneState};
+use crate::scene::{Scene, SceneState, Space};
 
 /// What a handle drag is moving.
 enum Dragged {
@@ -219,7 +219,14 @@ impl Running {
                 // object. Only ever for one object: a mask lives in one
                 // mesh, and that mesh is the active object's.
                 let alone = ids == [doc.scene.active_id()];
-                match alone.then(|| Deform::begin(&mut doc.mesh)).flatten() {
+                // Under the object's mirror symmetry each half moves as the
+                // other's mirror image (masked.rs).
+                let symmetry = doc.scene.active_symmetry();
+                let mirror = Mirror {
+                    axes: symmetry.mirror,
+                    world: (symmetry.space == Space::World).then(|| doc.scene.active().matrix()),
+                };
+                match alone.then(|| Deform::begin(&mut doc.mesh, mirror)).flatten() {
                     Some(deform) => {
                         // The shape Reset Shape goes back to is the one
                         // before this drag, as before a brush stroke.
@@ -332,15 +339,20 @@ impl Running {
             }
             Dragged::Surface { deform, .. } => {
                 let doc = &mut self.doc;
+                let mirrored = deform.mirrored();
                 if let Some(delta) = deform.end(&mut doc.mesh) {
                     doc.history.push_stroke(delta);
                     // The surface moved out from under the last brush dab.
                     doc.sculptor.last_hit = None;
                     let object = doc.scene.active().name.clone();
                     self.toast(name);
+                    let how = match mirrored {
+                        Some(planes) => format!(", each side the mirror image of the other across {planes}"),
+                        None => String::new(),
+                    };
                     self.status(
                         format!(
-                            "Reshaped the unmasked part of \"{object}\"; the masked part stayed where it was. Undo (Z) puts it back."
+                            "Reshaped the unmasked part of \"{object}\"{how}; the masked part stayed where it was. Undo (Z) puts it back."
                         ),
                         true,
                     );
@@ -439,6 +451,8 @@ impl Running {
     /// - `three-turn`: those three part of the way through a turn together
     /// - `masked`: a ball with its lower half masked, part of the way
     ///   through a pull upwards on the green arrow
+    /// - `masked-mirror`: a ball with its middle masked under X symmetry,
+    ///   part of the way through a pull out on the red arrow: both sides go out
     /// - `play`: works all of the above through the real pointer routines
     ///   and prints what came of each step
     pub(super) fn transform_demo(&mut self) {
@@ -463,6 +477,13 @@ impl Running {
                 if let Some(frame) = self.demo_frame() {
                     let grab = frame.pivot + frame.axis(1) * frame.arm * 1.1;
                     self.demo_drag(&[grab, grab + frame.axis(1) * 0.35], false);
+                }
+            }
+            "masked-mirror" => {
+                self.demo_mirror_masked();
+                if let Some(frame) = self.demo_frame() {
+                    let grab = frame.pivot + frame.axis(0) * frame.arm * 1.1;
+                    self.demo_drag(&[grab, grab + frame.axis(0) * 0.3], false);
                 }
             }
             "play" => self.transform_play(),
@@ -522,6 +543,23 @@ impl Running {
         if let Some(delta) = self.doc.mesh.remap_mask(|mesh, v, _| soft(mesh.positions[v as usize].y)) {
             self.doc.history.push_stroke(delta);
         }
+        self.doc.tool = Tool::Transform;
+        self.sync_view();
+    }
+
+    /// The first object alone, its middle across X masked with a soft edge
+    /// and both sides free, mirrored across X, and the gizmo up.
+    fn demo_mirror_masked(&mut self) {
+        let half = self.doc.mesh.bounds().size().x * 0.5;
+        let soft = move |x: f32| {
+            let t = ((0.45 * half - x.abs()) / (0.2 * half)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        if let Some(delta) = self.doc.mesh.remap_mask(|mesh, v, _| soft(mesh.positions[v as usize].x)) {
+            self.doc.history.push_stroke(delta);
+        }
+        let id = self.doc.scene.active_id();
+        self.doc.scene.edit_symmetry(id, |s| s.mirror = [true, false, false]);
         self.doc.tool = Tool::Transform;
         self.sync_view();
     }
@@ -654,6 +692,32 @@ impl Running {
         say("as one undo step", steps(self) == count + 1 && !self.transform_holds_mesh());
         self.act(Action::Undo);
         say("which puts every vertex back", self.doc.mesh.positions == rest);
+
+        // Under X symmetry with the middle masked, a pull out on the red
+        // arrow takes both sides out, as far as each other.
+        let symmetry = self.doc.scene.symmetry(ids[0]);
+        self.demo_mirror_masked();
+        let rest = self.doc.mesh.positions.clone();
+        let mask = self.doc.mesh.mask.clone();
+        let count = steps(self);
+        if let Some(frame) = self.demo_frame() {
+            let grab = frame.pivot + frame.axis(0) * frame.arm * 1.1;
+            say("under X symmetry a press on the red arrow of a masked object takes the drag", {
+                self.demo_drag(&[grab, grab + frame.axis(0) * 0.3], true)
+            });
+        }
+        let mesh = &self.doc.mesh;
+        let out = |v: usize| (mesh.positions[v].x - rest[v].x) * rest[v].x.signum();
+        let free: Vec<usize> = (0..rest.len()).filter(|&v| mask[v] <= 0.0).collect();
+        let sides = [free.iter().filter(|&&v| rest[v].x > 0.0).count(), free.iter().filter(|&&v| rest[v].x < 0.0).count()];
+        println!("     free vertices each side: {sides:?}");
+        say("both sides went out the whole way", sides[0] > 0 && sides[1] > 0 && free.iter().all(|&v| (out(v) - 0.3).abs() < 0.02));
+        let pinned = (0..rest.len()).filter(|&v| mask[v] >= 1.0).all(|v| mesh.positions[v] == rest[v]);
+        say("the masked middle stayed where it was", pinned);
+        say("as one undo step", steps(self) == count + 1);
+        self.act(Action::Undo);
+        say("which puts both sides back", self.doc.mesh.positions == rest);
+        self.doc.scene.set_symmetry(ids[0], symmetry);
 
         // A hosted tool's own target: the Studs example puts the gizmo on
         // its last stud.

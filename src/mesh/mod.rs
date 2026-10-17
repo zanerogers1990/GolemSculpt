@@ -123,6 +123,11 @@ pub struct Polys {
     pub indices: Vec<u32>,
 }
 
+/// The turn and stretch a stroke moved a vertex by, from where the vertex
+/// was when the stroke began: what sculpt layers are carried by after a move
+/// known exactly (`Mesh::end_stroke_carried`).
+pub type Carry<'a> = &'a (dyn Fn(Vec3) -> glam::Mat3 + Sync);
+
 /// One vertex as a brush sees it during a stroke.
 #[derive(Clone, Copy)]
 pub struct StrokeVertex {
@@ -861,11 +866,20 @@ impl Mesh {
     /// (the gizmo, reshaping what is not masked): the matrix's turn and
     /// stretch, in the mesh's own space, so that sculpt layers can be carried
     /// by exactly that (see layers.rs).
+    #[allow(dead_code)] // the gizmo goes through `end_stroke_carried`; the layer tests use this
     pub fn end_stroke_moved(&mut self, linear: glam::Mat3) -> Option<StrokeDelta> {
+        self.end_stroke_as(false, Some(&|_| linear))
+    }
+
+    /// [`Self::end_stroke_moved`] for a stroke that moved different parts of
+    /// the surface by different matrices (the gizmo under mirror symmetry,
+    /// each half the mirror image of the other): `linear` gives the turn and
+    /// stretch a vertex moved by, from where it was when the stroke began.
+    pub fn end_stroke_carried(&mut self, linear: Carry) -> Option<StrokeDelta> {
         self.end_stroke_as(false, Some(linear))
     }
 
-    fn end_stroke_as(&mut self, mask_stroke: bool, linear: Option<glam::Mat3>) -> Option<StrokeDelta> {
+    fn end_stroke_as(&mut self, mask_stroke: bool, linear: Option<Carry>) -> Option<StrokeDelta> {
         debug_assert!(self.in_stroke);
         self.in_stroke = false;
         // A stroke kept to its group (Stay in Group) is over: see visibility.rs.
@@ -895,7 +909,7 @@ impl Mesh {
     fn end_shape_record(
         &mut self,
         mask_stroke: bool,
-        linear: Option<glam::Mat3>,
+        linear: Option<Carry>,
         topology: Option<Box<dyntopo::TopologyDelta>>,
     ) -> StrokeDelta {
         let mut verts = std::mem::take(&mut self.touched);

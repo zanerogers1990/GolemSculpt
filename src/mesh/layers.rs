@@ -86,7 +86,7 @@ use glam::{DMat3, DVec3, Mat3, Vec3};
 use rayon::prelude::*;
 use sculpt_multires::{Fan, Turn};
 
-use super::{Mesh, StrokeDelta};
+use super::{Carry, Mesh, StrokeDelta};
 
 /// Vertices handed to one rayon task.
 const PER_TASK: usize = 1 << 12;
@@ -790,12 +790,13 @@ impl Mesh {
     /// the record, with what that did to the layers added to it.
     ///
     /// `linear` is for a move that is known exactly: the gizmo turning or
-    /// stretching the unmasked part of the surface. Each vertex moved as far
-    /// toward that matrix as it is unmasked, and with no layer recording its
+    /// stretching the unmasked part of the surface (each half its own way
+    /// under mirror symmetry, so it gives the matrix by where the vertex
+    /// began). Each vertex moved as far toward its matrix as it is unmasked, and with no layer recording its
     /// offsets are carried the same way, so a limb turned or made larger
     /// takes its layers' detail round, or up in size, with it. Without it
     /// `Mesh::layer_ride` says what kind of move the stroke was.
-    pub(super) fn settle_layers(&mut self, delta: StrokeDelta, linear: Option<Mat3>) -> StrokeDelta {
+    pub(super) fn settle_layers(&mut self, delta: StrokeDelta, linear: Option<Carry>) -> StrokeDelta {
         let StrokeDelta::Positions { verts, before, after, topology } = &delta else { return delta };
         let Some(taking) = self.layers.as_ref().map(|layers| layers.taking()) else { return delta };
         let from = topology.as_ref().map(|topology| topology.vertices_before());
@@ -852,7 +853,7 @@ impl Mesh {
     /// vertices it moved are carried as that kind of stroke carries them
     /// (see `Ride`; by `linear` if it is given). Gives back what changed, list
     /// by list.
-    fn carry_offsets(&mut self, verts: &[u32], from: Option<u32>, linear: Option<Mat3>) -> Vec<Change> {
+    fn carry_offsets(&mut self, verts: &[u32], from: Option<u32>, linear: Option<Carry>) -> Vec<Change> {
         if self.layers.is_none() || (linear.is_none() && self.layer_ride == Ride::Still) {
             return Vec::new();
         }
@@ -867,7 +868,10 @@ impl Mesh {
             Some(matrix) => {
                 // Known: as far toward the gizmo's matrix as the vertex went, which is its unmasked share.
                 let share = |v: &u32| (1.0 - self.mask[*v as usize]).clamp(0.0, 1.0) as f64;
-                let blended = |v: &u32| DMat3::IDENTITY + (matrix.as_dmat3() - DMat3::IDENTITY) * share(v);
+                let blended = |v: &u32| {
+                    let matrix = matrix(self.orig_pos[*v as usize]).as_dmat3();
+                    DMat3::IDENTITY + (matrix - DMat3::IDENTITY) * share(v)
+                };
                 carried.par_iter().with_min_len(PER_TASK).map(blended).collect()
             }
             None => {
