@@ -299,8 +299,10 @@ impl Motion {
 }
 
 /// The looks timed on every size: name and look setting (see `look::apply_spec`).
-const LOOKS: [(&str, &str); 6] = [
+const LOOKS: [(&str, &str); 7] = [
     ("lit", "matcap=off"),
+    // The smallest shadow map (Shadow Detail: Fast).
+    ("lit 512", "matcap=off,shadowmap=512"),
     ("lure", "matcap=off,finish=lure"),
     ("metal", "matcap=off,finish=metal"),
     ("clay", "matcap=off,finish=clay"),
@@ -660,6 +662,14 @@ pub fn run_shots(folder: &Path) {
         for (name, spec) in STUDIO {
             studio(gpu, folder, name, spec);
         }
+        // Under an HDRI, when one is named: the same picture on every machine
+        // needs the same file, so it is not built in.
+        if let Some(hdri) = std::env::var_os("SCULPT_SHOT_HDRI") {
+            for (name, spec) in HDRI_SHOTS {
+                let spec = format!("{spec},hdri={}", hdri.to_string_lossy());
+                studio(gpu, folder, name, &spec);
+            }
+        }
     });
     if let Err(e) = result {
         eprintln!("{e}");
@@ -677,6 +687,14 @@ const STUDIO: [(&str, &str); 5] = [
     ("studio_metal", "matcap=off,metallic=1,smoothness=0.85"),
 ];
 
+/// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is
+/// also behind it: a mirror, gloss and satin, for the reflections.
+const HDRI_SHOTS: [(&str, &str); 3] = [
+    ("hdri_chrome", "matcap=off,hdribg,metallic=1,smoothness=1"),
+    ("hdri_gloss", "matcap=off,hdribg,metallic=0,smoothness=0.95"),
+    ("hdri_satin_metal", "matcap=off,hdribg,metallic=1,smoothness=0.6"),
+];
+
 fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
     let mut stage = Stage::new(gpu, SHOT_SIZE);
     stage.meshes.push((1, primitives::build(Primitive::Cube, 20_000, 1.0)));
@@ -690,7 +708,15 @@ fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
     stage.objects.push((1, at(0.0, -0.05, 0.0, Vec3::new(2.0, 0.05, 1.5))));
     stage.objects.push((3, at(0.6, 0.3, -0.3, Vec3::splat(0.15))));
     stage.objects.push((4, at(0.3, 0.9, 0.6, Vec3::splat(0.2))));
-    look::apply_spec(&mut stage.opts, spec, 2.0);
+    if let Some(path) = look::apply_spec(&mut stage.opts, spec, 2.0) {
+        match look::load_hdri(&path) {
+            Ok(image) => {
+                stage.renderer.set_hdri(gpu, Some(image));
+                (stage.opts.look.hdri.loaded, stage.opts.look.hdri.enabled) = (true, true);
+            }
+            Err(e) => eprintln!("could not load {}: {e}", path.display()),
+        }
+    }
     // Looking down on the slab a little.
     stage.frame_camera(-25.0, 28.0);
     stage.camera.distance *= 0.75;

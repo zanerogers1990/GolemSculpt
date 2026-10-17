@@ -344,6 +344,13 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
             theme::slider(ui, "Ambient", &mut hdri.ambient, 0.0..=3.0, two);
             theme::slider(ui, "Reflection", &mut hdri.reflection, 0.0..=1.0, two);
         }
+        // The reflection cube's size: a setting of this computer, not of the scene.
+        let sizes = crate::render::quality::REFLECTION_SIZES;
+        let at = sizes.iter().position(|&s| s == o.quality.reflection_size()).unwrap_or(0);
+        ui.label(egui::RichText::new("Reflection Detail").font(theme::font(12.0)).color(theme::TEXT()));
+        if let Some(i) = choice(ui, &["Sharp", "Finest"], at) {
+            o.quality.reflections = sizes[i];
+        }
     });
 }
 

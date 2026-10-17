@@ -556,6 +556,7 @@ impl Running {
 
         self.show_skin_only(&view);
         self.renderer.overlays = false;
+        self.renderer.picture = true;
         // This goes out as its own batch of work: the renderer's settings
         // are shared with the window's frame, and each batch reads them as
         // they were last written.
@@ -574,6 +575,7 @@ impl Running {
         self.renderer.swap_side(&mut target.side);
         self.gpu.queue.submit([encoder.finish()]);
         self.renderer.overlays = !self.doc.opts.clean_view;
+        self.renderer.picture = false;
     }
 
     /// Whether the graphics card can hold a picture this large.

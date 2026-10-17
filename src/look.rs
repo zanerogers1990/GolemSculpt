@@ -1404,11 +1404,14 @@ pub struct LookUniform {
     /// x count, y shadows on, z shadow strength, w time in seconds
     pub light_params: [f32; 4],
     pub shadow_view_proj: [[f32; 4]; 4],
-    /// x one shadow texel in uv, y depth bias, z normal bias (world units)
+    /// x one shadow texel in uv, y depth bias, z normal bias (world units),
+    /// w 1 while the shadow changes frame after frame (the renderer sets it:
+    /// its soft edge then takes half the taps)
     pub shadow_params: [f32; 4],
     /// x the map's width in world units (world per uv), y world units per
     /// unit of map depth, z tangent of the key light's angular radius (how
-    /// fast its shadow softens with distance), w unused
+    /// fast its shadow softens with distance), w the part of the texture the
+    /// map fills (1; the renderer makes it less while it draws the map small)
     pub shadow_soft: [f32; 4],
     /// Ambient light as nine spherical harmonic terms, ready to evaluate.
     pub sh: [[f32; 4]; 9],
@@ -1665,7 +1668,7 @@ impl Look {
         u.shadow_params = [1.0 / size, 0.1 * texel * 2.5, 0.5 * texel * 2.5, 0.0];
         let softness = self.shadow_softness.clamp(0.0, 4.0);
         let light_tan = (preset.light_size.to_radians() * 0.5 * softness).tan();
-        u.shadow_soft = [fit.side, fit.depth, light_tan, 0.0];
+        u.shadow_soft = [fit.side, fit.depth, light_tan, 1.0];
 
         // Ambient and reflection: the HDRI's when one is on, otherwise the
         // preset's sky / equator / ground, scaled in linear space so
@@ -1900,12 +1903,16 @@ pub fn load_hdri(path: &std::path::Path) -> Result<HdriImage, String> {
     if !matches!(ext.as_str(), "hdr" | "exr" | "png" | "jpg" | "jpeg") {
         return Err(format!("Unsupported format .{ext}."));
     }
-    let image = image::ImageReader::open(path)
+    let mut reader = image::ImageReader::open(path)
         .map_err(|e| format!("Could not read file: {e}"))?
         .with_guessed_format()
-        .map_err(|e| format!("Could not read file: {e}"))?
-        .decode()
         .map_err(|e| format!("Could not read file: {e}"))?;
+    // The decoder's own limit (512 MB) refuses the 16K pictures HDRI sites
+    // offer, which are shrunk to MAX_WIDTH straight after anyway.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(8 << 30);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|e| format!("Could not read file: {e}"))?;
     // Bigger than this gains nothing on screen and costs a great deal of memory.
     const MAX_WIDTH: u32 = 8192;
     let image = if image.width() > MAX_WIDTH {
@@ -1956,7 +1963,8 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// clay, wood, optionally `:preset`); `glow` (off or a preset); `light` (a
 /// preset); `tonemap` (none, neutral, aces); `brightness`, `rotation`,
 /// `metallic`, `smoothness`, `normal`, `focus`, `aperture`, `softness`
-/// (numbers); `shadowmap` (the shadow map's side); `hdri` (a file).
+/// (numbers); `shadowmap`, `reflections` (the shadow map's and the
+/// reflection cube's sides); `hdri` (a file).
 pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Option<PathBuf> {
     let mut hdri = None;
     for item in spec.split(',') {
@@ -1977,6 +1985,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "shadows" => look.shadows = on,
             "softness" => look.shadow_softness = number.unwrap_or(1.0),
             "shadowmap" => opts.quality.shadow_map = number.map_or(2048, |n| n as u32),
+            "reflections" => opts.quality.reflections = number.map_or(256, |n| n as u32),
             "ao" => look.ambient_occlusion = on,
             "bloom" => look.bloom = on,
             "vignette" => look.vignette = on,

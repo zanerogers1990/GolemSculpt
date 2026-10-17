@@ -42,6 +42,10 @@ const BACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const AO_RADIUS: f32 = 0.15;
 const AO_INTENSITY: f32 = 0.4;
 pub const MSAA_SAMPLES: u32 = 4;
+/// The side the shadow map is drawn at while it changes frame after frame
+/// (see `Renderer::draw`): the size it always was, so orbiting and sculpting
+/// cost what they did.
+const QUICK_SHADOW: u32 = 512;
 
 pub struct Gpu {
     pub device: wgpu::Device,
@@ -406,6 +410,13 @@ pub struct Renderer {
     /// as this key has them. It is drawn again only when that changes (see
     /// `shadow_key`), not every frame.
     shadow_drawn: Option<cache::SceneKey>,
+    /// The shadow map holds the quick small version (`QUICK_SHADOW` in its
+    /// corner), and it was drawn again on the last frame drawn.
+    shadow_quick: bool,
+    shadow_moving: bool,
+    /// Set while drawing a picture to keep (a recording's frame): every pass
+    /// at its own quality, never the quick versions used while things move.
+    pub picture: bool,
     blit: cache::Blit,
     /// Painted objects' pipelines, the palette and the local tables (paint.rs).
     pub painted: paint::Painted,
@@ -734,6 +745,9 @@ impl Renderer {
             forced: 0,
             uploads: cache::Stamp::default(),
             shadow_drawn: None,
+            shadow_quick: false,
+            shadow_moving: false,
+            picture: false,
             blit: cache::Blit::new(gpu),
             painted,
         }
@@ -1057,11 +1071,25 @@ impl Renderer {
         let source = lit.then(|| env_source(globals, look, opts));
         let post_params = post_params(globals, look, settings);
 
+        // The key light's shadow map is drawn again only when what it is
+        // drawn from changes. While that happens frame after frame (the
+        // lights turning with an orbit, a stroke moving the model) it is
+        // drawn small, as cheap as it always was; the first frame it holds
+        // still it is drawn at its own size, and the picture with it.
+        // Its soft edge takes half the taps meanwhile, too.
+        let shadow_key = shadows.then(|| self.shadow_key(look, items, opts.show_backfaces));
+        let shadow_changes = shadows && shadow_key != self.shadow_drawn;
+        let moving = shadow_changes && self.shadow_moving && !self.picture;
+        let quick_shadow = moving && self.shadow_size > QUICK_SHADOW;
+        let draw_shadow = shadow_changes || (shadows && self.shadow_quick && !quick_shadow);
+        self.shadow_moving = shadow_changes;
+
         // Nothing it is drawn from has changed: the picture is the one kept.
         if std::mem::take(&mut self.scene_dirty) {
             self.forced += 1;
         }
-        let key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
+        let mut key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
+        key.push(&(moving as u32));
         let targets = self.targets.as_mut().unwrap();
         if targets.drawn.as_ref() == Some(&key) {
             self.blit.draw(encoder, &targets.blit_finished, target);
@@ -1083,6 +1111,7 @@ impl Renderer {
             let data: Vec<[[f32; 4]; 4]> = items.iter().map(|i| i.model).collect();
             gpu.queue.write_buffer(&self.objects.as_ref().unwrap().0, 0, bytemuck::cast_slice(&data));
         }
+        self.env.set_size(gpu, opts.quality.reflection_size());
         if let Some(source) = &source {
             self.env.update(gpu, encoder, source);
         }
@@ -1093,6 +1122,17 @@ impl Renderer {
             look.sh = self.env.ambient(look.bg_params[1], strength);
         }
         look.light_params[1] = if shadows { 1.0 } else { 0.0 };
+        look.shadow_params[3] = if moving { 1.0 } else { 0.0 };
+        if quick_shadow {
+            // The map fills only its corner, with texels as much bigger as
+            // it is smaller, and the biases that keep a surface from
+            // shadowing itself grow with them.
+            let grow = self.shadow_size as f32 / QUICK_SHADOW as f32;
+            look.shadow_params[0] = 1.0 / QUICK_SHADOW as f32;
+            look.shadow_params[1] *= grow;
+            look.shadow_params[2] *= grow;
+            look.shadow_soft[3] = 1.0 / grow;
+        }
         look.env_params[2] = if occlusion { 1.0 } else { 0.0 };
         look.matcap_params[3] = if plastic { 1.0 } else { 0.0 };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
@@ -1227,15 +1267,19 @@ impl Renderer {
             }
         };
 
-        let shadow_key = shadows.then(|| self.shadow_key(&look, items, opts.show_backfaces));
-        if shadows && shadow_key != self.shadow_drawn {
+        if draw_shadow {
             self.shadow_drawn = shadow_key;
+            self.shadow_quick = quick_shadow;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
                 color_attachments: &[],
                 depth_stencil_attachment: depth_attachment(&self.shadow, 1.0),
                 ..Default::default()
             });
+            if quick_shadow {
+                let side = QUICK_SHADOW as f32;
+                pass.set_viewport(0.0, 0.0, side, side, 0.0, 1.0);
+            }
             pass.set_bind_group(0, &self.bind_pre, &[]);
             let light = glam::Mat4::from_cols_array_2d(&look.shadow_view_proj);
             let runs = self.visible_runs(&light, items);
@@ -1387,6 +1431,7 @@ impl Renderer {
             key.push(source);
         }
         let flag = |on: bool| if on { 1.0f32 } else { 0.0 };
+        key.push(&[opts.quality.shadow_size(), opts.quality.reflection_size()]);
         key.push(&[
             flag(settings.hdri.active()),
             settings.hdri.ambient,

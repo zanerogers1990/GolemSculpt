@@ -49,10 +49,12 @@ struct Look {
     // x count, y shadows on, z shadow strength, w time in seconds
     light_params: vec4<f32>,
     shadow_view_proj: mat4x4<f32>,
-    // x one shadow texel in uv, y depth bias, z normal bias (world units)
+    // x one shadow texel in uv, y depth bias, z normal bias (world units),
+    // w 1 while the shadow changes frame after frame (half the taps then)
     shadow_params: vec4<f32>,
     // x the map's width in world units (world per uv), y world units per unit
-    // of map depth, z tangent of the key light's angular radius, w unused
+    // of map depth, z tangent of the key light's angular radius, w the part
+    // of the texture the map fills (less than 1 while it is drawn small)
     shadow_soft: vec4<f32>,
     // Ambient light as nine spherical harmonic terms, ready to evaluate.
     sh: array<vec4<f32>, 9>,
@@ -315,15 +317,23 @@ fn pixel_noise(pixel: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
 }
 
-// Point `i` of `count` spread evenly over the unit disc (Vogel's spiral),
-// the whole spiral turned by `turn`.
-fn vogel_disc(i: i32, count: i32, turn: f32) -> vec2<f32> {
-    let r = sqrt((f32(i) + 0.5) / f32(count));
-    let theta = f32(i) * 2.39996323 + turn;
-    return vec2<f32>(cos(theta), sin(theta)) * r;
-}
-
+// The soft shadow's taps go round Vogel's spiral, which spreads any number
+// of points evenly over a disc: each is a golden angle on from the one
+// before, at the radius that gives it an equal share of the area. Sixteen
+// for the filter, eight for finding the casters (each of those reads four
+// texels at once); half as many while the shadow changes every frame, when
+// it costs what the fixed filter before it did.
 const SHADOW_TAPS: i32 = 16;
+const CASTER_TAPS: i32 = 8;
+
+// Where a point of the shadow map (0..1 across it) is in its texture: the
+// map fills only the texture's corner while it is drawn small, and a tap
+// off its edge reads the edge.
+fn shadow_uv(at: vec2<f32>) -> vec2<f32> {
+    return clamp(at, vec2<f32>(0.0), vec2<f32>(1.0)) * look.shadow_soft.w;
+}
+// A turn by the golden angle (2.39996 radians).
+const GOLDEN_TURN: mat2x2<f32> = mat2x2<f32>(-0.7373688, 0.6754903, -0.6754903, -0.7373688);
 
 // The key light's shadow at `world`, whose surface faces `n`: crisp where it
 // meets what casts it and softer the farther that is, as under a real light
@@ -349,36 +359,47 @@ fn key_shadow(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
         return 1.0;
     }
     let turn = pixel_noise(pixel) * TAU;
-    let size = vec2<f32>(textureDimensions(shadow_tex));
+    let start = vec2<f32>(cos(turn), sin(turn));
 
     // The casters: over the widest the shadow could spread here, which is
-    // from a caster at the near side of the scene (a quarter of the map's depth).
+    // from a caster at the near side of the scene (a quarter of the map's
+    // depth). Each tap gathers the four texels around it.
     let reach = max(pos.z - 0.25, 0.0) * world_per_depth * light_tan / world_per_uv;
     let search = clamp(reach, texel * 2.0, 0.08);
+    let moving = look.shadow_params.w > 0.5;
+    let caster_taps = select(CASTER_TAPS, CASTER_TAPS / 2, moving);
+    let filter_taps = select(SHADOW_TAPS, SHADOW_TAPS / 2, moving);
     var found = 0.0;
     var caster_depth = 0.0;
-    for (var i = 0; i < SHADOW_TAPS; i++) {
-        let at = pos.xy + vogel_disc(i, SHADOW_TAPS, turn) * search;
-        let texel_at = clamp(vec2<i32>(at * size), vec2<i32>(0), vec2<i32>(size) - 1);
-        let d = textureLoad(shadow_tex, texel_at, 0);
-        if (d < pos.z) {
-            found += 1.0;
-            caster_depth += d;
-        }
+    var way = start;
+    for (var i = 0; i < caster_taps; i++) {
+        let r = sqrt((f32(i) + 0.5) / f32(caster_taps));
+        let d = textureGather(shadow_tex, env_smp, shadow_uv(pos.xy + way * (r * search)));
+        way = GOLDEN_TURN * way;
+        let blocked = select(vec4<f32>(0.0), vec4<f32>(1.0), d < vec4<f32>(pos.z));
+        found += dot(blocked, vec4<f32>(1.0));
+        caster_depth += dot(d, blocked);
     }
+    let strength = look.light_params.z;
     if (found < 0.5) {
         return 1.0;
+    }
+    if (found > f32(caster_taps * 4) - 0.5) {
+        // Everything around is in shadow, wider than the edge could be.
+        return 1.0 - strength;
     }
     // How wide the shadow's edge is at this distance from its casters.
     let gap = (pos.z - caster_depth / found) * world_per_depth;
     let radius = max(gap * light_tan / world_per_uv, texel * 1.5);
     var lit = 0.0;
-    for (var i = 0; i < SHADOW_TAPS; i++) {
-        let at = pos.xy + vogel_disc(i, SHADOW_TAPS, turn + 1.3) * radius;
-        lit += textureSampleCompareLevel(shadow_tex, shadow_smp, at, pos.z);
+    way = vec2<f32>(-start.y, start.x);
+    for (var i = 0; i < filter_taps; i++) {
+        let r = sqrt((f32(i) + 0.5) / f32(filter_taps));
+        lit += textureSampleCompareLevel(shadow_tex, shadow_smp, shadow_uv(pos.xy + way * (r * radius)), pos.z);
+        way = GOLDEN_TURN * way;
     }
     // Shadow strength: how dark the preset lets the key's shadow get.
-    return mix(1.0, lit / f32(SHADOW_TAPS), look.light_params.z);
+    return mix(1.0, lit / f32(filter_taps), strength);
 }
 
 struct Light {
@@ -419,10 +440,27 @@ fn ambient(n: vec3<f32>) -> vec3<f32> {
     return max(eq + (look.ambient_sky.rgb - eq) * up + (look.ambient_ground.rgb - eq) * down, vec3<f32>(0.0));
 }
 
-// The surroundings mirrored in a surface of the given roughness.
+// The surroundings mirrored in a surface of the given roughness: the cube,
+// each smaller level blurred for a rougher surface. A near-mirror under an
+// HDRI reads the picture itself instead, as sharp as the reflection is
+// (the cube holds it only at its own size), so chrome and gloss show the
+// HDRI crisply.
 fn environment(r: vec3<f32>, perceptual_roughness: f32) -> vec3<f32> {
     let level = perceptual_roughness * (1.7 - 0.7 * perceptual_roughness) * 6.0;
-    return textureSampleLevel(env_cube, env_smp, r, level).rgb * look.env_params.y;
+    var color = textureSampleLevel(env_cube, env_smp, r, level).rgb;
+    if (look.env_params.x > 0.5 && level < 1.5) {
+        // How wide the reflection's lobe is, or else the angle one pixel
+        // spans (times a little, for a curved surface spreading it): read a
+        // level of the picture as fine as that. No screen derivatives: a
+        // painted material may be shaded in a branch of its own.
+        let a = perceptual_roughness * perceptual_roughness;
+        let pixel = select(2.0 * g.viewport.z / max(g.viewport.y, 1.0), 0.002, g.viewport.z <= 0.0) * 3.0;
+        let width = f32(textureDimensions(hdri_tex).x);
+        let lod = max(log2(max(a, pixel) * width / TAU), 0.0);
+        let sharp = textureSampleLevel(hdri_tex, hdri_smp, hdri_uv(r, look.bg_params.y), lod).rgb * look.bg_params.z;
+        color = mix(sharp, color, saturate(level / 1.5));
+    }
+    return color * look.env_params.y;
 }
 
 fn pow5(x: f32) -> f32 {

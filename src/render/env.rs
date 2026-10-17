@@ -1,17 +1,17 @@
-//! The model's surroundings: a small cube map of the default sky, the
-//! background gradient or the loaded HDRI, blurred level by level for
-//! reflections, plus the HDRI's picture for the backdrop and its ambient
-//! light as spherical harmonics.
+//! The model's surroundings: a cube map of the default sky, the background
+//! gradient or the loaded HDRI, blurred level by level for reflections,
+//! plus the HDRI's picture for the backdrop (and the sharpest reflections,
+//! which the surface shader reads from it directly) and its ambient light
+//! as spherical harmonics.
 
 use bytemuck::{Pod, Zeroable};
 
 use super::Gpu;
 use crate::look::HdriImage;
 
-const CUBE_SIZE: u32 = 128;
-/// Levels of the plain source (128 down to 1) and of the blurred result
-/// (128 down to 2: one per step of roughness the shader looks up).
-const SOURCE_LEVELS: u32 = 8;
+/// Levels of the blurred result: one per step of roughness the shader looks
+/// up, the largest for a mirror. (The plain source has every level down to
+/// one texel: `source_levels`.)
 const ENV_LEVELS: u32 = 7;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Larger pictures are shrunk to this width: sharper gains nothing on screen.
@@ -39,6 +39,8 @@ pub struct Env {
     pipe_blur: wgpu::RenderPipeline,
     source: wgpu::Texture,
     blurred: wgpu::Texture,
+    /// The side of the cube's largest level (render/quality.rs).
+    size: u32,
     /// The blurred cube, for the surface shader.
     pub view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
@@ -48,8 +50,37 @@ pub struct Env {
     /// A small copy of the HDRI for working out its ambient light.
     hdri_small: Option<(usize, usize, Vec<f32>)>,
     baked: Option<EnvParams>,
-    /// Counts HDRI changes, so the renderer knows to rebind.
+    /// Counts HDRI and cube changes, so the renderer knows to rebind.
     pub generation: u32,
+}
+
+/// How many levels a cube of `size` has down to one texel.
+fn source_levels(size: u32) -> u32 {
+    32 - size.max(1).leading_zeros()
+}
+
+/// The plain source cube and the blurred one, at `size`, and the view of
+/// the blurred one the surface shader reads.
+fn cubes(device: &wgpu::Device, size: u32) -> (wgpu::Texture, wgpu::Texture, wgpu::TextureView) {
+    let cube = |label, levels| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 6 },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+    };
+    let source = cube("environment source", source_levels(size));
+    let blurred = cube("environment", ENV_LEVELS);
+    let view = blurred.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::Cube),
+        ..Default::default()
+    });
+    (source, blurred, view)
 }
 
 pub(super) fn f32_to_f16(v: f32) -> u16 {
@@ -198,24 +229,8 @@ impl Env {
                 cache: None,
             })
         };
-        let cube = |label, levels| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: CUBE_SIZE, height: CUBE_SIZE, depth_or_array_layers: 6 },
-                mip_level_count: levels,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        };
-        let source = cube("environment source", SOURCE_LEVELS);
-        let blurred = cube("environment", ENV_LEVELS);
-        let view = blurred.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
+        let size = crate::render::quality::Quality::default().reflection_size();
+        let (source, blurred, view) = cubes(device, size);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("environment"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -241,6 +256,7 @@ impl Env {
             pipe_blur: pipeline("fs_blur"),
             source,
             blurred,
+            size,
             view,
             sampler,
             hdri_view: hdri_texture(gpu, &[(1, 1, vec![0.0, 0.0, 0.0, 1.0])]),
@@ -249,6 +265,18 @@ impl Env {
             baked: None,
             generation: 0,
         }
+    }
+
+    /// Makes the cubes afresh at `size` if they are not that already; they
+    /// are drawn again on the next `update`.
+    pub fn set_size(&mut self, gpu: &Gpu, size: u32) {
+        if size == self.size {
+            return;
+        }
+        (self.source, self.blurred, self.view) = cubes(&gpu.device, size);
+        self.size = size;
+        self.baked = None;
+        self.generation += 1;
     }
 
     /// Takes a new HDRI picture, or drops the current one.
@@ -398,7 +426,7 @@ impl Env {
         // The source, then each smaller level of it from the one above. (The
         // first pass reads no cube, but one must be bound: the other one.)
         draw(&self.pipe_source, &bind(&self.view), &self.source, 0);
-        for level in 1..SOURCE_LEVELS {
+        for level in 1..source_levels(self.size) {
             draw(&self.pipe_shrink, &bind(&cube(&self.source, Some(level - 1))), &self.source, level);
         }
         let all = bind(&cube(&self.source, None));
