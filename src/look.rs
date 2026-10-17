@@ -857,6 +857,98 @@ pub const WOODS: [WoodPreset; 6] = [
     },
 ];
 
+/// One cast-resin look, for seeing a print or a casting as a buyer will: a
+/// glossy surface that reflects at a glance and lets the world through head
+/// on, bent by the resin and tinted by as much of it as the view crosses.
+pub struct ResinPreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    /// The colour light takes on through `depth` of resin.
+    pub color: Rgb,
+    /// How much resin, as a fraction of the model's size, gives that colour.
+    pub depth: f32,
+    /// Milkiness: how much of the light scatters inside instead of passing
+    /// through (0 water-clear, 1 opaque).
+    pub haze: f32,
+    pub smoothness: f32,
+    /// Light from behind glowing through.
+    pub transmission: f32,
+}
+
+pub const RESINS: [ResinPreset; 7] = [
+    ResinPreset {
+        id: "clear",
+        name: "Clear",
+        description: "Water-clear casting resin: all reflections and the world seen through it.",
+        color: [0.96, 0.98, 1.0],
+        depth: 0.6,
+        haze: 0.02,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "smoky",
+        name: "Smoky",
+        description: "Smoky grey resin: dark where it is thick, see-through at the edges.",
+        color: [0.42, 0.40, 0.38],
+        depth: 0.15,
+        haze: 0.05,
+        smoothness: 0.95,
+        transmission: 0.8,
+    },
+    ResinPreset {
+        id: "amber",
+        name: "Amber",
+        description: "Warm amber, golden at the edges and deep honey in the thick parts.",
+        color: [1.0, 0.62, 0.18],
+        depth: 0.25,
+        haze: 0.04,
+        smoothness: 0.96,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "ruby",
+        name: "Ruby",
+        description: "Deep transparent red.",
+        color: [0.9, 0.06, 0.14],
+        depth: 0.2,
+        haze: 0.03,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "emerald",
+        name: "Emerald",
+        description: "Transparent green.",
+        color: [0.12, 0.78, 0.38],
+        depth: 0.2,
+        haze: 0.03,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "sapphire",
+        name: "Sapphire",
+        description: "Transparent blue.",
+        color: [0.12, 0.32, 0.95],
+        depth: 0.2,
+        haze: 0.03,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "frosted",
+        name: "Frosted",
+        description: "Milky translucent white, like a frosted print: light glows through it softly.",
+        color: [0.95, 0.96, 1.0],
+        depth: 0.4,
+        haze: 0.55,
+        smoothness: 0.6,
+        transmission: 1.0,
+    },
+];
+
 /// One glow look: an emissive layer over whatever shades the surface. The
 /// pattern number is what the shader switches on.
 pub struct GlowPreset {
@@ -1018,10 +1110,12 @@ pub enum Finish {
     Metal,
     Clay,
     Wood,
+    Resin,
 }
 
 impl Finish {
-    pub const ALL: [Finish; 5] = [Finish::None, Finish::LurePlastic, Finish::Metal, Finish::Clay, Finish::Wood];
+    pub const ALL: [Finish; 6] =
+        [Finish::None, Finish::LurePlastic, Finish::Metal, Finish::Clay, Finish::Wood, Finish::Resin];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -1030,6 +1124,7 @@ impl Finish {
             Finish::Metal => "Metal",
             Finish::Clay => "Clay",
             Finish::Wood => "Wood",
+            Finish::Resin => "Resin",
         }
     }
 }
@@ -1139,6 +1234,25 @@ pub struct WoodSettings {
 }
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ResinSettings {
+    #[serde(with = "crate::io::preset::resin")]
+    pub preset: usize,
+    /// How see-through it is: more lets light further in before its colour
+    /// takes over.
+    pub clarity: f32,
+    pub haze: f32,
+    pub gloss: f32,
+    pub reference: f32,
+}
+
+impl Default for ResinSettings {
+    fn default() -> Self {
+        Self { preset: 0, clarity: 1.0, haze: 1.0, gloss: 1.0, reference: 0.0 }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GlowSettings {
     pub on: bool,
     #[serde(with = "crate::io::preset::glow")]
@@ -1215,6 +1329,8 @@ pub struct Look {
     pub metal: MetalSettings,
     pub clay: ClaySettings,
     pub wood: WoodSettings,
+    #[serde(default)]
+    pub resin: ResinSettings,
     pub glow: GlowSettings,
 
     #[serde(with = "crate::io::preset::lighting")]
@@ -1337,6 +1453,7 @@ impl Default for Look {
                 seed: 0.0,
                 reference: 0.0,
             },
+            resin: ResinSettings::default(),
             glow: GlowSettings {
                 on: false,
                 preset: 0,
@@ -1418,6 +1535,7 @@ impl Look {
             Finish::Metal => &mut self.metal.reference,
             Finish::Clay => &mut self.clay.reference,
             Finish::Wood => &mut self.wood.reference,
+            Finish::Resin => &mut self.resin.reference,
         };
         if *reference <= 0.0 {
             *reference = size;
@@ -1434,6 +1552,7 @@ impl Look {
             Finish::Metal => (self.metal.preset, self.metal.reference) = (preset, size),
             Finish::Clay => (self.clay.preset, self.clay.reference) = (preset, size),
             Finish::Wood => (self.wood.preset, self.wood.reference) = (preset, size),
+            Finish::Resin => (self.resin.preset, self.resin.reference) = (preset, size),
         }
         self.finish = finish;
     }
@@ -1566,6 +1685,7 @@ pub const METAL_SLOTS: usize = 10;
 pub const CLAY_SLOTS: usize = 6;
 pub const WOOD_SLOTS: usize = 12;
 pub const GLOW_SLOTS: usize = 5;
+pub const RESIN_SLOTS: usize = 2;
 
 /// What the uniform builder needs to know about the frame.
 pub struct Frame {
@@ -1868,6 +1988,8 @@ impl Look {
             Finish::Metal => 2.0,
             Finish::Clay => 3.0,
             Finish::Wood => 4.0,
+            // 5 is the matcap's pipeline.
+            Finish::Resin => 6.0,
         };
         u.matcap_params = [self.matcap_intensity.clamp(0.0, 3.0), clamp01(self.matcap_tint), finish, 0.0];
         // Masked areas go toward dark grey rather than a colour, as in
@@ -1906,6 +2028,7 @@ impl Look {
             Finish::Metal => self.pack_metal(self.size_of(self.metal.reference, f)),
             Finish::Clay => self.pack_clay(self.size_of(self.clay.reference, f)),
             Finish::Wood => self.pack_wood(self.size_of(self.wood.reference, f)),
+            Finish::Resin => self.pack_resin(self.size_of(self.resin.reference, f)),
         }
     }
 
@@ -2031,6 +2154,16 @@ impl Look {
                 clamp01(p.checks + (s.cracks - 1.0) * 0.5),
             ],
             [s.detail, 0.0, 0.0, 0.0],
+        ])
+    }
+
+    /// The cast resin (see `finish_resin`), its depths at `size`.
+    pub fn pack_resin(&self, size: f32) -> FinishParams {
+        let s = &self.resin;
+        let p = &RESINS[idx(s.preset, RESINS.len())];
+        FinishParams::of::<RESIN_SLOTS>([
+            rgba(p.color, p.depth * size * s.clarity.clamp(0.05, 10.0)),
+            [clamp01(p.haze * s.haze), clamp01(p.smoothness * s.gloss), p.transmission, 0.0],
         ])
     }
 
@@ -2207,6 +2340,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
                     "metal" => (Finish::Metal, METALS.iter().position(|p| p.id == preset)),
                     "clay" => (Finish::Clay, CLAYS.iter().position(|p| p.id == preset)),
                     "wood" => (Finish::Wood, WOODS.iter().position(|p| p.id == preset)),
+                    "resin" => (Finish::Resin, RESINS.iter().position(|p| p.id == preset)),
                     _ => (Finish::None, None),
                 };
                 match found {

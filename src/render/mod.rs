@@ -1112,7 +1112,10 @@ impl Renderer {
         let surface = if globals.shading[0] > 0.5 {
             pipelines::SURFACE_MATCAP
         } else {
-            ((look.matcap_params[2] + 0.5) as u32).clamp(0, 4)
+            match (look.matcap_params[2] + 0.5) as u32 {
+                f @ 0..=4 => f,
+                _ => pipelines::SURFACE_RESIN,
+            }
         };
         let glow = look.glow.v[2][0] > 0.5;
         // Which objects are drawn with their paint (paint.rs): those whose
@@ -1130,7 +1133,7 @@ impl Renderer {
             && items.iter().zip(&painted).any(|(i, &p)| {
                 p && self.meshes.get(&i.mesh).is_some_and(|m| upload.back_depth_for(m.table.iter().copied()))
             });
-        let plastic = lit && (surface == 1 || painted_lure);
+        let plastic = lit && (surface == 1 || surface == pipelines::SURFACE_RESIN || painted_lure);
         // The floor (floor.rs), under lit shading only: it is the lights'
         // shadow. Its reflection is the model drawn a second time.
         let floor = lit && look.floor[0] > 0.5;

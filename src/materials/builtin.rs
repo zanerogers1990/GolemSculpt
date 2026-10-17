@@ -1,6 +1,6 @@
 //! The materials that come with the app: Plain, and one for every preset of
 //! every finish the Look panel has (6 lure plastics, 7 metals, 5 clays, 6
-//! woods and the 8 glows). They are made from the preset tables at start-up,
+//! woods, 7 resins and the 8 glows). They are made from the preset tables at start-up,
 //! so a preset added there is a material here too, and are never written to
 //! disk. Each is the Look's own starting settings with that preset picked:
 //! what Look -> finish -> preset gives, before any slider is moved.
@@ -61,6 +61,10 @@ pub fn all() -> Vec<Material> {
         let s = look::WoodSettings { preset: i, ..look.wood.clone() };
         out.push(named("Wood", p.name, p.early, Settings::Wood(s)));
     }
+    for (i, p) in look::RESINS.iter().enumerate() {
+        let s = look::ResinSettings { preset: i, ..look.resin.clone() };
+        out.push(named("Resin", p.name, p.color, Settings::Resin(s)));
+    }
     for (i, p) in look::GLOWS.iter().enumerate() {
         let glow = look::GlowSettings { on: true, preset: i, ..look.glow.clone() };
         out.push(named("Glow", p.name, p.cool, Settings::Glow(Glow { glow, base: Plain::default() })));
@@ -92,6 +96,10 @@ pub fn from_look(look: &Look, base_color: [f32; 3], smoothness: f32) -> Material
         look::Finish::Wood => {
             let p = &look::WOODS[look.wood.preset.min(look::WOODS.len() - 1)];
             ("Wood", p.name, p.early, Settings::Wood(look.wood.clone()))
+        }
+        look::Finish::Resin => {
+            let p = &look::RESINS[look.resin.preset.min(look::RESINS.len() - 1)];
+            ("Resin", p.name, p.color, Settings::Resin(look.resin.clone()))
         }
     };
     let name = if preset.is_empty() { format!("My {finish}") } else { format!("My {finish} - {preset}") };

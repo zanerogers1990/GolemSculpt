@@ -219,6 +219,11 @@ fn settings(ui: &mut Ui, state: &State, m: &mut Material, tips: bool) {
             look::wood(ui, &mut scratch, tips, 1.0);
             *s = scratch.wood;
         }
+        Settings::Resin(s) => {
+            scratch.resin = s.clone();
+            look::resin(ui, &mut scratch, tips, 1.0);
+            *s = scratch.resin;
+        }
         Settings::Glow(g) => {
             let presets = crate::look::GLOWS.iter().map(|p| (p.name, p.description, p.cool));
             if let Some(i) = look::preset_grid(ui, tips, Some(g.glow.preset), presets) {
@@ -402,12 +407,13 @@ pub fn card(
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
         let of = |f: &dyn Fn(&Entry) -> bool| (0..entries.len()).filter(|&i| f(&entries[i])).collect::<Vec<usize>>();
         let built_in = |kind: Kind| move |e: &Entry| e.origin == Origin::BuiltIn && e.material.kind() == kind;
-        let groups: [(&str, Vec<usize>); 8] = [
+        let groups: [(&str, Vec<usize>); 9] = [
             ("", of(&built_in(Kind::Plain))),
             ("Lure Plastic", of(&built_in(Kind::Lure))),
             ("Metal", of(&built_in(Kind::Metal))),
             ("Clay", of(&built_in(Kind::Clay))),
             ("Wood", of(&built_in(Kind::Wood))),
+            ("Resin", of(&built_in(Kind::Resin))),
             ("Glow", of(&built_in(Kind::Glow))),
             ("Custom Shaders", of(&|e: &Entry| e.origin == Origin::Shader)),
             ("Yours", of(&|e: &Entry| e.origin == Origin::User)),

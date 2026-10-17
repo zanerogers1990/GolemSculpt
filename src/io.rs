@@ -975,7 +975,7 @@ pub mod preset {
         )*};
     }
 
-    by_id!(lighting: LIGHTING, lure: LURES, metal: METALS, clay: CLAYS, wood: WOODS, glow: GLOWS);
+    by_id!(lighting: LIGHTING, lure: LURES, metal: METALS, clay: CLAYS, wood: WOODS, resin: RESINS, glow: GLOWS);
 }
 
 /// One row of a saved scene; `mesh` indexes the file's mesh list, so

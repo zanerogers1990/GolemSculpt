@@ -149,6 +149,7 @@ pub fn material(ui: &mut egui::Ui, o: &mut Options, size: f32, actions: &mut Vec
         Finish::Metal => metal(ui, &mut o.look, tips, size),
         Finish::Clay => clay(ui, &mut o.look, tips, size),
         Finish::Wood => wood(ui, &mut o.look, tips, size),
+        Finish::Resin => resin(ui, &mut o.look, tips, size),
     }
 
     theme::heading(ui, "Surface Grain");
@@ -276,6 +277,21 @@ pub(super) fn wood(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
 }
 
 /// A number in 0..1 that differs from click to click.
+pub(super) fn resin(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
+    let presets = look::RESINS.iter().map(|p| (p.name, p.description, p.color));
+    if let Some(i) = preset_grid(ui, tips, Some(look.resin.preset), presets) {
+        look.pick_preset(Finish::Resin, i, size);
+    }
+    let s = &mut look.resin;
+    tip(
+        theme::slider(ui, "Clarity", &mut s.clarity, 0.1..=4.0, two),
+        tips,
+        "How see-through it is: more lets the light further in before the resin's colour takes over.",
+    );
+    tip(theme::slider(ui, "Haze", &mut s.haze, 0.0..=3.0, two), tips, "Milkiness: light scattered inside, as in a frosted print.");
+    theme::slider(ui, "Gloss", &mut s.gloss, 0.0..=1.0, two);
+}
+
 fn random(ui: &egui::Ui) -> f32 {
     let t = ui.input(|i| i.time);
     (t * 1000.0).sin().abs().fract() as f32

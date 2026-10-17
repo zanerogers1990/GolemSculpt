@@ -602,6 +602,10 @@ fn shots() -> Vec<Shot> {
     for p in look::WOODS {
         out.push(shot(&format!("wood_{}", p.id), &format!("matcap=off,finish=wood:{}", p.id)));
     }
+    for p in look::RESINS {
+        out.push(shot(&format!("resin_{}", p.id), &format!("matcap=off,finish=resin:{}", p.id)));
+    }
+    out.push(shot("resin_clear_gradient", "matcap=off,finish=resin:clear,gradient"));
     for p in look::GLOWS {
         out.push(shot(&format!("glow_{}", p.id), &format!("matcap=off,glow={}", p.id)));
     }
@@ -695,7 +699,7 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 14] = [
+const STUDIO: [(&str, &str); 16] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
@@ -714,6 +718,8 @@ const STUDIO: [(&str, &str); 14] = [
     ("floor", "matcap=off,floor,refine,samples=64"),
     ("floor_glossy", "matcap=off,floor,floorreflect=0.6,floorrough=0.25,refine,samples=64"),
     ("floor_white_glossy", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=64,light=highkey,backdrop=1"),
+    ("studio_resin_amber", "matcap=off,finish=resin:amber,refine,samples=64"),
+    ("studio_resin_clear_white", "matcap=off,finish=resin:clear,refine,samples=64,light=highkey,backdrop=1,floor"),
 ];
 
 /// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is

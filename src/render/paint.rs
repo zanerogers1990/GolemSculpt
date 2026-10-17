@@ -140,6 +140,7 @@ pub fn generated(kinds: &BTreeSet<Kind>, customs: &[Code]) -> String {
             Kind::Metal => "m = finish_metal(s, e.params);",
             Kind::Clay => "m = finish_clay(s, e.params);",
             Kind::Wood => "m = finish_wood(s, e.params);",
+            Kind::Resin => "m = finish_resin(s, e.params);",
             Kind::Glow => {
                 "m = plain_of(e, s, e.base.rgb);\n            let glow = finish_glow(s, e.params);\n            \
                  m.emission += glow.emission;\n            m.dim *= glow.dim;"

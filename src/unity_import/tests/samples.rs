@@ -518,6 +518,7 @@ fn every_sample_opens_as_the_file_says_and_survives_a_save() {
             Finish::Metal => format!("metal \"{}\"", look::METALS[look.metal.preset].id),
             Finish::Clay => format!("clay \"{}\"", look::CLAYS[look.clay.preset].id),
             Finish::Wood => format!("wood \"{}\"", look::WOODS[look.wood.preset].id),
+            Finish::Resin => format!("resin \"{}\"", look::RESINS[look.resin.preset].id),
         };
         println!(
             "   look: matcap {} (\"{}\"), {finish}, base colour {:?}, lighting \"{}\"{}, HDRI {}, background {:?}{}",

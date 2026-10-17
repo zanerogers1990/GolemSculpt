@@ -30,6 +30,7 @@ const FINISH_METAL: u32 = 2u;
 const FINISH_CLAY: u32 = 3u;
 const FINISH_WOOD: u32 = 4u;
 const FINISH_MATCAP: u32 = 5u;
+const FINISH_RESIN: u32 = 6u;
 
 // Which surface this pipeline shades (one of the FINISH_ values).
 override FINISH: u32 = 0u;
@@ -1546,6 +1547,75 @@ fn finish_glow(s: Surface, params: FinishParams) -> MaterialSample {
     return out;
 }
 
+// ---- cast resin -----------------------------------------------------------
+//
+// Clear or tinted resin, as a print or a casting is: a glossy surface that
+// reflects at a glance (the lighting does that, as for any gloss) and lets
+// what is behind it through head on, bent by the resin, tinted and darkened
+// by as much resin as the view crosses (the plastic's back-face thickness,
+// Beer and Lambert's law over it), a little milky haze lit like a surface,
+// and light from behind glowing through.
+
+// What the view sees in direction `dir` past the model: the backdrop as it
+// is drawn, so a resin in a dark studio looks dark through and one in front
+// of an HDRI shows it.
+fn backdrop(dir: vec3<f32>) -> vec3<f32> {
+    let mode = look.bg_params.x;
+    if (mode > 1.5) {
+        return textureSampleLevel(hdri_tex, hdri_smp, hdri_uv(dir, look.bg_params.y), 2.0).rgb * look.bg_params.z;
+    }
+    if (mode > 0.5) {
+        let t = pow(clamp(dir.y * 0.5 + 0.5, 0.0, 1.0), 1.0 / max(look.bg_params.w, 0.001));
+        return mix(g.bg_bottom.rgb, g.bg_top.rgb, t);
+    }
+    return g.bg_bottom.rgb;
+}
+
+// v[0] the colour light takes on through `w` of resin (world units); v[1]
+// x haze, y smoothness, z transmission.
+fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
+    let tint = params.v[0].rgb;
+    let depth = max(params.v[0].w, 1e-5);
+    let haze = saturate(params.v[1].x);
+    let n = s.n;
+    // How much resin the view crosses; with nothing behind, a solid body.
+    var thickness = depth * 2.0;
+    if (s.back_depth > 0.0) {
+        let front = dot(s.world - g.cam_pos.xyz, g.cam_forward.xyz);
+        if (s.back_depth >= front - depth * 0.02) {
+            thickness = max(s.back_depth - front, 0.0);
+        }
+    }
+    let through = pow(max(tint, vec3<f32>(1e-3)), vec3<f32>(thickness / depth));
+    // What is behind, along the view bent into the resin, and only what the
+    // surface does not reflect (the lighting adds the reflection).
+    var bent = refract(-s.v, n, 1.0 / 1.5);
+    if (dot(bent, bent) < 0.5) {
+        bent = -s.v;
+    }
+    let nv = saturate(dot(n, s.v));
+    let passes = 1.0 - (0.04 + 0.96 * pow5(1.0 - nv));
+    let behind = backdrop(bent) * through * passes * (1.0 - haze);
+    // A light behind the model seen through it, tinted by the resin: where
+    // the bent view points at it, sharply in clear resin and spread wide in
+    // milky.
+    var glow = vec3<f32>(0.0);
+    let spread = mix(48.0, 3.0, sqrt(haze));
+    let count = light_count();
+    for (var i = 0; i < count; i++) {
+        let light = get_light(i, s);
+        glow += light.color * pow(saturate(dot(bent, -light.dir)), spread);
+    }
+    var m = material(s, tint * haze);
+    m.smoothness = params.v[1].y;
+    m.emission = behind + glow * through * params.v[1].z * passes;
+    // A milky resin scatters light past the shadow line, as clay does.
+    m.scatter_color = tint * haze * 0.5;
+    m.scatter_wrap = 0.6;
+    m.scatter_shadow = 0.5;
+    return m;
+}
+
 // ---- the surface ----------------------------------------------------------
 
 // What this pipeline's finish makes of the pixel.
@@ -1561,6 +1631,9 @@ fn surface_material(s: Surface) -> MaterialSample {
     }
     if (FINISH == FINISH_WOOD) {
         return finish_wood(s, look.finish);
+    }
+    if (FINISH == FINISH_RESIN) {
+        return finish_resin(s, look.finish);
     }
     return finish_pbr(s, look.finish);
 }
