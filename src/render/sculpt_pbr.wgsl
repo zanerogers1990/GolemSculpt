@@ -88,6 +88,9 @@ struct Look {
 @group(0) @binding(10) var back_tex: texture_2d<f32>;
 @group(0) @binding(11) var hdri_tex: texture_2d<f32>;
 @group(0) @binding(12) var hdri_smp: sampler;
+// The split-sum reflection table (render/dfg.rs): view angle across,
+// roughness down; x what grazing fresnel adds, y all a white mirror reflects.
+@group(0) @binding(13) var dfg_tex: texture_2d<f32>;
 
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
@@ -384,29 +387,72 @@ fn environment(r: vec3<f32>, perceptual_roughness: f32) -> vec3<f32> {
     return textureSampleLevel(env_cube, env_smp, r, level).rgb * look.env_params.y;
 }
 
-// Physically based shading under the whole rig: the Unity pipeline's lit
-// model (a GGX highlight in its cheap normalised form, ambient from the sky
-// colours or the HDRI, a blurred environment reflection).
+fn pow5(x: f32) -> f32 {
+    let x2 = x * x;
+    return x2 * x2 * x;
+}
+
+// What the split-sum table holds for a surface seen at `nv` with this
+// perceptual roughness (see render/dfg.rs), read between its texel centres.
+fn dfg_lookup(nv: f32, perceptual_roughness: f32) -> vec2<f32> {
+    let size = f32(textureDimensions(dfg_tex).x);
+    let uv = vec2<f32>(nv, perceptual_roughness) * ((size - 1.0) / size) + 0.5 / size;
+    return textureSampleLevel(dfg_tex, env_smp, uv, 0.0).xy;
+}
+
+// The GGX spread of microfacet normals, for linear roughness `a`.
+fn d_ggx(nh: f32, a: f32) -> f32 {
+    let a2 = a * a;
+    let d = (nh * a2 - nh) * nh + 1.0;
+    return a2 / (3.14159265 * d * d);
+}
+
+// Height-correlated Smith visibility for GGX: how much of the light the
+// microfacets shadow and mask, with the 1 / (4 nl nv) of the highlight in it.
+fn v_smith(nv: f32, nl: f32, a: f32) -> f32 {
+    let a2 = a * a;
+    let gv = nl * sqrt(nv * nv * (1.0 - a2) + a2);
+    let gl = nv * sqrt(nl * nl * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-6);
+}
+
+// How much of the reflected surroundings a crease still sees (Lagarde's fit
+// from the ambient occlusion): a smooth surface's narrow reflection is
+// blocked less than the open sky above it, a rough one's about as much.
+fn specular_occlusion(nv: f32, ao: f32, a: f32) -> f32 {
+    return saturate(pow(nv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao);
+}
+
+// Physically based shading under the whole rig: ambient from the sky
+// colours or the HDRI, the surroundings reflected through the split-sum
+// table with the second bounce of rough surfaces given back, and each light
+// through a GGX highlight with height-correlated visibility and Schlick's
+// fresnel. Lights carry pi in their colour, as in the Unity pipeline this
+// came from, so the highlight is the BRDF times pi and diffuse has no 1 / pi.
 fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, smoothness: f32, occlusion: f32) -> vec3<f32> {
-    let one_minus_reflectivity = 0.96 * (1.0 - metallic);
-    let reflectivity = 1.0 - one_minus_reflectivity;
-    let diffuse = albedo * one_minus_reflectivity;
-    let specular = mix(vec3<f32>(0.04), albedo, metallic);
-    let perceptual_roughness = 1.0 - smoothness;
-    let roughness = max(perceptual_roughness * perceptual_roughness, 0.0078125);
-    let roughness2 = max(roughness * roughness, 6.103515625e-5);
-    let grazing = saturate(smoothness + reflectivity);
-    let normalization = roughness * 4.0 + 2.0;
+    let diffuse = albedo * (1.0 - metallic);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let perceptual_roughness = saturate(1.0 - smoothness);
+    let a = max(perceptual_roughness * perceptual_roughness, 0.0078125);
+    let nv = max(dot(n, s.v), 1e-4);
+    let dfg = dfg_lookup(nv, perceptual_roughness);
+    // What the surroundings give back, all of the lobe, and the factor that
+    // returns what bounces between microfacets more than once.
+    let reflected = mix(vec3<f32>(dfg.x), vec3<f32>(dfg.y), f0);
+    let energy = 1.0 + f0 * (1.0 / max(dfg.y, 1e-3) - 1.0);
 
-    // Indirect.
-    let nv = saturate(dot(n, s.v));
-    let fresnel = pow(1.0 - nv, 4.0);
-    let reflection = environment(reflect(-s.v, n), perceptual_roughness);
-    var color = ambient(n) * diffuse
-        + reflection * (1.0 / (roughness2 + 1.0)) * mix(specular, vec3<f32>(grazing), fresnel);
-    color *= min(s.ao, occlusion);
+    // Indirect. A bumped normal can reflect a direction below the surface's
+    // real horizon, which it could not see: that fades out.
+    let r = reflect(-s.v, n);
+    let horizon = min(1.0 + dot(r, s.smooth_n), 1.0);
+    let ao = min(s.ao, occlusion);
+    let reflection = environment(r, perceptual_roughness);
+    var color = ambient(n) * diffuse * (1.0 - reflected) * ao
+        + reflection * reflected * energy * (specular_occlusion(nv, ao, a) * horizon * horizon);
 
-    // Direct.
+    // Direct. Diffuse keeps what the surface does not reflect at normal
+    // incidence (the Unity pipeline's 0.96 for a dielectric).
+    let direct_diffuse = diffuse * (1.0 - 0.04);
     let count = light_count();
     for (var i = 0; i < count; i++) {
         let light = get_light(i, s);
@@ -414,9 +460,9 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
         let h = normalize(light.dir + s.v);
         let nh = saturate(dot(n, h));
         let lh = saturate(dot(light.dir, h));
-        let d = nh * nh * (roughness2 - 1.0) + 1.00001;
-        let spec = roughness2 / (d * d * max(0.1, lh * lh) * normalization);
-        color += (diffuse + specular * spec) * light.color * (s.ao_direct * light.shadow * nl);
+        let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - lh);
+        let spec = fresnel * (d_ggx(nh, a) * v_smith(nv, nl, a) * 3.14159265) * energy;
+        color += (direct_diffuse + spec) * light.color * (s.ao_direct * light.shadow * nl);
     }
     return color;
 }

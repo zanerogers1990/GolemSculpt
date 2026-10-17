@@ -653,10 +653,55 @@ pub fn run_shots(folder: &Path) {
                 Err(e) => eprintln!("could not write {}: {e}", path.display()),
             }
         }
+        for (name, spec) in SWEEPS {
+            sweep(gpu, folder, name, spec);
+        }
     });
     if let Err(e) = result {
         eprintln!("{e}");
     }
+}
+
+/// The roughness sweeps: a plain sphere at smoothness 1 down to 0 in steps
+/// of a tenth, side by side in one picture, as metal and as plastic.
+const SWEEPS: [(&str, &str); 2] = [("sweep_metal", "matcap=off,metallic=1"), ("sweep_dielectric", "matcap=off,metallic=0")];
+const SWEEP_CELL: u32 = 160;
+
+/// One sweep picture, and a line per sphere of how bright it is on average
+/// (0-255 over the pixels it covers), so a sweep that loses or gains light
+/// as it gets rougher shows in numbers as well as on sight.
+fn sweep(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
+    let steps = 11u32;
+    let mut sheet = image::RgbaImage::new(SWEEP_CELL * steps, SWEEP_CELL);
+    let mut means = Vec::new();
+    for step in 0..steps {
+        let smoothness = 1.0 - step as f32 / (steps - 1) as f32;
+        let mut stage = Stage::new(gpu, (SWEEP_CELL, SWEEP_CELL));
+        stage.meshes.push((1, primitives::build(Primitive::Sphere, 40_000, 1.0)));
+        stage.objects.push((1, Mat4::IDENTITY));
+        look::apply_spec(&mut stage.opts, &format!("{spec},smoothness={smoothness},vignette=off,bloom=off"), 2.0);
+        stage.frame_camera(-20.0, -12.0);
+        stage.draw(gpu);
+        let cell = crate::render::read_texture(gpu, &stage.target);
+        // The sphere is what differs from the corner's background.
+        let background = *cell.get_pixel(0, 0);
+        let (mut sum, mut count) = (0u64, 0u64);
+        for px in cell.pixels() {
+            if (0..3).any(|c| px[c].abs_diff(background[c]) > 6) {
+                sum += (px[0] as u64 + px[1] as u64 + px[2] as u64) / 3;
+                count += 1;
+            }
+        }
+        means.push(sum as f64 / count.max(1) as f64);
+        image::imageops::replace(&mut sheet, &cell, (step * SWEEP_CELL) as i64, 0);
+    }
+    let path = folder.join(format!("{name}.png"));
+    match sheet.save(&path) {
+        Ok(()) => println!("{}", path.display()),
+        Err(e) => eprintln!("could not write {}: {e}", path.display()),
+    }
+    let row: Vec<String> = means.iter().map(|m| format!("{m:.0}")).collect();
+    println!("{name} brightness, smoothness 1 to 0: {}", row.join(" "));
 }
 
 /// `sculpt --compare-shots <folder a> <folder b>`: per picture, the largest

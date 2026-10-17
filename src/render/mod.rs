@@ -16,6 +16,7 @@ use crate::mesh::Mesh;
 
 mod cache;
 mod chunks;
+mod dfg;
 mod dof;
 pub mod env;
 mod mips;
@@ -357,6 +358,8 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     shadow: wgpu::TextureView,
     shadow_sampler: wgpu::Sampler,
+    /// The split-sum reflection table (dfg.rs).
+    dfg: wgpu::TextureView,
     env: env::Env,
     /// The `env.generation` the main bind group was built against.
     env_seen: u32,
@@ -550,6 +553,7 @@ impl Renderer {
                 texture_entry(10, exact, flat),
                 texture_entry(11, smooth, flat),
                 sampler_entry(12, wgpu::SamplerBindingType::Filtering),
+                texture_entry(13, smooth, flat),
             ],
         });
         let bind_pre = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -702,6 +706,7 @@ impl Renderer {
             sampler,
             shadow,
             shadow_sampler,
+            dfg: dfg::texture(gpu),
             env: env::Env::new(gpu),
             env_seen: 0,
             post: post::Post::new(gpu),
@@ -1094,6 +1099,7 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 10, resource: view(&targets.back) },
                     wgpu::BindGroupEntry { binding: 11, resource: view(&self.env.hdri_view) },
                     wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::Sampler(&self.env.hdri_sampler) },
+                    wgpu::BindGroupEntry { binding: 13, resource: view(&self.dfg) },
                 ],
             }));
         }
