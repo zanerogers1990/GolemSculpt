@@ -13,6 +13,7 @@ use sculpt_toolkit::Ctx;
 use sculpt_toolkit::theme::{self, ACCENT, ButtonStyle};
 
 use crate::finish::Apply;
+use crate::layout;
 use crate::state::ArrayState;
 use crate::tool::ArrayTool;
 use crate::types::{ArrayKind, ArraySettings};
@@ -92,6 +93,7 @@ pub fn show(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
                 ("Right-click a point", "Delete it"),
                 ("Delete", "Delete the picked"),
                 ("Click a copy", "Turn or move them all"),
+                ("Drag a copy along", "Space them all"),
                 ("Click an object", "Switch to it"),
                 ("Esc", "Cancel, stop, leave"),
                 ("Z, Shift + Z", "Undo, redo"),
@@ -197,6 +199,7 @@ fn settings(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, state: &Array
         if let Some(on) = toggle(ui, cx.tips, "Space by Size", s.space_by_size, help) {
             tool.edit(cx, "Array Spacing", false, |a| a.settings.space_by_size = on);
         }
+        spacing(tool, ui, cx, state);
     }
     if s.kind == ArrayKind::Curve {
         let help = "Joins the end of the curve back to its start and spreads the copies round the whole loop - a \
@@ -211,6 +214,43 @@ fn settings(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, state: &Array
     }
     mirror_row(tool, ui, cx);
     copies_back(tool, ui, cx);
+}
+
+/// How far apart the copies of a line or curve are, against the gap that
+/// spreads them along the whole path: the middle is that, left packs them
+/// closer, right spaces them out (running on past the path's end). On the same
+/// log scale as the sizes, and snapping to the middle the same way.
+fn spacing(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, state: &ArrayState) {
+    let s = state.settings;
+    let fits = ArraySettings { spacing: 0.0, ..s };
+    let Some(fit) = layout::spacing(&fits, &state.points, 1).map(|at| at.gap).filter(|&gap| gap > 1e-6) else {
+        return;
+    };
+    let ratio = if s.has_spacing() { s.spacing / fit } else { 1.0 };
+    let mut value = to_slider(ratio);
+    let r = theme::slider(ui, "Gap Between Copies", &mut value, SLIDER_MIN_SIZE.ln()..=ArraySettings::MAX_SCALE.ln(), |v| {
+        let ratio = from_slider(v);
+        if ratio == 1.0 {
+            "fills the path".to_owned()
+        } else {
+            format!("{ratio:.2}x ({})", if ratio < 1.0 { "closer" } else { "further apart" })
+        }
+    });
+    let help = "Spaces every copy out or packs them closer, so links can slot into each other. The middle spreads                 them along the whole path; anywhere else they keep their gap when you change Copies, and carry on                 straight past the end of the path. Dragging a copy along the path with the gizmo does the same.";
+    if theme::tip(r, cx.tips, help).changed() {
+        let ratio = from_slider(value);
+        let new = if ratio == 1.0 { 0.0 } else { (ratio * fit).min(ArraySettings::MAX_SPACING) };
+        if (new - s.spacing).abs() > 1e-6 * fit {
+            tool.edit(cx, "Array Gap", true, |a| a.settings.spacing = new);
+        }
+    }
+    ui.add_enabled_ui(s.has_spacing(), |ui| {
+        let r = theme::button(ui, ui.available_width(), "Spread Along the Path", ButtonStyle::default());
+        let help = "Puts the gap back to what spreads the copies evenly from the start of the path to its end.";
+        if theme::tip(r, cx.tips, help).clicked() {
+            tool.edit(cx, "Array Gap", false, |a| a.settings.spacing = 0.0);
+        }
+    });
 }
 
 /// Mirrors the array across the world's planes: the object's own live mirror,

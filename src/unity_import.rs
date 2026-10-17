@@ -577,6 +577,8 @@ fn array_of(entry: &ArrayEntry) -> Option<LiveArray> {
         space_by_size: entry.space_by_size,
         axis: entry.axis,
         sweep: entry.sweep,
+        // The Unity app always spread the copies along the whole path.
+        spacing: 0.0,
     }
     .clamped();
     let points: Vec<Vec3> = entry.points.iter().map(|p| p.vec3()).collect();

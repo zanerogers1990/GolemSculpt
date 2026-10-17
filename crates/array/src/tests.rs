@@ -950,3 +950,107 @@ fn timing_of_a_layout() {
     }
     println!("100 copies on a closed 24-point curve: {:?} per layout (checksum {checksum})", start.elapsed() / runs);
 }
+
+// ================================================================== a gap of their own
+
+#[test]
+fn a_gap_of_their_own_keeps_the_copies_that_far_apart_whatever_the_count() {
+    let mut s = ArraySettings::new(ArrayKind::Line);
+    s.count = 5;
+    s.space_by_size = false;
+    let line = [Vec3::ZERO, Vec3::new(0.0, 4.0, 0.0)];
+    let spread = compute(&s, &line);
+    near(1.0, spread[1].offset.y as f64, 1e-5, "spread: four gaps along four units");
+
+    s.spacing = 0.6;
+    for count in [3, 5, 9] {
+        s.count = count;
+        let p = compute(&s, &line);
+        check_first_is_object(&p, "spaced");
+        for (i, copy) in p.iter().enumerate() {
+            near_vec(Vec3::new(0.0, 0.6 * i as f32, 0.0), copy.offset, 1e-5, &format!("{count} copies: copy {i}"));
+        }
+    }
+    // Nine copies 0.6 apart run 4.8 along a path of 4: the last ones carry straight on past its end.
+    assert!(compute(&s, &line)[8].offset.y > 4.0);
+
+    // By size, a gap is the spacing times the mean size of the copies either side.
+    s.count = 4;
+    s.end_scale = 0.5;
+    s.space_by_size = true;
+    let p = compute(&s, &line);
+    for i in 1..4 {
+        let gap = p[i].offset.y - p[i - 1].offset.y;
+        near((0.6 * 0.5 * (p[i].scale + p[i - 1].scale)) as f64, gap as f64, 1e-5, &format!("by size: gap {i}"));
+    }
+}
+
+#[test]
+fn past_the_end_of_a_curve_the_copies_carry_on_straight_turned_as_the_end_is() {
+    let mut s = ArraySettings::new(ArrayKind::Curve);
+    s.count = 12;
+    s.space_by_size = false;
+    let curve = [Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0), Vec3::new(2.0, 1.0, 0.0), Vec3::new(3.0, 1.0, 0.0)];
+    let length = path::sample(&curve, false).length();
+    s.spacing = length / 6.0;
+    let p = compute(&s, &curve);
+    let last_on = p[6];
+    for i in 7..12 {
+        let along = p[i].offset - last_on.offset;
+        near_vec(Vec3::X * (s.spacing * (i - 6) as f32), along, 1e-3, &format!("copy {i} straight on along +X"));
+        near(0.0, angle_deg(p[i].rotation * last_on.rotation.inverse()), 1e-2, &format!("copy {i} faces as the end does"));
+    }
+}
+
+#[test]
+fn round_a_loop_a_gap_of_their_own_wraps_round_and_a_circle_ignores_it() {
+    let mut s = ArraySettings::new(ArrayKind::Curve);
+    s.closed = true;
+    s.count = 6;
+    s.space_by_size = false;
+    let ring: Vec<Vec3> = (0..8)
+        .map(|i| {
+            let a = i as f32 / 8.0 * std::f32::consts::TAU;
+            Vec3::new(a.cos() - 1.0, a.sin(), 0.0)
+        })
+        .collect();
+    let length = path::sample(&ring, true).length();
+    s.spacing = length / 4.0;
+    let p = compute(&s, &ring);
+    assert!(p.iter().all(is_finite));
+    near_vec(p[0].offset, p[4].offset, 1e-3, "four gaps is once round");
+    near_vec(p[1].offset, p[5].offset, 1e-3, "and on round again");
+
+    let mut circle = ArraySettings::new(ArrayKind::Radial);
+    let centre = [Vec3::ZERO, Vec3::new(-1.0, 0.0, 0.0)];
+    let even = compute(&circle, &centre);
+    circle.spacing = 0.3;
+    assert_eq!(compute(&circle, &centre), even);
+    assert!(crate::layout::spacing(&circle, &centre, 1).is_none());
+}
+
+#[test]
+fn how_one_copy_sees_the_spacing() {
+    let mut s = ArraySettings::new(ArrayKind::Line);
+    s.space_by_size = false;
+    let line = [Vec3::ZERO, Vec3::new(0.0, 0.0, 8.0)];
+    let at = crate::layout::spacing(&s, &line, 3).expect("a copy of a line");
+    near(2.0, at.gap as f64, 1e-5, "spread: four gaps along eight");
+    near(3.0, at.gaps as f64, 1e-6, "three gaps from the object");
+    near_vec(Vec3::Z, at.direction, 1e-6, "the line runs along Z");
+    s.spacing = 0.5;
+    near(0.5, crate::layout::spacing(&s, &line, 3).unwrap().gap as f64, 1e-6, "its own gap");
+    assert!(crate::layout::spacing(&s, &line, 0).is_none(), "the object starts the run");
+    assert!(crate::layout::spacing(&s, &line, 9).is_none(), "no such copy");
+    assert!(crate::layout::spacing(&s, &[Vec3::ZERO, Vec3::ZERO], 1).is_none(), "no path");
+}
+
+#[test]
+fn a_spacing_that_is_not_a_gap_is_none() {
+    let mut s = ArraySettings::new(ArrayKind::Line);
+    let cases = [(f32::NAN, 0.0), (-2.0, 0.0), (f32::INFINITY, 0.0), (1.0e9, ArraySettings::MAX_SPACING), (0.25, 0.25)];
+    for (given, kept) in cases {
+        s.spacing = given;
+        assert_eq!(s.clamped().spacing, kept, "{given}");
+    }
+}

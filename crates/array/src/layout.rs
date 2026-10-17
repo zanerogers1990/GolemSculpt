@@ -13,6 +13,11 @@
 //! with the copy's size. That is what posing one copy with the gizmo edits: a
 //! row of links all lifted off, or pushed out from, the curve they hang on.
 //!
+//! A line's or curve's copies are spread from the path's start to its end
+//! unless they have a gap of their own (`ArraySettings::spacing`): then they sit
+//! that far apart from the object on, however many there are, and those that
+//! run out of path carry straight on past its end (round again, on a loop).
+//!
 //! Rotations are glam's, which turn counter-clockwise looking back along the
 //! axis from its positive end (the right-hand rule). The numbers are exactly the
 //! Unity app's; see the crate docs for what that means for the picture.
@@ -50,8 +55,7 @@ pub fn compute(raw: &ArraySettings, points: &[Vec3]) -> Vec<ArrayPlacement> {
         return Vec::new();
     }
     let settings = raw.clamped();
-    let count = settings.count as usize;
-    let sizes: Vec<f32> = (0..count).map(|i| scale_at(&settings, i as f32 / (count - 1) as f32)).collect();
+    let sizes = sizes_of(&settings);
 
     let mut placements = if settings.kind == ArrayKind::Radial {
         compute_radial(&settings, points, &sizes)
@@ -61,6 +65,63 @@ pub fn compute(raw: &ArraySettings, points: &[Vec3]) -> Vec<ArrayPlacement> {
     // Whatever the layout did, the object is where the object is.
     placements[0] = ArrayPlacement::OBJECT;
     placements
+}
+
+/// Every copy's size, copy 0 first, for settings already in range.
+fn sizes_of(settings: &ArraySettings) -> Vec<f32> {
+    let count = settings.count as usize;
+    (0..count).map(|i| scale_at(settings, i as f32 / (count - 1) as f32)).collect()
+}
+
+/// How the copies of a line or curve are spaced along it, seen from one copy:
+/// what dragging that copy along the path works from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spacing {
+    /// The gap the copies are at now (world units): `ArraySettings::spacing`,
+    /// or when that is zero the gap that spreads them along the whole path.
+    pub gap: f32,
+    /// How many gaps the copy is from the object (each in proportion to the
+    /// sizes either side of it, with Space by Size): moving the copy by `d`
+    /// along the path is a gap of `gap + d / gaps`.
+    pub gaps: f32,
+    /// Which way the path runs at the copy, in world axes.
+    pub direction: Vec3,
+}
+
+/// The spacing of a line's or curve's copies as copy `index` sees it. `None`
+/// for a circle, for the object itself (it starts the run, so moving it slides
+/// the whole run instead) and for a path with no length.
+pub fn spacing(raw: &ArraySettings, points: &[Vec3], index: usize) -> Option<Spacing> {
+    let settings = raw.clamped();
+    if !settings.is_path() || index == 0 || index >= settings.count as usize {
+        return None;
+    }
+    let closed = settings.kind == ArrayKind::Curve && settings.closed;
+    let looped = path::is_loop(points.len(), closed);
+    let sampled = path::sample(points, closed);
+    let length = sampled.length();
+    if length < 1e-9 {
+        return None;
+    }
+    let (run, total) = run_along(&sizes_of(&settings), looped, settings.space_by_size);
+    let gap = if settings.spacing > 0.0 { settings.spacing } else { length / total };
+    let dense = &sampled.points;
+    let (s, _) = wrap(run[index] * gap, length, looped);
+    // The path's direction just behind the copy: at the very end of an open path that is
+    // its last stretch, which the copies past the end carry straight on along.
+    let (k, _) = path::locate(&sampled.arc, s);
+    let direction = direction(dense[k], dense[k + 1]);
+    (direction.length_squared() > 0.5).then_some(Spacing { gap, gaps: run[index], direction })
+}
+
+/// A distance along the path brought onto it: round again on a loop, and on an
+/// open path held at its end, with how far past the end it was.
+fn wrap(s: f32, length: f32, looped: bool) -> (f32, f32) {
+    if looped {
+        (s.rem_euclid(length), 0.0)
+    } else {
+        (s.min(length), (s - length).max(0.0))
+    }
 }
 
 /// The curve a radial array's start point sweeps out, as `steps + 1` offsets
@@ -125,16 +186,21 @@ fn compute_path(settings: &ArraySettings, points: &[Vec3], sizes: &[f32]) -> Vec
     }
 
     let dense = &sampled.points;
-    let along = distribute_along(sizes, looped, settings.space_by_size);
+    let (run, total) = run_along(sizes, looped, settings.space_by_size);
+    // Spread along the whole path, worked out as the Unity app does it, to the last bit.
+    let along = |i: usize| if settings.spacing > 0.0 { run[i] * settings.spacing } else { run[i] / total * length };
     let (frames, twist) = build_frames(dense, looped);
     let start_tangent = direction(dense[0], dense[1]);
+    let end_tangent = direction(dense[dense.len() - 2], dense[dense.len() - 1]);
     let origin = dense[0];
     // How far the object sits off the path's start: see the module remarks.
     let shift = -points[0];
 
     (0..count)
         .map(|i| {
-            let s = along[i] * length;
+            // Copies with a gap of their own may run past the end of an open path: they carry
+            // on straight, turned as the end is.
+            let (s, beyond) = if settings.spacing > 0.0 { wrap(along(i), length, looped) } else { (along(i), 0.0) };
             let (k, f) = path::locate(&sampled.arc, s);
             let mut rotation = Quat::IDENTITY;
             if settings.follow {
@@ -146,7 +212,7 @@ fn compute_path(settings: &ArraySettings, points: &[Vec3], sizes: &[f32]) -> Vec
                     rotation *= Quat::from_axis_angle(start_tangent, -twist * (s / length));
                 }
             }
-            let mut offset = dense[k] + (dense[k + 1] - dense[k]) * f - origin;
+            let mut offset = dense[k] + (dense[k + 1] - dense[k]) * f - origin + end_tangent * beyond;
             if shift != Vec3::ZERO {
                 offset += rotation * (shift * sizes[i]) - shift;
             }
@@ -155,18 +221,19 @@ fn compute_path(settings: &ArraySettings, points: &[Vec3], sizes: &[f32]) -> Vec
         .collect()
 }
 
-/// Each copy's place on the path as a fraction of its length. An open path runs
-/// from its start to its end; a loop leaves one more gap, from the last copy
-/// back round to the first. With `by_size` a gap is as wide as the two copies
-/// either side of it are big.
-fn distribute_along(sizes: &[f32], looped: bool, by_size: bool) -> Vec<f32> {
+/// Each copy's place along the run counted in gaps, and the gaps the whole
+/// path holds. With `by_size` a gap is as wide as the two copies either side of
+/// it are big. An open path runs from its start to its end; a loop leaves one
+/// more gap, from the last copy back round to the first. Spread along the whole
+/// path, a copy is `run / total` of the way along it.
+fn run_along(sizes: &[f32], looped: bool, by_size: bool) -> (Vec<f32>, f32) {
     let gap = |a: f32, b: f32| if by_size { 0.5 * (a + b) } else { 1.0 };
-    let mut along = Vec::with_capacity(sizes.len());
+    let mut run = Vec::with_capacity(sizes.len());
     let mut total = 0.0;
-    along.push(0.0);
+    run.push(0.0);
     for pair in sizes.windows(2) {
         total += gap(pair[0], pair[1]);
-        along.push(total);
+        run.push(total);
     }
     if looped {
         total += gap(sizes[sizes.len() - 1], sizes[0]);
@@ -174,8 +241,7 @@ fn distribute_along(sizes: &[f32], looped: bool, by_size: bool) -> Vec<f32> {
     if total < 1e-9 {
         total = 1.0;
     }
-    along.iter_mut().for_each(|a| *a /= total);
-    along
+    (run, total)
 }
 
 /// One rotation per polyline point: how a frame carried along the path from its

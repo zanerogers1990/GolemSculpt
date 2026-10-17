@@ -6,6 +6,8 @@
 //! | (none), `circle` | Eight copies of the selected object round a circle, tapering as in the Unity design picture |
 //! | `line` | A row of bricks, shrinking toward the end |
 //! | `curve` | Bricks along a hand-drawn S, shrinking toward the end |
+//! | `spaced` | The S of bricks after the fourth was dragged on along the curve: every gap opened alike, the last bricks carried on straight past the end |
+//! | `packed` | The same dragged back instead: every gap closed alike |
 //! | `away` | The circle with the tool put away: the copies stay on screen |
 //! | `made` | The circle made real as one object |
 //! | `separate` | The circle made real as separate objects |
@@ -37,6 +39,8 @@ pub fn demo(tool: &mut ArrayTool, cx: &mut Ctx, what: &str) {
     match what {
         "line" => line(tool, cx),
         "curve" => curve(tool, cx),
+        "spaced" => spaced(tool, cx, 0.5),
+        "packed" => spaced(tool, cx, -0.25),
         "away" => {
             circle(tool, cx);
             cx.finish();
@@ -273,6 +277,26 @@ fn curve(tool: &mut ArrayTool, cx: &mut Ctx) {
         .collect();
     tool.draw_stroke(cx, &stroke);
     taper(tool, cx, 0.4);
+    fit(tool, cx);
+}
+
+/// The S of bricks with the fourth dragged `by` brick lengths along the curve,
+/// as its gizmo's arrow would: every copy is spaced the same way.
+fn spaced(tool: &mut ArrayTool, cx: &mut Ctx, by: f32) {
+    curve(tool, cx);
+    let object = cx.scene().active();
+    let reach = cx.scene().bounds(object).size().max_element();
+    let state = tool.arrays.state(object);
+    let Some(at) = crate::layout::spacing(&state.settings, &state.points, 3) else { return };
+    tool.picked = None;
+    tool.copy = Some(CopyPick { object, copy: 3, side: 0 });
+    tool.refresh_gizmo(cx);
+    let Some(target) = tool.gizmo().map(|g| g.placement) else { return };
+    let to = Placement { position: target.position + at.direction * by * reach * 3.0, ..target };
+    tool.gizmo_event(cx, target, GizmoPhase::Begin);
+    tool.gizmo_event(cx, to, GizmoPhase::Move);
+    tool.gizmo_event(cx, to, GizmoPhase::End);
+    tool.refresh_gizmo(cx);
     fit(tool, cx);
 }
 

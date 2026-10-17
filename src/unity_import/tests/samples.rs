@@ -662,6 +662,8 @@ fn live_array_sits_where_unity_drew_it(
         space_by_size: array["spaceBySize"].as_bool().unwrap_or(true),
         axis: array["axis"].as_i64().unwrap_or(1) as i32,
         sweep: array["sweep"].as_f64().unwrap_or(360.0) as f32,
+        // The Unity app always spread the copies along the whole path.
+        spacing: 0.0,
     };
     let unity_layout = sculpt_array::compute_layout(&settings, &file_points);
     let tool_layout = sculpt_array::compute_layout(&live.settings, &live.points);

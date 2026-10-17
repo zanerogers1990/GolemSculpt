@@ -673,6 +673,8 @@ fn unity_copy(source: &Object, k: usize) -> Vec<Vec3> {
         space_by_size: array.space_by_size,
         axis: array.axis,
         sweep: array.sweep,
+        // The Unity app always spread the copies along the whole path.
+        spacing: 0.0,
     };
     let layout = sculpt_array::compute_layout(&settings, &array.points);
     let copy = &layout[k];

@@ -17,7 +17,8 @@
 //! An object with a live mirror has its array mirrored with it (`copies.rs`:
 //! where each copy is drawn through each side of the mirror, and which is under
 //! the pointer). Clicking a copy puts the transform gizmo on it, and posing it
-//! poses them all; Copies Back onto the Path and the mirror buttons change the
+//! poses them all, and dragging a copy of a line or curve along it spaces them
+//! all out or packs them closer (`ArraySettings::spacing`); Copies Back onto the Path and the mirror buttons change the
 //! object in the scene along with the array (`pose.rs`). Clicking a point of the
 //! path puts the gizmo's arrows on that instead, to slide it along an axis
 //! (`arrows.rs`).
@@ -91,7 +92,7 @@ mod file_tests;
 pub use bake::{MAX_COMBINED_VERTICES, bake, bake_array, bake_normals, local_matrices};
 pub use copies::{Place, drawn as drawn_copies, places as copy_places};
 pub use finish::Apply;
-pub use layout::{axis_vector, compute as compute_layout, radial_arc, scale_at};
+pub use layout::{Spacing, axis_vector, compute as compute_layout, radial_arc, scale_at, spacing as copy_spacing};
 pub use pose::CopyPick;
 pub use saved::{from_saved as state_from_saved, to_saved as state_to_saved};
 pub use state::ArrayState;

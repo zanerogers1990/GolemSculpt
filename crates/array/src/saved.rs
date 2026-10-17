@@ -9,7 +9,7 @@
 //!
 //! ```json
 //! "array": { "kind": 2, "count": 5, "end_scale": 1, "mid_scale": 1, "closed": false,
-//!            "follow": true, "space_by_size": true, "axis": 1, "sweep": 360,
+//!            "follow": true, "space_by_size": true, "axis": 1, "sweep": 360, "spacing": 0,
 //!            "points": [[0, 0, 0], [1, 0.5, 0], [2, 0, 0]] }
 //! ```
 //!
@@ -39,6 +39,7 @@ pub fn to_saved(state: &ArrayState) -> Saved {
         ("space_by_size", s.space_by_size.into()),
         ("axis", s.axis.into()),
         ("sweep", s.sweep.into()),
+        ("spacing", s.spacing.into()),
         ("points", Saved::List(state.points.iter().map(|p| Saved::numbers(&p.to_array())).collect())),
     ])
 }
@@ -73,6 +74,7 @@ pub fn from_saved(saved: &Saved) -> Option<ArrayState> {
         space_by_size: flag("space_by_size", new.space_by_size),
         axis: whole("axis", new.axis),
         sweep: number("sweep", new.sweep),
+        spacing: number("spacing", new.spacing),
     };
     Some(ArrayState { settings, points }.sanitized())
 }
@@ -104,6 +106,7 @@ mod tests {
         settings.space_by_size = false;
         settings.axis = 2;
         settings.sweep = if kind == ArrayKind::Radial { -135.5 } else { 360.0 };
+        settings.spacing = if kind == ArrayKind::Radial { 0.0 } else { 1.25 };
         let points = vec![Vec3::new(0.0, 0.1, -0.7), Vec3::new(2.0, 1.0, 0.3), Vec3::new(3.5, -1.25, 2.0), Vec3::Z];
         ArrayState { settings, points }
     }
@@ -136,7 +139,7 @@ mod tests {
         };
         assert_eq!(
             names,
-            ["kind", "count", "end_scale", "mid_scale", "closed", "follow", "space_by_size", "axis", "sweep", "points"]
+            ["kind", "count", "end_scale", "mid_scale", "closed", "follow", "space_by_size", "axis", "sweep", "spacing", "points"]
         );
         assert_eq!(saved.get("kind").and_then(Saved::whole), Some(3));
         assert_eq!(saved.get("points").and_then(Saved::list).map(<[Saved]>::len), Some(4));

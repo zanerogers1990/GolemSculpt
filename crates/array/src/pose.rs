@@ -13,7 +13,11 @@
 //!   path's start (`points[0]`), so moving a copy moves the object off the path
 //!   and leaves the path where it is in the world: the object goes by `local`
 //!   and every point by `-local`, and each other copy goes the same way in its
-//!   own frame (turned with the path, scaled with its size).
+//!   own frame (turned with the path, scaled with its size);
+//! - except along the path: there a copy of a line or curve (not the object,
+//!   which starts the run) takes the gap between every pair of copies with it,
+//!   so pulling one link up opens every gap the same way and pushing it down
+//!   closes them (`ArraySettings::spacing`). Only the array changes for that.
 //!
 //! The object's half of that is a `Place` in the scene; the array's half, the
 //! points, is the tool's. A drag shows both live (the object is drawn where the
@@ -38,14 +42,18 @@ use sculpt_toolkit::{
 
 use crate::arrays::{Kind, Scened, Step};
 use crate::copies::{self, Place};
+use crate::layout::{self, Spacing};
 use crate::make;
 use crate::state::ArrayState;
 use crate::tool::{ArrayTool, pose_of};
-use crate::types::ArrayPlacement;
+use crate::types::{ArrayPlacement, ArraySettings};
 
 /// A move shorter than this (world units, per unit of distance from the origin) is the
 /// gizmo's rounding, not a move.
 const MOVE_EPSILON: f32 = 1e-6;
+/// The narrowest a drag can pack the copies, as a fraction of the gap they had at the press: as
+/// near as makes no difference to stacked, never through one another to the other side.
+const MIN_GAP: f32 = 0.02;
 /// A turn smaller than this (radians) is no turn.
 const TURN_EPSILON: f32 = 1e-5;
 /// How much nearer (as a fraction of the distance) a copy of the array has to be than another
@@ -92,6 +100,10 @@ pub(crate) struct Posing {
     /// Where the copy is at the press, and how it faces, on the straight side.
     at: Vec3,
     turned: Quat,
+    /// How the copies were spaced along the path at the press, as the dragged
+    /// copy saw it; `None` when moving it does not space them (see the module
+    /// remarks).
+    spacing: Option<Spacing>,
     /// The object as the drag has it.
     now: Placement,
 }
@@ -160,7 +172,15 @@ impl ArrayTool {
     pub(crate) fn select_copy(&mut self, cx: &mut Ctx, pick: CopyPick) {
         self.picked = None;
         self.copy = Some(pick);
-        self.say(cx, "Turn or move this copy with the gizmo: every copy does the same.", true);
+        let spaces = self.arrays.get(pick.object).is_some_and(|live| {
+            layout::spacing(&live.state.settings, &live.state.points, pick.copy).is_some()
+        });
+        let text = if spaces {
+            "Turn or move this copy with the gizmo: every copy does the same. Along the path it spaces them all."
+        } else {
+            "Turn or move this copy with the gizmo: every copy does the same."
+        };
+        self.say(cx, text, true);
     }
 
     // ---- the gizmo ---------------------------------------------------------------
@@ -228,6 +248,7 @@ impl ArrayTool {
         let (Some(live), Some(info)) = (self.arrays.get(pick.object), cx.scene().info(pick.object)) else { return };
         let Some(&frame) = live.layout.get(pick.copy) else { return };
         let at = frame.apply(&pose_of(info.placement));
+        let spacing = layout::spacing(&live.state.settings, &live.state.points, pick.copy);
         self.posing = Some(Posing {
             pick,
             placement: info.placement,
@@ -235,6 +256,7 @@ impl ArrayTool {
             frame,
             at: at.position,
             turned: at.rotation,
+            spacing,
             now: info.placement,
         });
     }
@@ -256,9 +278,19 @@ impl ArrayTool {
 
         let mut next = posing.placement;
         let mut state = posing.state.clone();
-        let delta = position - posing.at;
+        let mut delta = position - posing.at;
         // The gizmo's numbers carry rounding in proportion to how far from the origin they are.
-        if delta.length() > MOVE_EPSILON * (1.0 + posing.at.length()) {
+        let epsilon = MOVE_EPSILON * (1.0 + posing.at.length());
+        if let Some(spacing) = posing.spacing {
+            // Along the path the copy spaces the run; only what is left over moves it off.
+            let along = delta.dot(spacing.direction);
+            if along.abs() > epsilon {
+                let gap = (spacing.gap + along / spacing.gaps).max(spacing.gap * MIN_GAP);
+                state.settings.spacing = gap.min(ArraySettings::MAX_SPACING);
+                delta -= spacing.direction * along;
+            }
+        }
+        if delta.length() > epsilon {
             let by = posing.frame.object_shift_for(delta);
             next.position += by;
             state.shift_object(by);
@@ -281,22 +313,34 @@ impl ArrayTool {
         let object = posing.pick.object;
         let after = self.arrays.state(object);
         let restore = |tool: &mut ArrayTool| tool.arrays.set(object, posing.state.clone());
-        if posing.now == posing.placement || !cx.scene().exists(object) {
+        let spaced = after.settings.spacing != posing.state.settings.spacing;
+        let placed = posing.now != posing.placement;
+        if !(placed || spaced) || !cx.scene().exists(object) {
             return restore(self);
         }
-        let receipt = cx.commit("Pose Array Copies", vec![Command::Place { object, placement: posing.now }]);
-        if !receipt.changed || receipt.failed > 0 {
-            return restore(self);
+        let mut scene = None;
+        if placed {
+            let receipt = cx.commit("Pose Array Copies", vec![Command::Place { object, placement: posing.now }]);
+            if !receipt.changed || receipt.failed > 0 {
+                return restore(self);
+            }
+            // The step goes in the tool's history even when only the object turned, for the
+            // order of Z (see `Scened`); there the array has nothing to change.
+            let by = posing.now.position - posing.placement.position;
+            scene = Some(Scened::Placed { from: posing.placement, to: posing.now, by });
         }
 
-        // The step goes in the tool's history even when only the object turned, for the order
-        // of Z (see `Scened`); there the array has nothing to change.
-        let by = posing.now.position - posing.placement.position;
-        let scened = Scened::Placed { from: posing.placement, to: posing.now, by };
-        let what = if by == Vec3::ZERO { "Turned" } else { "Moved" };
-        let (label, scene) = ("Pose Array Copies", Some(scened));
+        let moved = matches!(scene, Some(Scened::Placed { by, .. }) if by != Vec3::ZERO);
+        let text = if spaced {
+            let wider = posing.spacing.is_some_and(|at_press| after.settings.spacing > at_press.gap);
+            let how = if wider { "Spaced the copies further apart" } else { "Packed the copies closer together" };
+            format!("{how}: every gap is the same. Z takes it back; Spread Along the Path fits them to it again.")
+        } else {
+            let what = if moved { "Moved" } else { "Turned" };
+            format!("{what} every copy the same way. Z takes it back; Copies Back onto the Path undoes any move.")
+        };
+        let label = if spaced && !placed { "Space Array Copies" } else { "Pose Array Copies" };
         self.history.push(Step { object, label, before: posing.state, after, scene });
-        let text = format!("{what} every copy the same way. Z takes it back; Copies Back onto the Path undoes any move.");
         self.say(cx, text, true);
     }
 

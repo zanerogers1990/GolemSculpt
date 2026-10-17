@@ -72,6 +72,14 @@ pub struct ArraySettings {
     /// app turned about its Y or Z axis runs the other way once its X is negated,
     /// and this is how it keeps the copies where they were drawn.
     pub sweep: f32,
+    /// Line and curve: how far apart neighbouring copies are, in world units
+    /// along the path (in proportion to their sizes, with Space by Size). Zero
+    /// spreads the copies along the whole path, as the Unity app does. Above
+    /// zero they keep that gap whatever the count and wherever the path ends,
+    /// carrying on straight past its end once they run out of it, so the links
+    /// of a strap stay slotted together as it is made longer. Dragging a copy
+    /// along the path sets it.
+    pub spacing: f32,
 }
 
 impl ArraySettings {
@@ -79,6 +87,8 @@ impl ArraySettings {
     pub const MAX_COUNT: i32 = 100;
     pub const MIN_SCALE: f32 = 0.05;
     pub const MAX_SCALE: f32 = 4.0;
+    /// The widest gap a file or script may ask for (world units).
+    pub const MAX_SPACING: f32 = 1.0e4;
 
     /// The settings a new array of `kind` starts with.
     pub fn new(kind: ArrayKind) -> ArraySettings {
@@ -92,7 +102,14 @@ impl ArraySettings {
             space_by_size: true,
             axis: 1,
             sweep: 360.0,
+            spacing: 0.0,
         }
+    }
+
+    /// Whether the copies keep a gap of their own rather than spreading along
+    /// the whole path.
+    pub fn has_spacing(&self) -> bool {
+        self.is_path() && self.spacing > 0.0
     }
 
     /// True for the two kinds that lie along a path of points.
@@ -111,6 +128,7 @@ impl ArraySettings {
             mid_scale: scale(self.mid_scale),
             axis: self.axis.clamp(0, 2),
             sweep: clamp_sweep(self.sweep),
+            spacing: finite_or(self.spacing, 0.0).clamp(0.0, Self::MAX_SPACING),
             closed: self.closed && self.kind == ArrayKind::Curve,
             ..*self
         }

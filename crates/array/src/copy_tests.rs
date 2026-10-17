@@ -409,8 +409,9 @@ fn moving_a_copy_with_the_gizmo_moves_the_object_and_every_copy_the_same_way_and
         let target = tool.gizmo().expect("the gizmo is on the copy").placement;
         near(target.position, was.positions[k], "the gizmo starts at the copy");
 
-        // The copy is dragged by (0.3, 0.1, 0.2), as the arrows would.
-        let by = Vec3::new(0.3, 0.1, 0.2);
+        // The copy is dragged by (0.3, 0.1, 0.2), as the arrows would; on the column, up is along
+        // the path, which spaces the copies instead (see the spacing tests), so it goes across only.
+        let by = if ring { Vec3::new(0.3, 0.1, 0.2) } else { Vec3::new(0.3, 0.0, 0.2) };
         assert!(bench.gizmo(&mut tool, Placement { position: target.position + by, ..target }));
 
         let now = placement(&bench, object);
@@ -460,7 +461,7 @@ fn the_object_is_drawn_where_the_drag_has_it_until_the_drag_ends() {
     let steps = bench.doc.undo_steps();
 
     bench.send(&mut tool, sculpt_toolkit::Event::Gizmo(target, sculpt_toolkit::GizmoPhase::Begin));
-    let moved = Placement { position: target.position + Vec3::new(0.0, 0.4, 0.0), ..target };
+    let moved = Placement { position: target.position + Vec3::new(0.0, 0.0, 0.4), ..target };
     bench.send(&mut tool, sculpt_toolkit::Event::Gizmo(moved, sculpt_toolkit::GizmoPhase::Move));
     assert_eq!(placement(&bench, object), was, "nothing is committed while the pointer moves");
     assert_eq!(bench.doc.undo_steps(), steps);
@@ -468,9 +469,9 @@ fn the_object_is_drawn_where_the_drag_has_it_until_the_drag_ends() {
     assert_eq!(draw.hidden(), [object]);
     let all = copies(&draw, object);
     assert_eq!(all.len(), 10, "the object as the first copy, on both sides");
-    near(at(&all[0]), was.position + Vec3::new(0.0, 0.4, 0.0), "the object is drawn where the drag took it");
+    near(at(&all[0]), was.position + Vec3::new(0.0, 0.0, 0.4), "the object is drawn where the drag took it");
     near(at(&all[3]), moved.position, "and the picked copy is where the gizmo is");
-    near(at(&all[5 + 3]), Vec3::new(-1.2, 0.5 + 0.4, 0.0), "its reflection with it");
+    near(at(&all[5 + 3]), Vec3::new(-1.2, 0.5, 0.4), "its reflection with it");
 
     bench.send(&mut tool, sculpt_toolkit::Event::Gizmo(moved, sculpt_toolkit::GizmoPhase::End));
     assert_eq!(bench.doc.undo_steps(), steps + 1);
@@ -540,15 +541,15 @@ fn dragging_a_mirrored_copy_right_moves_the_original_left() {
     near(target.position, Vec3::new(-1.2, 0.0, 0.0), "the gizmo is on the copy at the left");
     let was = placement(&bench, object).position;
 
-    // The copy is dragged 0.3 to the right, and 0.2 up.
-    assert!(bench.gizmo(&mut tool, Placement { position: target.position + Vec3::new(0.3, 0.2, 0.0), ..target }));
+    // The copy is dragged 0.3 to the right, and 0.2 toward the camera (up would space the copies).
+    assert!(bench.gizmo(&mut tool, Placement { position: target.position + Vec3::new(0.3, 0.0, 0.2), ..target }));
     let now = placement(&bench, object).position;
-    near(now - was, Vec3::new(-0.3, 0.2, 0.0), "the original went left, and up");
+    near(now - was, Vec3::new(-0.3, 0.0, 0.2), "the original went left, and forward");
     let all = copies(&bench.frame(&mut tool), object);
     // Copy 2 on the mirrored side: the second copy of the second side.
-    near(at(&all[4 + k - 1]), Vec3::new(-0.9, 0.2, 0.0), "the copy is where it was dragged to");
+    near(at(&all[4 + k - 1]), Vec3::new(-0.9, 0.0, 0.2), "the copy is where it was dragged to");
     assert_eq!(tool.picked_copy().map(|p| (p.copy, p.side)), Some((k, 1)));
-    near(tool.gizmo().unwrap().placement.position, Vec3::new(-0.9, 0.2, 0.0), "and the gizmo went with it");
+    near(tool.gizmo().unwrap().placement.position, Vec3::new(-0.9, 0.0, 0.2), "and the gizmo went with it");
 }
 
 #[test]
@@ -838,4 +839,96 @@ fn moving_the_objects_centre_onto_its_mesh_leaves_every_copy_where_it_is_and_fol
     move_origin(&mut bench, &mut tool, plain, shift);
     assert!(tool.state(plain).is_none() && steps.1.is_none());
     assert_eq!(tool.can_undo(false), steps.0);
+}
+
+// ---- spacing the copies by dragging one along the path ----------------------------------------
+
+#[test]
+fn dragging_a_copy_along_the_path_spaces_every_copy_and_leaves_the_object() {
+    let (mut bench, mut tool, object) = column(0);
+    let was = before(&tool, &bench, object);
+    let scene_steps = bench.doc.undo_steps();
+    tool.copy = Some(CopyPick { object, copy: 2, side: 0 });
+    bench.frame(&mut tool);
+    let target = tool.gizmo().unwrap().placement;
+
+    // The copies are 0.5 apart; copy 2, two gaps up, is pulled 0.4 further up.
+    assert!(bench.gizmo(&mut tool, Placement { position: target.position + Vec3::new(0.0, 0.4, 0.0), ..target }));
+    assert_eq!(placement(&bench, object), was.object, "the object stays");
+    assert_eq!(bench.doc.undo_steps(), scene_steps, "nothing of the scene's changed");
+    let state = tool.state(object);
+    assert!((state.settings.spacing - 0.7).abs() < 1e-5, "every gap is 0.7 now: {}", state.settings.spacing);
+    assert_eq!(state.points, was.state.points, "the path is where it was");
+    let after = copy_positions(&tool, &bench, object);
+    near(after[2], target.position + Vec3::new(0.0, 0.4, 0.0), "the dragged copy followed the gizmo");
+    for (i, (&a, &b)) in after.iter().zip(&was.positions).enumerate() {
+        near(a - b, Vec3::new(0.0, 0.2 * i as f32, 0.0), &format!("copy {i} went up by its share"));
+    }
+    assert!(bench.status.as_ref().unwrap().0.starts_with("Spaced the copies further apart"));
+
+    // More copies keep the gap and run on up past the path's end.
+    bench.call(|cx| tool.edit(cx, "Array Count", false, |a| a.settings.count = 8));
+    let longer = copy_positions(&tool, &bench, object);
+    near(longer[7] - longer[0], Vec3::new(0.0, 4.9, 0.0), "seven gaps of 0.7");
+
+    // Z takes the count back, then the spacing.
+    assert!(bench.undo(&mut tool));
+    assert!(bench.undo(&mut tool));
+    assert_eq!(tool.state(object), was.state);
+    assert!(bench.redo(&mut tool));
+    assert_eq!(tool.state(object).settings.spacing, state.settings.spacing);
+}
+
+#[test]
+fn pushing_a_copy_down_packs_them_closer_but_never_through_one_another() {
+    let (mut bench, mut tool, object) = column(0);
+    tool.copy = Some(CopyPick { object, copy: 4, side: 0 });
+    bench.frame(&mut tool);
+    let target = tool.gizmo().unwrap().placement;
+    assert!(bench.gizmo(&mut tool, Placement { position: target.position - Vec3::new(0.0, 0.8, 0.0), ..target }));
+    assert!((tool.state(object).settings.spacing - 0.3).abs() < 1e-5);
+    assert!(bench.status.as_ref().unwrap().0.starts_with("Packed the copies closer together"));
+
+    tool.copy = Some(CopyPick { object, copy: 1, side: 0 });
+    bench.frame(&mut tool);
+    let target = tool.gizmo().unwrap().placement;
+    assert!(bench.gizmo(&mut tool, Placement { position: target.position - Vec3::new(0.0, 5.0, 0.0), ..target }));
+    let gap = tool.state(object).settings.spacing;
+    assert!(gap > 0.0 && gap < 0.01, "as good as stacked, not turned round: {gap}");
+}
+
+#[test]
+fn across_the_path_a_copy_still_moves_them_all_off_it_and_the_object_still_slides_the_run() {
+    let (mut bench, mut tool, object) = column(0);
+    let was = before(&tool, &bench, object);
+    tool.copy = Some(CopyPick { object, copy: 3, side: 0 });
+    bench.frame(&mut tool);
+    let target = tool.gizmo().unwrap().placement;
+    // Up and to the right at once: up spaces them, right moves them all off the path.
+    assert!(bench.gizmo(&mut tool, Placement { position: target.position + Vec3::new(0.3, 0.3, 0.0), ..target }));
+    let now = placement(&bench, object);
+    near(now.position - was.object.position, Vec3::new(0.3, 0.0, 0.0), "the object went right only");
+    assert!((tool.state(object).settings.spacing - 0.6).abs() < 1e-5);
+    near(copy_positions(&tool, &bench, object)[3], target.position + Vec3::new(0.3, 0.3, 0.0), "the copy followed");
+
+    // The object itself starts the run: dragging it along the path slides every copy, as before.
+    let (mut bench, mut tool, object) = column(0);
+    let was = before(&tool, &bench, object);
+    tool.copy = Some(CopyPick { object, copy: 0, side: 0 });
+    bench.frame(&mut tool);
+    let target = tool.gizmo().unwrap().placement;
+    assert!(bench.gizmo(&mut tool, Placement { position: target.position + Vec3::new(0.0, 0.3, 0.0), ..target }));
+    assert_eq!(tool.state(object).settings.spacing, 0.0);
+    near(placement(&bench, object).position - was.object.position, Vec3::new(0.0, 0.3, 0.0), "the run slid up");
+}
+
+#[test]
+fn a_mirrored_copy_spaces_them_the_same_way() {
+    // Mirrored across X the reflection of the column is upright too: up is up on both sides.
+    let (mut bench, mut tool, object) = column(1);
+    tool.copy = Some(CopyPick { object, copy: 2, side: 1 });
+    bench.frame(&mut tool);
+    let target = tool.gizmo().expect("the gizmo is on the reflected copy").placement;
+    assert!(bench.gizmo(&mut tool, Placement { position: target.position + Vec3::new(0.0, 0.4, 0.0), ..target }));
+    assert!((tool.state(object).settings.spacing - 0.7).abs() < 1e-5);
 }
