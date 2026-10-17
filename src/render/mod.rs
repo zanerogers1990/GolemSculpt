@@ -20,6 +20,9 @@ mod dfg;
 mod dof;
 pub mod env;
 mod floor;
+mod ltc;
+#[cfg(test)]
+pub use ltc::integral as ltc_integral;
 mod mips;
 pub mod paint;
 mod pipelines;
@@ -380,8 +383,9 @@ pub struct Renderer {
     shadow_size: u32,
     shadow_generation: u32,
     shadow_sampler: wgpu::Sampler,
-    /// The split-sum reflection table (dfg.rs).
+    /// The split-sum reflection table (dfg.rs), and the softboxes' (ltc.rs).
     dfg: wgpu::TextureView,
+    ltc: wgpu::TextureView,
     env: env::Env,
     /// The `env.generation` and `shadow_generation` the main bind group was
     /// built against.
@@ -596,6 +600,7 @@ impl Renderer {
                 sampler_entry(12, wgpu::SamplerBindingType::Filtering),
                 texture_entry(13, smooth, flat),
                 texture_entry(14, smooth, flat),
+                texture_entry(15, smooth, flat),
             ],
         });
         let bind_pre = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -755,6 +760,7 @@ impl Renderer {
             shadow_generation: 0,
             shadow_sampler,
             dfg: dfg::texture(gpu),
+            ltc: ltc::texture(gpu),
             env: env::Env::new(gpu),
             bound_to: (0, 0),
             post: post::Post::new(gpu),
@@ -1254,6 +1260,7 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::Sampler(&self.env.hdri_sampler) },
                     wgpu::BindGroupEntry { binding: 13, resource: view(&self.dfg) },
                     wgpu::BindGroupEntry { binding: 14, resource: view(reflection) },
+                    wgpu::BindGroupEntry { binding: 15, resource: view(&self.ltc) },
                 ],
             });
             let (main, mirror) = (bind("main", &targets.floor_reflection), bind("mirror", &self.floor.nothing));

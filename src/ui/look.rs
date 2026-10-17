@@ -305,12 +305,17 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
             "Keep the key light at the upper left of the view. Off freezes the lights where they are.",
         );
         tip(theme::checkbox(ui, &mut look.shadows, "Shadows", ACCENT()), tips, "The key light casts a soft shadow.");
+        tip(
+            theme::checkbox(ui, &mut look.softboxes, "Softbox Lights", ACCENT()),
+            tips,
+            "Light with softboxes, as a photo studio does: long soft highlights on glossy surfaces. Off, each light is a point far away.",
+        );
+        tip(
+            theme::slider(ui, "Light Size", &mut look.shadow_softness, 0.0..=4.0, two),
+            tips,
+            "How big the lights are: bigger spreads the highlights and softens the shadows, which stay crisp where they touch. 1 is the preset's own, 0 is hard points.",
+        );
         if look.shadows {
-            tip(
-                theme::slider(ui, "Shadow Softness", &mut look.shadow_softness, 0.0..=4.0, two),
-                tips,
-                "How big the key light is. Shadows stay crisp where they touch and soften farther out; 1 is the preset's own, 0 is a hard point light.",
-            );
             let sizes = crate::render::quality::SHADOW_SIZES;
             let at = sizes.iter().position(|&s| s == o.quality.shadow_size()).unwrap_or(1);
             // The shadow map's size: a setting of this computer, not of the scene.

@@ -1230,10 +1230,14 @@ pub struct Look {
     #[serde(with = "crate::io::vec3")]
     pub world_forward: Vec3,
     pub shadows: bool,
-    /// How soft the key's shadow is against the preset's light size (1 =
-    /// as the preset has it, 0 = hard as a point light).
+    /// How big the lights are against the preset's sizes (1 = as the preset
+    /// has them, 0 = points): the key's shadow and every softbox's highlight.
     #[serde(default = "one")]
     pub shadow_softness: f32,
+    /// Light the model with softboxes (rectangles facing it, render/ltc.rs)
+    /// rather than plain directions: long soft highlights on gloss.
+    #[serde(default = "yes")]
+    pub softboxes: bool,
     pub hdri: HdriSettings,
     /// The shadow-catching floor (off unless asked for).
     #[serde(default)]
@@ -1271,6 +1275,10 @@ pub struct Look {
 /// them reads as.
 fn one() -> f32 {
     1.0
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Look {
@@ -1346,6 +1354,7 @@ impl Default for Look {
             world_forward: Vec3::NEG_Z,
             shadows: true,
             shadow_softness: 1.0,
+            softboxes: true,
             hdri: HdriSettings {
                 enabled: false,
                 loaded: false,
@@ -1509,6 +1518,14 @@ pub struct LookUniform {
     pub floor: [f32; 4],
     /// x z its middle, z how strongly it reflects the model, w how blurred
     pub floor_more: [f32; 4],
+    /// Each light as a softbox (render/ltc.rs): its middle, w 1 for a
+    /// softbox (0 for a plain direction); half its width as a vector, w pi
+    /// over its solid angle from the subject (the radiance that gives its
+    /// intensity there); half its height, w its distance from the subject
+    /// squared (its diffuse light falls off from there).
+    pub light_pos: [[f32; 4]; MAX_LIGHTS],
+    pub light_side: [[f32; 4]; MAX_LIGHTS],
+    pub light_up: [[f32; 4]; MAX_LIGHTS],
 }
 
 /// A finish's settings as its shader function reads them: sixteen groups of
@@ -1562,6 +1579,23 @@ pub struct Frame {
     pub smoothness: f32,
     /// Side of the shadow map the renderer draws (render/quality.rs).
     pub shadow_size: u32,
+}
+
+/// How far the softboxes stand from the middle of the scene, in its radii:
+/// a studio's distance, near enough that a highlight moves across a form.
+const SOFTBOX_DISTANCE: f32 = 3.0;
+
+/// The softbox light `i` of a preset is, in degrees across and up as seen
+/// from the subject: the key as the preset's light size, the fill a bank
+/// twice that, the rim and kicker tall strips, the top a wide overhead.
+fn softbox(preset: &LightingPreset, i: usize) -> (f32, f32) {
+    let s = preset.light_size;
+    match i {
+        0 => (s, s),
+        1 => (s * 2.0, s * 2.0),
+        2 | 3 => (s * 0.5, s * 2.5),
+        _ => (s * 1.5, s * 1.5),
+    }
 }
 
 /// The key light's shadow map, fitted to the scene: the box of everything
@@ -1733,6 +1767,36 @@ impl Look {
             let k = spec.intensity * brightness;
             u.light_dir[i] = [d.x, d.y, d.z, 0.0];
             u.light_color[i] = [c[0] * k, c[1] * k, c[2] * k, 0.0];
+        }
+        // Softboxes: each light a rectangle facing the middle of the scene
+        // from its direction, studio-far, as big as the preset says.
+        if self.softboxes {
+            let (min, max) = (f.scene_min, f.scene_max);
+            let (centre, radius) = if min.is_finite() && max.is_finite() {
+                ((min + max) * 0.5, ((max - min).length() * 0.5).max(1e-3))
+            } else {
+                (Vec3::ZERO, 1.0)
+            };
+            let distance = radius * SOFTBOX_DISTANCE;
+            let size = self.shadow_softness.clamp(0.0, 4.0);
+            for i in 0..count {
+                let (across, high) = softbox(preset, i);
+                let (half_w, half_h) =
+                    ((across * size).to_radians() * 0.5, (high * size).to_radians() * 0.5);
+                if half_w.min(half_h) < 0.002 {
+                    // Too small to be anything but a point: a direction.
+                    continue;
+                }
+                let d = Vec3::from_slice(&u.light_dir[i][..3]);
+                let right = Vec3::Y.cross(d).normalize_or(Vec3::X);
+                let up = d.cross(right);
+                let (a, b) = (distance * half_w.tan(), distance * half_h.tan());
+                // The solid angle of the rectangle from its middle's axis.
+                let solid = 4.0 * (a * b / ((a * a + distance * distance) * (b * b + distance * distance)).sqrt()).asin();
+                u.light_pos[i] = (centre + d * distance).extend(1.0).to_array();
+                u.light_side[i] = (right * a).extend(std::f32::consts::PI / solid.max(1e-9)).to_array();
+                u.light_up[i] = (up * b).extend(distance * distance).to_array();
+            }
         }
         u.light_params = [
             count as f32,
@@ -2058,6 +2122,7 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// (numbers); `shadowmap`, `reflections` (the shadow map's and the
 /// reflection cube's sides); `refine` (on / off) and `samples` (how many);
 /// `floor` (on / off) with `floorshadow`, `floorreflect`, `floorrough` (numbers);
+/// `softboxes` (on / off);
 /// `backdrop` (a grey, 0 black to 1 white);
 /// `hdri` (a file).
 pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Option<PathBuf> {
@@ -2080,6 +2145,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "follow" => look.follow_camera = on,
             "shadows" => look.shadows = on,
             "softness" => look.shadow_softness = number.unwrap_or(1.0),
+            "softboxes" => look.softboxes = on,
             "shadowmap" => opts.quality.shadow_map = number.map_or(2048, |n| n as u32),
             "floor" => look.floor.on = on,
             "floorshadow" => look.floor.shadow = number.unwrap_or(0.85),
@@ -2224,6 +2290,46 @@ mod tests {
         assert_eq!(u.floor[1], -0.25, "under the lowest point");
         assert_eq!([u.floor_more[0], u.floor_more[1]], [1.0, 0.0], "centred under the scene");
         assert!(u.floor[2] >= 4.0 * 1.5, "reaching well past the scene before it fades out");
+    }
+
+    #[test]
+    fn a_softbox_lights_the_subject_as_the_light_it_stands_for() {
+        let look = Look { five_point: true, ..Look::default() };
+        let frame = Frame {
+            cam_right: Vec3::X,
+            cam_up: Vec3::Y,
+            cam_forward: Vec3::NEG_Z,
+            ortho_half_height: None,
+            eye_offset: 0.0,
+            scene_min: Vec3::splat(-1.0),
+            scene_max: Vec3::splat(1.0),
+            model_size: 2.0,
+            time: 0.0,
+            gradient_background: false,
+            smoothness: 0.4,
+            shadow_size: 2048,
+        };
+        let u = look.uniform(&frame);
+        for i in 0..5 {
+            assert_eq!(u.light_pos[i][3], 1.0, "light {i} is a softbox");
+            let d = Vec3::from_slice(&u.light_dir[i][..3]);
+            let c = Vec3::from_slice(&u.light_pos[i][..3]);
+            let (side, up) = (Vec3::from_slice(&u.light_side[i][..3]), Vec3::from_slice(&u.light_up[i][..3]));
+            let corners = [c - side - up, c + side - up, c + side + up, c - side + up];
+            // At the middle of the scene, facing the light: what a direction
+            // of the same intensity gives, nl = 1.
+            let diffuse = crate::render::ltc_integral(d, d, Vec3::ZERO, glam::Mat3::IDENTITY, corners)
+                * u.light_side[i][3]
+                / std::f32::consts::TAU;
+            assert!((diffuse - 1.0).abs() < 0.02, "light {i}: {diffuse}");
+            // Turned 60 degrees from it: half, as the cosine has it.
+            let away = (d.any_orthonormal_vector() * 3f32.sqrt() + d).normalize() * 1.0;
+            let n = (d * 0.5 + d.cross(away).cross(d).normalize() * (3f32.sqrt() / 2.0)).normalize();
+            let tilted = crate::render::ltc_integral(n, n, Vec3::ZERO, glam::Mat3::IDENTITY, corners)
+                * u.light_side[i][3]
+                / std::f32::consts::TAU;
+            assert!((tilted - 0.5).abs() < 0.03, "light {i} at 60 degrees: {tilted}");
+        }
     }
 
     #[test]

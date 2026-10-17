@@ -65,6 +65,15 @@ pub fn mirrored_uniforms(globals: &Globals, look: &LookUniform) -> (Globals, Loo
     for dir in &mut l.light_dir {
         dir[1] = -dir[1];
     }
+    // Softboxes mirrored too, one side turned back so they still face the
+    // mirrored model (a mirror reverses which way round their corners go).
+    let height = look.floor[1];
+    for i in 0..l.light_pos.len() {
+        l.light_pos[i][1] = 2.0 * height - l.light_pos[i][1];
+        let side = &mut l.light_side[i];
+        (side[0], side[1], side[2]) = (-side[0], side[1], -side[2]);
+        l.light_up[i][1] = -l.light_up[i][1];
+    }
     l.light_params[1] = 0.0;
     l.env_params[2] = 0.0;
     l.matcap_params[3] = 0.0;
@@ -171,6 +180,22 @@ mod tests {
         globals.symmetry = [1.0, 1.0, 1.0, 1.0];
         let (g, l) = mirrored_uniforms(&globals, &look);
         assert_eq!(l.light_dir[0], [0.3, -0.8, 0.5, 0.0]);
+        // A softbox: mirrored in the floor, and still lighting the side the
+        // mirrored model is on (its corners' winding normal still points away).
+        let mut boxed = look;
+        boxed.floor[1] = -1.0;
+        boxed.light_pos[0] = [0.0, 3.0, 2.0, 1.0];
+        boxed.light_side[0] = [1.0, 0.0, 0.0, 5.0];
+        boxed.light_up[0] = [0.0, 0.6, -0.8, 0.0];
+        let (_, m) = mirrored_uniforms(&globals, &boxed);
+        assert_eq!(m.light_pos[0], [0.0, -5.0, 2.0, 1.0]);
+        let normal = |l: &LookUniform| {
+            let (s, u) = (glam::Vec3::from_slice(&l.light_side[0][..3]), glam::Vec3::from_slice(&l.light_up[0][..3]));
+            s.cross(u)
+        };
+        let reflect = glam::Vec3::new(1.0, -1.0, 1.0);
+        assert!(normal(&m).abs_diff_eq(normal(&boxed) * reflect, 1e-6), "{} {}", normal(&m), normal(&boxed));
+        assert_eq!(m.light_side[0][3], 5.0, "the same radiance");
         assert_eq!((l.light_params[1], l.env_params[2], l.floor[0]), (0.0, 0.0, 0.0));
         assert_eq!(g.shading, [0.0, 0.0, 0.0, 0.0]);
         assert_eq!(g.symmetry, [0.0, 0.0, 0.0, 1.0], "the cavity's pixel offset is left alone");

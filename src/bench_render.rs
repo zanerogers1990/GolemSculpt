@@ -695,12 +695,17 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 10] = [
+const STUDIO: [(&str, &str); 13] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
     ("studio_shadowmap_512", "matcap=off,shadowmap=512"),
     ("studio_metal", "matcap=off,metallic=1,smoothness=0.85"),
+    // The lights as plain directions rather than softboxes.
+    ("studio_metal_points", "matcap=off,metallic=1,smoothness=0.85,softboxes=off"),
+    // As drawn while orbiting (the cheaper softbox highlight, half the shadow taps).
+    ("studio_metal_moving", "matcap=off,metallic=1,smoothness=0.85"),
+    ("studio_gloss_refined", "matcap=off,metallic=0,smoothness=0.9,refine,samples=64"),
     // Refined to 64 samples, as the viewport is when it holds still.
     ("studio_refined", "matcap=off,refine,samples=64"),
     ("studio_metal_refined", "matcap=off,metallic=1,smoothness=0.85,refine,samples=64"),
@@ -746,6 +751,13 @@ fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
     // Looking down on the slab a little.
     stage.frame_camera(-25.0, 28.0);
     stage.camera.distance *= 0.75;
+    if name.ends_with("_moving") {
+        // Two frames of an orbit first, so this one is drawn as one in motion.
+        for nudge in [-0.2, 0.2] {
+            stage.camera.add_yaw(nudge);
+            stage.draw(gpu);
+        }
+    }
     stage.draw(gpu);
     // A refined picture: drawn again until it has all its samples.
     for _ in 0..1024 {

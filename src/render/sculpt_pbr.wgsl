@@ -84,6 +84,14 @@ struct Look {
     floor: vec4<f32>,
     // xy (world x and z) its middle, z how strongly it reflects, w how blurred
     floor_more: vec4<f32>,
+    // Each light as a softbox (render/ltc.rs): its middle, w 1 for a softbox
+    // (0 for a plain direction)...
+    light_pos: array<vec4<f32>, 5>,
+    // ...half its width as a vector, w the radiance that gives the light's
+    // intensity at the subject (pi over its solid angle)...
+    light_side: array<vec4<f32>, 5>,
+    // ...and half its height, w its distance from the subject squared.
+    light_up: array<vec4<f32>, 5>,
 };
 
 @group(0) @binding(4) var<uniform> look: Look;
@@ -103,6 +111,9 @@ struct Look {
 @group(0) @binding(13) var dfg_tex: texture_2d<f32>;
 // The model mirrored in the floor, at half size (render/floor.rs).
 @group(0) @binding(14) var floor_tex: texture_2d<f32>;
+// The softboxes' fitted highlight matrices (render/ltc.rs): roughness
+// across, sqrt(1 - cos) of the view angle down.
+@group(0) @binding(15) var ltc_tex: texture_2d<f32>;
 
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
@@ -512,6 +523,128 @@ fn specular_occlusion(nv: f32, ao: f32, a: f32) -> f32 {
     return saturate(pow(nv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao);
 }
 
+// ---- softboxes ------------------------------------------------------------
+//
+// Rectangle lights by linearly transformed cosines (render/ltc.rs): the
+// highlight for this roughness and view angle is a cosine lobe put through a
+// matrix, so its integral over a rectangle is a cosine's over the rectangle
+// put through the inverse, which has a closed form edge by edge.
+
+// The inverse lobe matrix for this view angle and roughness.
+fn ltc_inverse(nv: f32, perceptual_roughness: f32) -> mat3x3<f32> {
+    let size = f32(textureDimensions(ltc_tex).x);
+    let uv = vec2<f32>(perceptual_roughness, sqrt(max(1.0 - nv, 0.0))) * ((size - 1.0) / size) + 0.5 / size;
+    let t = textureSampleLevel(ltc_tex, env_smp, uv, 0.0);
+    return mat3x3<f32>(vec3<f32>(t.x, 0.0, t.y), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(t.z, 0.0, t.w));
+}
+
+// One edge's part of the integral, from unit vector a to b: the angle it
+// spans over its sine times their cross product's height. The angle over
+// its sine is Hill's fit (steadier than acos near 1), which comes divided by
+// 2 pi: that is put back.
+fn ltc_edge(a: vec3<f32>, b: vec3<f32>) -> f32 {
+    let x = dot(a, b);
+    let y = abs(x);
+    let p = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+    let q = 3.4175940 + (4.1616724 + y) * y;
+    let v = p / q;
+    let angle_over_sine = select(0.5 * inverseSqrt(max(1.0 - x * x, 1e-7)) - v, v, x > 0.0) * TAU;
+    return cross(a, b).z * angle_over_sine;
+}
+
+// Walking round the light's outline clipped to above the surface, one
+// corner at a time, adding up the edges as they come (no array of corners).
+struct LtcWalk {
+    first: vec3<f32>,
+    last: vec3<f32>,
+    started: bool,
+    sum: f32,
+};
+
+fn ltc_add(w: LtcWalk, corner: vec3<f32>) -> LtcWalk {
+    var out = w;
+    let q = normalize(corner);
+    if (w.started) {
+        out.sum += ltc_edge(w.last, q);
+    } else {
+        out.first = q;
+        out.started = true;
+    }
+    out.last = q;
+    return out;
+}
+
+// The corner a if it is above the surface, and where the edge to b crosses
+// the surface if it does.
+fn ltc_side(w: LtcWalk, a: vec3<f32>, b: vec3<f32>) -> LtcWalk {
+    var out = w;
+    if (a.z > 0.0) {
+        out = ltc_add(out, a);
+    }
+    if ((a.z > 0.0) != (b.z > 0.0)) {
+        let above = select(b, a, a.z > 0.0);
+        let below = select(a, b, a.z > 0.0);
+        out = ltc_add(out, -below.z * above + above.z * below);
+    }
+    return out;
+}
+
+// The integral, times 2 pi, of the lobe `minv` undoes over the rectangle
+// `c` +- `side` +- `up`, for a surface at `p` facing `n` seen from `v`. 0
+// from behind the light. The GPU twin of `ltc::integral`.
+fn ltc_integral(n: vec3<f32>, v: vec3<f32>, p: vec3<f32>, minv: mat3x3<f32>, c: vec3<f32>, side: vec3<f32>, up: vec3<f32>) -> f32 {
+    var t1 = v - n * dot(v, n);
+    if (dot(t1, t1) < 1e-10) {
+        t1 = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9);
+        t1 -= n * dot(t1, n);
+    }
+    t1 = normalize(t1);
+    let m = minv * transpose(mat3x3<f32>(t1, cross(n, t1), n));
+    let l0 = m * (c - side - up - p);
+    let l1 = m * (c + side - up - p);
+    let l2 = m * (c + side + up - p);
+    let l3 = m * (c - side + up - p);
+    var w: LtcWalk;
+    w.started = false;
+    w.sum = 0.0;
+    w = ltc_side(w, l0, l1);
+    w = ltc_side(w, l1, l2);
+    w = ltc_side(w, l2, l3);
+    w = ltc_side(w, l3, l0);
+    if (!w.started) {
+        return 0.0;
+    }
+    return max(w.sum + ltc_edge(w.last, w.first), 0.0);
+}
+
+// A softbox's highlight by its representative point (Karis): the point of
+// it nearest the reflection of the view, lit as a plain light with the lobe
+// widened by how big the softbox looks and its peak lowered to keep the
+// energy. For frames that change every frame; `ltc_integral` otherwise.
+fn softbox_glint(s: Surface, n: vec3<f32>, nv: f32, a: f32, f0: vec3<f32>, energy: vec3<f32>,
+                 c: vec3<f32>, side: vec3<f32>, up: vec3<f32>, far: f32) -> vec3<f32> {
+    let r = reflect(-s.v, n);
+    let facing = cross(side, up);
+    let along = dot(r, facing);
+    var q = c;
+    let t = dot(c - s.world, facing) / select(along, 1e-6, abs(along) < 1e-6);
+    if (t > 0.0) {
+        let hit = s.world + r * t - c;
+        q = c + side * clamp(dot(hit, side) / dot(side, side), -1.0, 1.0)
+            + up * clamp(dot(hit, up) / dot(up, up), -1.0, 1.0);
+    }
+    let l = normalize(q - s.world);
+    let nl = saturate(dot(n, l));
+    let h = normalize(l + s.v);
+    let nh = saturate(dot(n, h));
+    let lh = saturate(dot(l, h));
+    let size = sqrt(length(side) * length(up));
+    let wide = saturate(a + size / (2.0 * sqrt(far)));
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - lh);
+    let keep = (a / wide) * (a / wide);
+    return fresnel * (d_ggx(nh, wide) * v_smith(nv, nl, wide) * 3.14159265 * keep * nl) * energy;
+}
+
 // Physically based shading under the whole rig: ambient from the sky
 // colours or the HDRI, the surroundings reflected through the split-sum
 // table with the second bounce of rough surfaces given back, and each light
@@ -542,9 +675,38 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
     // Direct. Diffuse keeps what the surface does not reflect at normal
     // incidence (the Unity pipeline's 0.96 for a dielectric).
     let direct_diffuse = diffuse * (1.0 - 0.04);
+    let lobe = ltc_inverse(nv, perceptual_roughness);
     let count = light_count();
     for (var i = 0; i < count; i++) {
         let light = get_light(i, s);
+        if (look.light_pos[i].w > 0.5) {
+            // A softbox. Diffuse light from its middle, falling off with
+            // distance as it does (as near the integral over its face as
+            // makes no difference at these sizes, for half the work); the
+            // highlight integrated over its face, at the radiance that gives
+            // its intensity, unless all of it is behind the surface.
+            let c = look.light_pos[i].xyz;
+            let side = look.light_side[i].xyz;
+            let up = look.light_up[i].xyz;
+            let to_light = c - s.world;
+            let far = dot(to_light, to_light);
+            let falloff = look.light_up[i].w / max(far, 1e-12);
+            var lit = direct_diffuse * (saturate(dot(n, to_light) * inverseSqrt(far)) * falloff);
+            let height = dot(n, to_light);
+            let reach = abs(dot(n, side)) + abs(dot(n, up));
+            if (look.shadow_params.w > 0.5) {
+                // While the picture changes every frame (an orbit, a stroke):
+                // the highlight of the softbox's point nearest the reflected
+                // view, the lobe widened by the softbox's size (Karis). Close
+                // to the integral, at a plain light's cost.
+                lit += softbox_glint(s, n, nv, a, f0, energy, c, side, up, far) * falloff;
+            } else if (height + reach > 0.0) {
+                let spec = ltc_integral(n, s.v, s.world, lobe, c, side, up);
+                lit += reflected * energy * (spec * look.light_side[i].w / TAU);
+            }
+            color += lit * light.color * (s.ao_direct * light.shadow);
+            continue;
+        }
         let nl = saturate(dot(n, light.dir));
         let h = normalize(light.dir + s.v);
         let nh = saturate(dot(n, h));
