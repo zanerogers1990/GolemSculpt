@@ -683,6 +683,20 @@ impl Running {
         }
         // Loading switches the HDRI on; the file says whether it was.
         self.doc.opts.look.hdri.enabled = wanted;
+        // The colour table, the same way.
+        let lut = self.doc.opts.look.lut.path.clone();
+        (self.doc.opts.look.lut.loaded, self.doc.opts.look.lut.failed) = (false, false);
+        self.doc.opts.look.lut.status = "No colour table loaded.".into();
+        match lut {
+            Some(path) if saved_picture_is_there(&path, Path::is_file) => self.load_lut(path),
+            Some(path) => {
+                self.renderer.set_lut(&self.gpu, None);
+                let lut = &mut self.doc.opts.look.lut;
+                lut.status = format!("Saved colour table not found: {}", file_name(&path));
+                lut.failed = true;
+            }
+            None => self.renderer.set_lut(&self.gpu, None),
+        }
     }
 
     /// Puts `path` at the front of the recent files. `picture` takes a new

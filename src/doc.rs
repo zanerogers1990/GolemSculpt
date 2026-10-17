@@ -434,6 +434,9 @@ pub enum Action {
     /// Pick an HDRI picture to light the scene with.
     LoadHdri,
     ClearHdri,
+    /// Pick a .cube colour table to grade the picture by, or drop it.
+    LoadLut,
+    ClearLut,
     Frame,
     /// Turn to an axis view (yaw, pitch in degrees) and switch to orthographic.
     Snap(f32, f32),

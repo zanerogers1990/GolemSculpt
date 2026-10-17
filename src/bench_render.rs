@@ -589,6 +589,10 @@ fn shots() -> Vec<Shot> {
         shot("lit_tone_agx", "matcap=off,tonemap=agx"),
         shot("lit_tone_aces", "matcap=off,tonemap=aces"),
         shot("lit_exposure_up", "matcap=off,exposure=1"),
+        shot("lit_grain", "matcap=off,grain=0.6"),
+        shot("lit_sharpen", "matcap=off,sharpen=1"),
+        // Graded by the colour table SCULPT_SHOT_LUT names, if one is named.
+        shot("lit_lut", "matcap=off"),
     ];
     for p in look::LURES {
         out.push(shot(&format!("lure_{}", p.id), &format!("matcap=off,finish=lure:{}", p.id)));
@@ -659,6 +663,17 @@ pub fn run_shots(folder: &Path) {
             stage.frame_camera(-20.0, -12.0);
             // Closer than framed, so the surface has pixels to compare.
             stage.camera.distance *= 0.6;
+            if shot.name == "lit_lut" {
+                if let Some(path) = std::env::var_os("SCULPT_SHOT_LUT") {
+                    match crate::render::lut::Lut::load(Path::new(&path)) {
+                        Ok(table) => {
+                            stage.renderer.set_lut(gpu, Some(&table));
+                            stage.opts.look.lut.loaded = true;
+                        }
+                        Err(e) => eprintln!("could not load the colour table: {e}"),
+                    }
+                }
+            }
             if shot.flash {
                 stage.sync(gpu);
                 let (globals, _, items) = stage.inputs();

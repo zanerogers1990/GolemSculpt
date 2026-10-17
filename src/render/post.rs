@@ -39,6 +39,54 @@ pub struct PostParams {
     /// x 1 while the picture changes every frame (the occlusion takes fewer
     /// samples then)
     pub occlusion: [f32; 4],
+    /// x film grain, y sharpening, z the colour table's strength (0 none),
+    /// w its points a side
+    pub extras: [f32; 4],
+}
+
+/// The colour table's bind group's shape (render/lut.rs): the table and a
+/// sampler that reads between its points. Made the same wherever it is made,
+/// so the renderer's table fits every picture size's composite pass.
+pub fn lut_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("colour table"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+/// The colour table as the composite pass reads it.
+pub fn lut_bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, table: &wgpu::TextureView) -> wgpu::BindGroup {
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("colour table"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("colour table"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(table) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+        ],
+    })
 }
 
 struct Targets {
@@ -138,10 +186,18 @@ impl Post {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
+        // The composite pass reads the colour table too, as a second group.
+        let tables = lut_layout(device);
+        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("post composite"),
+            bind_group_layouts: &[Some(&layout), Some(&tables)],
+            immediate_size: 0,
+        });
         let pipeline = |entry: &'static str, format: wgpu::TextureFormat, samples: u32| {
+            let pipeline_layout = if entry == "fs_composite" { &composite_layout } else { &pipeline_layout };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
-                layout: Some(&pipeline_layout),
+                layout: Some(pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_post"),
@@ -338,8 +394,16 @@ impl Post {
     }
 
     /// Turns the shaded scene into the finished picture in `to`, which is
-    /// multisampled (for overlays to be drawn on) or, with `single`, not.
-    pub fn finish(&self, encoder: &mut wgpu::CommandEncoder, to: &wgpu::TextureView, bloom: bool, single: bool) {
+    /// multisampled (for overlays to be drawn on) or, with `single`, not,
+    /// graded by the colour table `lut` (see `lut_bind`).
+    pub fn finish(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        to: &wgpu::TextureView,
+        bloom: bool,
+        single: bool,
+        lut: &wgpu::BindGroup,
+    ) {
         let Some(t) = &self.targets else { return };
         // Depth of field comes first, as it does in the Unity pipeline: what
         // glows is the scene as the lens sees it.
@@ -362,7 +426,20 @@ impl Post {
             }
         }
         let composite = if single { &self.pipe_composite_single } else { &self.pipe_composite };
-        Self::pass(encoder, to, composite, bind_composite, 0);
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("post composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: to,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(composite);
+        pass.set_bind_group(0, bind_composite, &[]);
+        pass.set_bind_group(1, lut, &[]);
+        pass.draw(0..3, 0..1);
     }
 }
 

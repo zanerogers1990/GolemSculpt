@@ -1481,6 +1481,21 @@ impl Running {
                     self.load_hdri(path);
                 }
             }
+            Action::LoadLut => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose a colour table")
+                    .add_filter("3D LUT", &["cube"])
+                    .pick_file();
+                if let Some(path) = picked {
+                    self.load_lut(path);
+                }
+            }
+            Action::ClearLut => {
+                self.renderer.set_lut(&self.gpu, None);
+                let lut = &mut self.doc.opts.look.lut;
+                (lut.loaded, lut.failed, lut.path) = (false, false, None);
+                lut.status = "No colour table loaded.".into();
+            }
             Action::ClearHdri => {
                 self.renderer.set_hdri(&self.gpu, None);
                 let hdri = &mut self.doc.opts.look.hdri;
@@ -1580,6 +1595,26 @@ impl Running {
                 let hdri = &mut self.doc.opts.look.hdri;
                 hdri.status = e;
                 hdri.failed = true;
+            }
+        }
+        self.redraw = true;
+    }
+
+    /// Loads `path` as the colour table the picture is graded by. A file that
+    /// cannot be read leaves the previous table in place.
+    fn load_lut(&mut self, path: PathBuf) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match crate::render::lut::Lut::load(&path) {
+            Ok(table) => {
+                self.renderer.set_lut(&self.gpu, Some(&table));
+                let lut = &mut self.doc.opts.look.lut;
+                lut.status = format!("{name} ({0} x {0} x {0})", table.size);
+                (lut.path, lut.loaded, lut.failed) = (Some(path), true, false);
+            }
+            Err(e) => {
+                let lut = &mut self.doc.opts.look.lut;
+                lut.status = e;
+                lut.failed = true;
             }
         }
         self.redraw = true;

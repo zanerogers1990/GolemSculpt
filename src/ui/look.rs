@@ -376,7 +376,7 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
 }
 
 /// The backdrop and the post effects.
-pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
+pub fn effects(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
     let tips = o.tooltips;
     theme::category(ui, "Backdrop & Effects", Color32::from_rgb(150, 205, 240), "", false, |ui| {
         theme::heading(ui, "Background");
@@ -462,6 +462,36 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
             theme::slider(ui, "Saturation", &mut look.saturation, -100.0..=100.0, |v| format!("{v:.0}"));
             theme::slider(ui, "Contrast", &mut look.contrast, -100.0..=100.0, |v| format!("{v:.0}"));
         }
+        // A colour table: a grade made in a photo or video tool.
+        let lut = &mut look.lut;
+        let color = if lut.failed { theme::ERROR } else { theme::HINT() };
+        ui.add(egui::Label::new(egui::RichText::new(&lut.status).font(theme::font(11.0)).color(color)).wrap());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let w = theme::row_width(ui, 2, 6.0);
+            let load = theme::button(ui, w, "Load LUT...", ButtonStyle::default());
+            if tip(load, tips, "Grade the picture with a colour table (.cube) made in a photo or video tool.").clicked() {
+                actions.push(Action::LoadLut);
+            }
+            ui.add_enabled_ui(lut.loaded, |ui| {
+                if theme::button(ui, w, "Clear", ButtonStyle::default()).clicked() {
+                    actions.push(Action::ClearLut);
+                }
+            });
+        });
+        if lut.loaded {
+            theme::slider(ui, "LUT Strength", &mut lut.strength, 0.0..=1.0, percent);
+        }
+        tip(
+            theme::slider(ui, "Film Grain", &mut look.film_grain, 0.0..=1.0, percent),
+            tips,
+            "A fine grain over the picture, as film has: strongest in the mid tones.",
+        );
+        tip(
+            theme::slider(ui, "Sharpen", &mut look.sharpen, 0.0..=1.0, percent),
+            tips,
+            "Crisper edges and detail, without the bright halos plain sharpening leaves.",
+        );
         theme::heading(ui, "Tone Curve");
         tip(
             theme::slider(ui, "Exposure", &mut look.exposure, -4.0..=4.0, |v| format!("{v:+.1} EV")),

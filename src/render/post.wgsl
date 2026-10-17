@@ -23,12 +23,18 @@ struct PostU {
     // x 1 while the picture changes every frame (the occlusion takes fewer
     // samples then)
     occlusion: vec4<f32>,
+    // x film grain, y sharpening, z the colour table's strength (0 none),
+    // w its points a side
+    extras: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> post: PostU;
 @group(0) @binding(1) var tex_a: texture_2d<f32>;
 @group(0) @binding(2) var tex_b: texture_2d<f32>;
 @group(0) @binding(3) var smp: sampler;
+// The colour table (render/lut.rs), for the composite pass only.
+@group(1) @binding(0) var lut_tex: texture_3d<f32>;
+@group(1) @binding(1) var lut_smp: sampler;
 
 const TAU: f32 = 6.2831853;
 
@@ -397,11 +403,31 @@ fn to_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, x <= vec3<f32>(0.0031308));
 }
 
+// A number in -0.5..0.5 with no pattern in it, for film grain.
+fn grain_noise(p: vec2<f32>) -> f32 {
+    let q = fract(p * vec2<f32>(0.1031, 0.1030));
+    let r = q + dot(q, q.yx + 33.33);
+    return fract((r.x + r.y) * r.x) - 0.5;
+}
+
 // tex_a is the shaded scene, tex_b the bloom. The scene's alpha is how much
 // of the pixel is model (1) rather than backdrop (0).
 @fragment
 fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
-    let scene = textureSampleLevel(tex_a, smp, in.uv, 0.0);
+    var scene = textureSampleLevel(tex_a, smp, in.uv, 0.0);
+    if (post.extras.y > 0.0) {
+        // Sharpening: the pixel pushed away from its neighbours' average,
+        // never past the brightest or darkest of them, so edges get crisper
+        // without a halo (after AMD's contrast-adaptive sharpening).
+        let t = 1.0 / vec2<f32>(textureDimensions(tex_a));
+        let n = textureSampleLevel(tex_a, smp, in.uv + vec2<f32>(0.0, -t.y), 0.0);
+        let s = textureSampleLevel(tex_a, smp, in.uv + vec2<f32>(0.0, t.y), 0.0);
+        let e = textureSampleLevel(tex_a, smp, in.uv + vec2<f32>(t.x, 0.0), 0.0);
+        let w = textureSampleLevel(tex_a, smp, in.uv + vec2<f32>(-t.x, 0.0), 0.0);
+        let lo = min(min(min(n, s), min(e, w)), scene);
+        let hi = max(max(max(n, s), max(e, w)), scene);
+        scene = clamp(scene + (scene - (n + s + e + w) * 0.25) * post.extras.y * 2.0, lo, hi);
+    }
     let transparent = post.exposure.z > 0.5;
     let coverage = saturate(scene.a);
     // With no backdrop (black there), an outline pixel is the model's colour
@@ -437,8 +463,21 @@ fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
         color = max(vec3<f32>(luma) + post.grade.z * (color - luma), vec3<f32>(0.0));
     }
     color = mix(color, as_picked, backdrop);
+    if (post.extras.x > 0.0) {
+        // Film grain: strongest in the mid tones, as on film.
+        let luma = dot(color, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
+        let amount = post.extras.x * 0.12 * (1.0 - 0.7 * abs(saturate(luma) * 2.0 - 1.0));
+        color = max(color * (1.0 + grain_noise(in.pos.xy) * amount * 4.0) + grain_noise(in.pos.yx + 7.7) * amount * 0.25, vec3<f32>(0.0));
+    }
     // The target is a plain 8-bit format: encode here, with a little noise
     // to break up banding in smooth gradients.
+    var shown = to_srgb(color);
+    if (post.extras.z > 0.0) {
+        // The colour table works on the colour as shown: last.
+        let size = max(post.extras.w, 2.0);
+        let at = saturate(shown) * ((size - 1.0) / size) + 0.5 / size;
+        shown = mix(shown, textureSampleLevel(lut_tex, lut_smp, at, 0.0).rgb, post.extras.z);
+    }
     let dither = fract(52.9829189 * fract(dot(in.pos.xy, vec2<f32>(0.06711056, 0.00583715)))) - 0.5;
-    return vec4<f32>(to_srgb(color) + dither / 255.0, select(1.0, coverage, transparent));
+    return vec4<f32>(shown + dither / 255.0, select(1.0, coverage, transparent));
 }

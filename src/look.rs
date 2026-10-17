@@ -1290,6 +1290,29 @@ impl Default for FloorSettings {
     }
 }
 
+/// Colour grading by a .cube look-up table (render/lut.rs). The table itself
+/// is not in the scene file, only where it was, like the HDRI.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LutSettings {
+    pub path: Option<PathBuf>,
+    /// How much of the table's grading shows (0 none, 1 all).
+    pub strength: f32,
+    /// Set once a table is loaded (the renderer holds it).
+    #[serde(skip)]
+    pub loaded: bool,
+    #[serde(skip)]
+    pub status: String,
+    #[serde(skip)]
+    pub failed: bool,
+}
+
+impl Default for LutSettings {
+    fn default() -> Self {
+        Self { path: None, strength: 1.0, loaded: false, status: "No colour table loaded.".into(), failed: false }
+    }
+}
+
 /// Image-based lighting from an equirectangular picture.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct HdriSettings {
@@ -1376,6 +1399,15 @@ pub struct Look {
     pub grading: bool,
     pub saturation: f32,
     pub contrast: f32,
+    /// Film grain over the finished picture (0 none, 1 heavy).
+    #[serde(default)]
+    pub film_grain: f32,
+    /// Crisper edges (0 none, 1 strong).
+    #[serde(default)]
+    pub sharpen: f32,
+    /// A colour table graded over the finished picture.
+    #[serde(default)]
+    pub lut: LutSettings,
     /// Brightness of the whole picture in photographic stops: +1 doubles
     /// the light, -1 halves it. Applied before the tone curve.
     #[serde(default)]
@@ -1501,6 +1533,9 @@ impl Default for Look {
             grading: false,
             saturation: 0.0,
             contrast: 0.0,
+            film_grain: 0.0,
+            sharpen: 0.0,
+            lut: LutSettings::default(),
             exposure: 0.0,
             tonemap: Tonemap::PbrNeutral,
             // Off, at the Unity pipeline's own starting focus and aperture.
@@ -2269,7 +2304,7 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// reflection cube's sides); `refine` (on / off) and `samples` (how many);
 /// `floor` (on / off) with `floorshadow`, `floorreflect`, `floorrough` (numbers);
 /// `softboxes` (on / off);
-/// `backdrop` (a grey, 0 black to 1 white);
+/// `backdrop` (a grey, 0 black to 1 white); `grain`, `sharpen` (0 to 1);
 /// `hdri` (a file).
 pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Option<PathBuf> {
     let mut hdri = None;
@@ -2310,6 +2345,8 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "aperture" => look.aperture = number.unwrap_or(5.6),
             "brightness" => look.brightness = number.unwrap_or(1.0),
             "exposure" => look.exposure = number.unwrap_or(0.0),
+            "grain" => look.film_grain = number.unwrap_or(0.0),
+            "sharpen" => look.sharpen = number.unwrap_or(0.0),
             "rotation" => look.rotation = number.unwrap_or(0.0),
             "metallic" => look.metallic = number.unwrap_or(0.0),
             "smoothness" => opts.smoothness = number.unwrap_or(0.4),

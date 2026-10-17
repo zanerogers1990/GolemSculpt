@@ -21,6 +21,7 @@ mod dof;
 pub mod env;
 mod floor;
 mod ltc;
+pub mod lut;
 #[cfg(test)]
 pub use ltc::integral as ltc_integral;
 mod mips;
@@ -392,6 +393,10 @@ pub struct Renderer {
     /// The split-sum reflection table (dfg.rs), and the softboxes' (ltc.rs).
     dfg: wgpu::TextureView,
     ltc: wgpu::TextureView,
+    /// The colour table the picture is graded by (lut.rs), as the composite
+    /// pass reads it, and its points a side.
+    lut: wgpu::BindGroup,
+    lut_size: u32,
     env: env::Env,
     /// The `env.generation` and `shadow_generation` the main bind group was
     /// built against.
@@ -766,6 +771,8 @@ impl Renderer {
             shadow_sampler,
             dfg: dfg::texture(gpu),
             ltc: ltc::texture(gpu),
+            lut: post::lut_bind(device, &post::lut_layout(device), &lut::texture(gpu, &lut::Lut::identity())),
+            lut_size: 2,
             env: env::Env::new(gpu),
             bound_to: (0, 0),
             post: post::Post::new(gpu),
@@ -816,6 +823,16 @@ impl Renderer {
     pub fn set_matcap(&mut self, gpu: &Gpu, image: &image::RgbaImage) {
         self.matcap = matcap_texture(&gpu.device, &gpu.queue, image);
         self.bind_main = None;
+        self.scene_dirty = true;
+    }
+
+    /// Takes a colour table to grade the picture by, or drops it.
+    pub fn set_lut(&mut self, gpu: &Gpu, table: Option<&lut::Lut>) {
+        let identity = lut::Lut::identity();
+        let table = table.unwrap_or(&identity);
+        let view = lut::texture(gpu, table);
+        self.lut = post::lut_bind(&gpu.device, &post::lut_layout(&gpu.device), &view);
+        self.lut_size = table.size as u32;
         self.scene_dirty = true;
     }
 
@@ -1139,7 +1156,8 @@ impl Renderer {
         let floor = lit && look.floor[0] > 0.5;
         let reflect = floor && look.floor_more[2] > 0.0;
         let source = lit.then(|| env_source(globals, look, opts));
-        let post_params = post_params(globals, look, settings, self.transparent);
+        let mut post_params = post_params(globals, look, settings, self.transparent);
+        post_params.extras[3] = self.lut_size as f32;
 
         // Nothing it is drawn from has changed: the picture is the one kept.
         if std::mem::take(&mut self.scene_dirty) {
@@ -1485,12 +1503,12 @@ impl Renderer {
             || self.wire.active()
             || self.spheres.active();
         if !overlaid {
-            self.post.finish(encoder, &targets.finished, bloom, true);
+            self.post.finish(encoder, &targets.finished, bloom, true, &self.lut);
             self.blit.draw(encoder, &targets.blit_finished, target);
             self.targets.as_mut().unwrap().drawn = Some(key);
             return;
         }
-        self.post.finish(encoder, &targets.ldr, bloom, false);
+        self.post.finish(encoder, &targets.ldr, bloom, false, &self.lut);
 
         // Overlays go on the finished picture, hidden by whatever of the
         // scene is in front of them.
@@ -1775,6 +1793,12 @@ fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Lo
             0.0,
         ],
         occlusion: [0.0; 4],
+        extras: [
+            settings.film_grain.clamp(0.0, 1.0),
+            settings.sharpen.clamp(0.0, 1.0),
+            if settings.lut.loaded { settings.lut.strength.clamp(0.0, 1.0) } else { 0.0 },
+            2.0,
+        ],
     }
 }
 

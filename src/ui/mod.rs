@@ -795,5 +795,5 @@ fn look_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     let o = &mut doc.opts;
     materials::card(ui, &o.materials, &mut o.paint, &mut state.materials, tips, actions);
     look::lighting(ui, &mut doc.opts, actions);
-    look::effects(ui, &mut doc.opts);
+    look::effects(ui, &mut doc.opts, actions);
 }
