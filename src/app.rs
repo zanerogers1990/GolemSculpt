@@ -68,6 +68,7 @@ mod print_check;
 mod recovery;
 mod selection;
 mod spheres;
+mod still;
 mod symmetry;
 pub(crate) mod symmetry_repair;
 pub(crate) mod tools;
@@ -151,6 +152,13 @@ pub struct Args {
     pub loop_cancel: Option<u32>,
     /// Record a timelapse of a few scripted strokes to this file, then close.
     pub demo_timelapse: Option<PathBuf>,
+    /// Render Picture to this PNG, then close (see app/still.rs); with
+    /// `render_scale` times the window's size, `render_samples` samples and
+    /// `render_transparent` no backdrop.
+    pub render_picture: Option<PathBuf>,
+    pub render_scale: Option<u32>,
+    pub render_samples: Option<u32>,
+    pub render_transparent: bool,
     /// Import this picture as a matcap and shade with it, by the routine
     /// under Import Matcap (for visual checks; no file box is opened).
     pub demo_matcap: Option<PathBuf>,
@@ -194,7 +202,10 @@ impl Args {
     /// it must not take the keyboard from whoever is at the machine, nor the
     /// Claude bridge's port from the real app.
     fn records(&self) -> bool {
-        self.record_loop.is_some() || self.demo_timelapse.is_some() || ui_demo::plays(self.demo_ui.as_deref())
+        self.record_loop.is_some()
+            || self.demo_timelapse.is_some()
+            || self.render_picture.is_some()
+            || ui_demo::plays(self.demo_ui.as_deref())
     }
 }
 
@@ -297,6 +308,8 @@ struct Running {
     flash: flash::State,
     /// The turntable, the 360 loop and the timelapse (see app/recording.rs).
     recording: recording::State,
+    /// A picture being rendered (app/still.rs).
+    still: Option<still::StillRun>,
     /// Settings, recent files and whether the scene has unsaved work.
     files: files::State,
     /// The copies kept against a crash (see app/recovery.rs).
@@ -559,6 +572,7 @@ impl Running {
                 tools: Default::default(),
                 turntable: Default::default(),
                 timelapse: Default::default(),
+                still: Default::default(),
             },
             input: Input {
                 pointer: Vec2::new(-1.0, -1.0),
@@ -597,6 +611,7 @@ impl Running {
             transform: Default::default(),
             flash: Default::default(),
             recording: Default::default(),
+            still: None,
             files,
             recovery,
             older: Default::default(),

@@ -17,7 +17,8 @@ struct PostU {
     // y grading on, z saturation, w contrast (both 1 = unchanged)
     grade: vec4<f32>,
     // x what the light is multiplied by before the tone curve, y 1 when the
-    // backdrop is a picked colour, which is shown as picked
+    // backdrop is a picked colour, which is shown as picked, z 1 for a
+    // picture with no backdrop: alpha out is how much of a pixel is model
     exposure: vec4<f32>,
 };
 
@@ -335,7 +336,11 @@ fn to_srgb(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
     let scene = textureSampleLevel(tex_a, smp, in.uv, 0.0);
-    var color = scene.rgb;
+    let transparent = post.exposure.z > 0.5;
+    let coverage = saturate(scene.a);
+    // With no backdrop (black there), an outline pixel is the model's colour
+    // times its share of the pixel: undone, so the alpha alone fades it.
+    var color = select(scene.rgb, scene.rgb / max(coverage, 1e-4), transparent);
     if (post.bloom.x > 0.0) {
         color += bicubic_b(in.uv) * post.bloom.x;
     }
@@ -346,7 +351,7 @@ fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
     // A backdrop colour the user picked is shown as picked: a white
     // background for a product shot stays white whatever the curve does.
     let as_picked = color;
-    let backdrop = select(0.0, 1.0 - saturate(scene.a), post.exposure.y > 0.5);
+    let backdrop = select(0.0, 1.0 - coverage, post.exposure.y > 0.5 && !transparent);
     color *= post.exposure.x;
     if (post.grade.x > 3.5) {
         color = agx_tonemap(color);
@@ -369,5 +374,5 @@ fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
     // The target is a plain 8-bit format: encode here, with a little noise
     // to break up banding in smooth gradients.
     let dither = fract(52.9829189 * fract(dot(in.pos.xy, vec2<f32>(0.06711056, 0.00583715)))) - 0.5;
-    return vec4<f32>(to_srgb(color) + dither / 255.0, 1.0);
+    return vec4<f32>(to_srgb(color) + dither / 255.0, select(1.0, coverage, transparent));
 }

@@ -423,6 +423,7 @@ fn doc_of(mesh: Mesh) -> (crate::doc::Doc, View) {
         tools: Default::default(),
         turntable: Default::default(),
         timelapse: Default::default(),
+        still: Default::default(),
     };
     doc.history.target = doc.scene.active_mesh();
     doc.sculptor.settings.symmetry = [false; 3];

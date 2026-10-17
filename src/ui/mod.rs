@@ -680,6 +680,7 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             "Close GolemSculpt, as the window's close button does (Ctrl+Q). It asks first if anything would be lost.",
         )]);
     });
+    crate::still::card(ui, doc);
     crate::turntable::card(ui, doc);
     crate::timelapse::card(ui, doc);
 }

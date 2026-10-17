@@ -31,7 +31,8 @@ pub struct PostParams {
     pub grade: [f32; 4],
     /// x what the light is multiplied by before the tone curve (2 to the
     /// exposure in stops), y 1 when the backdrop is a picked colour (flat or
-    /// gradient), which is shown as picked: no exposure, curve or grading
+    /// gradient), which is shown as picked: no exposure, curve or grading,
+    /// z 1 for a picture with no backdrop (alpha out is the model's coverage)
     pub exposure: [f32; 4],
 }
 

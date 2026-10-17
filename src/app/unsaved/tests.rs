@@ -284,6 +284,7 @@ fn doc() -> Doc {
         tools: Default::default(),
         turntable: Default::default(),
         timelapse: Default::default(),
+        still: Default::default(),
     }
 }
 

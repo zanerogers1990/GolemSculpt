@@ -156,6 +156,8 @@ pub struct Doc {
     pub turntable: crate::turntable::Turntable,
     /// The timelapse recorder's settings and status.
     pub timelapse: crate::timelapse::Timelapse,
+    /// Render Picture's settings and how a render is going (still.rs).
+    pub still: crate::still::Still,
 }
 
 impl Doc {

@@ -424,6 +424,9 @@ pub struct Renderer {
     /// How many samples a still picture is refined to (refine.rs); 1 for
     /// none. The app sets it every frame: off during a stroke.
     pub refine_to: u32,
+    /// Set while drawing a picture with no backdrop (a render saved with
+    /// a transparent background): what is not model comes out see-through.
+    pub transparent: bool,
     refine: refine::Refine,
     /// The last frame left the picture short of `refine_to` samples, so
     /// the next one will refine it further.
@@ -760,6 +763,7 @@ impl Renderer {
             shadow_moving: false,
             picture: false,
             refine_to: 1,
+            transparent: false,
             refine: refine::Refine::new(gpu, HDR_FORMAT),
             refine_pending: false,
             blit: cache::Blit::new(gpu),
@@ -1057,6 +1061,15 @@ impl Renderer {
     ) {
         self.ensure_targets(gpu, size);
         self.ensure_shadow(gpu, &opts.quality);
+        // With no backdrop, the backdrop is flat black and marked as not
+        // model, so the model's smoothed outline blends with nothing.
+        let (mut bare_globals, mut bare_look) = (*globals, *look);
+        if self.transparent {
+            bare_globals.bg_bottom = [0.0; 4];
+            bare_globals.bg_top = [0.0; 4];
+            bare_look.bg_params[0] = 0.0;
+        }
+        let (globals, look) = (&bare_globals, &bare_look);
 
         // What this frame needs. A matcap carries its own lighting, so none
         // of the lighting's helper passes run under one.
@@ -1090,7 +1103,7 @@ impl Renderer {
             });
         let plastic = lit && (surface == 1 || painted_lure);
         let source = lit.then(|| env_source(globals, look, opts));
-        let post_params = post_params(globals, look, settings);
+        let post_params = post_params(globals, look, settings, self.transparent);
 
         // The key light's shadow map is drawn again only when what it is
         // drawn from changes. While that happens frame after frame (the
@@ -1565,7 +1578,7 @@ fn env_source(globals: &Globals, look: &LookUniform, opts: &Options) -> env::Env
 }
 
 /// The post effects' settings for this frame.
-fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Look) -> post::PostParams {
+fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Look, transparent: bool) -> post::PostParams {
     let srgb_to_linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
     post::PostParams {
         viewport: globals.viewport,
@@ -1593,7 +1606,7 @@ fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Lo
             settings.exposure.clamp(-10.0, 10.0).exp2(),
             // Flat or gradient: a colour picked to be seen as it is.
             if look.bg_params[0] < 1.5 { 1.0 } else { 0.0 },
-            0.0,
+            if transparent { 1.0 } else { 0.0 },
             0.0,
         ],
     }
@@ -1609,8 +1622,15 @@ fn depth_attachment(view: &wgpu::TextureView, clear: f32) -> Option<wgpu::Render
     })
 }
 
-/// Reads a rendered texture back as an image (used for screenshots).
+/// Reads a rendered texture back as an image (used for screenshots), every
+/// pixel opaque.
 pub fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> image::RgbaImage {
+    read_texture_as(gpu, texture, false)
+}
+
+/// The same, keeping the texture's alpha when `alpha` is set (a picture
+/// rendered with no backdrop).
+pub fn read_texture_as(gpu: &Gpu, texture: &wgpu::Texture, alpha: bool) -> image::RgbaImage {
     let (width, height) = (texture.width(), texture.height());
     let row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1646,7 +1666,8 @@ pub fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> image::RgbaImage {
     for y in 0..height {
         let src = &data[(y * row) as usize..(y * row + width * 4) as usize];
         for (x, px) in src.chunks_exact(4).enumerate() {
-            let rgba = if bgra { [px[2], px[1], px[0], 255] } else { [px[0], px[1], px[2], 255] };
+            let a = if alpha { px[3] } else { 255 };
+            let rgba = if bgra { [px[2], px[1], px[0], a] } else { [px[0], px[1], px[2], a] };
             out.put_pixel(x as u32, y, image::Rgba(rgba));
         }
     }

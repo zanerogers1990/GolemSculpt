@@ -32,6 +32,7 @@ mod render;
 mod scene;
 mod sculpt;
 mod ssphere;
+mod still;
 #[cfg(test)]
 mod tests;
 mod timelapse;
@@ -258,6 +259,11 @@ fn window_options(args: &[String]) -> app::Args {
             "--loop-cancel" => opts.loop_cancel = it.next().and_then(|s| s.parse().ok()),
             // Sculpt a few scripted strokes while recording a timelapse to this file, then close.
             "--demo-timelapse" => opts.demo_timelapse = it.next().map(PathBuf::from),
+            // Render Picture to this PNG, then close; the size (times the window's), samples and backdrop as given.
+            "--render-picture" => opts.render_picture = it.next().map(PathBuf::from),
+            "--render-scale" => opts.render_scale = it.next().and_then(|s| s.parse().ok()),
+            "--render-samples" => opts.render_samples = it.next().and_then(|s| s.parse().ok()),
+            "--render-transparent" => opts.render_transparent = true,
             // Shading settings for visual checks, e.g. "matcap=off,finish=metal:rust".
             "--look" => opts.look = it.next().cloned(),
             // Look at the whole scene from a yaw and pitch in degrees, e.g. "0,0" for the front.
