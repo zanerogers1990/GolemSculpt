@@ -305,6 +305,20 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
             "Keep the key light at the upper left of the view. Off freezes the lights where they are.",
         );
         tip(theme::checkbox(ui, &mut look.shadows, "Shadows", ACCENT()), tips, "The key light casts a soft shadow.");
+        if look.shadows {
+            tip(
+                theme::slider(ui, "Shadow Softness", &mut look.shadow_softness, 0.0..=4.0, two),
+                tips,
+                "How big the key light is. Shadows stay crisp where they touch and soften farther out; 1 is the preset's own, 0 is a hard point light.",
+            );
+            let sizes = crate::render::quality::SHADOW_SIZES;
+            let at = sizes.iter().position(|&s| s == o.quality.shadow_size()).unwrap_or(1);
+            // The shadow map's size: a setting of this computer, not of the scene.
+            ui.label(egui::RichText::new("Shadow Detail").font(theme::font(12.0)).color(theme::TEXT()));
+            if let Some(i) = choice(ui, &["Fast", "Sharp", "Finest"], at) {
+                o.quality.shadow_map = sizes[i];
+            }
+        }
 
         theme::heading(ui, "HDRI Environment");
         let hdri = &mut look.hdri;

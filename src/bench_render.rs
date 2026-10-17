@@ -252,6 +252,7 @@ impl Stage {
             time: CLOCK,
             gradient_background: self.opts.gradient_background,
             smoothness: self.opts.smoothness,
+            shadow_size: self.opts.quality.shadow_size(),
         });
         let items = self
             .objects
@@ -656,9 +657,49 @@ pub fn run_shots(folder: &Path) {
         for (name, spec) in SWEEPS {
             sweep(gpu, folder, name, spec);
         }
+        for (name, spec) in STUDIO {
+            studio(gpu, folder, name, spec);
+        }
     });
     if let Err(e) = result {
         eprintln!("{e}");
+    }
+}
+
+/// The studio pictures: shapes standing on a slab, one floating above it,
+/// for the shadows (crisp where they touch, soft farther off) and later the
+/// floor and the lights.
+const STUDIO: [(&str, &str); 5] = [
+    ("studio", "matcap=off"),
+    ("studio_hard", "matcap=off,softness=0"),
+    ("studio_softbox", "matcap=off,light=softclay"),
+    ("studio_shadowmap_512", "matcap=off,shadowmap=512"),
+    ("studio_metal", "matcap=off,metallic=1,smoothness=0.85"),
+];
+
+fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
+    let mut stage = Stage::new(gpu, SHOT_SIZE);
+    stage.meshes.push((1, primitives::build(Primitive::Cube, 20_000, 1.0)));
+    stage.meshes.push((2, primitives::build(Primitive::Sphere, 60_000, 1.0)));
+    stage.meshes.push((3, primitives::build(Primitive::Capsule, 60_000, 1.0)));
+    stage.meshes.push((4, primitives::build(Primitive::Cone, 30_000, 1.0)));
+    // The first object is the active one; the slab is not, so it has no guides.
+    // Primitives are built at radius (or half-width) 1, then placed.
+    let at = |x: f32, y: f32, z: f32, scale: Vec3| Mat4::from_translation(Vec3::new(x, y, z)) * Mat4::from_scale(scale);
+    stage.objects.push((2, at(-0.7, 0.25, 0.2, Vec3::splat(0.25))));
+    stage.objects.push((1, at(0.0, -0.05, 0.0, Vec3::new(2.0, 0.05, 1.5))));
+    stage.objects.push((3, at(0.6, 0.3, -0.3, Vec3::splat(0.15))));
+    stage.objects.push((4, at(0.3, 0.9, 0.6, Vec3::splat(0.2))));
+    look::apply_spec(&mut stage.opts, spec, 2.0);
+    // Looking down on the slab a little.
+    stage.frame_camera(-25.0, 28.0);
+    stage.camera.distance *= 0.75;
+    stage.draw(gpu);
+    let picture = crate::render::read_texture(gpu, &stage.target);
+    let path = folder.join(format!("{name}.png"));
+    match picture.save(&path) {
+        Ok(()) => println!("{}", path.display()),
+        Err(e) => eprintln!("could not write {}: {e}", path.display()),
     }
 }
 

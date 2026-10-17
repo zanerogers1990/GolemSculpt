@@ -536,6 +536,9 @@ pub struct Prefs {
     pub dynamic_topology_detail: f32,
     /// Sculpts recently saved or opened, newest first (see `recent.rs`).
     pub recent: Vec<PathBuf>,
+    /// How hard the renderer works: shadow map size and the like (see
+    /// `render/quality.rs`).
+    pub render_quality: crate::render::quality::Quality,
 }
 
 impl Default for Prefs {
@@ -564,6 +567,7 @@ impl Default for Prefs {
             dynamic_topology: dyntopo.enabled,
             dynamic_topology_detail: dyntopo.detail,
             recent: Vec::new(),
+            render_quality: opts.quality,
         }
     }
 }

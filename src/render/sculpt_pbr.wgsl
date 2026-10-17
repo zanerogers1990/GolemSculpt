@@ -51,6 +51,9 @@ struct Look {
     shadow_view_proj: mat4x4<f32>,
     // x one shadow texel in uv, y depth bias, z normal bias (world units)
     shadow_params: vec4<f32>,
+    // x the map's width in world units (world per uv), y world units per unit
+    // of map depth, z tangent of the key light's angular radius, w unused
+    shadow_soft: vec4<f32>,
     // Ambient light as nine spherical harmonic terms, ready to evaluate.
     sh: array<vec4<f32>, 9>,
     ambient_sky: vec4<f32>,
@@ -303,44 +306,79 @@ fn to_object_normal(s: Surface, n: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(s.mx, n), dot(s.my, n), dot(s.mz, n));
 }
 
-// Soft shadow of the key light: a 7x7 tent over the shadow map.
-fn key_shadow(world: vec3<f32>) -> f32 {
+// A number in 0..1 that changes from pixel to pixel without a pattern the
+// eye picks out (Jimenez's interleaved gradient noise), moved on for each
+// sample of a picture being refined, so every sample turns its filters a
+// different way and their average is smooth.
+fn pixel_noise(pixel: vec2<f32>) -> f32 {
+    let p = pixel + 5.588238 * look.cam_params.z;
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// Point `i` of `count` spread evenly over the unit disc (Vogel's spiral),
+// the whole spiral turned by `turn`.
+fn vogel_disc(i: i32, count: i32, turn: f32) -> vec2<f32> {
+    let r = sqrt((f32(i) + 0.5) / f32(count));
+    let theta = f32(i) * 2.39996323 + turn;
+    return vec2<f32>(cos(theta), sin(theta)) * r;
+}
+
+const SHADOW_TAPS: i32 = 16;
+
+// The key light's shadow at `world`, whose surface faces `n`: crisp where it
+// meets what casts it and softer the farther that is, as under a real light
+// of the preset's size (percentage-closer soft shadows). The casters near
+// this point are found first and their average distance sets how wide the
+// filter is; `pixel` turns the filter's taps.
+fn key_shadow(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
     if (look.light_params.y < 0.5) {
         return 1.0;
     }
-    let clip = look.shadow_view_proj * vec4<f32>(world, 1.0);
+    let texel = look.shadow_params.x;
+    let world_per_uv = look.shadow_soft.x;
+    let world_per_depth = look.shadow_soft.y;
+    let light_tan = look.shadow_soft.z;
+    // A step off the surface along its normal, more where it turns from the
+    // light: the wider filter reaches across a slope, which must not shadow
+    // itself.
+    let l = look.light_dir[0].xyz;
+    let lift = world_per_uv * texel * (1.0 + 2.0 * (1.0 - saturate(dot(n, l))));
+    let clip = look.shadow_view_proj * vec4<f32>(world + n * lift, 1.0);
     let pos = vec3<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5, clip.z);
     if (pos.z <= 0.0 || pos.z >= 1.0 || any(pos.xy <= vec2<f32>(0.0)) || any(pos.xy >= vec2<f32>(1.0))) {
         return 1.0;
     }
-    let texel = look.shadow_params.x;
-    let uv = pos.xy / texel;
-    var base = floor(uv + 0.5);
-    let s = uv.x + 0.5 - base.x;
-    let t = uv.y + 0.5 - base.y;
-    base = (base - 0.5) * texel;
+    let turn = pixel_noise(pixel) * TAU;
+    let size = vec2<f32>(textureDimensions(shadow_tex));
 
-    let uw = vec4<f32>(5.0 * s - 6.0, 11.0 * s - 28.0, -(11.0 * s + 17.0), -(5.0 * s + 1.0));
-    let u = vec4<f32>(
-        (4.0 * s - 5.0) / uw.x - 3.0,
-        (4.0 * s - 16.0) / uw.y - 1.0,
-        -(7.0 * s + 5.0) / uw.z + 1.0,
-        -s / uw.w + 3.0);
-    let vw = vec4<f32>(5.0 * t - 6.0, 11.0 * t - 28.0, -(11.0 * t + 17.0), -(5.0 * t + 1.0));
-    let v = vec4<f32>(
-        (4.0 * t - 5.0) / vw.x - 3.0,
-        (4.0 * t - 16.0) / vw.y - 1.0,
-        -(7.0 * t + 5.0) / vw.z + 1.0,
-        -t / vw.w + 3.0);
-    var sum = 0.0;
-    for (var j = 0; j < 4; j++) {
-        for (var i = 0; i < 4; i++) {
-            let at = base + vec2<f32>(u[i], v[j]) * texel;
-            sum += uw[i] * vw[j] * textureSampleCompareLevel(shadow_tex, shadow_smp, at, pos.z);
+    // The casters: over the widest the shadow could spread here, which is
+    // from a caster at the near side of the scene (a quarter of the map's depth).
+    let reach = max(pos.z - 0.25, 0.0) * world_per_depth * light_tan / world_per_uv;
+    let search = clamp(reach, texel * 2.0, 0.08);
+    var found = 0.0;
+    var caster_depth = 0.0;
+    for (var i = 0; i < SHADOW_TAPS; i++) {
+        let at = pos.xy + vogel_disc(i, SHADOW_TAPS, turn) * search;
+        let texel_at = clamp(vec2<i32>(at * size), vec2<i32>(0), vec2<i32>(size) - 1);
+        let d = textureLoad(shadow_tex, texel_at, 0);
+        if (d < pos.z) {
+            found += 1.0;
+            caster_depth += d;
         }
     }
+    if (found < 0.5) {
+        return 1.0;
+    }
+    // How wide the shadow's edge is at this distance from its casters.
+    let gap = (pos.z - caster_depth / found) * world_per_depth;
+    let radius = max(gap * light_tan / world_per_uv, texel * 1.5);
+    var lit = 0.0;
+    for (var i = 0; i < SHADOW_TAPS; i++) {
+        let at = pos.xy + vogel_disc(i, SHADOW_TAPS, turn + 1.3) * radius;
+        lit += textureSampleCompareLevel(shadow_tex, shadow_smp, at, pos.z);
+    }
     // Shadow strength: how dark the preset lets the key's shadow get.
-    return mix(1.0, sum / 2704.0, look.light_params.z);
+    return mix(1.0, lit / f32(SHADOW_TAPS), look.light_params.z);
 }
 
 struct Light {
@@ -1331,7 +1369,7 @@ fn mesh_surface(in: VsOut, front: bool) -> Surface {
 // ambient occlusion, and the back faces behind it for the plastic.
 fn lit_surface(surface: Surface) -> Surface {
     var s = surface;
-    s.shadow = key_shadow(s.world);
+    s.shadow = key_shadow(s.world, s.smooth_n, vec2<f32>(s.pixel));
     if (look.env_params.z > 0.5) {
         s.ao = textureLoad(ao_tex, s.pixel, 0).r;
         s.ao_direct = mix(1.0, s.ao, look.env_params.w);

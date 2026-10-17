@@ -60,6 +60,10 @@ pub struct LightingPreset {
     pub shadow_strength: f32,
     /// Strength of the environment reflection.
     pub reflection: f32,
+    /// How wide the key light looks from the subject, in degrees: a small
+    /// hard source casts crisp shadows, a big softbox soft ones. The shadow
+    /// is crisp where it meets what casts it and softens with distance.
+    pub light_size: f32,
 }
 
 pub const LIGHTING: [LightingPreset; 8] = [
@@ -79,6 +83,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.16, 0.15, 0.14],
         shadow_strength: 0.75,
         reflection: 0.6,
+        light_size: 6.0,
     },
     LightingPreset {
         id: "softclay",
@@ -96,6 +101,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.21, 0.20, 0.19],
         shadow_strength: 0.35,
         reflection: 0.4,
+        light_size: 14.0,
     },
     LightingPreset {
         id: "highkey",
@@ -113,6 +119,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.36, 0.35, 0.34],
         shadow_strength: 0.25,
         reflection: 0.8,
+        light_size: 16.0,
     },
     LightingPreset {
         id: "vibrant",
@@ -130,6 +137,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.15, 0.10, 0.15],
         shadow_strength: 0.7,
         reflection: 0.7,
+        light_size: 6.0,
     },
     LightingPreset {
         id: "cinematic",
@@ -147,6 +155,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.06, 0.06, 0.06],
         shadow_strength: 0.9,
         reflection: 0.5,
+        light_size: 4.0,
     },
     LightingPreset {
         id: "golden",
@@ -164,6 +173,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.18, 0.12, 0.08],
         shadow_strength: 0.85,
         reflection: 0.6,
+        light_size: 3.0,
     },
     LightingPreset {
         id: "moody",
@@ -181,6 +191,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.02, 0.02, 0.02],
         shadow_strength: 1.0,
         reflection: 0.25,
+        light_size: 5.0,
     },
     LightingPreset {
         id: "dramatic",
@@ -198,6 +209,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.01, 0.01, 0.01],
         shadow_strength: 1.0,
         reflection: 0.2,
+        light_size: 2.0,
     },
 ];
 
@@ -1161,6 +1173,10 @@ pub struct Look {
     #[serde(with = "crate::io::vec3")]
     pub world_forward: Vec3,
     pub shadows: bool,
+    /// How soft the key's shadow is against the preset's light size (1 =
+    /// as the preset has it, 0 = hard as a point light).
+    #[serde(default = "one")]
+    pub shadow_softness: f32,
     pub hdri: HdriSettings,
     /// Show the HDRI behind the model (when one is on).
     pub hdri_background: bool,
@@ -1185,6 +1201,12 @@ pub struct Look {
     pub focus_distance: f32,
     /// The lens's f-number, 1-32: lower blurs more.
     pub aperture: f32,
+}
+
+/// For settings added after scenes were first saved: what a file without
+/// them reads as.
+fn one() -> f32 {
+    1.0
 }
 
 impl Default for Look {
@@ -1259,6 +1281,7 @@ impl Default for Look {
             follow_camera: true,
             world_forward: Vec3::NEG_Z,
             shadows: true,
+            shadow_softness: 1.0,
             hdri: HdriSettings {
                 enabled: false,
                 loaded: false,
@@ -1383,6 +1406,10 @@ pub struct LookUniform {
     pub shadow_view_proj: [[f32; 4]; 4],
     /// x one shadow texel in uv, y depth bias, z normal bias (world units)
     pub shadow_params: [f32; 4],
+    /// x the map's width in world units (world per uv), y world units per
+    /// unit of map depth, z tangent of the key light's angular radius (how
+    /// fast its shadow softens with distance), w unused
+    pub shadow_soft: [f32; 4],
     /// Ambient light as nine spherical harmonic terms, ready to evaluate.
     pub sh: [[f32; 4]; 9],
     pub ambient_sky: [f32; 4],
@@ -1459,11 +1486,77 @@ pub struct Frame {
     pub gradient_background: bool,
     /// The model's own smoothness (the plain finish's gloss).
     pub smoothness: f32,
+    /// Side of the shadow map the renderer draws (render/quality.rs).
+    pub shadow_size: u32,
 }
 
-/// Side of the square shadow map. Deliberately modest: with the soft filter
-/// it gives the same penumbra width on a model as the Unity app's cascades.
-pub const SHADOW_SIZE: u32 = 512;
+/// The key light's shadow map, fitted to the scene: the box of everything
+/// shown, seen from the light, inside the map's square with a little room
+/// at the edges for the soft filter, and in depth inside the map's middle
+/// half (casters are pushed away from the light a little, which must not
+/// push them out of it).
+pub struct ShadowFit {
+    /// The light's axes: across, up, and toward the light.
+    x: Vec3,
+    y: Vec3,
+    key: Vec3,
+    /// The middle of the map, along `x` and `y`.
+    centre: [f32; 2],
+    /// Along `key`, the side of the box nearest the light and how deep it is.
+    near: f32,
+    /// The map's side, in world units.
+    pub side: f32,
+    /// World units per unit of map depth.
+    pub depth: f32,
+}
+
+impl ShadowFit {
+    pub fn around(key: Vec3, min: Vec3, max: Vec3) -> ShadowFit {
+        let (min, max) =
+            if min.is_finite() && max.is_finite() && min.cmple(max).all() { (min, max) } else { (Vec3::splat(-0.5), Vec3::splat(0.5)) };
+        let up = if key.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
+        let x = up.cross(key).normalize();
+        let y = key.cross(x);
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        for i in 0..8 {
+            let p = Vec3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            );
+            let q = Vec3::new(p.dot(x), p.dot(y), p.dot(key));
+            lo = lo.min(q);
+            hi = hi.max(q);
+        }
+        let extent = (hi - lo).max(Vec3::splat(1e-4));
+        // A twentieth more on every side: the widest soft edge stays on the map.
+        let side = extent.x.max(extent.y) * 1.1;
+        ShadowFit {
+            x,
+            y,
+            key,
+            centre: [(lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5],
+            near: hi.z,
+            side,
+            // The box's depth fills half the map's.
+            depth: extent.z * 2.0,
+        }
+    }
+
+    /// World to the map: x and y -1..1 across it, depth 0..1 away from the
+    /// light with the box between a quarter and three quarters.
+    pub fn view_proj(&self) -> Mat4 {
+        let half = self.side * 0.5;
+        let rows = [
+            (self.x / half).extend(-self.centre[0] / half),
+            (self.y / half).extend(-self.centre[1] / half),
+            (-self.key / self.depth).extend(0.25 + self.near / self.depth),
+            glam::Vec4::W,
+        ];
+        Mat4::from_cols(rows[0], rows[1], rows[2], rows[3]).transpose()
+    }
+}
 
 const fn idx(i: usize, len: usize) -> usize {
     if i < len { i } else { len - 1 }
@@ -1562,26 +1655,17 @@ impl Look {
         ];
 
         // One shadow map fitted around everything shown.
-        let centre = (f.scene_min + f.scene_max) * 0.5;
-        let radius = ((f.scene_max - f.scene_min).length() * 0.5).max(1e-4);
-        let (centre, radius) = if radius.is_finite() { (centre, radius) } else { (Vec3::ZERO, 1.0) };
         let key = self.light_source(0, f);
-        let up = if key.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
-        let x = up.cross(key).normalize();
-        let y = key.cross(x);
-        // Across the map the scene's sphere fills -1..1; in depth it sits in
-        // the middle half, nearest the light at the small end.
-        let rows = [
-            (x / radius).extend(-centre.dot(x) / radius),
-            (y / radius).extend(-centre.dot(y) / radius),
-            (-key / (4.0 * radius)).extend(0.5 + centre.dot(key) / (4.0 * radius)),
-            glam::Vec4::W,
-        ];
-        u.shadow_view_proj = Mat4::from_cols(rows[0], rows[1], rows[2], rows[3]).transpose().to_cols_array_2d();
+        let fit = ShadowFit::around(key, f.scene_min, f.scene_max);
+        u.shadow_view_proj = fit.view_proj().to_cols_array_2d();
         // The Unity pipeline's biases (depth 0.1, normal 0.5 texels), widened
         // for the soft filter's reach as it does.
-        let texel = radius * 2.0 / SHADOW_SIZE as f32;
-        u.shadow_params = [1.0 / SHADOW_SIZE as f32, 0.1 * texel * 2.5, 0.5 * texel * 2.5, 0.0];
+        let size = f.shadow_size.max(1) as f32;
+        let texel = fit.side / size;
+        u.shadow_params = [1.0 / size, 0.1 * texel * 2.5, 0.5 * texel * 2.5, 0.0];
+        let softness = self.shadow_softness.clamp(0.0, 4.0);
+        let light_tan = (preset.light_size.to_radians() * 0.5 * softness).tan();
+        u.shadow_soft = [fit.side, fit.depth, light_tan, 0.0];
 
         // Ambient and reflection: the HDRI's when one is on, otherwise the
         // preset's sky / equator / ground, scaled in linear space so
@@ -1871,8 +1955,8 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// `bloom`, `vignette`, `hdribg`, `dof` (on / off); `finish` (none, lure, metal,
 /// clay, wood, optionally `:preset`); `glow` (off or a preset); `light` (a
 /// preset); `tonemap` (none, neutral, aces); `brightness`, `rotation`,
-/// `metallic`, `smoothness`, `normal`, `focus`, `aperture` (numbers); `hdri`
-/// (a file).
+/// `metallic`, `smoothness`, `normal`, `focus`, `aperture`, `softness`
+/// (numbers); `shadowmap` (the shadow map's side); `hdri` (a file).
 pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Option<PathBuf> {
     let mut hdri = None;
     for item in spec.split(',') {
@@ -1891,6 +1975,8 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "five" => look.five_point = on,
             "follow" => look.follow_camera = on,
             "shadows" => look.shadows = on,
+            "softness" => look.shadow_softness = number.unwrap_or(1.0),
+            "shadowmap" => opts.quality.shadow_map = number.map_or(2048, |n| n as u32),
             "ao" => look.ambient_occlusion = on,
             "bloom" => look.bloom = on,
             "vignette" => look.vignette = on,
@@ -1938,4 +2024,79 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
         }
     }
     hdri
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_shadow_map_holds_the_whole_scene_and_little_else() {
+        let (min, max) = (Vec3::new(-1.0, 0.0, -0.5), Vec3::new(2.0, 0.5, 0.5));
+        for key in [Vec3::Y, Vec3::new(-0.49, 0.64, 0.59).normalize(), Vec3::new(0.3, -0.2, -0.93).normalize()] {
+            let fit = ShadowFit::around(key, min, max);
+            let m = fit.view_proj();
+            let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+            for i in 0..8 {
+                let p = Vec3::new(
+                    if i & 1 == 0 { min.x } else { max.x },
+                    if i & 2 == 0 { min.y } else { max.y },
+                    if i & 4 == 0 { min.z } else { max.z },
+                );
+                let q = m.project_point3(p);
+                lo = lo.min(q);
+                hi = hi.max(q);
+            }
+            // Every corner on the map, inside the room left for soft edges...
+            assert!(lo.x >= -1.0 && hi.x <= 1.0 && lo.y >= -1.0 && hi.y <= 1.0, "{key}: {lo} {hi}");
+            // ...the longer side filling it bar that room...
+            let filled = (hi.x - lo.x).max(hi.y - lo.y) / 2.0;
+            assert!((filled - 1.0 / 1.1).abs() < 1e-4, "{key}: {filled}");
+            // ...and in depth the middle half, nearest the light first.
+            assert!((lo.z - 0.25).abs() < 1e-4 && (hi.z - 0.75).abs() < 1e-4, "{key}: {lo} {hi}");
+            let toward = m.project_point3((min + max) * 0.5 + key);
+            assert!(toward.z < 0.5, "nearer the light is smaller depth");
+        }
+        // Nothing to fit, or bounds that are not numbers: a unit box instead.
+        let fit = ShadowFit::around(Vec3::Y, Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        assert!(fit.side.is_finite() && fit.side > 0.0 && fit.depth > 0.0);
+    }
+
+    #[test]
+    fn softness_widens_the_key_light_and_zero_makes_it_a_point() {
+        let mut look = Look::default();
+        let frame = Frame {
+            cam_right: Vec3::X,
+            cam_up: Vec3::Y,
+            cam_forward: Vec3::NEG_Z,
+            ortho_half_height: None,
+            eye_offset: 0.0,
+            scene_min: Vec3::splat(-1.0),
+            scene_max: Vec3::splat(1.0),
+            model_size: 2.0,
+            time: 0.0,
+            gradient_background: false,
+            smoothness: 0.4,
+            shadow_size: 2048,
+        };
+        let usual = look.uniform(&frame).shadow_soft[2];
+        let expected = (look.preset().light_size.to_radians() * 0.5).tan();
+        assert!((usual - expected).abs() < 1e-6);
+        look.shadow_softness = 2.0;
+        assert!(look.uniform(&frame).shadow_soft[2] > usual * 1.9);
+        look.shadow_softness = 0.0;
+        assert_eq!(look.uniform(&frame).shadow_soft[2], 0.0);
+        // A bigger map has finer texels.
+        let fine = look.uniform(&frame).shadow_params;
+        let coarse = look.uniform(&Frame { shadow_size: 512, ..frame }).shadow_params;
+        assert_eq!(fine[0] * 4.0, coarse[0]);
+        assert!(fine[1] < coarse[1] && fine[2] < coarse[2]);
+    }
+
+    #[test]
+    fn a_scene_saved_before_soft_shadows_reads_as_the_presets_own() {
+        let look: Look = crate::io::read_over(&Look::default(), &serde_json::json!({ "shadows": false })).unwrap();
+        assert_eq!(look.shadow_softness, 1.0);
+        assert!(!look.shadows);
+    }
 }

@@ -33,6 +33,7 @@ fn frame(size: f32) -> Frame {
         time: 1.0,
         gradient_background: false,
         smoothness: 0.4,
+        shadow_size: 2048,
     }
 }
 

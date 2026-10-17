@@ -234,6 +234,7 @@ impl Running {
         opts.decimate_target = kept.decimate_target();
         opts.subdivide_flat = kept.subdivide_flat;
         opts.new_shape_tris = kept.starting_detail();
+        opts.quality = kept.render_quality.sanitized();
         self.doc.sculptor.dyntopo.enabled = kept.dynamic_topology;
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
         self.doc.tools.unit = kept.length_unit();
@@ -276,6 +277,7 @@ impl Running {
             dynamic_topology: self.doc.sculptor.dyntopo.enabled,
             dynamic_topology_detail: self.doc.sculptor.dyntopo.detail,
             recent: self.ui.recent.paths().to_vec(),
+            render_quality: opts.quality,
         }
     }
 

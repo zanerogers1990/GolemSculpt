@@ -328,7 +328,7 @@ mod layout_tests {
             };
         }
         same!(
-            light_dir, light_color, light_params, shadow_view_proj, shadow_params, sh, ambient_sky, ambient_equator,
+            light_dir, light_color, light_params, shadow_view_proj, shadow_params, shadow_soft, sh, ambient_sky, ambient_equator,
             ambient_ground, env_params, cam_params, bg_params, base_params, matcap_params, mask_tint, finish, glow
         );
     }
@@ -375,6 +375,7 @@ mod layout_tests {
             time: 3.0,
             gradient_background: false,
             smoothness: 0.37,
+            shadow_size: 2048,
         }
     }
 

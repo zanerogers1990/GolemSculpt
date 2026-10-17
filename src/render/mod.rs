@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use crate::doc::Options;
-use crate::look::{LookUniform, Tonemap, SHADOW_SIZE};
+use crate::look::{LookUniform, Tonemap};
 use pipelines::{Cull, MeshKey};
 use crate::mesh::Mesh;
 
@@ -26,6 +26,7 @@ pub mod flash;
 pub mod groups;
 pub mod post;
 pub mod preview;
+pub mod quality;
 pub mod spheres;
 pub mod wire;
 
@@ -357,12 +358,17 @@ pub struct Renderer {
     matcap: wgpu::TextureView,
     sampler: wgpu::Sampler,
     shadow: wgpu::TextureView,
+    /// The shadow map's side, and how many times it has been made afresh
+    /// (a bind group made before reads the old one).
+    shadow_size: u32,
+    shadow_generation: u32,
     shadow_sampler: wgpu::Sampler,
     /// The split-sum reflection table (dfg.rs).
     dfg: wgpu::TextureView,
     env: env::Env,
-    /// The `env.generation` the main bind group was built against.
-    env_seen: u32,
+    /// The `env.generation` and `shadow_generation` the main bind group was
+    /// built against.
+    bound_to: (u32, u32),
     post: post::Post,
     targets: Option<Targets>,
     /// Keyed by the scene's mesh id.
@@ -411,13 +417,13 @@ pub struct Renderer {
 pub struct Side {
     targets: Option<Targets>,
     bind_main: Option<wgpu::BindGroup>,
-    env_seen: u32,
+    bound_to: (u32, u32),
     post: post::Post,
 }
 
 impl Side {
     pub fn new(gpu: &Gpu) -> Side {
-        Side { targets: None, bind_main: None, env_seen: 0, post: post::Post::new(gpu) }
+        Side { targets: None, bind_main: None, bound_to: (0, 0), post: post::Post::new(gpu) }
     }
 }
 
@@ -682,7 +688,8 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        let shadow = target_texture(device, "shadow", (SHADOW_SIZE, SHADOW_SIZE), DEPTH_FORMAT, 1, true);
+        let shadow_size = quality::Quality::default().shadow_size();
+        let shadow = target_texture(device, "shadow", (shadow_size, shadow_size), DEPTH_FORMAT, 1, true);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -705,10 +712,12 @@ impl Renderer {
             matcap: matcap_texture(device, &gpu.queue, matcap),
             sampler,
             shadow,
+            shadow_size,
+            shadow_generation: 0,
             shadow_sampler,
             dfg: dfg::texture(gpu),
             env: env::Env::new(gpu),
-            env_seen: 0,
+            bound_to: (0, 0),
             post: post::Post::new(gpu),
             targets: None,
             meshes: HashMap::new(),
@@ -743,7 +752,7 @@ impl Renderer {
     pub fn swap_side(&mut self, side: &mut Side) {
         std::mem::swap(&mut self.targets, &mut side.targets);
         std::mem::swap(&mut self.bind_main, &mut side.bind_main);
-        std::mem::swap(&mut self.env_seen, &mut side.env_seen);
+        std::mem::swap(&mut self.bound_to, &mut side.bound_to);
         std::mem::swap(&mut self.post, &mut side.post);
     }
 
@@ -757,6 +766,19 @@ impl Renderer {
     pub fn set_hdri(&mut self, gpu: &Gpu, image: Option<crate::look::HdriImage>) {
         self.env.set_hdri(gpu, image);
         self.scene_dirty = true;
+    }
+
+    /// Makes the shadow map afresh at the side the quality settings ask for,
+    /// if it is not that already.
+    fn ensure_shadow(&mut self, gpu: &Gpu, quality: &quality::Quality) {
+        let size = quality.shadow_size();
+        if size == self.shadow_size {
+            return;
+        }
+        self.shadow = target_texture(&gpu.device, "shadow", (size, size), DEPTH_FORMAT, 1, true);
+        self.shadow_size = size;
+        self.shadow_generation += 1;
+        self.shadow_drawn = None;
     }
 
     fn ensure_targets(&mut self, gpu: &Gpu, size: (u32, u32)) {
@@ -999,6 +1021,7 @@ impl Renderer {
         items: &[DrawItem],
     ) {
         self.ensure_targets(gpu, size);
+        self.ensure_shadow(gpu, &opts.quality);
 
         // What this frame needs. A matcap carries its own lighting, so none
         // of the lighting's helper passes run under one.
@@ -1079,8 +1102,9 @@ impl Renderer {
         self.post.focus(gpu, settings, globals, look.cam_params[1]);
 
         let targets = self.targets.as_ref().unwrap();
-        if self.bind_main.is_none() || self.env_seen != self.env.generation {
-            self.env_seen = self.env.generation;
+        let generations = (self.env.generation, self.shadow_generation);
+        if self.bind_main.is_none() || self.bound_to != generations {
+            self.bound_to = generations;
             let view = wgpu::BindingResource::TextureView;
             self.bind_main = Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("main"),

@@ -1589,6 +1589,7 @@ impl Running {
             time: self.time() as f32,
             gradient_background: o.gradient_background,
             smoothness: o.smoothness,
+            shadow_size: o.quality.shadow_size(),
         })
     }
 
