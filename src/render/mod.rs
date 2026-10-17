@@ -42,10 +42,11 @@ const GBUF_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Full floats: plastic thickness is a small difference of two eye depths.
 const BACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-/// Ambient occlusion reach and strength. The Unity app's 0.3 and 0.4, with
-/// the reach halved because shapes here are built at half its size.
+/// Ambient occlusion reach, and the power its openness is raised to: the
+/// Unity app's reach of 0.3, halved because shapes here are built at half
+/// its size, and the strength that looks as its occlusion did.
 const AO_RADIUS: f32 = 0.15;
-const AO_INTENSITY: f32 = 0.4;
+const AO_POWER: f32 = 1.6;
 pub const MSAA_SAMPLES: u32 = 4;
 /// The side the shadow map is drawn at while it changes frame after frame
 /// (see `Renderer::draw`): the size it always was, so orbiting and sculpting
@@ -225,6 +226,11 @@ struct Targets {
     finished: wgpu::TextureView,
     blit_finished: wgpu::BindGroup,
     drawn: Option<cache::SceneKey>,
+    /// What the picture was last drawn from, before this file's own marks,
+    /// and whether that had changed from the frame before: two changes in a
+    /// row are a picture in motion (an orbit, a stroke).
+    last_inputs: Option<cache::SceneKey>,
+    changing: bool,
     /// The running average of the still picture's samples (refine.rs),
     /// made the first time this size refines.
     refine: Option<refine::Buffers>,
@@ -428,9 +434,8 @@ pub struct Renderer {
     /// `shadow_key`), not every frame.
     shadow_drawn: Option<cache::SceneKey>,
     /// The shadow map holds the quick small version (`QUICK_SHADOW` in its
-    /// corner), and it was drawn again on the last frame drawn.
+    /// corner).
     shadow_quick: bool,
-    shadow_moving: bool,
     /// Set while drawing a picture to keep (a recording's frame): every pass
     /// at its own quality, never the quick versions used while things move.
     pub picture: bool,
@@ -780,7 +785,6 @@ impl Renderer {
             uploads: cache::Stamp::default(),
             shadow_drawn: None,
             shadow_quick: false,
-            shadow_moving: false,
             picture: false,
             refine_to: 1,
             transparent: false,
@@ -855,6 +859,8 @@ impl Renderer {
             blit_finished: self.blit.bind(gpu, &finished),
             finished,
             drawn: None,
+            last_inputs: None,
+            changing: false,
             refine: None,
         };
         self.post.resize(gpu, size, &targets.gbuf, &targets.scene, &targets.depth);
@@ -1132,25 +1138,30 @@ impl Renderer {
         let source = lit.then(|| env_source(globals, look, opts));
         let post_params = post_params(globals, look, settings, self.transparent);
 
-        // The key light's shadow map is drawn again only when what it is
-        // drawn from changes. While that happens frame after frame (the
-        // lights turning with an orbit, a stroke moving the model) it is
-        // drawn small, as cheap as it always was; the first frame it holds
-        // still it is drawn at its own size, and the picture with it.
-        // Its soft edge takes half the taps meanwhile, too.
-        let shadow_key = shadows.then(|| self.shadow_key(look, items, opts.show_backfaces));
-        let shadow_changes = shadows && shadow_key != self.shadow_drawn;
-        let moving = shadow_changes && self.shadow_moving && !self.picture;
-        let quick_shadow = moving && self.shadow_size > QUICK_SHADOW;
-        let draw_shadow = shadow_changes || (shadows && self.shadow_quick && !quick_shadow);
-        self.shadow_moving = shadow_changes;
-
         // Nothing it is drawn from has changed: the picture is the one kept.
         if std::mem::take(&mut self.scene_dirty) {
             self.forced += 1;
         }
         let mut key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
+        // A picture that changes frame after frame is in motion: its costlier
+        // parts (the soft shadow's taps, the occlusion's, the softboxes'
+        // highlights) are drawn the cheaper way meanwhile, and the first
+        // frame it holds still at full quality.
+        let targets = self.targets.as_mut().unwrap();
+        let changed = targets.last_inputs.as_ref() != Some(&key);
+        let moving = changed && targets.changing && !self.picture;
+        (targets.changing, targets.last_inputs) = (changed, Some(key.clone()));
         key.push(&(moving as u32));
+
+        // The key light's shadow map is drawn again only when what it is
+        // drawn from changes. While that happens in a picture in motion (the
+        // lights turning with an orbit, a stroke moving the model) it is
+        // drawn small, as cheap as it always was; the first frame it holds
+        // still it is drawn at its own size.
+        let shadow_key = shadows.then(|| self.shadow_key(look, items, opts.show_backfaces));
+        let shadow_changes = shadows && shadow_key != self.shadow_drawn;
+        let quick_shadow = shadow_changes && moving && self.shadow_size > QUICK_SHADOW;
+        let draw_shadow = shadow_changes || (shadows && self.shadow_quick && !quick_shadow);
         // A picture kept but with fewer samples than asked for is refined
         // instead (refine.rs). Never under the matcap, which stays exactly
         // as it was.
@@ -1211,6 +1222,11 @@ impl Renderer {
             look.sh = self.env.ambient(look.bg_params[1], strength);
         }
         look.light_params[1] = if shadows { 1.0 } else { 0.0 };
+        // Contact shadows march through the normals prepass, and only while
+        // the picture holds still.
+        if !(cavity || occlusion) || moving {
+            look.contact[0] = 0.0;
+        }
         look.shadow_params[3] = if moving { 1.0 } else { 0.0 };
         if quick_shadow {
             // The map fills only its corner, with texels as much bigger as
@@ -1229,6 +1245,7 @@ impl Renderer {
         look.cam_params[2] = sample as f32;
         let mut post_params = post_params;
         post_params.ao[3] = sample as f32;
+        post_params.occlusion[0] = if moving { 1.0 } else { 0.0 };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
         gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&look));
         self.post.set_params(gpu, &post_params);
@@ -1727,7 +1744,7 @@ fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Lo
     let srgb_to_linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
     post::PostParams {
         viewport: globals.viewport,
-        ao: [look.cam_params[0], AO_RADIUS, AO_INTENSITY, 0.0],
+        ao: [look.cam_params[0], AO_RADIUS, AO_POWER, 0.0],
         bloom: [
             if settings.bloom { settings.bloom_intensity.max(0.0) } else { 0.0 },
             srgb_to_linear(settings.bloom_threshold.max(0.0)),
@@ -1754,6 +1771,7 @@ fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Lo
             if transparent { 1.0 } else { 0.0 },
             0.0,
         ],
+        occlusion: [0.0; 4],
     }
 }
 

@@ -92,6 +92,9 @@ struct Look {
     light_side: array<vec4<f32>, 5>,
     // ...and half its height, w its distance from the subject squared.
     light_up: array<vec4<f32>, 5>,
+    // x how far the contact shadows march toward each light, as a fraction of
+    // the view's height at the surface's depth (0 for none)
+    contact: vec4<f32>,
 };
 
 @group(0) @binding(4) var<uniform> look: Look;
@@ -100,7 +103,8 @@ struct Look {
 @group(0) @binding(6) var env_smp: sampler;
 @group(0) @binding(7) var shadow_tex: texture_depth_2d;
 @group(0) @binding(8) var shadow_smp: sampler_comparison;
-// 1 = open, 0 = fully occluded.
+// The ambient occlusion (post.wgsl): the bent normal in rgb (view space, z
+// forward, as 0.5 + 0.5 n) and how open in alpha (1 = open).
 @group(0) @binding(9) var ao_tex: texture_2d<f32>;
 // Eye depth of the nearest back face under each pixel, 0 = none.
 @group(0) @binding(10) var back_tex: texture_2d<f32>;
@@ -247,9 +251,15 @@ struct Surface {
     curv: f32,
     // Light reaching the surface from the key: 1 lit, 0 in its shadow.
     shadow: f32,
+    // Each light's contact shadow (lights 0 to 3, then 4): 1 lit.
+    contact: vec4<f32>,
+    contact_last: f32,
     // Ambient occlusion (1 = open), and what direct light keeps of it.
     ao: f32,
     ao_direct: f32,
+    // Which way the open sky lies (the occlusion's bent normal, world
+    // space): the smooth normal where nothing closes it in.
+    bent: vec3<f32>,
     // The model's colour here, before any finish: the base colour (later,
     // whatever is painted on).
     base_color: vec3<f32>,
@@ -436,8 +446,10 @@ fn get_light(i: i32, s: Surface) -> Light {
     var l: Light;
     l.dir = look.light_dir[i].xyz;
     l.color = look.light_color[i].rgb;
-    // Only the key casts shadows.
-    l.shadow = select(1.0, s.shadow, i == 0);
+    // Only the key casts a shadow from its map; every light has its contact
+    // shadow.
+    let contact = select(s.contact_last, s.contact[min(i, 3)], i < 4);
+    l.shadow = select(1.0, s.shadow, i == 0) * contact;
     return l;
 }
 
@@ -521,6 +533,18 @@ fn v_smith(nv: f32, nl: f32, a: f32) -> f32 {
 // blocked less than the open sky above it, a rough one's about as much.
 fn specular_occlusion(nv: f32, ao: f32, a: f32) -> f32 {
     return saturate(pow(nv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao);
+}
+
+// Whether the reflection points where the sky is open (Jimenez 2016): the
+// open sky as a cone round the bent normal, as wide as the openness says,
+// against the reflection's lobe as a cone round the reflected view; how
+// much the two overlap (Unreal's approximation), 1 when one holds the other.
+fn reflection_in_open_sky(open: f32, bent: vec3<f32>, r: vec3<f32>, a: f32) -> f32 {
+    let sky = acos(sqrt(saturate(1.0 - open)));
+    let lobe = clamp(a * 1.2, 0.05, 1.5707963);
+    let between = acos(clamp(dot(bent, r), -1.0, 1.0));
+    let difference = abs(sky - lobe);
+    return smoothstep(0.0, 1.0, 1.0 - saturate((between - difference) / max(sky + lobe - difference, 1e-4)));
 }
 
 // ---- softboxes ------------------------------------------------------------
@@ -669,8 +693,13 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
     let horizon = min(1.0 + dot(r, s.smooth_n), 1.0);
     let ao = min(s.ao, occlusion);
     let reflection = environment(r, perceptual_roughness);
-    var color = ambient(n) * diffuse * (1.0 - reflected) * ao
-        + reflection * reflected * energy * (specular_occlusion(nv, ao, a) * horizon * horizon);
+    // Ambient light from where the sky is open, the surface's own detail
+    // kept on it; reflections dimmed as much as the crease hides them and
+    // more where they point into it.
+    let sky = normalize(n + (s.bent - s.smooth_n));
+    let hidden = specular_occlusion(nv, ao, a) * reflection_in_open_sky(s.ao, s.bent, r, a);
+    var color = ambient(sky) * diffuse * (1.0 - reflected) * ao
+        + reflection * reflected * energy * (hidden * horizon * horizon);
 
     // Direct. Diffuse keeps what the surface does not reflect at normal
     // incidence (the Unity pipeline's 0.96 for a dielectric).
@@ -1565,8 +1594,11 @@ fn mesh_surface(in: VsOut, front: bool) -> Surface {
     s.curv = in.curv;
     s.base_color = g.base_color.rgb;
     s.shadow = 1.0;
+    s.contact = vec4<f32>(1.0);
+    s.contact_last = 1.0;
     s.ao = 1.0;
     s.ao_direct = 1.0;
+    s.bent = smooth_n;
     s.back_depth = 0.0;
 
     // Surface grain: a small bump straight from the object-space position,
@@ -1578,14 +1610,79 @@ fn mesh_surface(in: VsOut, front: bool) -> Surface {
     return s;
 }
 
-// The surface with what reaches it of the lights: the key's shadow, the
-// ambient occlusion, and the back faces behind it for the plastic.
+// A crease's own shadow toward the light `dir`, too fine for the shadow
+// map: a short march from the surface toward the light through the depth
+// the normals prepass drew. A point of the march with something drawn in
+// front of it, but not so far in front that it is a different surface
+// passing behind, is in shadow; the farther along the march, the less.
+fn contact_shadow(s: Surface, dir: vec3<f32>) -> f32 {
+    if (look.contact.x <= 0.0 || dot(s.smooth_n, dir) <= 0.0) {
+        return 1.0;
+    }
+    // Short on screen, so it reaches fine detail and no further at any zoom.
+    let depth = dot(s.world - g.cam_pos.xyz, g.cam_forward.xyz);
+    let view_height = select(2.0 * look.cam_params.x, 2.0 * g.viewport.z * depth, g.viewport.z > 0.0);
+    let reach = view_height * look.contact.x;
+    let size = vec2<f32>(textureDimensions(gbuf));
+    let steps = 8;
+    let jitter = pixel_noise(vec2<f32>(s.pixel) + 0.5);
+    // Off the surface by a couple of its pixels, so it does not shadow itself.
+    let start = s.world + s.smooth_n * (s.footprint * 2.0);
+    // Deeper in front than this is taken for another surface passing in
+    // front, not one the light has to get past. Generous: a march that
+    // starts under an overhang is inside the solid, far behind its front.
+    let thickness = reach * 8.0;
+    for (var k = 0; k < steps; k++) {
+        let t = (f32(k) + jitter) / f32(steps);
+        let q = start + dir * (t * reach);
+        let clip = g.view_proj * vec4<f32>(q, 1.0);
+        if (clip.w <= 0.0) {
+            break;
+        }
+        let ndc = clip.xy / clip.w;
+        let at = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * size;
+        if (any(at < vec2<f32>(0.0)) || any(at >= size)) {
+            break;
+        }
+        let drawn = textureLoad(gbuf, vec2<i32>(at), 0).w;
+        let behind = dot(q - g.cam_pos.xyz, g.cam_forward.xyz) - drawn;
+        if (drawn > 0.0 && behind > s.footprint && behind < thickness) {
+            // Full right at the crease, fading out along the march: the
+            // light's own size softens a shadow that far from its caster.
+            return sqrt(t);
+        }
+    }
+    return 1.0;
+}
+
+// The surface with what reaches it of the lights: the key's shadow, each
+// light's contact shadow, the ambient occlusion and its bent normal, and the
+// back faces behind it for the plastic.
 fn lit_surface(surface: Surface) -> Surface {
     var s = surface;
     s.shadow = key_shadow(s.world, s.smooth_n, vec2<f32>(s.pixel));
+    if (look.contact.x > 0.0) {
+        let count = light_count();
+        for (var i = 0; i < min(count, 4); i++) {
+            s.contact[i] = contact_shadow(s, look.light_dir[i].xyz);
+        }
+        if (count > 4) {
+            s.contact_last = contact_shadow(s, look.light_dir[4].xyz);
+        }
+    }
     if (look.env_params.z > 0.5) {
-        s.ao = textureLoad(ao_tex, s.pixel, 0).r;
+        let occlusion = textureLoad(ao_tex, s.pixel, 0);
+        s.ao = occlusion.a;
         s.ao_direct = mix(1.0, s.ao, look.env_params.w);
+        // Back from the occlusion's view space (z forward) to the world.
+        let b = occlusion.rgb * 2.0 - 1.0;
+        let to_world = transpose(mat3x3<f32>(g.view[0].xyz, g.view[1].xyz, g.view[2].xyz));
+        let bent = to_world * vec3<f32>(b.x, b.y, -b.z);
+        if (dot(bent, bent) > 0.01) {
+            s.bent = normalize(bent);
+            // Facing the eye as the surface does.
+            s.bent = select(s.bent, -s.bent, dot(s.bent, s.smooth_n) < -0.5);
+        }
     }
     if (look.matcap_params.w > 0.5) {
         s.back_depth = textureLoad(back_tex, s.pixel, 0).r;
@@ -1746,7 +1843,7 @@ fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
     }
     var open = 1.0;
     if (look.env_params.z > 0.5) {
-        open = textureLoad(ao_tex, vec2<i32>(pixel), 0).r;
+        open = textureLoad(ao_tex, vec2<i32>(pixel), 0).a;
     }
     let dark = (1.0 - lit * open) * fade;
 

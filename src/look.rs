@@ -1247,6 +1247,10 @@ pub struct Look {
     pub gradient_bias: f32,
 
     pub ambient_occlusion: bool,
+    /// Crisp shadows in fine creases, toward every light, where the shadow
+    /// map is too coarse (drawn when the picture holds still).
+    #[serde(default = "yes")]
+    pub contact_shadows: bool,
     pub bloom: bool,
     pub bloom_intensity: f32,
     pub bloom_threshold: f32,
@@ -1370,6 +1374,7 @@ impl Default for Look {
             hdri_background: false,
             gradient_bias: 1.0,
             ambient_occlusion: true,
+            contact_shadows: true,
             bloom: true,
             bloom_intensity: 0.25,
             bloom_threshold: 1.0,
@@ -1526,6 +1531,10 @@ pub struct LookUniform {
     pub light_pos: [[f32; 4]; MAX_LIGHTS],
     pub light_side: [[f32; 4]; MAX_LIGHTS],
     pub light_up: [[f32; 4]; MAX_LIGHTS],
+    /// x how far the contact shadows march toward each light, as a fraction
+    /// of the view's height at the surface's depth (0 for none; the renderer
+    /// clears it while the picture moves)
+    pub contact: [f32; 4],
 }
 
 /// A finish's settings as its shader function reads them: sixteen groups of
@@ -1872,6 +1881,10 @@ impl Look {
             u.floor = [1.0, min.y, reach, clamp01(floor.shadow)];
             u.floor_more = [(min.x + max.x) * 0.5, (min.z + max.z) * 0.5, clamp01(floor.reflection), clamp01(floor.roughness)];
         }
+        // Contact shadows march a sixtieth of the view's height.
+        if self.contact_shadows {
+            u.contact[0] = 1.0 / 60.0;
+        }
         u.finish = self.finish_params(self.finish, f);
         if self.glow.on {
             u.glow = self.pack_glow(self.size_of(self.glow.reference, f));
@@ -2114,7 +2127,7 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// Applies shading settings written as `key=value,key=value` (the `--look`
 /// option, for visual checks). Returns an HDRI to load, if one was named.
 ///
-/// Keys: `matcap`, `panels`, `gradient`, `flat`, `five`, `follow`, `shadows`, `ao`,
+/// Keys: `matcap`, `panels`, `gradient`, `flat`, `five`, `follow`, `shadows`, `ao`, `contact`,
 /// `bloom`, `vignette`, `hdribg`, `dof` (on / off); `finish` (none, lure, metal,
 /// clay, wood, optionally `:preset`); `glow` (off or a preset); `light` (a
 /// preset); `tonemap` (none, neutral, aces, pbr, agx); `brightness`, `rotation`, `exposure`,
@@ -2155,6 +2168,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "refine" => opts.quality.refine = on,
             "samples" => opts.quality.samples = number.map_or(64, |n| n as u32),
             "ao" => look.ambient_occlusion = on,
+            "contact" => look.contact_shadows = on,
             "bloom" => look.bloom = on,
             "vignette" => look.vignette = on,
             "hdribg" => look.hdri_background = on,

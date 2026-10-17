@@ -695,7 +695,7 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 13] = [
+const STUDIO: [(&str, &str); 14] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
@@ -708,6 +708,7 @@ const STUDIO: [(&str, &str); 13] = [
     ("studio_gloss_refined", "matcap=off,metallic=0,smoothness=0.9,refine,samples=64"),
     // Refined to 64 samples, as the viewport is when it holds still.
     ("studio_refined", "matcap=off,refine,samples=64"),
+    ("studio_refined_no_contact", "matcap=off,refine,samples=64,contact=off"),
     ("studio_metal_refined", "matcap=off,metallic=1,smoothness=0.85,refine,samples=64"),
     // The shapes alone over a shadow floor, and a glossy one (no slab).
     ("floor", "matcap=off,floor,refine,samples=64"),

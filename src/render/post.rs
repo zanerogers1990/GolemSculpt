@@ -8,7 +8,8 @@ use super::dof::Dof;
 use super::{target_texture, Globals, Gpu, MSAA_SAMPLES};
 use crate::look::Look;
 
-const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// The bent normal in rgb, how open in alpha (post.wgsl, `fs_ssao`).
+const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The glow is blurred at most this many times, each at half the size.
 const MAX_BLOOM_LEVELS: usize = 6;
@@ -19,8 +20,9 @@ const MAX_BLOOM_LEVELS: usize = 6;
 pub struct PostParams {
     /// xy viewport px, z tan(half fov) (0 = orthographic), w aspect
     pub viewport: [f32; 4],
-    /// x orthographic half height, y occlusion radius, z occlusion intensity,
-    /// w which sample of a refined picture (its noise turns with it)
+    /// x orthographic half height, y occlusion radius, z the power the
+    /// openness is raised to (how strong it looks), w which sample of a
+    /// refined picture (its noise turns with it)
     pub ao: [f32; 4],
     /// x intensity (0 = off), y threshold, z scatter
     pub bloom: [f32; 4],
@@ -34,6 +36,9 @@ pub struct PostParams {
     /// gradient), which is shown as picked: no exposure, curve or grading,
     /// z 1 for a picture with no backdrop (alpha out is the model's coverage)
     pub exposure: [f32; 4],
+    /// x 1 while the picture changes every frame (the occlusion takes fewer
+    /// samples then)
+    pub occlusion: [f32; 4],
 }
 
 struct Targets {
@@ -325,8 +330,8 @@ impl Post {
     /// Works out the ambient occlusion from the normals prepass.
     pub fn occlusion(&self, encoder: &mut wgpu::CommandEncoder) {
         let (Some(t), Some(ao)) = (&self.targets, &self.ao) else { return };
-        // Raw into `ao`, blurred across into the scratch, then down and
-        // flipped back into `ao`.
+        // Raw into `ao`, blurred across into the scratch, then down back
+        // into `ao`.
         Self::pass(encoder, ao, &self.pipe_ssao, &t.bind_ssao, 0);
         Self::pass(encoder, &t.ao_scratch, &self.pipe_ssao_blur, &t.bind_ssao_across, 0);
         Self::pass(encoder, ao, &self.pipe_ssao_blur, &t.bind_ssao_down, 1);

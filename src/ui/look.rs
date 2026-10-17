@@ -475,6 +475,11 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
             tips,
             "Soft contact shadows in creases and where forms meet (lit shading only).",
         );
+        tip(
+            theme::checkbox(ui, &mut look.contact_shadows, "Contact Shadows", ACCENT()),
+            tips,
+            "Crisp shadows in fine creases from every light, finer than the key light's shadow can draw. Added once the view holds still (lit shading with Cavity or Ambient Occlusion on).",
+        );
         // How the still picture is refined: settings of this computer.
         theme::heading(ui, "Still Picture");
         let quality = &mut o.quality;

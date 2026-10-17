@@ -20,6 +20,9 @@ struct PostU {
     // backdrop is a picked colour, which is shown as picked, z 1 for a
     // picture with no backdrop: alpha out is how much of a pixel is model
     exposure: vec4<f32>,
+    // x 1 while the picture changes every frame (the occlusion takes fewer
+    // samples then)
+    occlusion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> post: PostU;
@@ -78,51 +81,115 @@ fn hash1(x: f32) -> f32 {
     return fract(sin(x * 12.9898) * 43758.5453);
 }
 
-// How closed-in each pixel is: points scattered in the hemisphere over the
-// surface are tested against what is actually drawn there.
+// Ground-truth ambient occlusion (Jimenez, Wu, Pesce and Jarabo 2016, as
+// Intel's XeGTAO lays it out). In a few slices through the view at this
+// pixel, the highest the depth buffer rises on either side within the
+// radius bounds the sky the surface can see, and the cosine-weighted arc of
+// sky between those two horizons has a closed form: that is how open the
+// pixel is, as a matte surface feels it. The same arcs give the bent normal,
+// the way the open sky lies, which the surface shader takes its ambient
+// light from and measures its reflections' occlusion against.
+//
+// Out: the bent normal (view space, z forward) in rgb as 0.5 + 0.5 n, and
+// how open the pixel is in alpha (1 = all).
+
+const PI_HALF: f32 = 1.5707963;
+
+// XeGTAO's fast arc cosine: close enough for the horizons, and cheap.
+fn fast_acos(x: f32) -> f32 {
+    let ax = abs(x);
+    let r = (-0.156583 * ax + PI_HALF) * sqrt(1.0 - ax);
+    return select(3.1415927 - r, r, x >= 0.0);
+}
+
+// What the occlusion writes where there is no surface: open, facing the eye.
+const OPEN: vec4<f32> = vec4<f32>(0.5, 0.5, 0.0, 1.0);
+
 @fragment
 fn fs_ssao(in: PostOut) -> @location(0) vec4<f32> {
-    let size = vec2<i32>(textureDimensions(tex_a));
+    let size = vec2<f32>(textureDimensions(tex_a));
     let pixel = vec2<i32>(in.pos.xy);
     let centre = textureLoad(tex_a, pixel, 0);
     if (centre.w <= 0.0) {
-        return vec4<f32>(0.0);
+        return OPEN;
     }
     let depth = centre.w;
     // The prepass normal looks back along the view's z; here z runs forward.
     let n = normalize(vec3<f32>(centre.x, centre.y, -centre.z));
     let p = view_pos(in.pos.xy, depth);
+    let v = select(normalize(-p), vec3<f32>(0.0, 0.0, -1.0), post.viewport.z <= 0.0);
     let radius = post.ao.y;
-    let noise = gradient_noise(in.pos.xy + 5.588238 * post.ao.w);
-    const SAMPLES: i32 = 8;
-    var ao = 0.0;
-    for (var s = 0; s < SAMPLES; s++) {
-        let fs = f32(s);
-        let u = fract(hash1(fs + 0.37) + noise) * 2.0 - 1.0;
-        let theta = (hash1(fs + 20.11) + noise) * TAU;
-        let u2 = sqrt(1.0 - u * u);
-        var v = vec3<f32>(u2 * cos(theta), u2 * sin(theta), u);
-        // Spread between the surface and the full radius, in its hemisphere.
-        v *= sqrt((fs + 1.0) / f32(SAMPLES));
-        v = select(v, -v, dot(v, n) < 0.0) * radius;
-        let at = p + v;
-        if (post.viewport.z > 0.0 && at.z <= 1e-5) {
-            continue;
-        }
-        let sp = vec2<i32>(to_pixel(at));
-        if (sp.x < 0 || sp.y < 0 || sp.x >= size.x || sp.y >= size.y) {
-            continue;
-        }
-        let there = textureLoad(tex_a, sp, 0).w;
-        if (there <= 0.0) {
-            continue;
-        }
-        let d = view_pos(vec2<f32>(sp) + 0.5, there) - p;
-        ao += max(dot(d, n) - 0.002 * depth, 0.0) / (dot(d, d) + 1e-4);
+    // The radius in pixels at this depth.
+    let per_unit = select(post.viewport.y / (2.0 * post.ao.x), post.viewport.y / (2.0 * post.viewport.z * depth), post.viewport.z > 0.0);
+    let reach = min(radius * per_unit, post.viewport.y * 0.25);
+    if (reach < 1.5) {
+        return OPEN;
     }
-    ao *= radius;
-    ao = pow(saturate(ao * post.ao.z / f32(SAMPLES)), 0.6);
-    return vec4<f32>(ao, 0.0, 0.0, 1.0);
+    // Every slice and step turned and shifted per pixel and per sample of
+    // a refined picture; fewer of them while the picture changes every frame.
+    let moving = post.occlusion.x > 0.5;
+    let slices = select(2, 1, moving);
+    let steps = select(8, 4, moving);
+    let turn = gradient_noise(in.pos.xy + 5.588238 * post.ao.w);
+    let shift = gradient_noise(in.pos.yx * 1.31 + 17.17 + 3.7 * post.ao.w);
+    var visibility = 0.0;
+    var bent = vec3<f32>(0.0);
+    for (var slice = 0; slice < slices; slice++) {
+        let phi = (f32(slice) + turn) * 3.1415927 / f32(slices);
+        // On screen y runs down; in view space up.
+        let omega = vec2<f32>(cos(phi), sin(phi));
+        let dir = vec3<f32>(omega.x, -omega.y, 0.0);
+        let ortho = dir - v * dot(dir, v);
+        let axis = normalize(cross(ortho, v));
+        let projected = n - axis * dot(n, axis);
+        let projected_len = length(projected);
+        let cos_n = saturate(dot(projected, v) / max(projected_len, 1e-6));
+        let angle_n = sign(dot(ortho, projected)) * fast_acos(cos_n);
+        // Horizons start at the surface's own tangent plane.
+        let low0 = cos(angle_n + PI_HALF);
+        let low1 = cos(angle_n - PI_HALF);
+        var horizon0 = low0;
+        var horizon1 = low1;
+        for (var step = 0; step < steps; step++) {
+            let s = (f32(step) + shift) / f32(steps);
+            let along = omega * (s * s * reach + 1.0);
+            let at0 = clamp(in.pos.xy + along, vec2<f32>(0.5), size - 0.5);
+            let at1 = clamp(in.pos.xy - along, vec2<f32>(0.5), size - 0.5);
+            let depth0 = textureLoad(tex_a, vec2<i32>(at0), 0).w;
+            let depth1 = textureLoad(tex_a, vec2<i32>(at1), 0).w;
+            if (depth0 > 0.0) {
+                let d = view_pos(at0, depth0) - p;
+                let len = length(d);
+                // Farther than the radius counts for less, then nothing.
+                let near = saturate((radius - len) / (radius * 0.4));
+                horizon0 = max(horizon0, mix(low0, dot(d / len, v), near));
+            }
+            if (depth1 > 0.0) {
+                let d = view_pos(at1, depth1) - p;
+                let len = length(d);
+                let near = saturate((radius - len) / (radius * 0.4));
+                horizon1 = max(horizon1, mix(low1, dot(d / len, v), near));
+            }
+        }
+        // The two horizons as angles from the view, within the hemisphere.
+        let h0 = angle_n + max(-fast_acos(horizon1) - angle_n, -PI_HALF);
+        let h1 = angle_n + min(fast_acos(horizon0) - angle_n, PI_HALF);
+        let sin_n = sin(angle_n);
+        let arc0 = (cos_n + 2.0 * h0 * sin_n - cos(2.0 * h0 - angle_n)) * 0.25;
+        let arc1 = (cos_n + 2.0 * h1 * sin_n - cos(2.0 * h1 - angle_n)) * 0.25;
+        visibility += projected_len * (arc0 + arc1);
+        // The middle of the open arc, weighted as the visibility is.
+        let t0 = (6.0 * sin(h0 - angle_n) - sin(3.0 * h0 - angle_n) + 6.0 * sin(h1 - angle_n) - sin(3.0 * h1 - angle_n)
+            + 16.0 * sin_n - 3.0 * (sin(h0 + angle_n) + sin(h1 + angle_n))) / 12.0;
+        let t1 = (-cos(3.0 * h0 - angle_n) - cos(3.0 * h1 - angle_n) + 8.0 * cos(angle_n)
+            - 3.0 * (cos(h0 + angle_n) + cos(h1 + angle_n))) / 12.0;
+        bent += projected_len * (normalize(ortho) * t0 + v * t1);
+    }
+    visibility /= f32(slices);
+    // As strong as the occlusion it replaces looked.
+    let open = pow(saturate(visibility), post.ao.z);
+    let b = select(n, normalize(bent), dot(bent, bent) > 1e-10);
+    return vec4<f32>(b * 0.5 + 0.5, open);
 }
 
 fn prepass_normal(uv: vec2<f32>) -> vec3<f32> {
@@ -131,9 +198,9 @@ fn prepass_normal(uv: vec2<f32>) -> vec3<f32> {
     return textureLoad(tex_a, at, 0).xyz;
 }
 
-// Smooths the occlusion along one axis without bleeding across edges: taps
-// whose surface faces another way count for less. tex_b is the occlusion.
-// The second pass also flips it into "how open" for the lighting to read.
+// Smooths the occlusion and its bent normal along one axis (variant 0
+// across, 1 down) without bleeding across edges: taps whose surface faces
+// another way count for less. tex_b is the occlusion.
 @fragment
 fn fs_ssao_blur(in: PostOut) -> @location(0) vec4<f32> {
     let texel = 1.0 / vec2<f32>(textureDimensions(tex_b));
@@ -141,7 +208,7 @@ fn fs_ssao_blur(in: PostOut) -> @location(0) vec4<f32> {
     let n0 = prepass_normal(in.uv);
     var offsets = array<f32, 5>(0.0, -1.3846153846, 1.3846153846, -3.2307692308, 3.2307692308);
     var weights = array<f32, 5>(0.2270270270, 0.3162162162, 0.3162162162, 0.0702702703, 0.0702702703);
-    var sum = 0.0;
+    var sum = vec4<f32>(0.0);
     var total = 0.0;
     for (var i = 0; i < 5; i++) {
         let uv = in.uv + delta * offsets[i];
@@ -149,11 +216,10 @@ fn fs_ssao_blur(in: PostOut) -> @location(0) vec4<f32> {
         if (i > 0) {
             w *= smoothstep(0.8, 1.0, dot(n0, prepass_normal(uv)));
         }
-        sum += textureSampleLevel(tex_b, smp, uv, 0.0).r * w;
+        sum += textureSampleLevel(tex_b, smp, uv, 0.0) * w;
         total += w;
     }
-    let ao = sum / total;
-    return vec4<f32>(select(ao, 1.0 - ao, in.variant == 1u), 0.0, 0.0, 1.0);
+    return sum / total;
 }
 
 // ---- bloom ----------------------------------------------------------------

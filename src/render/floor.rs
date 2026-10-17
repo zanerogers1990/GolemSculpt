@@ -78,6 +78,7 @@ pub fn mirrored_uniforms(globals: &Globals, look: &LookUniform) -> (Globals, Loo
     l.env_params[2] = 0.0;
     l.matcap_params[3] = 0.0;
     l.floor[0] = 0.0;
+    l.contact[0] = 0.0;
     (g, l)
 }
 
