@@ -25,9 +25,13 @@ pub struct PostParams {
     pub bloom: [f32; 4],
     /// x intensity * 3 (0 = off), y smoothness * 5
     pub vignette: [f32; 4],
-    /// x tone curve (0 none, 1 neutral, 2 ACES), y grading on,
-    /// z saturation, w contrast (both 1 = unchanged)
+    /// x tone curve (0 none, 1 neutral, 2 ACES, 3 PBR Neutral, 4 AgX),
+    /// y grading on, z saturation, w contrast (both 1 = unchanged)
     pub grade: [f32; 4],
+    /// x what the light is multiplied by before the tone curve (2 to the
+    /// exposure in stops), y 1 when the backdrop is a picked colour (flat or
+    /// gradient), which is shown as picked: no exposure, curve or grading
+    pub exposure: [f32; 4],
 }
 
 struct Targets {

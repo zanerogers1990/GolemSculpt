@@ -424,13 +424,27 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
             theme::slider(ui, "Contrast", &mut look.contrast, -100.0..=100.0, |v| format!("{v:.0}"));
         }
         theme::heading(ui, "Tone Curve");
-        let at = match look.tonemap {
-            Tonemap::None => 0,
-            Tonemap::Neutral => 1,
-            Tonemap::Aces => 2,
+        tip(
+            theme::slider(ui, "Exposure", &mut look.exposure, -4.0..=4.0, |v| format!("{v:+.1} EV")),
+            tips,
+            "Brightens or darkens the whole picture in camera stops: +1 is twice the light.",
+        );
+        // Two rows: the curves for presenting work, then the older ones.
+        let at = Tonemap::ALL.iter().position(|&t| t == look.tonemap).unwrap_or(0);
+        let labels = Tonemap::ALL.map(Tonemap::label);
+        if let Some(i) = choice(ui, &labels[..2], at) {
+            look.tonemap = Tonemap::ALL[i];
+        }
+        if let Some(i) = choice(ui, &labels[2..], at.wrapping_sub(2)) {
+            look.tonemap = Tonemap::ALL[i + 2];
+        }
+        let note = match look.tonemap {
+            Tonemap::PbrNeutral => "Keeps colours true: the one for product shots.",
+            Tonemap::Agx => "Filmic: rolls bright colours off gently.",
+            _ => "",
         };
-        if let Some(i) = choice(ui, &["None", "Neutral", "ACES"], at) {
-            look.tonemap = [Tonemap::None, Tonemap::Neutral, Tonemap::Aces][i];
+        if tips && !note.is_empty() {
+            theme::hint(ui, note);
         }
         ui.add_space(4.0);
         tip(

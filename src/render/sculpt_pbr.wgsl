@@ -141,7 +141,9 @@ fn fs_background(in: BgOut) -> @location(0) vec4<f32> {
         t = pow(t, 1.0 / max(look.bg_params.w, 0.001));
         color = mix(g.bg_bottom.rgb, g.bg_top.rgb, t);
     }
-    return vec4<f32>(color, 1.0);
+    // Alpha 0 marks the backdrop (the model is drawn with 1): a backdrop
+    // colour is shown as it was picked, outside the tone curve (post.wgsl).
+    return vec4<f32>(color, 0.0);
 }
 
 // ---- noise ----------------------------------------------------------------

@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use crate::doc::Options;
-use crate::look::{LookUniform, Tonemap};
+use crate::look::LookUniform;
 use pipelines::{Cull, MeshKey};
 use crate::mesh::Mesh;
 
@@ -1517,14 +1517,17 @@ fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Lo
             0.0,
         ],
         grade: [
-            match settings.tonemap {
-                Tonemap::None => 0.0,
-                Tonemap::Neutral => 1.0,
-                Tonemap::Aces => 2.0,
-            },
+            settings.tonemap.shader_index(),
             if settings.grading { 1.0 } else { 0.0 },
             settings.saturation.clamp(-100.0, 100.0) / 100.0 + 1.0,
             settings.contrast.clamp(-100.0, 100.0) / 100.0 + 1.0,
+        ],
+        exposure: [
+            settings.exposure.clamp(-10.0, 10.0).exp2(),
+            // Flat or gradient: a colour picked to be seen as it is.
+            if look.bg_params[0] < 1.5 { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
         ],
     }
 }

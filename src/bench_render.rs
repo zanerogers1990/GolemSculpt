@@ -574,6 +574,10 @@ fn shots() -> Vec<Shot> {
         shot("lit_world_lights", "matcap=off,follow=off,rotation=40"),
         shot("lit_wire", "matcap=off,wire"),
         shot("matcap_wire", "matcap=on,wire"),
+        shot("lit_tone_old_neutral", "matcap=off,tonemap=neutral"),
+        shot("lit_tone_agx", "matcap=off,tonemap=agx"),
+        shot("lit_tone_aces", "matcap=off,tonemap=aces"),
+        shot("lit_exposure_up", "matcap=off,exposure=1"),
     ];
     for p in look::LURES {
         out.push(shot(&format!("lure_{}", p.id), &format!("matcap=off,finish=lure:{}", p.id)));

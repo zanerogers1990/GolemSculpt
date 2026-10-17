@@ -12,9 +12,12 @@ struct PostU {
     bloom: vec4<f32>,
     // x intensity * 3 (0 = off), y smoothness * 5
     vignette: vec4<f32>,
-    // x tone curve (0 none, 1 neutral, 2 ACES), y grading on,
-    // z saturation, w contrast (both 1 = unchanged)
+    // x tone curve (0 none, 1 neutral, 2 ACES, 3 PBR Neutral, 4 AgX),
+    // y grading on, z saturation, w contrast (both 1 = unchanged)
     grade: vec4<f32>,
+    // x what the light is multiplied by before the tone curve, y 1 when the
+    // backdrop is a picked colour, which is shown as picked
+    exposure: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> post: PostU;
@@ -274,6 +277,51 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
     return clamp(m2 * (a / b), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+// Khronos PBR Neutral: the colour as it is up to near white (less a small
+// offset that keeps the darkest tones from going muddy), then the brightest
+// part rolled off toward white with as little shift of hue as it can.
+fn pbr_neutral_tonemap(c_in: vec3<f32>) -> vec3<f32> {
+    let start = 0.8 - 0.04;
+    let desaturation = 0.15;
+    var c = c_in;
+    let x = min(c.r, min(c.g, c.b));
+    let offset = select(0.04, x - 6.25 * x * x, x < 0.08);
+    c -= offset;
+    let peak = max(c.r, max(c.g, c.b));
+    if (peak < start) {
+        return c;
+    }
+    let d = 1.0 - start;
+    let new_peak = 1.0 - d * d / (peak + d - start);
+    c *= new_peak / peak;
+    let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    return mix(c, vec3<f32>(new_peak), g);
+}
+
+// AgX (Troy Sobotka's, in Benjamin Wrensch's fit): into a log space with
+// the primaries pulled in a little, an S curve there, and back out. Its
+// result is display-encoded; it is returned linear, for the encoding below.
+fn agx_tonemap(c: vec3<f32>) -> vec3<f32> {
+    let inset = mat3x3<f32>(
+        vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
+        vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
+        vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
+    let outset = mat3x3<f32>(
+        vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
+        vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
+        vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
+    let min_ev = -12.47393;
+    let max_ev = 4.026069;
+    var v = inset * max(c, vec3<f32>(1e-10));
+    v = clamp(log2(v), vec3<f32>(min_ev), vec3<f32>(max_ev));
+    v = (v - min_ev) / (max_ev - min_ev);
+    let v2 = v * v;
+    let v4 = v2 * v2;
+    v = 15.5 * v4 * v2 - 40.14 * v4 * v + 31.96 * v4 - 6.868 * v2 * v + 0.4298 * v2 + 0.1191 * v - 0.00232;
+    v = outset * v;
+    return pow(max(v, vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
 fn to_srgb(c: vec3<f32>) -> vec3<f32> {
     let x = max(c, vec3<f32>(0.0));
     let lo = x * 12.92;
@@ -281,10 +329,12 @@ fn to_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, x <= vec3<f32>(0.0031308));
 }
 
-// tex_a is the shaded scene, tex_b the bloom.
+// tex_a is the shaded scene, tex_b the bloom. The scene's alpha is how much
+// of the pixel is model (1) rather than backdrop (0).
 @fragment
 fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
-    var color = textureSampleLevel(tex_a, smp, in.uv, 0.0).rgb;
+    let scene = textureSampleLevel(tex_a, smp, in.uv, 0.0);
+    var color = scene.rgb;
     if (post.bloom.x > 0.0) {
         color += bicubic_b(in.uv) * post.bloom.x;
     }
@@ -292,7 +342,16 @@ fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
         let dist = abs(in.uv - 0.5) * post.vignette.x;
         color *= pow(saturate(1.0 - dot(dist, dist)), post.vignette.y);
     }
-    if (post.grade.x > 1.5) {
+    // A backdrop colour the user picked is shown as picked: a white
+    // background for a product shot stays white whatever the curve does.
+    let as_picked = color;
+    let backdrop = select(0.0, 1.0 - saturate(scene.a), post.exposure.y > 0.5);
+    color *= post.exposure.x;
+    if (post.grade.x > 3.5) {
+        color = agx_tonemap(color);
+    } else if (post.grade.x > 2.5) {
+        color = pbr_neutral_tonemap(color);
+    } else if (post.grade.x > 1.5) {
         color = aces_tonemap(color);
     } else if (post.grade.x > 0.5) {
         color = neutral_tonemap(color);
@@ -305,6 +364,7 @@ fn fs_composite(in: PostOut) -> @location(0) vec4<f32> {
         let luma = dot(color, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
         color = max(vec3<f32>(luma) + post.grade.z * (color - luma), vec3<f32>(0.0));
     }
+    color = mix(color, as_picked, backdrop);
     // The target is a plain 8-bit format: encode here, with a little noise
     // to break up banding in smooth gradients.
     let dither = fract(52.9829189 * fract(dot(in.pos.xy, vec2<f32>(0.06711056, 0.00583715)))) - 0.5;

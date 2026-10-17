@@ -1034,11 +1034,46 @@ impl Finish {
     }
 }
 
+/// The tone curve that brings the scene's light into what a screen shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Tonemap {
     None,
+    /// The Unity pipeline's neutral curve.
     Neutral,
     Aces,
+    /// Khronos PBR Neutral: colours as they are up to near white, only the
+    /// brightest rolled off, so a product's colours come out true. The curve
+    /// new scenes start with.
+    PbrNeutral,
+    /// Troy Sobotka's AgX: a filmic roll-off that keeps bright saturated
+    /// colours from turning flat and garish.
+    Agx,
+}
+
+impl Tonemap {
+    /// As the choice in the Backdrop & Effects card shows them, in its order.
+    pub const ALL: [Tonemap; 5] = [Tonemap::PbrNeutral, Tonemap::Agx, Tonemap::Aces, Tonemap::Neutral, Tonemap::None];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tonemap::PbrNeutral => "PBR Neutral",
+            Tonemap::Agx => "AgX",
+            Tonemap::Aces => "ACES",
+            Tonemap::Neutral => "Neutral",
+            Tonemap::None => "None",
+        }
+    }
+
+    /// The number the post shader switches on (`post.grade.x`).
+    pub fn shader_index(self) -> f32 {
+        match self {
+            Tonemap::None => 0.0,
+            Tonemap::Neutral => 1.0,
+            Tonemap::Aces => 2.0,
+            Tonemap::PbrNeutral => 3.0,
+            Tonemap::Agx => 4.0,
+        }
+    }
 }
 
 // The sliders below are adjustments on top of whichever preset is picked
@@ -1192,6 +1227,10 @@ pub struct Look {
     pub grading: bool,
     pub saturation: f32,
     pub contrast: f32,
+    /// Brightness of the whole picture in photographic stops: +1 doubles
+    /// the light, -1 halves it. Applied before the tone curve.
+    #[serde(default)]
+    pub exposure: f32,
     pub tonemap: Tonemap,
     /// Blur what is nearer or farther than the focus distance, as a camera
     /// lens does.
@@ -1305,7 +1344,8 @@ impl Default for Look {
             grading: false,
             saturation: 0.0,
             contrast: 0.0,
-            tonemap: Tonemap::Neutral,
+            exposure: 0.0,
+            tonemap: Tonemap::PbrNeutral,
             // Off, at the Unity pipeline's own starting focus and aperture.
             depth_of_field: false,
             focus_distance: 10.0,
@@ -1961,7 +2001,7 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// Keys: `matcap`, `panels`, `gradient`, `flat`, `five`, `follow`, `shadows`, `ao`,
 /// `bloom`, `vignette`, `hdribg`, `dof` (on / off); `finish` (none, lure, metal,
 /// clay, wood, optionally `:preset`); `glow` (off or a preset); `light` (a
-/// preset); `tonemap` (none, neutral, aces); `brightness`, `rotation`,
+/// preset); `tonemap` (none, neutral, aces, pbr, agx); `brightness`, `rotation`, `exposure`,
 /// `metallic`, `smoothness`, `normal`, `focus`, `aperture`, `softness`
 /// (numbers); `shadowmap`, `reflections` (the shadow map's and the
 /// reflection cube's sides); `hdri` (a file).
@@ -1994,6 +2034,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "focus" => look.focus_distance = number.unwrap_or(10.0),
             "aperture" => look.aperture = number.unwrap_or(5.6),
             "brightness" => look.brightness = number.unwrap_or(1.0),
+            "exposure" => look.exposure = number.unwrap_or(0.0),
             "rotation" => look.rotation = number.unwrap_or(0.0),
             "metallic" => look.metallic = number.unwrap_or(0.0),
             "smoothness" => opts.smoothness = number.unwrap_or(0.4),
@@ -2003,6 +2044,8 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
                 look.tonemap = match value {
                     "none" => Tonemap::None,
                     "aces" => Tonemap::Aces,
+                    "pbr" => Tonemap::PbrNeutral,
+                    "agx" => Tonemap::Agx,
                     _ => Tonemap::Neutral,
                 }
             }
@@ -2100,6 +2143,20 @@ mod tests {
         let coarse = look.uniform(&Frame { shadow_size: 512, ..frame }).shadow_params;
         assert_eq!(fine[0] * 4.0, coarse[0]);
         assert!(fine[1] < coarse[1] && fine[2] < coarse[2]);
+    }
+
+    #[test]
+    fn new_scenes_get_pbr_neutral_and_saved_ones_keep_their_curve() {
+        assert_eq!(Look::default().tonemap, Tonemap::PbrNeutral);
+        assert_eq!(Look::default().exposure, 0.0);
+        // A scene from before: its curve as it was, and no change of exposure.
+        let saved = serde_json::json!({ "tonemap": "Neutral", "bloom": false });
+        let look: Look = crate::io::read_over(&Look::default(), &saved).unwrap();
+        assert_eq!((look.tonemap, look.exposure, look.bloom), (Tonemap::Neutral, 0.0, false));
+        // Each curve has its own number in the shader and its own place in the card.
+        let mut numbers: Vec<f32> = Tonemap::ALL.iter().map(|t| t.shader_index()).collect();
+        numbers.sort_by(f32::total_cmp);
+        assert_eq!(numbers, [0.0, 1.0, 2.0, 3.0, 4.0]);
     }
 
     #[test]
