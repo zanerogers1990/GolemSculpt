@@ -161,9 +161,8 @@ impl Running {
     /// The demo scene's cube (which has two instances) is given a mirrored
     /// column of copies by the Array tool, and then its centre is stood 400
     /// of its own lengths away along X without moving anything, and Mirror X
-    /// is ticked. A Remesh at the resolution the app starts with is refused,
-    /// and the line says what to do. Set Origin to Mesh is pressed; then
-    /// Undo, Redo, and the same Remesh again, which now runs. At each point
+    /// is ticked. Set Origin to Mesh is pressed; then Undo, Redo, and a
+    /// Remesh, which runs (brush symmetry never mirrors one). At each point
     /// everything drawn for the cube (the cube, its instances, its mirror
     /// copy, every copy of its array on both sides) is measured against where
     /// it was at the start. Prints the status lines and a line per check
@@ -203,11 +202,6 @@ impl Running {
         checks.push(("standing the centre far off moved nothing", same(self)));
         let placed_far = self.doc.scene.active().placement();
 
-        self.act(Action::Remesh);
-        println!("{}", self.ui.status.0);
-        let refused = self.ui.status.1 == crate::ui::theme::ERROR && self.ui.status.0.contains("Set Origin to Mesh");
-        checks.push(("a mirrored Remesh is refused, and the line names Set Origin to Mesh", refused));
-
         let steps = self.doc.history.steps().0;
         self.act(Action::SetOriginToMesh);
         println!("{}", self.ui.status.0);
@@ -233,7 +227,7 @@ impl Running {
         println!("{}", self.ui.status.0);
         self.tools_frame();
         let rebuilt = self.ui.status.1 == crate::ui::theme::OK && self.ui.status.0.starts_with("Remeshed to ");
-        checks.push(("the mirrored Remesh now runs at the default resolution", rebuilt));
+        checks.push(("Remesh runs at the default resolution, Mirror X on or not", rebuilt));
         for (what, ok) in checks {
             println!("{} {what}", if ok { "ok  " } else { "FAIL" });
         }

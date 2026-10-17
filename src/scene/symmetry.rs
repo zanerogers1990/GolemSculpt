@@ -104,14 +104,6 @@ impl Symmetry {
         (self.space == Space::World).then(|| object.placement())
     }
 
-    /// The mirror planes a rebuilt mesh can be made exactly symmetric across
-    /// (a remesh, a boolean): the ticked ones, while they are the object's
-    /// own, which is where the lattice a mesh is rebuilt on is centred. The
-    /// world's planes cut the object anywhere, so there it is none.
-    pub fn exact_mirrors(&self) -> [bool; 3] {
-        if self.space == Space::Local { self.mirror } else { [false; 3] }
-    }
-
     /// What the Symmetry card says in its header: "X + Z + Radial 8", with
     /// "(World)" after it when that is where it sits, or "Off".
     pub fn summary(&self) -> String {

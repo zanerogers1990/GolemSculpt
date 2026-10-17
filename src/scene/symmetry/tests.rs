@@ -571,9 +571,6 @@ fn the_card_header_says_where_a_symmetry_sits() {
     let world = Symmetry { space: Space::World, mirror: [true, false, false], ..radial(6, RadialAxis::Z) };
     assert_eq!(world.summary(), "X + Radial 6 (World)");
     assert_eq!(Symmetry { space: Space::World, ..Symmetry::default() }.summary(), "Off", "nothing is on to be anywhere");
-    // Only a symmetry of the object's own can be made exact by a remesh.
-    assert_eq!(mirror(true, false, true).exact_mirrors(), [true, false, true]);
-    assert_eq!(world.exact_mirrors(), [false; 3]);
 }
 
 // ------------------------------------------------------------ files

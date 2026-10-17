@@ -132,6 +132,12 @@ impl Notes {
     }
 }
 
+/// The mirror planes Remesh, Join with remesh and the booleans rebuild
+/// across: none. They rebuild the whole model as it is. A mirrored rebuild
+/// keeps one side and throws the other away, so the brush symmetry never
+/// decides one; only Cut & Mirror and Make Symmetric say they do that.
+pub const AS_IT_IS: [bool; 3] = [false; 3];
+
 pub fn voxel_remesh(mesh: &Mesh, resolution: u32, symmetry: [bool; 3]) -> Result<Mesh, String> {
     voxel_remesh_noted(mesh, resolution, symmetry).map(|(rebuilt, _)| rebuilt)
 }
@@ -226,6 +232,36 @@ mod tests {
         assert_eq!(notes.after_remesh(), " The model had holes, which were closed over flat.");
         // And closed they are.
         assert!(sculpt_geom::edge_census(rebuilt.vertex_count(), &rebuilt.indices).is_closed());
+    }
+
+    /// A ball with a lump on its -X side only: one door, on one side.
+    fn one_door() -> Mesh {
+        let ball = primitives::build(Primitive::Sphere, 20_000, 0.5);
+        let centre = Vec3::new(-0.45, 0.0, 0.0);
+        let lump = |p: Vec3| 0.15 * (-(p - centre).length_squared() / (2.0 * 0.12 * 0.12)).exp();
+        Mesh::new(ball.positions.iter().map(|&p| p + p.normalize() * lump(p)).collect(), ball.indices.clone(), None)
+    }
+
+    /// How far the model reaches along -X and along +X.
+    fn reach(mesh: &Mesh) -> (f32, f32) {
+        mesh.positions.iter().fold((0.0, 0.0), |(low, high), p| (low.max(-p.x), high.max(p.x)))
+    }
+
+    #[test]
+    fn the_rebuild_the_app_runs_keeps_both_sides_as_they_are() {
+        let door = one_door();
+        let (left, right) = reach(&door);
+        assert!(left > right + 0.1, "the door stands out on -X: {left} {right}");
+
+        let (kept, _) = voxel_remesh_noted(&door, 96, AS_IT_IS).unwrap();
+        let (kept_left, kept_right) = reach(&kept);
+        assert!((kept_left - left).abs() < 0.03 && (kept_right - right).abs() < 0.03, "{kept_left} {kept_right}");
+
+        // What a mirrored rebuild does, and why Mirror X must never reach one:
+        // the -X side becomes a copy of +X, and the door is gone.
+        let mirrored = voxel_remesh(&door, 96, [true, false, false]).unwrap();
+        let (gone_left, gone_right) = reach(&mirrored);
+        assert!((gone_left - gone_right).abs() < 0.01 && gone_left < left - 0.1, "{gone_left} {gone_right}");
     }
 
     /// Nine spheres in one place: nine times the surface in one sphere's

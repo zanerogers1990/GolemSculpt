@@ -451,7 +451,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         if tip(
             theme::button(ui, ui.available_width(), "Remesh", style),
             tips,
-            "Rebuilds the surface with even triangles at this resolution. Use it after big shape changes, or to add detail (R).",
+            "Rebuilds the surface with even triangles at this resolution. It keeps both sides as they are, whatever the symmetry. Use it after big shape changes, or to add detail (R).",
         )
         .clicked()
         {

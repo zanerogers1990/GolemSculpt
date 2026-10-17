@@ -558,8 +558,7 @@ points on the plane.
   is chosen, as in the Unity app, and with World chosen a line under the
   buttons says so.
 - The kept side is left as it was, triangle for triangle, up to the plane;
-  only the triangles the plane runs through are cut. (A mirrored Remesh also
-  makes a model symmetric, by rebuilding all of it.)
+  only the triangles the plane runs through are cut.
 - The mask comes across, mirrored with the surface. Hidden parts are cut
   with the rest and everything shows again afterwards, and a quad-remeshed
   object comes out as triangles, as after anything that rebuilds a mesh.
@@ -606,42 +605,14 @@ last bit, as a Local one is; across a plane it is turned against, the two
 sides agree to rounding (a few ten-millionths of the model's size in the
 tests). On an object scaled unevenly and turned as well, the plane still
 passes through the right place but is as tilted as a rigid mirror image of a
-stretched object must be (the Unity app's limit too). A **Remesh**, a
-**Join** with remesh and the booleans are made exactly symmetric across the
-mirror planes of a Local symmetry only: the world's planes cut an object
-anywhere.
+stretched object must be (the Unity app's limit too).
 
-**Far from its own mirror plane.** A mirrored rebuild works on a grid that
-reaches from the model to its mirror image. That is nothing for a model that
-sits on its plane or beside it, and enormous for one a long way off: a piece
-split off a figure keeps the figure's centre and its Mirror X, so a rivet
-from the figure's hand is many times its own size from that plane. Such a
-rebuild is not attempted (two planes at once used to ask for more than
-10 GB). The status line names the object, says how far off it is, and what to
-do: "Turn the X mirror off for this, lower the resolution to 740 or less, or
-move its centre onto it with Set Origin to Mesh." Any of the three works, and
-the number offered is one that is then accepted; nothing is changed until one
-is done. They are not the same thing, though:
-
-- Turning the mirror off rebuilds the piece as it is.
-- A lower resolution rebuilds it mirrored across the figure's plane, far
-  away, which leaves the piece itself as it is and coarser.
-- **Set Origin to Mesh** (Objects card, see Objects) puts the piece's centre
-  in the middle of the piece without moving it. Its own mirror plane then
-  runs through its own middle, so the same rebuild runs at any resolution
-  the piece alone could be rebuilt at (the 128 the app starts with, say),
-  and makes the piece symmetric about its own middle: right for a rivet, a
-  button or a horn that should be its own mirror image, and not what is
-  wanted for a piece that was only ever one half of a pair.
-
-A mirrored rebuild keeps the half of the model on the positive side of each
-mirror plane and reflects it. A piece that lies wholly on the other side (the
-rivet from the figure's other hand) has no such half, at any resolution, so
-it is never told to lower the resolution: the line says it "lies wholly on
-the far side of its mirror plane, so its mirror image is empty. Turn the
-mirror off for this, move the model across the plane, or move its centre
-onto it with Set Origin to Mesh." The booleans say the same of the object
-that is kept.
+**Rebuilds never mirror.** A **Remesh**, a **Join** with remesh and the
+booleans rebuild the whole model as it is, whatever the Symmetry card says.
+The brush mirrors are for sculpting; they never decide that one side of a
+model is thrown away and replaced by a copy of the other. (They used to,
+and a door sculpted on one side came out as two.) To make a model
+symmetric, use **Cut & Mirror** or **Make Symmetric**, which say so.
 
 ## Dynamic topology
 
@@ -2904,7 +2875,7 @@ sculpt.exe --screenshot out.png --demo --decimate 8000 --look "wire=on"   # the 
 sculpt.exe --screenshot out.png --demo --demo-decimate   # Decimate worked through its button, its question about symmetry, Undo, Redo, Cancel and a model edited under it; prints the status lines and a line per check (SCULPT_DEMO_DECIMATE=ask stops at the question, for a picture of it)
 sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances
-sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more; apart | aside | behind ask for a union and mirrored remeshes that are not started, to see what the status line says; origin stands the centre of the cube, which has two instances, a live mirror and a live array, 400 lengths off, then presses Remesh (refused), Set Origin to Mesh, Undo, Redo and Remesh again, printing the status lines and a line per check; add --demo-ui "float=Objects@440:20" --size 1600x1400 to see the button)
+sculpt.exe --screenshot out.png --demo-select  # the same with three objects selected (SCULPT_DEMO_SELECT=ask | local | subtract | union | intersect | play for more; apart asks for a union that is not started, to see what the status line says; origin stands the centre of the cube, which has two instances, a live mirror and a live array, 400 lengths off, then presses Set Origin to Mesh, Undo, Redo and Remesh, printing the status lines and a line per check; add --demo-ui "float=Objects@440:20" --size 1600x1400 to see the button)
 sculpt.exe --screenshot out.png --demo --look "panels=off,matcap=off,finish=metal:rust,light=moody"
 sculpt.exe --screenshot out.png --demo --demo-matcap big.png   # a picture imported as a matcap by the routine under Import Matcap, with no file box: any size (it is copied into assets/matcaps/Imported)
 sculpt.exe --screenshot out.png --demo-spheres rig   # SSphere figure: rig | preview | skin | back | again | attached | followed | followed-skin | wheel | new | play | gizmo | gizmo-held | gizmo-play

@@ -384,7 +384,7 @@ mod tests {
         placed(&mut scene, id, Vec3::new(-2.0, 1.0, 0.0), Quat::from_rotation_z(0.5), Vec3::splat(0.01));
         scene.set_symmetry(id, Symmetry { mirror, ..Symmetry::default() });
 
-        let refused = voxel_remesh(&mesh, resolution, scene.active_symmetry().exact_mirrors()).err().expect("too far off");
+        let refused = voxel_remesh(&mesh, resolution, mirror).err().expect("too far off");
         assert!(refused.contains("times its own size away from its X and Y mirror planes"), "{refused}");
         assert!(refused.contains("Set Origin to Mesh"), "the line says what would let it through: {refused}");
 
@@ -393,9 +393,9 @@ mod tests {
         // The rivet is a hundredth of a unit across: within a thousandth of that.
         let now = world_points(&scene, &mesh, id, scene.active().matrix());
         assert!(same_places(&now, &world, 1e-5), "the rivet has not moved");
-        assert_eq!(scene.active_symmetry().exact_mirrors(), mirror, "its mirrors are still on");
+        assert_eq!(scene.active_symmetry().mirror, mirror, "its mirrors are still on");
 
-        let rebuilt = voxel_remesh(&mesh, resolution, scene.active_symmetry().exact_mirrors()).expect("it fits now");
+        let rebuilt = voxel_remesh(&mesh, resolution, mirror).expect("it fits now");
         assert!(crate::printable::census(&rebuilt).is_closed());
         let places: std::collections::HashSet<[u32; 3]> =
             rebuilt.positions.iter().map(|&p| (p + Vec3::ZERO).to_array().map(f32::to_bits)).collect();

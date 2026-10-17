@@ -197,9 +197,8 @@ impl Running {
     pub(super) fn join_selected(&mut self, rebuild: bool) {
         let started = Instant::now();
         let doc = &mut self.doc;
-        // The object the join keeps is the one whose symmetry the result has.
-        let mirrors = doc.scene.active_symmetry().exact_mirrors();
-        let rebuild = rebuild.then(|| (doc.opts.remesh_resolution as u32, mirrors));
+        // Rebuilt as it is, whatever the brush symmetry.
+        let rebuild = rebuild.then(|| (doc.opts.remesh_resolution as u32, remesh::AS_IT_IS));
         let Some(joined) = join(&mut doc.scene, &mut doc.mesh, &mut doc.history, rebuild) else {
             self.status("Join needs two or more objects selected. Ctrl + click rows in the list to add them.", false);
             return;
@@ -231,11 +230,8 @@ impl Running {
     pub(super) fn boolean_selected(&mut self, op: BooleanOp, resolution: u32, delete: bool) {
         let started = Instant::now();
         let doc = &mut self.doc;
-        // Mirror-exact across the planes strokes on the kept object are
-        // mirrored across, where the solids are: the same promise a remesh
-        // makes.
-        let mirror = doc.scene.active_symmetry().exact_mirrors();
-        let settings = BooleanSettings { mirror, ..BooleanSettings::new(resolution) };
+        // Rebuilt as it is, whatever the brush symmetry.
+        let settings = BooleanSettings { mirror: remesh::AS_IT_IS, ..BooleanSettings::new(resolution) };
         let others = if delete { Others::Deleted } else { Others::Hidden };
         let made = match boolean(&mut doc.scene, &mut doc.mesh, &mut doc.history, op, &settings, others) {
             Ok(made) => made,
@@ -410,8 +406,8 @@ impl Running {
     /// variable `SCULPT_DEMO_SELECT` asks for more: `ask` also presses Delete,
     /// to show the question that asks, `local` turns Local View on for the
     /// three, `subtract`, `union` and `intersect` show that boolean of the
-    /// cube and the sphere, `apart`, `aside` and `behind` ask for a union and
-    /// a remesh that will not be started (`demo_too_big`), `origin` moves the
+    /// cube and the sphere, `apart` asks for a union that will not be
+    /// started (`demo_too_big`), `origin` moves the
     /// centre of a piece that is far from it (`origin_demo`, app/origin.rs),
     /// and `play` runs `selection_play` first.
     pub(super) fn demo_select(&mut self) {
@@ -437,41 +433,26 @@ impl Running {
             "subtract" => self.demo_boolean(BooleanOp::Subtract),
             "union" => self.demo_boolean(BooleanOp::Union),
             "intersect" => self.demo_boolean(BooleanOp::Intersect),
-            "apart" | "aside" | "behind" => self.demo_too_big(&extra),
+            "apart" => self.demo_too_big(),
             "origin" => self.origin_demo(),
             _ => {}
         }
     }
 
     /// A job the engine will not start, at the highest resolution the sliders
-    /// have, to see what the status line says of it. `apart`: the demo
-    /// scene's cube united with its sphere sixty cube-lengths away on two
-    /// axes. `aside`: the cube's own mesh moved forty lengths off its X
-    /// mirror plane (as a piece split off a figure lies off the figure's),
-    /// and remeshed there with Mirror X on. `behind`: the same on the other
-    /// side of the plane, where a mirrored rebuild would keep nothing.
-    fn demo_too_big(&mut self, what: &str) {
-        let apart = what == "apart";
+    /// have, to see what the status line says of it: the demo scene's cube
+    /// united with its sphere sixty cube-lengths away on two axes.
+    fn demo_too_big(&mut self) {
         let named = |app: &Running, name: &str| app.doc.scene.objects.iter().find(|o| o.name == name).map(|o| o.id);
         let (Some(cube), Some(ball)) = (named(self, "Cube"), named(self, "Sphere (1)")) else { return };
         self.act(Action::SelectObject(cube));
         let across = self.doc.mesh.bounds().size().max_element();
-        if apart {
-            let far = self.doc.scene.active().position + Vec3::new(60.0, 60.0, 0.0) * across;
-            if let Some(o) = self.doc.scene.get_mut(ball) {
-                o.position = far;
-            }
-            self.act(Action::SelectAlso(ball));
-            self.act(Action::Boolean { op: BooleanOp::Union, resolution: 1024, delete: false });
-        } else {
-            let side = if what == "behind" { -1.0 } else { 1.0 };
-            let aside = |p: &Vec3| *p + Vec3::X * 40.0 * across * side;
-            let positions = self.doc.mesh.positions.iter().map(aside).collect();
-            self.replace_mesh(Mesh::new(positions, self.doc.mesh.indices.clone(), None), true);
-            self.doc.edit_symmetry(|symmetry| symmetry.mirror = [true, false, false]);
-            self.doc.opts.remesh_resolution = 1024.0;
-            self.act(Action::Remesh);
+        let far = self.doc.scene.active().position + Vec3::new(60.0, 60.0, 0.0) * across;
+        if let Some(o) = self.doc.scene.get_mut(ball) {
+            o.position = far;
         }
+        self.act(Action::SelectAlso(ball));
+        self.act(Action::Boolean { op: BooleanOp::Union, resolution: 1024, delete: false });
     }
 
     /// The demo scene's sphere moved onto the near top corner of its cube and

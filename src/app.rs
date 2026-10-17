@@ -1352,16 +1352,15 @@ impl Running {
             Action::Remesh => {
                 let t = Instant::now();
                 let res = self.doc.opts.remesh_resolution as u32;
-                // Exactly symmetric across the object's own mirror planes.
-                let mirrors = self.doc.scene.active_symmetry().exact_mirrors();
-                match remesh::voxel_remesh_noted(&self.doc.mesh, res, mirrors) {
+                // The whole model as it is, whatever the brush symmetry.
+                match remesh::voxel_remesh_noted(&self.doc.mesh, res, remesh::AS_IT_IS) {
                     Ok((mesh, notes)) => {
                         let tris = mesh.triangle_count();
                         self.replace_mesh(mesh, true);
                         self.toast("Remesh");
                         let ms = t.elapsed().as_secs_f64() * 1000.0;
                         // What it did about holes the model had, then whether the result is closed.
-                        let text = format!("Remeshed to {tris} triangles in {ms:.0} ms.{}", notes.after_remesh());
+                        let text = format!("Remeshed to {tris} triangles in {ms:.0} ms, both sides as they were.{}", notes.after_remesh());
                         self.status_checked(text, Cure::OtherResolution);
                     }
                     Err(e) => {
