@@ -108,8 +108,10 @@ fn fast_acos(x: f32) -> f32 {
     return select(3.1415927 - r, r, x >= 0.0);
 }
 
-// What the occlusion writes where there is no surface: open, facing the eye.
-const OPEN: vec4<f32> = vec4<f32>(0.5, 0.5, 0.0, 1.0);
+// What the occlusion writes where there is no surface, or none it can
+// measure: open, with no bent normal (0.5 is zero), so the surface shader
+// keeps the surface's own.
+const OPEN: vec4<f32> = vec4<f32>(0.5, 0.5, 0.5, 1.0);
 
 @fragment
 fn fs_ssao(in: PostOut) -> @location(0) vec4<f32> {

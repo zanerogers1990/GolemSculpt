@@ -546,7 +546,8 @@ impl Running {
     /// with nothing over the model: once, or refined toward `samples`
     /// (render/refine.rs), at most `draws` of them and only while `budget`
     /// lasts. With `transparent` the backdrop is left out. Gives back
-    /// whether the picture now has all its samples, and how many it drew.
+    /// whether the picture now has all its samples, how many it drew, and
+    /// how many it holds (fewer, if what it shows changed meanwhile).
     pub(super) fn draw_capture(
         &mut self,
         target: &mut Target,
@@ -555,7 +556,7 @@ impl Running {
         transparent: bool,
         draws: u32,
         budget: Duration,
-    ) -> (bool, u32) {
+    ) -> (bool, u32, u32) {
         let view = self.capture_view(&camera, target.size);
         // The frame's inputs are worked out from the app's own view and
         // camera, so those are lent this shot for the moment.
@@ -603,12 +604,13 @@ impl Running {
                 }
             }
         }
+        let shown = self.renderer.samples_shown();
         self.renderer.swap_side(&mut target.side);
         self.renderer.overlays = !self.doc.opts.clean_view;
         self.renderer.picture = false;
         self.renderer.transparent = false;
         self.renderer.refine_to = refine_to;
-        (done, drawn)
+        (done, drawn, shown)
     }
 
     /// Whether the graphics card can hold a picture this large.

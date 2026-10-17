@@ -698,14 +698,27 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
     // kept on it; reflections dimmed as much as the crease hides them and
     // more where they point into it.
     let sky = normalize(n + (s.bent - s.smooth_n));
-    let hidden = specular_occlusion(nv, ao, a) * reflection_in_open_sky(s.ao, s.bent, r, a);
+    var hidden = specular_occlusion(nv, ao, a);
+    let moving = look.shadow_params.w > 0.5;
+    if (!moving && look.env_params.z > 0.5) {
+        // The finer test, once the picture holds still: how much of the lobe
+        // the open sky holds, against how much a surface with nothing round
+        // it would see (the table already counts what falls below its
+        // horizon, so an open surface keeps all of its reflection).
+        let unhidden = reflection_in_open_sky(1.0, s.smooth_n, r, a);
+        hidden *= saturate(reflection_in_open_sky(s.ao, s.bent, r, a) / max(unhidden, 1e-3));
+    }
     var color = ambient(sky) * diffuse * (1.0 - reflected) * ao
         + reflection * reflected * energy * (hidden * horizon * horizon);
 
     // Direct. Diffuse keeps what the surface does not reflect at normal
     // incidence (the Unity pipeline's 0.96 for a dielectric).
     let direct_diffuse = diffuse * (1.0 - 0.04);
-    let lobe = ltc_inverse(nv, perceptual_roughness);
+    // The softboxes' lobe, read only when their highlights are integrated.
+    var lobe = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    if (!moving) {
+        lobe = ltc_inverse(nv, perceptual_roughness);
+    }
     let count = light_count();
     for (var i = 0; i < count; i++) {
         let light = get_light(i, s);
@@ -724,7 +737,7 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
             var lit = direct_diffuse * (saturate(dot(n, to_light) * inverseSqrt(far)) * falloff);
             let height = dot(n, to_light);
             let reach = abs(dot(n, side)) + abs(dot(n, up));
-            if (look.shadow_params.w > 0.5) {
+            if (moving) {
                 // While the picture changes every frame (an orbit, a stroke):
                 // the highlight of the softbox's point nearest the reflected
                 // view, the lobe widened by the softbox's size (Karis). Close
@@ -1604,7 +1617,7 @@ fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
     let count = light_count();
     for (var i = 0; i < count; i++) {
         let light = get_light(i, s);
-        glow += light.color * pow(saturate(dot(bent, -light.dir)), spread);
+        glow += light.color * pow(saturate(dot(bent, light.dir)), spread);
     }
     var m = material(s, tint * haze);
     m.smoothness = params.v[1].y;

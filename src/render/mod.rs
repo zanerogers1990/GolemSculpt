@@ -914,6 +914,11 @@ impl Renderer {
         self.refine_pending
     }
 
+    /// How many samples the picture last drawn into the current target holds.
+    pub fn samples_shown(&self) -> u32 {
+        self.targets.as_ref().and_then(|t| t.refine.as_ref()).map_or(1, refine::Buffers::shown)
+    }
+
     /// Moves whenever any mesh's buffers are sent again or let go: the
     /// meshes the picture was drawn from have changed.
     pub fn uploads(&self) -> u64 {
@@ -1107,15 +1112,6 @@ impl Renderer {
     ) {
         self.ensure_targets(gpu, size);
         self.ensure_shadow(gpu, &opts.quality);
-        // With no backdrop, the backdrop is flat black and marked as not
-        // model, so the model's smoothed outline blends with nothing.
-        let (mut bare_globals, mut bare_look) = (*globals, *look);
-        if self.transparent {
-            bare_globals.bg_bottom = [0.0; 4];
-            bare_globals.bg_top = [0.0; 4];
-            bare_look.bg_params[0] = 0.0;
-        }
-        let (globals, look) = (&bare_globals, &bare_look);
 
         // What this frame needs. A matcap carries its own lighting, so none
         // of the lighting's helper passes run under one.
@@ -1234,7 +1230,16 @@ impl Renderer {
         }
         self.env.set_size(gpu, opts.quality.reflection_size());
         if let Some(source) = &source {
-            self.env.update(gpu, encoder, source);
+            if reflect && !self.env.is_current(source) {
+                // The floor's reflection goes out as a batch of its own
+                // before the frame's (below), and reflects the cube too: the
+                // cube goes out before it.
+                let mut first = gpu.device.create_command_encoder(&Default::default());
+                self.env.update(gpu, &mut first, source);
+                gpu.queue.submit([first.finish()]);
+            } else {
+                self.env.update(gpu, encoder, source);
+            }
         }
 
         let mut look = *look;
@@ -1448,6 +1453,13 @@ impl Renderer {
         }
 
         {
+            // With no backdrop, the picture starts as black marked as not
+            // model, so the model's smoothed outline blends with nothing; the
+            // reflections and the resin still see the backdrop.
+            let (clear, backdrop) = match self.transparent {
+                true => (wgpu::Color::TRANSPARENT, false),
+                false => (wgpu::Color::BLACK, true),
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1459,7 +1471,7 @@ impl Renderer {
                         _ => &targets.scene,
                     }),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Discard,
                     },
                 })],
@@ -1467,8 +1479,10 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, bind_main, &[]);
-            pass.set_pipeline(&self.pipe_background);
-            pass.draw(0..3, 0..1);
+            if backdrop {
+                pass.set_pipeline(&self.pipe_background);
+                pass.draw(0..3, 0..1);
+            }
             for (cull, with_paint, pipeline) in &mesh_pipes {
                 pass.set_pipeline(pipeline);
                 if let (true, Some(bind)) = (*with_paint, &paint_bind) {
@@ -1604,6 +1618,7 @@ impl Renderer {
         key.push(&[
             flag(settings.hdri.active()),
             settings.hdri.ambient,
+            flag(settings.ambient_occlusion),
             flag(settings.depth_of_field),
             settings.focus_distance,
             settings.aperture,
@@ -1617,9 +1632,12 @@ impl Renderer {
             self.forced,
             self.uploads.count(),
             self.env.generation as u64,
-            self.flash.stamp.count(),
-            self.spheres.stamp.count(),
-            self.previews.stamp.count(),
+            // Pick flashes and previews show only with the overlays.
+            if self.overlays { self.flash.stamp.count() } else { 0 },
+            // The SSpheres by what they show, not by how often it was sent:
+            // a render's view and the window's take turns sending theirs.
+            self.spheres.stamp.content(),
+            if self.overlays { self.previews.stamp.count() } else { 0 },
             self.wire.stamp.count(),
             self.groups.stamp.count(),
             self.painted.stamp.count(),

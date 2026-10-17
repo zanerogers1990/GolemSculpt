@@ -365,6 +365,11 @@ impl Env {
         out
     }
 
+    /// Whether the cube is drawn from `params` already.
+    pub fn is_current(&self, params: &EnvParams) -> bool {
+        self.baked.as_ref() == Some(params)
+    }
+
     /// Redraws the cube if what it is drawn from changed.
     pub fn update(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, params: &EnvParams) {
         if self.baked.as_ref() == Some(params) {
