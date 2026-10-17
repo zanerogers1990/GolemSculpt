@@ -634,6 +634,20 @@ fn shots() -> Vec<Shot> {
     out.push(Shot { groups: true, open: true, ..shot("groups_open", "matcap=off") });
     out.push(Shot { ortho: true, ..shot("ortho_lit", "matcap=off") });
     out.push(Shot { ortho: true, ..shot("ortho_clay", "matcap=off,finish=clay") });
+    // Ray traced (render/ray.rs), refined as a render is.
+    for (name, spec) in [
+        ("lit", "matcap=off"),
+        ("metal", "matcap=off,finish=metal"),
+        ("clay", "matcap=off,finish=clay"),
+        ("lure", "matcap=off,finish=lure"),
+        ("wood", "matcap=off,finish=wood"),
+        ("resin", "matcap=off,finish=resin:clear,gradient"),
+    ] {
+        out.push(shot(&format!("{name}_refined"), &format!("{spec},refine,samples=128")));
+        out.push(shot(&format!("{name}_rays"), &format!("{spec},refine,samples=128,rays")));
+    }
+    out.push(open("open_lit_backfaces_rays", "matcap=off,refine,samples=128,rays", true));
+    out.push(Shot { ortho: true, ..shot("ortho_lit_rays", "matcap=off,refine,samples=128,rays") });
     out
 }
 
@@ -661,7 +675,10 @@ pub fn run_shots(folder: &Path) {
             let mirror = Mat4::from_translation(Vec3::new(2.6, 0.0, 0.0)) * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
             stage.objects.push((1, mirror * Mat4::from_rotation_y(0.6)));
             stage.opts = unrefined();
-            look::apply_spec(&mut stage.opts, &shot.spec, 2.0);
+            // Ray traced: not a look setting but how a render is drawn.
+            stage.renderer.ray_traced = shot.spec.split(',').any(|part| part == "rays");
+            let spec = shot.spec.split(',').filter(|part| *part != "rays").collect::<Vec<_>>().join(",");
+            look::apply_spec(&mut stage.opts, &spec, 2.0);
             set_backfaces(&mut stage.opts, shot.backfaces);
             stage.renderer.groups.enabled = shot.groups;
             stage.camera.ortho = shot.ortho;
@@ -689,6 +706,13 @@ pub fn run_shots(folder: &Path) {
                 stage.renderer.flash.show(gpu, &globals.view_proj, &pulses);
             }
             stage.draw(gpu);
+            // A refined picture: drawn again until it has all its samples.
+            for _ in 0..1024 {
+                if !stage.renderer.refining() {
+                    break;
+                }
+                stage.draw(gpu);
+            }
             let picture = crate::render::read_texture(gpu, &stage.target);
             let path = folder.join(format!("{}.png", shot.name));
             match picture.save(&path) {

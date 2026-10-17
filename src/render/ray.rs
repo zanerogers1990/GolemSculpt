@@ -66,7 +66,8 @@ pub fn shader_source() -> String {
 pub struct HitMaterial {
     /// rgb colour (linear), a metallic.
     pub color: [f32; 4],
-    /// x smoothness.
+    /// x smoothness, y how much light passes through it (resin), tinted by
+    /// the colour.
     pub params: [f32; 4],
 }
 
@@ -77,6 +78,7 @@ pub struct HitMaterial {
 pub fn hit_material(look: &Look, base: [f32; 4]) -> HitMaterial {
     let mix = |a: look::Rgb, b: look::Rgb| [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5];
     let pick = |i: usize, len: usize| i.min(len - 1);
+    let mut through = 0.0;
     let (color, metallic, smoothness) = match look.finish {
         Finish::None => ([base[0], base[1], base[2]], look.metallic, base[3]),
         Finish::LurePlastic => {
@@ -96,15 +98,15 @@ pub fn hit_material(look: &Look, base: [f32; 4]) -> HitMaterial {
             (look::linear(mix(p.early, p.late)), 0.0, p.smoothness)
         }
         Finish::Resin => {
-            // Light mostly passes through: as a surface, a dim glossy tint.
+            // What lies beyond shows through it, tinted, as much as it is not milky.
             let p = &look::RESINS[pick(look.resin.preset, look::RESINS.len())];
-            let c = look::linear(p.color);
-            ([c[0] * 0.5, c[1] * 0.5, c[2] * 0.5], 0.0, p.smoothness * look.resin.gloss)
+            through = 1.0 - (p.haze * look.resin.haze).clamp(0.0, 1.0);
+            (look::linear(p.color), 0.0, p.smoothness * look.resin.gloss)
         }
     };
     HitMaterial {
         color: [color[0], color[1], color[2], metallic.clamp(0.0, 1.0)],
-        params: [smoothness.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+        params: [smoothness.clamp(0.0, 1.0), through, 0.0, 0.0],
     }
 }
 

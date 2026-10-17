@@ -16,7 +16,7 @@
 struct HitMaterial {
     // rgb colour (linear), a metallic
     color: vec4<f32>,
-    // x smoothness
+    // x smoothness, y how much light passes through (resin), tinted by the colour
     params: vec4<f32>,
 };
 
@@ -245,6 +245,27 @@ fn sky_light(d: vec3<f32>) -> vec3<f32> {
     return eq + (look.ambient_sky.rgb - eq) * up + (look.ambient_ground.rgb - eq) * down;
 }
 
+// What a surface a ray met reflects back along it: the surroundings, or for
+// a metal, which reflects little else, what the reflection meets of the
+// model once more (lit by the sky alone, reflecting the surroundings), so
+// metal seen in metal is not black.
+fn hit_reflection(h: Hit, dir: vec3<f32>) -> vec3<f32> {
+    let m = h.material;
+    let r = reflect(dir, h.normal);
+    let rough = 1.0 - m.params.x;
+    if (m.color.a < 0.5) {
+        return environment(r, rough);
+    }
+    let again = ray_closest(h.at + h.normal * ray_offset(h.at), r, trace.params.z);
+    if (!again.found) {
+        return environment(r, rough);
+    }
+    let n = again.material;
+    let albedo = n.color.rgb * (1.0 - n.color.a);
+    let f0 = mix(vec3<f32>(0.04), n.color.rgb, n.color.a);
+    return albedo * ambient(again.normal) + f0 * environment(reflect(r, again.normal), 1.0 - n.params.x);
+}
+
 // The light leaving a point a ray met, back along the ray: the surface's
 // colour lit by each light that reaches it and by the sky, plus its own
 // reflection of the surroundings. The floor gives the backdrop's colour,
@@ -279,7 +300,9 @@ fn hit_light(h: Hit, dir: vec3<f32>, pixel: vec2<u32>, dim: u32) -> vec3<f32> {
             light += strength * nl;
         }
     }
-    return albedo * light + f0 * environment(reflect(dir, h.normal), 1.0 - m.params.x);
+    let mirrored = f0 * hit_reflection(h, dir);
+    // Resin lets what lies beyond it through, tinted, much as if it were thin.
+    return mix(albedo * light, backdrop(dir) * m.color.rgb, m.params.y) + mirrored;
 }
 
 // ---- the pass ---------------------------------------------------------------
@@ -370,21 +393,31 @@ fn cs_trace(@builtin(global_invocation_id) id: vec3<u32>) {
     // leave), and on to whatever is there.
     var through = vec4<f32>(0.0, 0.0, 0.0, -1.0);
     if (trace.params.y > 0.5) {
-        let bent = refract(-v, n, 1.0 / 1.5);
-        if (dot(bent, bent) > 0.5) {
-            let exit = ray_closest(world - n * lift, bent, reach);
-            if (exit.found) {
-                var leaving = refract(bent, exit.normal, 1.5);
-                if (dot(leaving, leaving) < 0.5) {
-                    leaving = reflect(bent, exit.normal);
-                }
+        var dir = refract(-v, n, 1.0 / 1.5);
+        var start = world - n * lift;
+        var crossed = 0.0;
+        // Across, and back across where the far side reflects it inside,
+        // a few times at most: then it is taken as leaving the way it goes.
+        for (var bounce = 0; bounce < 3 && dot(dir, dir) > 0.5; bounce++) {
+            let exit = ray_closest(start, dir, reach);
+            if (!exit.found) {
+                // An open mesh: no far side to leave by.
+                break;
+            }
+            crossed += exit.t;
+            let leaving = refract(dir, exit.normal, 1.5);
+            if (dot(leaving, leaving) > 0.5) {
                 let beyond = ray_meet(exit.at - exit.normal * ray_offset(exit.at), leaving, reach, pixel, 14u);
                 var seen = backdrop(leaving);
                 if (beyond.found) {
                     seen = hit_light(beyond, leaving, pixel, 32u);
                 }
-                through = vec4<f32>(seen, exit.t);
+                through = vec4<f32>(seen, crossed);
+                break;
             }
+            dir = reflect(dir, exit.normal);
+            start = exit.at + exit.normal * ray_offset(exit.at);
+            through = vec4<f32>(backdrop(dir), crossed);
         }
     }
     textureStore(out_through, pixel, through);
