@@ -332,7 +332,7 @@ mod layout_tests {
         same!(
             light_dir, light_color, light_params, shadow_view_proj, shadow_params, shadow_soft, sh, ambient_sky, ambient_equator,
             ambient_ground, env_params, cam_params, bg_params, base_params, matcap_params, mask_tint, finish, glow,
-            floor, floor_more, light_pos, light_side, light_up, contact
+            floor, floor_more, light_pos, light_side, light_up, contact, rays
         );
     }
 

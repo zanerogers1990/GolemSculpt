@@ -300,7 +300,7 @@ impl Motion {
 }
 
 /// The looks timed on every size: name and look setting (see `look::apply_spec`).
-const LOOKS: [(&str, &str); 8] = [
+const LOOKS: [(&str, &str); 9] = [
     ("lit", "matcap=off"),
     // The smallest shadow map (Shadow Detail: Fast).
     ("lit 512", "matcap=off,shadowmap=512"),
@@ -311,6 +311,9 @@ const LOOKS: [(&str, &str); 8] = [
     ("matcap", "matcap=on"),
     // Still, refining: each cursor frame is one more sample (refine.rs).
     ("lit refining", "matcap=off,refine,samples=256"),
+    // Ray traced, as a render with Ray Traced on is: each orbit frame is one
+    // sample's cost (render/ray.rs).
+    ("lit rays", "matcap=off,rays"),
 ];
 
 /// The usual options with refining off: a picture is drawn once, as in a
@@ -354,7 +357,9 @@ pub fn run(sizes: &[usize]) {
                 let mut cells = Vec::new();
                 for &motion in motions {
                     stage.opts = unrefined();
-                    look::apply_spec(&mut stage.opts, spec, 2.0);
+                    stage.renderer.ray_traced = spec.split(',').any(|part| part == "rays");
+                    let spec = spec.split(',').filter(|part| *part != "rays").collect::<Vec<_>>().join(",");
+                    look::apply_spec(&mut stage.opts, &spec, 2.0);
                     stage.frame_camera(30.0, -15.0);
                     let ms = time_frames(gpu, stage, motion);
                     println!("RESULT\t{tris}\t{name}\t{}\t{ms:.3}", motion.name());
@@ -639,7 +644,7 @@ pub fn run_shots(folder: &Path) {
         return;
     }
     let result = with_gpu(|gpu| {
-        for shot in shots() {
+        for shot in shots().into_iter().filter(|s| wanted_shot(&s.name)) {
             let mut stage = Stage::new(gpu, SHOT_SIZE);
             stage.guides = true;
             let mut mesh = bumpy_sphere(150_000);
@@ -714,7 +719,7 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 16] = [
+const STUDIO: [(&str, &str); 22] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
@@ -735,18 +740,44 @@ const STUDIO: [(&str, &str); 16] = [
     ("floor_white_glossy", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=64,light=highkey,backdrop=1"),
     ("studio_resin_amber", "matcap=off,finish=resin:amber,refine,samples=64"),
     ("studio_resin_clear_white", "matcap=off,finish=resin:clear,refine,samples=64,light=highkey,backdrop=1,floor"),
+    // Ray traced, as a render with Ray Traced on is (render/ray.rs), on a
+    // card that traces rays.
+    ("studio_rays", "matcap=off,refine,samples=256,rays"),
+    ("studio_metal_rays", "matcap=off,metallic=1,smoothness=0.85,refine,samples=256,rays"),
+    ("floor_rays", "matcap=off,floor,refine,samples=256,rays"),
+    ("floor_white_glossy_rays", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=256,light=highkey,backdrop=1,rays"),
+    ("studio_resin_amber_rays", "matcap=off,finish=resin:amber,refine,samples=256,rays"),
+    ("studio_resin_clear_white_rays", "matcap=off,finish=resin:clear,refine,samples=256,light=highkey,backdrop=1,floor,rays"),
 ];
 
 /// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is
 /// also behind it: a mirror, gloss and satin, for the reflections.
-const HDRI_SHOTS: [(&str, &str); 3] = [
+const HDRI_SHOTS: [(&str, &str); 5] = [
     ("hdri_chrome", "matcap=off,hdribg,metallic=1,smoothness=1"),
     ("hdri_gloss", "matcap=off,hdribg,metallic=0,smoothness=0.95"),
     ("hdri_satin_metal", "matcap=off,hdribg,metallic=1,smoothness=0.6"),
+    ("hdri_chrome_rays", "matcap=off,hdribg,metallic=1,smoothness=1,refine,samples=256,rays"),
+    ("hdri_gloss_rays", "matcap=off,hdribg,metallic=0,smoothness=0.95,refine,samples=256,rays"),
 ];
 
+/// Whether the picture `name` is drawn: all of them, or with `SCULPT_SHOTS`
+/// set only those whose names have one of its comma-separated words in them.
+fn wanted_shot(name: &str) -> bool {
+    match std::env::var("SCULPT_SHOTS") {
+        Ok(words) => words.split(',').any(|w| !w.is_empty() && name.contains(w)),
+        Err(_) => true,
+    }
+}
+
 fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
+    if !wanted_shot(name) {
+        return;
+    }
+    // Ray traced: not a look setting but how a render is drawn.
+    let rays = spec.split(',').any(|part| part == "rays");
+    let spec = &spec.split(',').filter(|part| *part != "rays").collect::<Vec<_>>().join(",");
     let mut stage = Stage::new(gpu, SHOT_SIZE);
+    stage.renderer.ray_traced = rays;
     stage.meshes.push((1, primitives::build(Primitive::Cube, 20_000, 1.0)));
     stage.meshes.push((2, primitives::build(Primitive::Sphere, 60_000, 1.0)));
     stage.meshes.push((3, primitives::build(Primitive::Capsule, 60_000, 1.0)));

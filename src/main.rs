@@ -264,6 +264,7 @@ fn window_options(args: &[String]) -> app::Args {
             "--render-scale" => opts.render_scale = it.next().and_then(|s| s.parse().ok()),
             "--render-samples" => opts.render_samples = it.next().and_then(|s| s.parse().ok()),
             "--render-transparent" => opts.render_transparent = true,
+            "--render-no-rays" => opts.render_no_rays = true,
             // Shading settings for visual checks, e.g. "matcap=off,finish=metal:rust".
             "--look" => opts.look = it.next().cloned(),
             // Look at the whole scene from a yaw and pitch in degrees, e.g. "0,0" for the front.

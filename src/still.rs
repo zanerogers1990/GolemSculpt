@@ -29,11 +29,14 @@ pub struct Settings {
     pub samples: u32,
     /// Leave the backdrop out: the PNG is see-through wherever the model is not.
     pub transparent: bool,
+    /// Trace the picture's light with the graphics card's ray tracing
+    /// (render/ray.rs), on a card that has it.
+    pub ray_traced: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { scale: 2, samples: 256, transparent: false }
+        Self { scale: 2, samples: 256, transparent: false, ray_traced: true }
     }
 }
 
@@ -77,6 +80,8 @@ pub struct Still {
     /// render will come to.
     pub window: (u32, u32),
     pub limit: u32,
+    /// Whether this graphics card traces rays, which the app sets too.
+    pub rays: bool,
 }
 
 impl Still {
@@ -124,9 +129,16 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
                 theme::checkbox(ui, &mut s.transparent, "Transparent Background", ACCENT()),
                 "Leave the backdrop out: the PNG is see-through wherever the model is not, ready to put on any background.",
             );
+            if still.rays {
+                tip(
+                    theme::checkbox(ui, &mut s.ray_traced, "Ray Traced", ACCENT()),
+                    "Traces real light for the picture: soft shadows from every light, light bounced off the model and the floor, the model reflected in itself, and the view through resin bent as glass bends it. Each sample takes longer; 256 samples or more give clean soft shadows.",
+                );
+            }
         });
         let (width, height) = still.size();
-        theme::hint(ui, &format!("{width} x {height} PNG, {} samples, saved to Pictures\\Sculpt", still.settings.samples));
+        let traced = if still.rays && still.settings.ray_traced { ", ray traced" } else { "" };
+        theme::hint(ui, &format!("{width} x {height} PNG, {} samples{traced}, saved to Pictures\\Sculpt", still.settings.samples));
 
         let (label, style) = match still.progress {
             Some(_) => ("Cancel", ButtonStyle { active: Some(theme::SUB), ..Default::default() }),

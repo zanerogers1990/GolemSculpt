@@ -26,6 +26,8 @@ pub(super) struct StillRun {
     fov_y: f32,
     samples: u32,
     transparent: bool,
+    /// Ray traced (render/ray.rs).
+    traced: bool,
     path: PathBuf,
     /// Samples drawn so far, counting any drawn again after a change.
     drawn: u32,
@@ -50,6 +52,7 @@ impl Running {
         let size = self.window.inner_size();
         let still = &mut self.doc.still;
         (still.window, still.limit) = ((size.width, size.height), self.gpu.max_texture_side() as u32);
+        still.rays = self.gpu.rays;
         match still.request.take() {
             Some(Request::Render) => self.start_still(None),
             Some(Request::Cancel) => {
@@ -72,6 +75,7 @@ impl Running {
                 s.scale = self.args.render_scale.unwrap_or(1).clamp(1, 4);
                 s.samples = self.args.render_samples.unwrap_or(64).max(1);
                 s.transparent = self.args.render_transparent;
+                s.ray_traced = !self.args.render_no_rays;
                 self.start_still(Some(path));
             }
         }
@@ -108,6 +112,7 @@ impl Running {
             fov_y,
             samples: settings.samples.max(1),
             transparent: settings.transparent,
+            traced: settings.ray_traced && self.gpu.rays,
             path,
             drawn: 0,
             shown: 0,
@@ -132,6 +137,7 @@ impl Running {
         };
         self.redraw = true;
         if run.cancelled && run.saved.is_none() {
+            self.renderer.release_rays();
             let still = &mut self.doc.still;
             (still.progress, still.status, still.status_ok) = (None, "Render cancelled.".into(), false);
             return;
@@ -149,7 +155,8 @@ impl Running {
                     let name = run.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     let place = run.path.parent().map(|p| capture::tail(p, 2)).unwrap_or_default();
                     let (w, h) = run.target.size;
-                    still.status = format!("Saved {name} ({w} x {h}, {} samples) in {place}", run.shown);
+                    let traced = if run.traced { ", ray traced" } else { "" };
+                    still.status = format!("Saved {name} ({w} x {h}, {} samples{traced}) in {place}", run.shown);
                     still.status_ok = true;
                     if self.args.render_picture.is_some() {
                         println!("render: {w}x{h}, {} samples, in {}", run.shown, run.path.display());
@@ -173,13 +180,16 @@ impl Running {
         // again: it is done when it holds them all, or, should they keep
         // starting again, after four times as many draws.
         let camera = self.camera_at(run.shot, run.fov_y);
+        self.renderer.ray_traced = run.traced;
         let (done, drawn, shown) =
             self.draw_capture(&mut run.target, camera, run.samples, run.transparent, run.samples, FRAME_BUDGET);
+        self.renderer.ray_traced = false;
         run.drawn += drawn;
         run.shown = shown.min(run.samples);
         let finished = done || run.drawn >= run.samples.saturating_mul(4);
         self.doc.still.progress = Some(Progress { samples: run.shown, total: run.samples, saving: finished });
         if finished {
+            self.renderer.release_rays();
             let picture = crate::render::read_texture_as(&self.gpu, &run.target.texture, run.transparent);
             let slot = Arc::new(Mutex::new(None));
             let (into, path, transparent) = (slot.clone(), run.path.clone(), run.transparent);

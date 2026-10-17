@@ -96,6 +96,10 @@ struct Look {
     // x how far the contact shadows march toward each light, as a fraction of
     // the view's height at the surface's depth (0 for none)
     contact: vec4<f32>,
+    // Ray traced (render/ray.rs): x 1 when the shadows and the light from
+    // around come from the rays (`ray_lights` and the others below), y 1
+    // when the view through resin does too
+    rays: vec4<f32>,
 };
 
 @group(0) @binding(4) var<uniform> look: Look;
@@ -119,6 +123,12 @@ struct Look {
 // The softboxes' fitted highlight matrices (render/ltc.rs): roughness
 // across, sqrt(1 - cos) of the view angle down.
 @group(0) @binding(15) var ltc_tex: texture_2d<f32>;
+// What the rays found for each pixel (ray.wgsl says what each holds), read
+// only while `look.rays` says so.
+@group(0) @binding(16) var ray_lights: texture_2d<f32>;
+@group(0) @binding(17) var ray_diffuse: texture_2d<f32>;
+@group(0) @binding(18) var ray_specular: texture_2d<f32>;
+@group(0) @binding(19) var ray_through: texture_2d<f32>;
 
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
@@ -710,6 +720,20 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
     }
     var color = ambient(sky) * diffuse * (1.0 - reflected) * ao
         + reflection * reflected * energy * (hidden * horizon * horizon);
+    if (look.rays.x > 0.5) {
+        let traced = textureLoad(ray_specular, s.pixel, 0);
+        if (traced.a > -0.5) {
+            // Ray traced: the light from around as the rays found it from
+            // the smooth surface, this surface's own bumps put back as the
+            // sky lights them, and the reflection where it meets nothing
+            // plus what it met. Only the finish's own occlusion dims them.
+            let around = textureLoad(ray_diffuse, s.pixel, 0).rgb;
+            let bumps = clamp(ambient(n) / max(ambient(s.smooth_n), vec3<f32>(1e-4)), vec3<f32>(0.0), vec3<f32>(4.0));
+            let kept = specular_occlusion(nv, occlusion, a) * horizon * horizon;
+            color = around * bumps * diffuse * (1.0 - reflected) * occlusion
+                + (reflection * traced.a + traced.rgb) * reflected * energy * kept;
+        }
+    }
 
     // Direct. Diffuse keeps what the surface does not reflect at normal
     // incidence (the Unity pipeline's 0.96 for a dielectric).
@@ -1584,6 +1608,15 @@ fn backdrop(dir: vec3<f32>) -> vec3<f32> {
     return g.bg_bottom.rgb;
 }
 
+// Ray traced (render/ray.rs): what the view meets through the resin, bent
+// in and out of it, and across how much resin; a below 0 when not traced.
+fn traced_through(s: Surface) -> vec4<f32> {
+    if (look.rays.y > 0.5) {
+        return textureLoad(ray_through, s.pixel, 0);
+    }
+    return vec4<f32>(-1.0);
+}
+
 // v[0] the colour light takes on through `w` of resin (world units); v[1]
 // x haze, y smoothness, z transmission.
 fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
@@ -1599,6 +1632,10 @@ fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
             thickness = max(s.back_depth - front, 0.0);
         }
     }
+    let seen = traced_through(s);
+    if (seen.a >= 0.0) {
+        thickness = seen.a;
+    }
     let through = pow(max(tint, vec3<f32>(1e-3)), vec3<f32>(thickness / depth));
     // What is behind, along the view bent into the resin, and only what the
     // surface does not reflect (the lighting adds the reflection).
@@ -1608,7 +1645,11 @@ fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
     }
     let nv = saturate(dot(n, s.v));
     let passes = 1.0 - (0.04 + 0.96 * pow5(1.0 - nv));
-    let behind = backdrop(bent) * through * passes * (1.0 - haze);
+    var beyond = backdrop(bent);
+    if (seen.a >= 0.0) {
+        beyond = seen.rgb;
+    }
+    let behind = beyond * through * passes * (1.0 - haze);
     // A light behind the model seen through it, tinted by the resin: where
     // the bent view points at it, sharply in clear resin and spread wide in
     // milky.
@@ -1755,6 +1796,14 @@ fn lit_surface(surface: Surface) -> Surface {
         if (count > 4) {
             s.contact_last = contact_shadow(s, look.light_dir[4].xyz);
         }
+    }
+    if (look.rays.x > 0.5) {
+        // Ray traced: whether each light reaches here, from the rays, each
+        // shadow as dark as the key's would be.
+        let reaches = textureLoad(ray_lights, s.pixel, 0);
+        let last = textureLoad(ray_diffuse, s.pixel, 0).a;
+        s.contact = mix(vec4<f32>(1.0), reaches, look.light_params.z);
+        s.contact_last = mix(1.0, last, look.light_params.z);
     }
     if (look.env_params.z > 0.5) {
         let occlusion = textureLoad(ao_tex, s.pixel, 0);
@@ -1930,6 +1979,25 @@ fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
     var open = 1.0;
     if (look.env_params.z > 0.5) {
         open = textureLoad(ao_tex, vec2<i32>(pixel), 0).a;
+    }
+    if (look.rays.x > 0.5) {
+        // Ray traced: every light's shadow, each counted by the light it
+        // gives the floor, and the sky the model hides from it.
+        let at = vec2<i32>(pixel);
+        let reaches = textureLoad(ray_lights, at, 0);
+        let around = textureLoad(ray_diffuse, at, 0);
+        var given = 0.0;
+        var reaching = 0.0;
+        let count = light_count();
+        for (var i = 0; i < count; i++) {
+            let w = luminance(look.light_color[i].rgb) * max(look.light_dir[i].y, 0.0);
+            given += w;
+            reaching += w * select(around.a, reaches[min(i, 3)], i < 4);
+        }
+        if (given > 0.0) {
+            lit = 1.0 - (1.0 - reaching / given) * look.floor.w;
+        }
+        open = saturate(luminance(around.rgb) / max(luminance(ambient(up)), 1e-4));
     }
     let dark = (1.0 - lit * open) * fade;
 
