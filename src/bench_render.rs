@@ -695,7 +695,7 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 7] = [
+const STUDIO: [(&str, &str); 10] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
@@ -704,6 +704,10 @@ const STUDIO: [(&str, &str); 7] = [
     // Refined to 64 samples, as the viewport is when it holds still.
     ("studio_refined", "matcap=off,refine,samples=64"),
     ("studio_metal_refined", "matcap=off,metallic=1,smoothness=0.85,refine,samples=64"),
+    // The shapes alone over a shadow floor, and a glossy one (no slab).
+    ("floor", "matcap=off,floor,refine,samples=64"),
+    ("floor_glossy", "matcap=off,floor,floorreflect=0.6,floorrough=0.25,refine,samples=64"),
+    ("floor_white_glossy", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=64,light=highkey,backdrop=1"),
 ];
 
 /// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is
@@ -724,7 +728,9 @@ fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
     // Primitives are built at radius (or half-width) 1, then placed.
     let at = |x: f32, y: f32, z: f32, scale: Vec3| Mat4::from_translation(Vec3::new(x, y, z)) * Mat4::from_scale(scale);
     stage.objects.push((2, at(-0.7, 0.25, 0.2, Vec3::splat(0.25))));
-    stage.objects.push((1, at(0.0, -0.05, 0.0, Vec3::new(2.0, 0.05, 1.5))));
+    if !spec.contains("floor") {
+        stage.objects.push((1, at(0.0, -0.05, 0.0, Vec3::new(2.0, 0.05, 1.5))));
+    }
     stage.objects.push((3, at(0.6, 0.3, -0.3, Vec3::splat(0.15))));
     stage.objects.push((4, at(0.3, 0.9, 0.6, Vec3::splat(0.2))));
     stage.opts = unrefined();

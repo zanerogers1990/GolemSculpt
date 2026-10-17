@@ -19,6 +19,7 @@ mod chunks;
 mod dfg;
 mod dof;
 pub mod env;
+mod floor;
 mod mips;
 pub mod paint;
 mod pipelines;
@@ -212,6 +213,10 @@ struct Targets {
     gbuf_depth: wgpu::TextureView,
     /// Eye depth of the nearest back face, for the lure plastic.
     back: wgpu::TextureView,
+    /// The model mirrored in the floor, at half size, for the floor to read
+    /// (floor.rs), and what it is drawn with, made the first time it is.
+    floor_reflection: wgpu::TextureView,
+    reflection: Option<floor::Reflection>,
     /// The finished picture with its overlays, kept for frames in which
     /// nothing of it changes (see cache.rs), and what it was drawn from.
     finished: wgpu::TextureView,
@@ -356,6 +361,10 @@ pub struct Renderer {
     layout_main: wgpu::BindGroupLayout,
     bind_pre: wgpu::BindGroup,
     bind_main: Option<wgpu::BindGroup>,
+    /// The same, with nothing where the floor's reflection goes: what the
+    /// reflection itself is drawn with (floor.rs).
+    bind_mirror: Option<wgpu::BindGroup>,
+    floor: floor::Floor,
     pipe_background: wgpu::RenderPipeline,
     /// The main pass's, one per finish and culling (pipelines.rs).
     mesh_pipes: pipelines::MeshPipelines,
@@ -442,13 +451,14 @@ pub struct Renderer {
 pub struct Side {
     targets: Option<Targets>,
     bind_main: Option<wgpu::BindGroup>,
+    bind_mirror: Option<wgpu::BindGroup>,
     bound_to: (u32, u32),
     post: post::Post,
 }
 
 impl Side {
     pub fn new(gpu: &Gpu) -> Side {
-        Side { targets: None, bind_main: None, bound_to: (0, 0), post: post::Post::new(gpu) }
+        Side { targets: None, bind_main: None, bind_mirror: None, bound_to: (0, 0), post: post::Post::new(gpu) }
     }
 }
 
@@ -585,6 +595,7 @@ impl Renderer {
                 texture_entry(11, smooth, flat),
                 sampler_entry(12, wgpu::SamplerBindingType::Filtering),
                 texture_entry(13, smooth, flat),
+                texture_entry(14, smooth, flat),
             ],
         });
         let bind_pre = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -649,6 +660,7 @@ impl Renderer {
         let mesh_pipes =
             pipelines::MeshPipelines::new(device, &shader, &layout, HDR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES);
         let painted = paint::Painted::new(gpu, &layout_main, HDR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES);
+        let floor = floor::Floor::new(device, &shader, &layout, &pipeline_layout(&layout_pre), GBUF_FORMAT);
         let layout = pipeline_layout(&layout_pre);
         let helper = |label, fragment: &str, format: wgpu::TextureFormat, cull: Cull| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -729,6 +741,8 @@ impl Renderer {
             layout_main,
             bind_pre,
             bind_main: None,
+            bind_mirror: None,
+            floor,
             pipe_background,
             mesh_pipes,
             pipe_prepass,
@@ -784,6 +798,7 @@ impl Renderer {
     pub fn swap_side(&mut self, side: &mut Side) {
         std::mem::swap(&mut self.targets, &mut side.targets);
         std::mem::swap(&mut self.bind_main, &mut side.bind_main);
+        std::mem::swap(&mut self.bind_mirror, &mut side.bind_mirror);
         std::mem::swap(&mut self.bound_to, &mut side.bound_to);
         std::mem::swap(&mut self.post, &mut side.post);
     }
@@ -829,6 +844,8 @@ impl Renderer {
             gbuf: target_texture(device, "normals", size, GBUF_FORMAT, 1, true),
             gbuf_depth: target_texture(device, "normals depth", size, DEPTH_FORMAT, 1, false),
             back: target_texture(device, "back depth", size, BACK_FORMAT, 1, true),
+            floor_reflection: target_texture(device, "floor reflection", floor::reflection_size(size), HDR_FORMAT, 1, true),
+            reflection: None,
             blit_finished: self.blit.bind(gpu, &finished),
             finished,
             drawn: None,
@@ -1102,6 +1119,10 @@ impl Renderer {
                 p && self.meshes.get(&i.mesh).is_some_and(|m| upload.back_depth_for(m.table.iter().copied()))
             });
         let plastic = lit && (surface == 1 || painted_lure);
+        // The floor (floor.rs), under lit shading only: it is the lights'
+        // shadow. Its reflection is the model drawn a second time.
+        let floor = lit && look.floor[0] > 0.5;
+        let reflect = floor && look.floor_more[2] > 0.0;
         let source = lit.then(|| env_source(globals, look, opts));
         let post_params = post_params(globals, look, settings, self.transparent);
 
@@ -1153,9 +1174,12 @@ impl Renderer {
         globals.view_proj = refine::jittered(globals.view_proj, refine::jitter(sample), size);
         let globals = &globals;
 
+        // The objects' placements, and for the floor's reflection each
+        // mirrored in it after them.
+        let placed = items.len() * if reflect { 2 } else { 1 };
         if !items.is_empty() {
-            if self.objects.as_ref().is_none_or(|(_, room)| *room < items.len()) {
-                let room = items.len().next_power_of_two().max(16);
+            if self.objects.as_ref().is_none_or(|(_, room)| *room < placed) {
+                let room = placed.next_power_of_two().max(16);
                 let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("objects"),
                     size: room as u64 * 64,
@@ -1164,7 +1188,10 @@ impl Renderer {
                 });
                 self.objects = Some((buffer, room));
             }
-            let data: Vec<[[f32; 4]; 4]> = items.iter().map(|i| i.model).collect();
+            let mut data: Vec<[[f32; 4]; 4]> = items.iter().map(|i| i.model).collect();
+            if reflect {
+                data.extend(mirrored_items(items, look.floor[1]).iter().map(|i| i.model));
+            }
             gpu.queue.write_buffer(&self.objects.as_ref().unwrap().0, 0, bytemuck::cast_slice(&data));
         }
         self.env.set_size(gpu, opts.quality.reflection_size());
@@ -1191,6 +1218,7 @@ impl Renderer {
         }
         look.env_params[2] = if occlusion { 1.0 } else { 0.0 };
         look.matcap_params[3] = if plastic { 1.0 } else { 0.0 };
+        look.floor[0] = if floor { 1.0 } else { 0.0 };
         // Every noisy filter turns its own way for each sample.
         look.cam_params[2] = sample as f32;
         let mut post_params = post_params;
@@ -1206,8 +1234,9 @@ impl Renderer {
         if self.bind_main.is_none() || self.bound_to != generations {
             self.bound_to = generations;
             let view = wgpu::BindingResource::TextureView;
-            self.bind_main = Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("main"),
+            // Everything the scene pass reads; `reflection` is the floor's.
+            let bind = |label, reflection| gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
                 layout: &self.layout_main,
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: self.globals.as_entire_binding() },
@@ -1224,10 +1253,12 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 11, resource: view(&self.env.hdri_view) },
                     wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::Sampler(&self.env.hdri_sampler) },
                     wgpu::BindGroupEntry { binding: 13, resource: view(&self.dfg) },
+                    wgpu::BindGroupEntry { binding: 14, resource: view(reflection) },
                 ],
-            }));
+            });
+            let (main, mirror) = (bind("main", &targets.floor_reflection), bind("mirror", &self.floor.nothing));
+            (self.bind_main, self.bind_mirror) = (Some(main), Some(mirror));
         }
-        let bind_main = self.bind_main.as_ref().unwrap();
 
         // Which parts of each object are in view (chunks.rs).
         let view_proj = glam::Mat4::from_cols_array_2d(&globals.view_proj);
@@ -1250,55 +1281,63 @@ impl Renderer {
                     rows
                 })
                 .collect();
+            let tables = if reflect { [tables.clone(), tables].concat() } else { tables };
             self.painted.set_tables(gpu, &tables);
         }
         // The main pass's pipelines: for each way of culling in use, the
         // finish's own for objects without paint and the palette's painted
         // one for objects with. A painted pipeline that cannot be built
         // leaves its objects drawn without their paint.
-        let module = self.painted.module_key();
-        let mut mesh_pipes: Vec<(Cull, bool, wgpu::RenderPipeline)> = Vec::new();
-        for cull in Cull::ALL {
-            let with_paint = |painted: &[bool]| (0..items.len()).any(|i| culls[i] == cull && painted[i]);
-            if with_paint(&painted) {
-                let key = paint::Key { module: module.clone(), surface, glow, cull };
-                match self.painted.pipeline(&key) {
-                    Some(pipeline) => mesh_pipes.push((cull, true, pipeline)),
-                    None => (0..items.len()).filter(|&i| culls[i] == cull).for_each(|i| painted[i] = false),
+        let mesh_pipes = scene_pipelines(&mut self.painted, &mut self.mesh_pipes, &culls, &mut painted, surface, glow);
+        let paint_bind = painted.contains(&true).then(|| self.painted.bind().clone());
+
+        // The floor's reflection: the model mirrored in it, drawn with
+        // uniforms of its own as a batch of work before the frame's
+        // (floor.rs), after which the frame's are written back.
+        if reflect {
+            let mirrored = mirrored_items(items, look.floor[1]);
+            let mirror_culls: Vec<Cull> =
+                mirrored.iter().map(|i| Cull::of(opts.show_backfaces, pipelines::mirrored(&i.model))).collect();
+            let mut mirror_painted = painted.clone();
+            let mirror_pipes =
+                scene_pipelines(&mut self.painted, &mut self.mesh_pipes, &mirror_culls, &mut mirror_painted, surface, glow);
+            let mirror_runs = self.visible_runs(&view_proj, &mirrored);
+            let (mirror_globals, mirror_look) = floor::mirrored_uniforms(globals, &look);
+            gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&mirror_globals));
+            gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&mirror_look));
+            let mut mirror_encoder = gpu.device.create_command_encoder(&Default::default());
+            let targets = self.targets.as_mut().unwrap();
+            let reflection = targets.reflection.get_or_insert_with(|| floor::Reflection::new(gpu, size));
+            if let (Some(bind_mirror), Some((objects, _))) = (&self.bind_mirror, &self.objects) {
+                let mut pass = reflection.pass(&mut mirror_encoder, &targets.floor_reflection);
+                pass.set_bind_group(0, bind_mirror, &[]);
+                for (cull, with_paint, pipeline) in &mirror_pipes {
+                    pass.set_pipeline(pipeline);
+                    if let (true, Some(bind)) = (*with_paint, &paint_bind) {
+                        pass.set_bind_group(1, bind, &[]);
+                    }
+                    let first = items.len() as u32;
+                    let drawn = Drawn { items: &mirrored, first, runs: &mirror_runs, culls: &mirror_culls, painted: &mirror_painted };
+                    draw_objects(&mut pass, &self.meshes, objects, &drawn, *cull, Some(*with_paint));
                 }
             }
-            if (0..items.len()).any(|i| culls[i] == cull && !painted[i]) {
-                mesh_pipes.push((cull, false, self.mesh_pipes.get(MeshKey { surface, glow, cull }).clone()));
-            }
+            gpu.queue.submit([mirror_encoder.finish()]);
+            gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
+            gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&look));
         }
-        let paint_bind = painted.contains(&true).then(|| self.painted.bind().clone());
+        let targets = self.targets.as_ref().unwrap();
+        let bind_main = self.bind_main.as_ref().unwrap();
+
         // Draws the objects culled as `cull`, the parts of each in `runs`:
         // all of them, or with `paint` only those drawn with their paint or
         // only those without.
         let draw_items = |pass: &mut wgpu::RenderPass, runs: &[Vec<std::ops::Range<u32>>], cull: Cull, paint: Option<bool>| {
             let Some((objects, _)) = &self.objects else { return };
-            for (i, item) in items.iter().enumerate() {
-                let Some(mesh) = self.meshes.get(&item.mesh) else { continue };
-                if runs[i].is_empty() || culls[i] != cull || paint.is_some_and(|p| p != painted[i]) {
-                    continue;
-                }
-                pass.set_vertex_buffer(0, mesh.positions.slice(..));
-                pass.set_vertex_buffer(1, mesh.normals.slice(..));
-                pass.set_vertex_buffer(2, mesh.mask.slice(..));
-                pass.set_vertex_buffer(3, objects.slice(..));
-                pass.set_vertex_buffer(4, mesh.curv.slice(..));
-                if paint == Some(true) {
-                    let Some(colour) = &mesh.paint else { continue };
-                    pass.set_vertex_buffer(5, colour.slice(..));
-                }
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                for run in &runs[i] {
-                    pass.draw_indexed(run.clone(), 0, i as u32..i as u32 + 1);
-                }
-            }
+            let drawn = Drawn { items, first: 0, runs, culls: &culls, painted: &painted };
+            draw_objects(pass, &self.meshes, objects, &drawn, cull, paint);
         };
         // A colour buffer cleared to "nothing here", with its own depth.
-        let helper_pass = |encoder: &mut wgpu::CommandEncoder, label: &str, view: &wgpu::TextureView, pipelines: &[wgpu::RenderPipeline; 3]| {
+        let helper_pass = |encoder: &mut wgpu::CommandEncoder, label: &str, view: &wgpu::TextureView, pipelines: &[wgpu::RenderPipeline; 3], with_floor: bool| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1325,6 +1364,10 @@ impl Renderer {
                 pass.set_pipeline(&pipelines[cull.index()]);
                 draw_items(&mut pass, &in_view, cull, None);
             }
+            if with_floor {
+                pass.set_pipeline(&self.floor.pipe_prepass);
+                pass.draw(0..floor::VERTICES, 0..1);
+            }
         };
 
         if draw_shadow {
@@ -1349,10 +1392,11 @@ impl Renderer {
             }
         }
         if cavity || occlusion {
-            helper_pass(encoder, "normals prepass", &targets.gbuf, &self.pipe_prepass);
+            // The floor too, for the occlusion where the model meets it.
+            helper_pass(encoder, "normals prepass", &targets.gbuf, &self.pipe_prepass, floor);
         }
         if plastic {
-            helper_pass(encoder, "back depth", &targets.back, &self.pipe_back);
+            helper_pass(encoder, "back depth", &targets.back, &self.pipe_back, false);
         }
         if occlusion {
             self.post.occlusion(encoder);
@@ -1386,6 +1430,10 @@ impl Renderer {
                     pass.set_bind_group(1, bind, &[]);
                 }
                 draw_items(&mut pass, &in_view, *cull, Some(*with_paint));
+            }
+            if floor {
+                pass.set_pipeline(&self.floor.pipe);
+                pass.draw(0..floor::VERTICES, 0..1);
             }
         }
         // The sample into the average, which then stands in the scene's
@@ -1533,6 +1581,96 @@ impl Renderer {
         ]);
         key
     }
+}
+
+/// The scene pass's pipelines for objects culled as `culls`: for each way of
+/// culling in use, the finish's own for objects without paint and the
+/// palette's painted one for those with. A painted pipeline that cannot be
+/// built leaves its objects drawn without their paint (`painted` says so).
+fn scene_pipelines(
+    painted_pipes: &mut paint::Painted,
+    mesh_pipes: &mut pipelines::MeshPipelines,
+    culls: &[Cull],
+    painted: &mut [bool],
+    surface: u32,
+    glow: bool,
+) -> Vec<(Cull, bool, wgpu::RenderPipeline)> {
+    let module = painted_pipes.module_key();
+    let mut out = Vec::new();
+    for cull in Cull::ALL {
+        let with_paint = |painted: &[bool]| (0..culls.len()).any(|i| culls[i] == cull && painted[i]);
+        if with_paint(painted) {
+            let key = paint::Key { module: module.clone(), surface, glow, cull };
+            match painted_pipes.pipeline(&key) {
+                Some(pipeline) => out.push((cull, true, pipeline)),
+                None => (0..culls.len()).filter(|&i| culls[i] == cull).for_each(|i| painted[i] = false),
+            }
+        }
+        if (0..culls.len()).any(|i| culls[i] == cull && !painted[i]) {
+            out.push((cull, false, mesh_pipes.get(MeshKey { surface, glow, cull }).clone()));
+        }
+    }
+    out
+}
+
+/// Objects to draw in a pass: each with the runs of its corners in view,
+/// how it is culled and whether it is drawn with its paint. Their
+/// placements are in the objects buffer from instance `first` on.
+struct Drawn<'a> {
+    items: &'a [DrawItem],
+    first: u32,
+    runs: &'a [Vec<std::ops::Range<u32>>],
+    culls: &'a [Cull],
+    painted: &'a [bool],
+}
+
+/// Draws those of `drawn` culled as `cull`: all of them, or with `paint`
+/// only those drawn with their paint or only those without.
+fn draw_objects(
+    pass: &mut wgpu::RenderPass,
+    meshes: &HashMap<u64, MeshBuffers>,
+    objects: &wgpu::Buffer,
+    drawn: &Drawn,
+    cull: Cull,
+    paint: Option<bool>,
+) {
+    for (i, item) in drawn.items.iter().enumerate() {
+        let Some(mesh) = meshes.get(&item.mesh) else { continue };
+        if drawn.runs[i].is_empty() || drawn.culls[i] != cull || paint.is_some_and(|p| p != drawn.painted[i]) {
+            continue;
+        }
+        pass.set_vertex_buffer(0, mesh.positions.slice(..));
+        pass.set_vertex_buffer(1, mesh.normals.slice(..));
+        pass.set_vertex_buffer(2, mesh.mask.slice(..));
+        pass.set_vertex_buffer(3, objects.slice(..));
+        pass.set_vertex_buffer(4, mesh.curv.slice(..));
+        if paint == Some(true) {
+            let Some(colour) = &mesh.paint else { continue };
+            pass.set_vertex_buffer(5, colour.slice(..));
+        }
+        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+        let instance = drawn.first + i as u32;
+        for run in &drawn.runs[i] {
+            pass.draw_indexed(run.clone(), 0, instance..instance + 1);
+        }
+    }
+}
+
+/// `items` mirrored in the floor at `height`, each keeping its active flag.
+fn mirrored_items(items: &[DrawItem], height: f32) -> Vec<DrawItem> {
+    let mirror = floor::mirror(height);
+    items
+        .iter()
+        .map(|item| {
+            let mut model = glam::Mat4::from_cols_array_2d(&item.model);
+            // The last element carries the active flag, not the matrix's own 1.
+            let active = model.w_axis.w;
+            model.w_axis.w = 1.0;
+            let mut out = (mirror * model).to_cols_array_2d();
+            out[3][3] = active;
+            DrawItem { mesh: item.mesh, model: out }
+        })
+        .collect()
 }
 
 /// `look` with the clock zeroed unless a glow is moving: nothing else reads

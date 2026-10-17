@@ -385,6 +385,24 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
         }
 
         let look = &mut o.look;
+        theme::heading(ui, "Floor");
+        tip(
+            theme::checkbox(ui, &mut look.floor.on, "Shadow Floor", ACCENT()),
+            tips,
+            "A floor under the model that is the background itself: it catches the key light's shadow and the contact shading where the model meets it, and fades out all round. Lit shading only.",
+        );
+        if look.floor.on {
+            let floor = &mut look.floor;
+            theme::slider(ui, "Shadow", &mut floor.shadow, 0.0..=1.0, two);
+            tip(
+                theme::slider(ui, "Reflection", &mut floor.reflection, 0.0..=1.0, two),
+                tips,
+                "A glossy floor: the model reflected in it. Draws the model a second time while it is on.",
+            );
+            if floor.reflection > 0.0 {
+                theme::slider(ui, "Blur", &mut floor.roughness, 0.0..=1.0, two);
+            }
+        }
         theme::heading(ui, "Bloom");
         theme::checkbox(ui, &mut look.bloom, "Enabled", ACCENT());
         if look.bloom {

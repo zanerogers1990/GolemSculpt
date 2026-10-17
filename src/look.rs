@@ -1154,6 +1154,28 @@ pub struct GlowSettings {
     pub reference: f32,
 }
 
+/// The floor under the model: the backdrop itself, catching the key light's
+/// shadow and the shading where the model meets it, and if glossy a soft
+/// reflection of the model. It sits under the lowest point of what is shown
+/// and fades out into the backdrop all round, so it has no edge.
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct FloorSettings {
+    pub on: bool,
+    /// How dark the model's shadow on it gets (0..1).
+    pub shadow: f32,
+    /// How strongly it reflects the model (0 for not at all).
+    pub reflection: f32,
+    /// How blurred that reflection is: 0 a mirror, 1 a satin.
+    pub roughness: f32,
+}
+
+impl Default for FloorSettings {
+    fn default() -> Self {
+        Self { on: false, shadow: 0.85, reflection: 0.0, roughness: 0.3 }
+    }
+}
+
 /// Image-based lighting from an equirectangular picture.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct HdriSettings {
@@ -1213,6 +1235,9 @@ pub struct Look {
     #[serde(default = "one")]
     pub shadow_softness: f32,
     pub hdri: HdriSettings,
+    /// The shadow-catching floor (off unless asked for).
+    #[serde(default)]
+    pub floor: FloorSettings,
     /// Show the HDRI behind the model (when one is on).
     pub hdri_background: bool,
     pub gradient_bias: f32,
@@ -1332,6 +1357,7 @@ impl Default for Look {
                 ambient: 1.0,
                 reflection: 1.0,
             },
+            floor: FloorSettings::default(),
             hdri_background: false,
             gradient_bias: 1.0,
             ambient_occlusion: true,
@@ -1478,6 +1504,11 @@ pub struct LookUniform {
     /// The finish's own settings (see [`FinishParams`]), and the glow's.
     pub finish: FinishParams,
     pub glow: FinishParams,
+    /// The floor: x 1 when it shows, y its height, z how far it reaches from
+    /// its middle (it has faded out there), w how dark shadows on it get
+    pub floor: [f32; 4],
+    /// x z its middle, z how strongly it reflects the model, w how blurred
+    pub floor_more: [f32; 4],
 }
 
 /// A finish's settings as its shader function reads them: sixteen groups of
@@ -1554,7 +1585,10 @@ pub struct ShadowFit {
 }
 
 impl ShadowFit {
-    pub fn around(key: Vec3, min: Vec3, max: Vec3) -> ShadowFit {
+    /// With `floor` (its height, under the box) the map also takes in where
+    /// the box's shadow falls on the floor, so the shadow is not cut off at
+    /// the map's edge however low the light.
+    pub fn around(key: Vec3, min: Vec3, max: Vec3, floor: Option<f32>) -> ShadowFit {
         let (min, max) =
             if min.is_finite() && max.is_finite() && min.cmple(max).all() { (min, max) } else { (Vec3::splat(-0.5), Vec3::splat(0.5)) };
         let up = if key.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
@@ -1562,15 +1596,25 @@ impl ShadowFit {
         let y = key.cross(x);
         let mut lo = Vec3::splat(f32::INFINITY);
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        let mut take = |p: Vec3| {
+            let q = Vec3::new(p.dot(x), p.dot(y), p.dot(key));
+            lo = lo.min(q);
+            hi = hi.max(q);
+        };
+        // The longest a shadow on the floor is followed: a light near the
+        // horizon would otherwise stretch the map over a great deal of floor.
+        let longest = (max - min).max_element().max(1e-3) * 3.0;
         for i in 0..8 {
             let p = Vec3::new(
                 if i & 1 == 0 { min.x } else { max.x },
                 if i & 2 == 0 { min.y } else { max.y },
                 if i & 4 == 0 { min.z } else { max.z },
             );
-            let q = Vec3::new(p.dot(x), p.dot(y), p.dot(key));
-            lo = lo.min(q);
-            hi = hi.max(q);
+            take(p);
+            if let Some(height) = floor.filter(|h| h.is_finite() && key.y > 0.05) {
+                let along = ((p.y - height) / key.y).min(longest);
+                take(p - key * along);
+            }
         }
         let extent = (hi - lo).max(Vec3::splat(1e-4));
         // A twentieth more on every side: the widest soft edge stays on the map.
@@ -1699,7 +1743,8 @@ impl Look {
 
         // One shadow map fitted around everything shown.
         let key = self.light_source(0, f);
-        let fit = ShadowFit::around(key, f.scene_min, f.scene_max);
+        let floor = self.floor.on.then_some(f.scene_min.y);
+        let fit = ShadowFit::around(key, f.scene_min, f.scene_max, floor);
         u.shadow_view_proj = fit.view_proj().to_cols_array_2d();
         // The Unity pipeline's biases (depth 0.1, normal 0.5 texels), widened
         // for the soft filter's reach as it does.
@@ -1756,6 +1801,13 @@ impl Look {
         // ZBrush and Blender, so the mask does not read as paint.
         u.mask_tint = rgba([0.1, 0.1, 0.1], 0.6);
 
+        if self.floor.on && f.scene_min.is_finite() && f.scene_max.is_finite() {
+            let (min, max) = (f.scene_min, f.scene_max);
+            let reach = (max.x - min.x).max(max.z - min.z).max(max.y - min.y).max(1e-3) * 1.6;
+            let floor = &self.floor;
+            u.floor = [1.0, min.y, reach, clamp01(floor.shadow)];
+            u.floor_more = [(min.x + max.x) * 0.5, (min.z + max.z) * 0.5, clamp01(floor.reflection), clamp01(floor.roughness)];
+        }
         u.finish = self.finish_params(self.finish, f);
         if self.glow.on {
             u.glow = self.pack_glow(self.size_of(self.glow.reference, f));
@@ -2005,6 +2057,8 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// `metallic`, `smoothness`, `normal`, `focus`, `aperture`, `softness`
 /// (numbers); `shadowmap`, `reflections` (the shadow map's and the
 /// reflection cube's sides); `refine` (on / off) and `samples` (how many);
+/// `floor` (on / off) with `floorshadow`, `floorreflect`, `floorrough` (numbers);
+/// `backdrop` (a grey, 0 black to 1 white);
 /// `hdri` (a file).
 pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Option<PathBuf> {
     let mut hdri = None;
@@ -2018,6 +2072,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "matcap" => opts.matcap_on = on,
             "panels" => opts.clean_view = !on,
             "gradient" => opts.gradient_background = on,
+            "backdrop" => opts.background = [number.unwrap_or(0.1).clamp(0.0, 1.0); 3],
             "flat" => opts.flat_shading = on,
             "backfaces" => opts.show_backfaces = on,
             "wire" => opts.wireframe = on,
@@ -2026,6 +2081,10 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "shadows" => look.shadows = on,
             "softness" => look.shadow_softness = number.unwrap_or(1.0),
             "shadowmap" => opts.quality.shadow_map = number.map_or(2048, |n| n as u32),
+            "floor" => look.floor.on = on,
+            "floorshadow" => look.floor.shadow = number.unwrap_or(0.85),
+            "floorreflect" => look.floor.reflection = number.unwrap_or(0.0),
+            "floorrough" => look.floor.roughness = number.unwrap_or(0.3),
             "reflections" => opts.quality.reflections = number.map_or(256, |n| n as u32),
             "refine" => opts.quality.refine = on,
             "samples" => opts.quality.samples = number.map_or(64, |n| n as u32),
@@ -2089,7 +2148,7 @@ mod tests {
     fn the_shadow_map_holds_the_whole_scene_and_little_else() {
         let (min, max) = (Vec3::new(-1.0, 0.0, -0.5), Vec3::new(2.0, 0.5, 0.5));
         for key in [Vec3::Y, Vec3::new(-0.49, 0.64, 0.59).normalize(), Vec3::new(0.3, -0.2, -0.93).normalize()] {
-            let fit = ShadowFit::around(key, min, max);
+            let fit = ShadowFit::around(key, min, max, None);
             let m = fit.view_proj();
             let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
             for i in 0..8 {
@@ -2113,8 +2172,58 @@ mod tests {
             assert!(toward.z < 0.5, "nearer the light is smaller depth");
         }
         // Nothing to fit, or bounds that are not numbers: a unit box instead.
-        let fit = ShadowFit::around(Vec3::Y, Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        let fit = ShadowFit::around(Vec3::Y, Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY), None);
         assert!(fit.side.is_finite() && fit.side > 0.0 && fit.depth > 0.0);
+    }
+
+    #[test]
+    fn with_a_floor_the_shadow_map_takes_in_where_the_shadow_lands() {
+        let (min, max) = (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        // A low light from the side: the shadow runs a long way over the floor.
+        let key = Vec3::new(1.0, 0.4, 0.0).normalize();
+        let bare = ShadowFit::around(key, min, max, None);
+        let floored = ShadowFit::around(key, min, max, Some(0.0));
+        // Along the light a shadow stays where its caster is across the map;
+        // what the floor needs is depth, out to where the shadow lands.
+        assert!((floored.side - bare.side).abs() < 1e-5);
+        assert!(floored.depth > bare.depth * 1.5, "{} {}", floored.depth, bare.depth);
+        // The tip of the shadow of the top far corner is on the map, and
+        // within its depth (beyond it would read as lit).
+        let top = Vec3::new(0.5, 1.0, 0.5);
+        let tip = top - key * (top.y / key.y);
+        let q = floored.view_proj().project_point3(tip);
+        assert!(q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && q.z > 0.0 && q.z < 1.0, "{q}");
+        assert!(bare.view_proj().project_point3(tip).z > 1.0, "without the floor it was beyond the map");
+        // A light below the floor casts nothing onto it: no change.
+        let under = Vec3::new(0.3, -0.5, 0.2).normalize();
+        assert_eq!(ShadowFit::around(under, min, max, Some(0.0)).depth, ShadowFit::around(under, min, max, None).depth);
+    }
+
+    #[test]
+    fn the_floor_lies_under_the_lowest_point_and_is_off_in_a_file_from_before() {
+        let mut look: Look = crate::io::read_over(&Look::default(), &serde_json::json!({ "shadows": true })).unwrap();
+        assert!(!look.floor.on);
+        let frame = Frame {
+            cam_right: Vec3::X,
+            cam_up: Vec3::Y,
+            cam_forward: Vec3::NEG_Z,
+            ortho_half_height: None,
+            eye_offset: 0.0,
+            scene_min: Vec3::new(-1.0, -0.25, -2.0),
+            scene_max: Vec3::new(3.0, 1.0, 2.0),
+            model_size: 4.0,
+            time: 0.0,
+            gradient_background: false,
+            smoothness: 0.4,
+            shadow_size: 2048,
+        };
+        assert_eq!(look.uniform(&frame).floor[0], 0.0, "off: the shader draws none");
+        look.floor.on = true;
+        let u = look.uniform(&frame);
+        assert_eq!(u.floor[0], 1.0);
+        assert_eq!(u.floor[1], -0.25, "under the lowest point");
+        assert_eq!([u.floor_more[0], u.floor_more[1]], [1.0, 0.0], "centred under the scene");
+        assert!(u.floor[2] >= 4.0 * 1.5, "reaching well past the scene before it fades out");
     }
 
     #[test]

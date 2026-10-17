@@ -79,6 +79,11 @@ struct Look {
     // The finish's settings, and the glow's (glow.v[2].x is 1 while it is on).
     finish: FinishParams,
     glow: FinishParams,
+    // The floor (render/floor.rs): x 1 when it shows, y its height, z how far
+    // it reaches from its middle, w how dark shadows on it get
+    floor: vec4<f32>,
+    // xy (world x and z) its middle, z how strongly it reflects, w how blurred
+    floor_more: vec4<f32>,
 };
 
 @group(0) @binding(4) var<uniform> look: Look;
@@ -96,6 +101,8 @@ struct Look {
 // The split-sum reflection table (render/dfg.rs): view angle across,
 // roughness down; x what grazing fresnel adds, y all a white mirror reflects.
 @group(0) @binding(13) var dfg_tex: texture_2d<f32>;
+// The model mirrored in the floor, at half size (render/floor.rs).
+@group(0) @binding(14) var floor_tex: texture_2d<f32>;
 
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
@@ -337,12 +344,18 @@ fn shadow_uv(at: vec2<f32>) -> vec2<f32> {
 // A turn by the golden angle (2.39996 radians).
 const GOLDEN_TURN: mat2x2<f32> = mat2x2<f32>(-0.7373688, 0.6754903, -0.6754903, -0.7373688);
 
-// The key light's shadow at `world`, whose surface faces `n`: crisp where it
-// meets what casts it and softer the farther that is, as under a real light
-// of the preset's size (percentage-closer soft shadows). The casters near
-// this point are found first and their average distance sets how wide the
-// filter is; `pixel` turns the filter's taps.
+// The key light's shadow at `world`, as dark as the preset lets it get.
 fn key_shadow(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    return mix(1.0, key_light_reaching(world, n, pixel), look.light_params.z);
+}
+
+// How much of the key light reaches `world`, whose surface faces `n` (1 all,
+// 0 none): a shadow crisp where it meets what casts it and softer the
+// farther that is, as under a real light of the preset's size
+// (percentage-closer soft shadows). The casters near this point are found
+// first and their average distance sets how wide the filter is; `pixel`
+// turns the filter's taps.
+fn key_light_reaching(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
     if (look.light_params.y < 0.5) {
         return 1.0;
     }
@@ -382,13 +395,12 @@ fn key_shadow(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
         found += dot(blocked, vec4<f32>(1.0));
         caster_depth += dot(d, blocked);
     }
-    let strength = look.light_params.z;
     if (found < 0.5) {
         return 1.0;
     }
     if (found > f32(caster_taps * 4) - 0.5) {
         // Everything around is in shadow, wider than the edge could be.
-        return 1.0 - strength;
+        return 0.0;
     }
     // How wide the shadow's edge is at this distance from its casters.
     let gap = (pos.z - caster_depth / found) * world_per_depth;
@@ -400,8 +412,7 @@ fn key_shadow(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
         lit += textureSampleCompareLevel(shadow_tex, shadow_smp, shadow_uv(pos.xy + way * (r * radius)), pos.z);
         way = GOLDEN_TURN * way;
     }
-    // Shadow strength: how dark the preset lets the key's shadow get.
-    return mix(1.0, lit / f32(filter_taps), strength);
+    return lit / f32(filter_taps);
 }
 
 struct Light {
@@ -1497,6 +1508,110 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
         color = light_sample(s, surface_material(s));
     }
     return mesh_finish(color, s, in, front);
+}
+
+// ---- the floor ------------------------------------------------------------
+//
+// A shadow catcher (render/floor.rs): a square under the model that is the
+// backdrop itself, darkened by the key's shadow and the occlusion where the
+// model meets it, with the model's reflection on it, all fading out toward
+// its edge. Drawn over the backdrop, premultiplied: alpha is how much of the
+// backdrop it takes away, colour what it adds.
+
+struct FloorOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) world: vec3<f32>,
+};
+
+@vertex
+fn vs_floor(@builtin(vertex_index) i: u32) -> FloorOut {
+    // Two triangles over the square, out to where it has faded away.
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
+    let c = corners[i] * look.floor.z;
+    var out: FloorOut;
+    out.world = vec3<f32>(look.floor_more.x + c.x, look.floor.y, look.floor_more.y + c.y);
+    out.pos = g.view_proj * vec4<f32>(out.world, 1.0);
+    if (look.floor.x < 0.5) {
+        // Off: every corner in one place, so nothing is drawn.
+        out.pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    return out;
+}
+
+// How much of the floor there is here: all of it near the model, none at
+// its edge.
+fn floor_fade(world: vec3<f32>) -> f32 {
+    let d = length(world.xz - look.floor_more.xy) / max(look.floor.z, 1e-6);
+    return 1.0 - smoothstep(0.35, 1.0, d);
+}
+
+// Toward the eye from a point on the floor.
+fn floor_view(world: vec3<f32>) -> vec3<f32> {
+    if (g.viewport.z <= 0.0) {
+        return -g.cam_forward.xyz;
+    }
+    return normalize(g.cam_pos.xyz - world);
+}
+
+// The floor in the normals prepass: facing up, at its eye depth.
+@fragment
+fn fs_floor_prepass(in: FloorOut) -> @location(0) vec4<f32> {
+    if (floor_view(in.world).y <= 0.0) {
+        discard;
+    }
+    let vn = (g.view * vec4<f32>(0.0, 1.0, 0.0, 0.0)).xyz;
+    let depth = dot(in.world - g.cam_pos.xyz, g.cam_forward.xyz);
+    return vec4<f32>(vn, max(depth, 1e-6));
+}
+
+@fragment
+fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
+    let v = floor_view(in.world);
+    // Seen from below there is no floor.
+    if (v.y <= 0.0) {
+        discard;
+    }
+    let fade = floor_fade(in.world);
+    let pixel = in.pos.xy;
+    let up = vec3<f32>(0.0, 1.0, 0.0);
+    // The key's shadow, as dark as the floor's own setting, and the
+    // occlusion where the model comes close above it.
+    var lit = 1.0;
+    if (look.light_params.y > 0.5) {
+        lit = 1.0 - (1.0 - key_light_reaching(in.world, up, pixel)) * look.floor.w;
+    }
+    var open = 1.0;
+    if (look.env_params.z > 0.5) {
+        open = textureLoad(ao_tex, vec2<i32>(pixel), 0).r;
+    }
+    let dark = (1.0 - lit * open) * fade;
+
+    // The model's reflection, blurred by the floor's roughness: taps over a
+    // disc as wide as that, turned for each pixel and each sample.
+    var reflected = vec4<f32>(0.0);
+    let strength = look.floor_more.z;
+    if (strength > 0.0) {
+        let uv = pixel / g.viewport.xy;
+        let blur = look.floor_more.w * look.floor_more.w * 0.05;
+        let turn = pixel_noise(pixel) * TAU;
+        var way = vec2<f32>(cos(turn), sin(turn));
+        let aspect = vec2<f32>(1.0 / max(g.viewport.w, 1e-3), 1.0);
+        const TAPS: i32 = 8;
+        for (var i = 0; i < TAPS; i++) {
+            let r = sqrt((f32(i) + 0.5) / f32(TAPS)) * blur;
+            reflected += textureSampleLevel(floor_tex, env_smp, uv + way * aspect * r, 0.0);
+            way = GOLDEN_TURN * way;
+        }
+        reflected /= f32(TAPS);
+        // A glossy floor reflects more at a glancing angle.
+        let k = strength * (0.3 + 0.7 * pow5(1.0 - saturate(v.y))) * fade;
+        reflected *= k;
+    }
+    // Premultiplied: the reflection is added, and it and the shadow take
+    // that much of the backdrop away.
+    return vec4<f32>(reflected.rgb, dark + reflected.a * (1.0 - dark));
 }
 
 // ---- helper passes --------------------------------------------------------
