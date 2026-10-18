@@ -68,6 +68,7 @@ mod print_check;
 mod recovery;
 mod selection;
 mod spheres;
+mod still;
 mod symmetry;
 pub(crate) mod symmetry_repair;
 pub(crate) mod tools;
@@ -151,6 +152,13 @@ pub struct Args {
     pub loop_cancel: Option<u32>,
     /// Record a timelapse of a few scripted strokes to this file, then close.
     pub demo_timelapse: Option<PathBuf>,
+    /// Render Picture to this PNG, then close (see app/still.rs); with
+    /// `render_scale` times the window's size, `render_samples` samples and
+    /// `render_transparent` no backdrop.
+    pub render_picture: Option<PathBuf>,
+    pub render_scale: Option<u32>,
+    pub render_samples: Option<u32>,
+    pub render_transparent: bool,
     /// Import this picture as a matcap and shade with it, by the routine
     /// under Import Matcap (for visual checks; no file box is opened).
     pub demo_matcap: Option<PathBuf>,
@@ -194,7 +202,10 @@ impl Args {
     /// it must not take the keyboard from whoever is at the machine, nor the
     /// Claude bridge's port from the real app.
     fn records(&self) -> bool {
-        self.record_loop.is_some() || self.demo_timelapse.is_some() || ui_demo::plays(self.demo_ui.as_deref())
+        self.record_loop.is_some()
+            || self.demo_timelapse.is_some()
+            || self.render_picture.is_some()
+            || ui_demo::plays(self.demo_ui.as_deref())
     }
 }
 
@@ -297,6 +308,8 @@ struct Running {
     flash: flash::State,
     /// The turntable, the 360 loop and the timelapse (see app/recording.rs).
     recording: recording::State,
+    /// A picture being rendered (app/still.rs).
+    still: Option<still::StillRun>,
     /// Settings, recent files and whether the scene has unsaved work.
     files: files::State,
     /// The copies kept against a crash (see app/recovery.rs).
@@ -559,6 +572,7 @@ impl Running {
                 tools: Default::default(),
                 turntable: Default::default(),
                 timelapse: Default::default(),
+                still: Default::default(),
             },
             input: Input {
                 pointer: Vec2::new(-1.0, -1.0),
@@ -597,6 +611,7 @@ impl Running {
             transform: Default::default(),
             flash: Default::default(),
             recording: Default::default(),
+            still: None,
             files,
             recovery,
             older: Default::default(),
@@ -1465,6 +1480,21 @@ impl Running {
                     self.load_hdri(path);
                 }
             }
+            Action::LoadLut => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose a colour table")
+                    .add_filter("3D LUT", &["cube"])
+                    .pick_file();
+                if let Some(path) = picked {
+                    self.load_lut(path);
+                }
+            }
+            Action::ClearLut => {
+                self.renderer.set_lut(&self.gpu, None);
+                let lut = &mut self.doc.opts.look.lut;
+                (lut.loaded, lut.failed, lut.path) = (false, false, None);
+                lut.status = "No colour table loaded.".into();
+            }
             Action::ClearHdri => {
                 self.renderer.set_hdri(&self.gpu, None);
                 let hdri = &mut self.doc.opts.look.hdri;
@@ -1569,6 +1599,26 @@ impl Running {
         self.redraw = true;
     }
 
+    /// Loads `path` as the colour table the picture is graded by. A file that
+    /// cannot be read leaves the previous table in place.
+    fn load_lut(&mut self, path: PathBuf) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match crate::render::lut::Lut::load(&path) {
+            Ok(table) => {
+                self.renderer.set_lut(&self.gpu, Some(&table));
+                let lut = &mut self.doc.opts.look.lut;
+                lut.status = format!("{name} ({0} x {0} x {0})", table.size);
+                (lut.path, lut.loaded, lut.failed) = (Some(path), true, false);
+            }
+            Err(e) => {
+                let lut = &mut self.doc.opts.look.lut;
+                lut.status = e;
+                lut.failed = true;
+            }
+        }
+        self.redraw = true;
+    }
+
     /// The material, lighting and environment inputs of this frame.
     fn look_uniform(&self) -> crate::look::LookUniform {
         let o = &self.doc.opts;
@@ -1588,6 +1638,7 @@ impl Running {
             time: self.time() as f32,
             gradient_background: o.gradient_background,
             smoothness: o.smoothness,
+            shadow_size: o.quality.shadow_size(),
         })
     }
 
@@ -2000,7 +2051,12 @@ impl Running {
             .collect();
         self.redraw |= self.flash.animating();
         self.renderer.flash.show(&self.gpu, &globals.view_proj, &pulses);
+        // A still picture refines (render/refine.rs), but not between the
+        // dabs of a stroke: a pause there is not the end of it.
+        let quality = &self.doc.opts.quality;
+        self.renderer.refine_to = if self.doc.sculptor.is_active() { 1 } else { quality.refine_samples() };
         self.renderer.draw(&self.gpu, &mut encoder, &target, size, &globals, &look, &self.doc.opts, &items);
+        self.redraw |= self.renderer.refining();
 
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [size.0, size.1],

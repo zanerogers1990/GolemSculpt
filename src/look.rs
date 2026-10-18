@@ -60,6 +60,10 @@ pub struct LightingPreset {
     pub shadow_strength: f32,
     /// Strength of the environment reflection.
     pub reflection: f32,
+    /// How wide the key light looks from the subject, in degrees: a small
+    /// hard source casts crisp shadows, a big softbox soft ones. The shadow
+    /// is crisp where it meets what casts it and softens with distance.
+    pub light_size: f32,
 }
 
 pub const LIGHTING: [LightingPreset; 8] = [
@@ -79,6 +83,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.16, 0.15, 0.14],
         shadow_strength: 0.75,
         reflection: 0.6,
+        light_size: 6.0,
     },
     LightingPreset {
         id: "softclay",
@@ -96,6 +101,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.21, 0.20, 0.19],
         shadow_strength: 0.35,
         reflection: 0.4,
+        light_size: 14.0,
     },
     LightingPreset {
         id: "highkey",
@@ -113,6 +119,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.36, 0.35, 0.34],
         shadow_strength: 0.25,
         reflection: 0.8,
+        light_size: 16.0,
     },
     LightingPreset {
         id: "vibrant",
@@ -130,6 +137,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.15, 0.10, 0.15],
         shadow_strength: 0.7,
         reflection: 0.7,
+        light_size: 6.0,
     },
     LightingPreset {
         id: "cinematic",
@@ -147,6 +155,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.06, 0.06, 0.06],
         shadow_strength: 0.9,
         reflection: 0.5,
+        light_size: 4.0,
     },
     LightingPreset {
         id: "golden",
@@ -164,6 +173,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.18, 0.12, 0.08],
         shadow_strength: 0.85,
         reflection: 0.6,
+        light_size: 3.0,
     },
     LightingPreset {
         id: "moody",
@@ -181,6 +191,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.02, 0.02, 0.02],
         shadow_strength: 1.0,
         reflection: 0.25,
+        light_size: 5.0,
     },
     LightingPreset {
         id: "dramatic",
@@ -198,6 +209,7 @@ pub const LIGHTING: [LightingPreset; 8] = [
         ambient_ground: [0.01, 0.01, 0.01],
         shadow_strength: 1.0,
         reflection: 0.2,
+        light_size: 2.0,
     },
 ];
 
@@ -845,6 +857,98 @@ pub const WOODS: [WoodPreset; 6] = [
     },
 ];
 
+/// One cast-resin look, for seeing a print or a casting as a buyer will: a
+/// glossy surface that reflects at a glance and lets the world through head
+/// on, bent by the resin and tinted by as much of it as the view crosses.
+pub struct ResinPreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    /// The colour light takes on through `depth` of resin.
+    pub color: Rgb,
+    /// How much resin, as a fraction of the model's size, gives that colour.
+    pub depth: f32,
+    /// Milkiness: how much of the light scatters inside instead of passing
+    /// through (0 water-clear, 1 opaque).
+    pub haze: f32,
+    pub smoothness: f32,
+    /// Light from behind glowing through.
+    pub transmission: f32,
+}
+
+pub const RESINS: [ResinPreset; 7] = [
+    ResinPreset {
+        id: "clear",
+        name: "Clear",
+        description: "Water-clear casting resin: all reflections and the world seen through it.",
+        color: [0.96, 0.98, 1.0],
+        depth: 0.6,
+        haze: 0.02,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "smoky",
+        name: "Smoky",
+        description: "Smoky grey resin: dark where it is thick, see-through at the edges.",
+        color: [0.42, 0.40, 0.38],
+        depth: 0.15,
+        haze: 0.05,
+        smoothness: 0.95,
+        transmission: 0.8,
+    },
+    ResinPreset {
+        id: "amber",
+        name: "Amber",
+        description: "Warm amber, golden at the edges and deep honey in the thick parts.",
+        color: [1.0, 0.62, 0.18],
+        depth: 0.25,
+        haze: 0.04,
+        smoothness: 0.96,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "ruby",
+        name: "Ruby",
+        description: "Deep transparent red.",
+        color: [0.9, 0.06, 0.14],
+        depth: 0.2,
+        haze: 0.03,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "emerald",
+        name: "Emerald",
+        description: "Transparent green.",
+        color: [0.12, 0.78, 0.38],
+        depth: 0.2,
+        haze: 0.03,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "sapphire",
+        name: "Sapphire",
+        description: "Transparent blue.",
+        color: [0.12, 0.32, 0.95],
+        depth: 0.2,
+        haze: 0.03,
+        smoothness: 0.97,
+        transmission: 1.0,
+    },
+    ResinPreset {
+        id: "frosted",
+        name: "Frosted",
+        description: "Milky translucent white, like a frosted print: light glows through it softly.",
+        color: [0.95, 0.96, 1.0],
+        depth: 0.4,
+        haze: 0.55,
+        smoothness: 0.6,
+        transmission: 1.0,
+    },
+];
+
 /// One glow look: an emissive layer over whatever shades the surface. The
 /// pattern number is what the shader switches on.
 pub struct GlowPreset {
@@ -1006,10 +1110,12 @@ pub enum Finish {
     Metal,
     Clay,
     Wood,
+    Resin,
 }
 
 impl Finish {
-    pub const ALL: [Finish; 5] = [Finish::None, Finish::LurePlastic, Finish::Metal, Finish::Clay, Finish::Wood];
+    pub const ALL: [Finish; 6] =
+        [Finish::None, Finish::LurePlastic, Finish::Metal, Finish::Clay, Finish::Wood, Finish::Resin];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -1018,15 +1124,51 @@ impl Finish {
             Finish::Metal => "Metal",
             Finish::Clay => "Clay",
             Finish::Wood => "Wood",
+            Finish::Resin => "Resin",
         }
     }
 }
 
+/// The tone curve that brings the scene's light into what a screen shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Tonemap {
     None,
+    /// The Unity pipeline's neutral curve.
     Neutral,
     Aces,
+    /// Khronos PBR Neutral: colours as they are up to near white, only the
+    /// brightest rolled off, so a product's colours come out true. The curve
+    /// new scenes start with.
+    PbrNeutral,
+    /// Troy Sobotka's AgX: a filmic roll-off that keeps bright saturated
+    /// colours from turning flat and garish.
+    Agx,
+}
+
+impl Tonemap {
+    /// As the choice in the Backdrop & Effects card shows them, in its order.
+    pub const ALL: [Tonemap; 5] = [Tonemap::PbrNeutral, Tonemap::Agx, Tonemap::Aces, Tonemap::Neutral, Tonemap::None];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tonemap::PbrNeutral => "PBR Neutral",
+            Tonemap::Agx => "AgX",
+            Tonemap::Aces => "ACES",
+            Tonemap::Neutral => "Neutral",
+            Tonemap::None => "None",
+        }
+    }
+
+    /// The number the post shader switches on (`post.grade.x`).
+    pub fn shader_index(self) -> f32 {
+        match self {
+            Tonemap::None => 0.0,
+            Tonemap::Neutral => 1.0,
+            Tonemap::Aces => 2.0,
+            Tonemap::PbrNeutral => 3.0,
+            Tonemap::Agx => 4.0,
+        }
+    }
 }
 
 // The sliders below are adjustments on top of whichever preset is picked
@@ -1092,6 +1234,25 @@ pub struct WoodSettings {
 }
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ResinSettings {
+    #[serde(with = "crate::io::preset::resin")]
+    pub preset: usize,
+    /// How see-through it is: more lets light further in before its colour
+    /// takes over.
+    pub clarity: f32,
+    pub haze: f32,
+    pub gloss: f32,
+    pub reference: f32,
+}
+
+impl Default for ResinSettings {
+    fn default() -> Self {
+        Self { preset: 0, clarity: 1.0, haze: 1.0, gloss: 1.0, reference: 0.0 }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GlowSettings {
     pub on: bool,
     #[serde(with = "crate::io::preset::glow")]
@@ -1105,6 +1266,51 @@ pub struct GlowSettings {
     pub dim: f32,
     pub hue_shift: f32,
     pub reference: f32,
+}
+
+/// The floor under the model: the backdrop itself, catching the key light's
+/// shadow and the shading where the model meets it, and if glossy a soft
+/// reflection of the model. It sits under the lowest point of what is shown
+/// and fades out into the backdrop all round, so it has no edge.
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct FloorSettings {
+    pub on: bool,
+    /// How dark the model's shadow on it gets (0..1).
+    pub shadow: f32,
+    /// How strongly it reflects the model (0 for not at all).
+    pub reflection: f32,
+    /// How blurred that reflection is: 0 a mirror, 1 a satin.
+    pub roughness: f32,
+}
+
+impl Default for FloorSettings {
+    fn default() -> Self {
+        Self { on: false, shadow: 0.85, reflection: 0.0, roughness: 0.3 }
+    }
+}
+
+/// Colour grading by a .cube look-up table (render/lut.rs). The table itself
+/// is not in the scene file, only where it was, like the HDRI.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LutSettings {
+    pub path: Option<PathBuf>,
+    /// How much of the table's grading shows (0 none, 1 all).
+    pub strength: f32,
+    /// Set once a table is loaded (the renderer holds it).
+    #[serde(skip)]
+    pub loaded: bool,
+    #[serde(skip)]
+    pub status: String,
+    #[serde(skip)]
+    pub failed: bool,
+}
+
+impl Default for LutSettings {
+    fn default() -> Self {
+        Self { path: None, strength: 1.0, loaded: false, status: "No colour table loaded.".into(), failed: false }
+    }
 }
 
 /// Image-based lighting from an equirectangular picture.
@@ -1146,6 +1352,8 @@ pub struct Look {
     pub metal: MetalSettings,
     pub clay: ClaySettings,
     pub wood: WoodSettings,
+    #[serde(default)]
+    pub resin: ResinSettings,
     pub glow: GlowSettings,
 
     #[serde(with = "crate::io::preset::lighting")]
@@ -1161,12 +1369,27 @@ pub struct Look {
     #[serde(with = "crate::io::vec3")]
     pub world_forward: Vec3,
     pub shadows: bool,
+    /// How big the lights are against the preset's sizes (1 = as the preset
+    /// has them, 0 = points): the key's shadow and every softbox's highlight.
+    #[serde(default = "one")]
+    pub shadow_softness: f32,
+    /// Light the model with softboxes (rectangles facing it, render/ltc.rs)
+    /// rather than plain directions: long soft highlights on gloss.
+    #[serde(default = "yes")]
+    pub softboxes: bool,
     pub hdri: HdriSettings,
+    /// The shadow-catching floor (off unless asked for).
+    #[serde(default)]
+    pub floor: FloorSettings,
     /// Show the HDRI behind the model (when one is on).
     pub hdri_background: bool,
     pub gradient_bias: f32,
 
     pub ambient_occlusion: bool,
+    /// Crisp shadows in fine creases, toward every light, where the shadow
+    /// map is too coarse (drawn when the picture holds still).
+    #[serde(default = "yes")]
+    pub contact_shadows: bool,
     pub bloom: bool,
     pub bloom_intensity: f32,
     pub bloom_threshold: f32,
@@ -1176,6 +1399,19 @@ pub struct Look {
     pub grading: bool,
     pub saturation: f32,
     pub contrast: f32,
+    /// Film grain over the finished picture (0 none, 1 heavy).
+    #[serde(default)]
+    pub film_grain: f32,
+    /// Crisper edges (0 none, 1 strong).
+    #[serde(default)]
+    pub sharpen: f32,
+    /// A colour table graded over the finished picture.
+    #[serde(default)]
+    pub lut: LutSettings,
+    /// Brightness of the whole picture in photographic stops: +1 doubles
+    /// the light, -1 halves it. Applied before the tone curve.
+    #[serde(default)]
+    pub exposure: f32,
     pub tonemap: Tonemap,
     /// Blur what is nearer or farther than the focus distance, as a camera
     /// lens does.
@@ -1185,6 +1421,16 @@ pub struct Look {
     pub focus_distance: f32,
     /// The lens's f-number, 1-32: lower blurs more.
     pub aperture: f32,
+}
+
+/// For settings added after scenes were first saved: what a file without
+/// them reads as.
+fn one() -> f32 {
+    1.0
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Look {
@@ -1239,6 +1485,7 @@ impl Default for Look {
                 seed: 0.0,
                 reference: 0.0,
             },
+            resin: ResinSettings::default(),
             glow: GlowSettings {
                 on: false,
                 preset: 0,
@@ -1259,6 +1506,8 @@ impl Default for Look {
             follow_camera: true,
             world_forward: Vec3::NEG_Z,
             shadows: true,
+            shadow_softness: 1.0,
+            softboxes: true,
             hdri: HdriSettings {
                 enabled: false,
                 loaded: false,
@@ -1270,9 +1519,11 @@ impl Default for Look {
                 ambient: 1.0,
                 reflection: 1.0,
             },
+            floor: FloorSettings::default(),
             hdri_background: false,
             gradient_bias: 1.0,
             ambient_occlusion: true,
+            contact_shadows: true,
             bloom: true,
             bloom_intensity: 0.25,
             bloom_threshold: 1.0,
@@ -1282,7 +1533,11 @@ impl Default for Look {
             grading: false,
             saturation: 0.0,
             contrast: 0.0,
-            tonemap: Tonemap::Neutral,
+            film_grain: 0.0,
+            sharpen: 0.0,
+            lut: LutSettings::default(),
+            exposure: 0.0,
+            tonemap: Tonemap::PbrNeutral,
             // Off, at the Unity pipeline's own starting focus and aperture.
             depth_of_field: false,
             focus_distance: 10.0,
@@ -1315,6 +1570,7 @@ impl Look {
             Finish::Metal => &mut self.metal.reference,
             Finish::Clay => &mut self.clay.reference,
             Finish::Wood => &mut self.wood.reference,
+            Finish::Resin => &mut self.resin.reference,
         };
         if *reference <= 0.0 {
             *reference = size;
@@ -1331,6 +1587,7 @@ impl Look {
             Finish::Metal => (self.metal.preset, self.metal.reference) = (preset, size),
             Finish::Clay => (self.clay.preset, self.clay.reference) = (preset, size),
             Finish::Wood => (self.wood.preset, self.wood.reference) = (preset, size),
+            Finish::Resin => (self.resin.preset, self.resin.reference) = (preset, size),
         }
         self.finish = finish;
     }
@@ -1381,8 +1638,15 @@ pub struct LookUniform {
     /// x count, y shadows on, z shadow strength, w time in seconds
     pub light_params: [f32; 4],
     pub shadow_view_proj: [[f32; 4]; 4],
-    /// x one shadow texel in uv, y depth bias, z normal bias (world units)
+    /// x one shadow texel in uv, y depth bias, z normal bias (world units),
+    /// w 1 while the shadow changes frame after frame (the renderer sets it:
+    /// its soft edge then takes half the taps)
     pub shadow_params: [f32; 4],
+    /// x the map's width in world units (world per uv), y world units per
+    /// unit of map depth, z tangent of the key light's angular radius (how
+    /// fast its shadow softens with distance), w the part of the texture the
+    /// map fills (1; the renderer makes it less while it draws the map small)
+    pub shadow_soft: [f32; 4],
     /// Ambient light as nine spherical harmonic terms, ready to evaluate.
     pub sh: [[f32; 4]; 9],
     pub ambient_sky: [f32; 4],
@@ -1408,6 +1672,23 @@ pub struct LookUniform {
     /// The finish's own settings (see [`FinishParams`]), and the glow's.
     pub finish: FinishParams,
     pub glow: FinishParams,
+    /// The floor: x 1 when it shows, y its height, z how far it reaches from
+    /// its middle (it has faded out there), w how dark shadows on it get
+    pub floor: [f32; 4],
+    /// x z its middle, z how strongly it reflects the model, w how blurred
+    pub floor_more: [f32; 4],
+    /// Each light as a softbox (render/ltc.rs): its middle, w 1 for a
+    /// softbox (0 for a plain direction); half its width as a vector, w pi
+    /// over its solid angle from the subject (the radiance that gives its
+    /// intensity there); half its height, w its distance from the subject
+    /// squared (its diffuse light falls off from there).
+    pub light_pos: [[f32; 4]; MAX_LIGHTS],
+    pub light_side: [[f32; 4]; MAX_LIGHTS],
+    pub light_up: [[f32; 4]; MAX_LIGHTS],
+    /// x how far the contact shadows march toward each light, as a fraction
+    /// of the view's height at the surface's depth (0 for none; the renderer
+    /// clears it while the picture moves)
+    pub contact: [f32; 4],
 }
 
 /// A finish's settings as its shader function reads them: sixteen groups of
@@ -1439,6 +1720,7 @@ pub const METAL_SLOTS: usize = 10;
 pub const CLAY_SLOTS: usize = 6;
 pub const WOOD_SLOTS: usize = 12;
 pub const GLOW_SLOTS: usize = 5;
+pub const RESIN_SLOTS: usize = 2;
 
 /// What the uniform builder needs to know about the frame.
 pub struct Frame {
@@ -1459,11 +1741,107 @@ pub struct Frame {
     pub gradient_background: bool,
     /// The model's own smoothness (the plain finish's gloss).
     pub smoothness: f32,
+    /// Side of the shadow map the renderer draws (render/quality.rs).
+    pub shadow_size: u32,
 }
 
-/// Side of the square shadow map. Deliberately modest: with the soft filter
-/// it gives the same penumbra width on a model as the Unity app's cascades.
-pub const SHADOW_SIZE: u32 = 512;
+/// How far the softboxes stand from the middle of the scene, in its radii:
+/// a studio's distance, near enough that a highlight moves across a form.
+const SOFTBOX_DISTANCE: f32 = 3.0;
+
+/// The softbox light `i` of a preset is, in degrees across and up as seen
+/// from the subject: the key as the preset's light size, the fill a bank
+/// twice that, the rim and kicker tall strips, the top a wide overhead.
+fn softbox(preset: &LightingPreset, i: usize) -> (f32, f32) {
+    let s = preset.light_size;
+    match i {
+        0 => (s, s),
+        1 => (s * 2.0, s * 2.0),
+        2 | 3 => (s * 0.5, s * 2.5),
+        _ => (s * 1.5, s * 1.5),
+    }
+}
+
+/// The key light's shadow map, fitted to the scene: the box of everything
+/// shown, seen from the light, inside the map's square with a little room
+/// at the edges for the soft filter, and in depth inside the map's middle
+/// half (casters are pushed away from the light a little, which must not
+/// push them out of it).
+pub struct ShadowFit {
+    /// The light's axes: across, up, and toward the light.
+    x: Vec3,
+    y: Vec3,
+    key: Vec3,
+    /// The middle of the map, along `x` and `y`.
+    centre: [f32; 2],
+    /// Along `key`, the side of the box nearest the light and how deep it is.
+    near: f32,
+    /// The map's side, in world units.
+    pub side: f32,
+    /// World units per unit of map depth.
+    pub depth: f32,
+}
+
+impl ShadowFit {
+    /// With `floor` (its height, under the box) the map also takes in where
+    /// the box's shadow falls on the floor, so the shadow is not cut off at
+    /// the map's edge however low the light.
+    pub fn around(key: Vec3, min: Vec3, max: Vec3, floor: Option<f32>) -> ShadowFit {
+        let (min, max) =
+            if min.is_finite() && max.is_finite() && min.cmple(max).all() { (min, max) } else { (Vec3::splat(-0.5), Vec3::splat(0.5)) };
+        let up = if key.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
+        let x = up.cross(key).normalize();
+        let y = key.cross(x);
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        let mut take = |p: Vec3| {
+            let q = Vec3::new(p.dot(x), p.dot(y), p.dot(key));
+            lo = lo.min(q);
+            hi = hi.max(q);
+        };
+        // The longest a shadow on the floor is followed: a light near the
+        // horizon would otherwise stretch the map over a great deal of floor.
+        let longest = (max - min).max_element().max(1e-3) * 3.0;
+        for i in 0..8 {
+            let p = Vec3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            );
+            take(p);
+            if let Some(height) = floor.filter(|h| h.is_finite() && key.y > 0.05) {
+                let along = ((p.y - height) / key.y).min(longest);
+                take(p - key * along);
+            }
+        }
+        let extent = (hi - lo).max(Vec3::splat(1e-4));
+        // A twentieth more on every side: the widest soft edge stays on the map.
+        let side = extent.x.max(extent.y) * 1.1;
+        ShadowFit {
+            x,
+            y,
+            key,
+            centre: [(lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5],
+            near: hi.z,
+            side,
+            // The box's depth fills half the map's.
+            depth: extent.z * 2.0,
+        }
+    }
+
+    /// World to the map: x and y -1..1 across it, depth 0..1 away from the
+    /// light with the box between a quarter and three quarters.
+    pub fn view_proj(&self) -> Mat4 {
+        let half = self.side * 0.5;
+        let rows = [
+            (self.x / half).extend(-self.centre[0] / half),
+            (self.y / half).extend(-self.centre[1] / half),
+            (-self.key / self.depth).extend(0.25 + self.near / self.depth),
+            glam::Vec4::W,
+        ];
+        Mat4::from_cols(rows[0], rows[1], rows[2], rows[3]).transpose()
+    }
+}
 
 const fn idx(i: usize, len: usize) -> usize {
     if i < len { i } else { len - 1 }
@@ -1554,6 +1932,36 @@ impl Look {
             u.light_dir[i] = [d.x, d.y, d.z, 0.0];
             u.light_color[i] = [c[0] * k, c[1] * k, c[2] * k, 0.0];
         }
+        // Softboxes: each light a rectangle facing the middle of the scene
+        // from its direction, studio-far, as big as the preset says.
+        if self.softboxes {
+            let (min, max) = (f.scene_min, f.scene_max);
+            let (centre, radius) = if min.is_finite() && max.is_finite() {
+                ((min + max) * 0.5, ((max - min).length() * 0.5).max(1e-3))
+            } else {
+                (Vec3::ZERO, 1.0)
+            };
+            let distance = radius * SOFTBOX_DISTANCE;
+            let size = self.shadow_softness.clamp(0.0, 4.0);
+            for i in 0..count {
+                let (across, high) = softbox(preset, i);
+                let (half_w, half_h) =
+                    ((across * size).to_radians() * 0.5, (high * size).to_radians() * 0.5);
+                if half_w.min(half_h) < 0.002 {
+                    // Too small to be anything but a point: a direction.
+                    continue;
+                }
+                let d = Vec3::from_slice(&u.light_dir[i][..3]);
+                let right = Vec3::Y.cross(d).normalize_or(Vec3::X);
+                let up = d.cross(right);
+                let (a, b) = (distance * half_w.tan(), distance * half_h.tan());
+                // The solid angle of the rectangle from its middle's axis.
+                let solid = 4.0 * (a * b / ((a * a + distance * distance) * (b * b + distance * distance)).sqrt()).asin();
+                u.light_pos[i] = (centre + d * distance).extend(1.0).to_array();
+                u.light_side[i] = (right * a).extend(std::f32::consts::PI / solid.max(1e-9)).to_array();
+                u.light_up[i] = (up * b).extend(distance * distance).to_array();
+            }
+        }
         u.light_params = [
             count as f32,
             if self.shadows { 1.0 } else { 0.0 },
@@ -1562,26 +1970,18 @@ impl Look {
         ];
 
         // One shadow map fitted around everything shown.
-        let centre = (f.scene_min + f.scene_max) * 0.5;
-        let radius = ((f.scene_max - f.scene_min).length() * 0.5).max(1e-4);
-        let (centre, radius) = if radius.is_finite() { (centre, radius) } else { (Vec3::ZERO, 1.0) };
         let key = self.light_source(0, f);
-        let up = if key.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
-        let x = up.cross(key).normalize();
-        let y = key.cross(x);
-        // Across the map the scene's sphere fills -1..1; in depth it sits in
-        // the middle half, nearest the light at the small end.
-        let rows = [
-            (x / radius).extend(-centre.dot(x) / radius),
-            (y / radius).extend(-centre.dot(y) / radius),
-            (-key / (4.0 * radius)).extend(0.5 + centre.dot(key) / (4.0 * radius)),
-            glam::Vec4::W,
-        ];
-        u.shadow_view_proj = Mat4::from_cols(rows[0], rows[1], rows[2], rows[3]).transpose().to_cols_array_2d();
+        let floor = self.floor.on.then_some(f.scene_min.y);
+        let fit = ShadowFit::around(key, f.scene_min, f.scene_max, floor);
+        u.shadow_view_proj = fit.view_proj().to_cols_array_2d();
         // The Unity pipeline's biases (depth 0.1, normal 0.5 texels), widened
         // for the soft filter's reach as it does.
-        let texel = radius * 2.0 / SHADOW_SIZE as f32;
-        u.shadow_params = [1.0 / SHADOW_SIZE as f32, 0.1 * texel * 2.5, 0.5 * texel * 2.5, 0.0];
+        let size = f.shadow_size.max(1) as f32;
+        let texel = fit.side / size;
+        u.shadow_params = [1.0 / size, 0.1 * texel * 2.5, 0.5 * texel * 2.5, 0.0];
+        let softness = self.shadow_softness.clamp(0.0, 4.0);
+        let light_tan = (preset.light_size.to_radians() * 0.5 * softness).tan();
+        u.shadow_soft = [fit.side, fit.depth, light_tan, 1.0];
 
         // Ambient and reflection: the HDRI's when one is on, otherwise the
         // preset's sky / equator / ground, scaled in linear space so
@@ -1623,12 +2023,25 @@ impl Look {
             Finish::Metal => 2.0,
             Finish::Clay => 3.0,
             Finish::Wood => 4.0,
+            // 5 is the matcap's pipeline.
+            Finish::Resin => 6.0,
         };
         u.matcap_params = [self.matcap_intensity.clamp(0.0, 3.0), clamp01(self.matcap_tint), finish, 0.0];
         // Masked areas go toward dark grey rather than a colour, as in
         // ZBrush and Blender, so the mask does not read as paint.
         u.mask_tint = rgba([0.1, 0.1, 0.1], 0.6);
 
+        if self.floor.on && f.scene_min.is_finite() && f.scene_max.is_finite() {
+            let (min, max) = (f.scene_min, f.scene_max);
+            let reach = (max.x - min.x).max(max.z - min.z).max(max.y - min.y).max(1e-3) * 1.6;
+            let floor = &self.floor;
+            u.floor = [1.0, min.y, reach, clamp01(floor.shadow)];
+            u.floor_more = [(min.x + max.x) * 0.5, (min.z + max.z) * 0.5, clamp01(floor.reflection), clamp01(floor.roughness)];
+        }
+        // Contact shadows march a sixtieth of the view's height.
+        if self.contact_shadows {
+            u.contact[0] = 1.0 / 60.0;
+        }
         u.finish = self.finish_params(self.finish, f);
         if self.glow.on {
             u.glow = self.pack_glow(self.size_of(self.glow.reference, f));
@@ -1650,6 +2063,7 @@ impl Look {
             Finish::Metal => self.pack_metal(self.size_of(self.metal.reference, f)),
             Finish::Clay => self.pack_clay(self.size_of(self.clay.reference, f)),
             Finish::Wood => self.pack_wood(self.size_of(self.wood.reference, f)),
+            Finish::Resin => self.pack_resin(self.size_of(self.resin.reference, f)),
         }
     }
 
@@ -1778,6 +2192,16 @@ impl Look {
         ])
     }
 
+    /// The cast resin (see `finish_resin`), its depths at `size`.
+    pub fn pack_resin(&self, size: f32) -> FinishParams {
+        let s = &self.resin;
+        let p = &RESINS[idx(s.preset, RESINS.len())];
+        FinishParams::of::<RESIN_SLOTS>([
+            rgba(p.color, p.depth * size * s.clarity.clamp(0.05, 10.0)),
+            [clamp01(p.haze * s.haze), clamp01(p.smoothness * s.gloss), p.transmission, 0.0],
+        ])
+    }
+
     /// The glow (see `finish_glow`), its pattern at `size`. v[2].x is 1: on.
     pub fn pack_glow(&self, size: f32) -> FinishParams {
         let s = &self.glow;
@@ -1816,12 +2240,16 @@ pub fn load_hdri(path: &std::path::Path) -> Result<HdriImage, String> {
     if !matches!(ext.as_str(), "hdr" | "exr" | "png" | "jpg" | "jpeg") {
         return Err(format!("Unsupported format .{ext}."));
     }
-    let image = image::ImageReader::open(path)
+    let mut reader = image::ImageReader::open(path)
         .map_err(|e| format!("Could not read file: {e}"))?
         .with_guessed_format()
-        .map_err(|e| format!("Could not read file: {e}"))?
-        .decode()
         .map_err(|e| format!("Could not read file: {e}"))?;
+    // The decoder's own limit (512 MB) refuses the 16K pictures HDRI sites
+    // offer, which are shrunk to MAX_WIDTH straight after anyway.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(8 << 30);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|e| format!("Could not read file: {e}"))?;
     // Bigger than this gains nothing on screen and costs a great deal of memory.
     const MAX_WIDTH: u32 = 8192;
     let image = if image.width() > MAX_WIDTH {
@@ -1867,12 +2295,17 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// Applies shading settings written as `key=value,key=value` (the `--look`
 /// option, for visual checks). Returns an HDRI to load, if one was named.
 ///
-/// Keys: `matcap`, `panels`, `gradient`, `flat`, `five`, `follow`, `shadows`, `ao`,
+/// Keys: `matcap`, `panels`, `gradient`, `flat`, `five`, `follow`, `shadows`, `ao`, `contact`,
 /// `bloom`, `vignette`, `hdribg`, `dof` (on / off); `finish` (none, lure, metal,
 /// clay, wood, optionally `:preset`); `glow` (off or a preset); `light` (a
-/// preset); `tonemap` (none, neutral, aces); `brightness`, `rotation`,
-/// `metallic`, `smoothness`, `normal`, `focus`, `aperture` (numbers); `hdri`
-/// (a file).
+/// preset); `tonemap` (none, neutral, aces, pbr, agx); `brightness`, `rotation`, `exposure`,
+/// `metallic`, `smoothness`, `normal`, `focus`, `aperture`, `softness`
+/// (numbers); `shadowmap`, `reflections` (the shadow map's and the
+/// reflection cube's sides); `refine` (on / off) and `samples` (how many);
+/// `floor` (on / off) with `floorshadow`, `floorreflect`, `floorrough` (numbers);
+/// `softboxes` (on / off);
+/// `backdrop` (a grey, 0 black to 1 white); `grain`, `sharpen` (0 to 1);
+/// `hdri` (a file).
 pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Option<PathBuf> {
     let mut hdri = None;
     for item in spec.split(',') {
@@ -1885,13 +2318,25 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "matcap" => opts.matcap_on = on,
             "panels" => opts.clean_view = !on,
             "gradient" => opts.gradient_background = on,
+            "backdrop" => opts.background = [number.unwrap_or(0.1).clamp(0.0, 1.0); 3],
             "flat" => opts.flat_shading = on,
             "backfaces" => opts.show_backfaces = on,
             "wire" => opts.wireframe = on,
             "five" => look.five_point = on,
             "follow" => look.follow_camera = on,
             "shadows" => look.shadows = on,
+            "softness" => look.shadow_softness = number.unwrap_or(1.0),
+            "softboxes" => look.softboxes = on,
+            "shadowmap" => opts.quality.shadow_map = number.map_or(2048, |n| n as u32),
+            "floor" => look.floor.on = on,
+            "floorshadow" => look.floor.shadow = number.unwrap_or(0.85),
+            "floorreflect" => look.floor.reflection = number.unwrap_or(0.0),
+            "floorrough" => look.floor.roughness = number.unwrap_or(0.3),
+            "reflections" => opts.quality.reflections = number.map_or(256, |n| n as u32),
+            "refine" => opts.quality.refine = on,
+            "samples" => opts.quality.samples = number.map_or(64, |n| n as u32),
             "ao" => look.ambient_occlusion = on,
+            "contact" => look.contact_shadows = on,
             "bloom" => look.bloom = on,
             "vignette" => look.vignette = on,
             "hdribg" => look.hdri_background = on,
@@ -1899,6 +2344,9 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "focus" => look.focus_distance = number.unwrap_or(10.0),
             "aperture" => look.aperture = number.unwrap_or(5.6),
             "brightness" => look.brightness = number.unwrap_or(1.0),
+            "exposure" => look.exposure = number.unwrap_or(0.0),
+            "grain" => look.film_grain = number.unwrap_or(0.0),
+            "sharpen" => look.sharpen = number.unwrap_or(0.0),
             "rotation" => look.rotation = number.unwrap_or(0.0),
             "metallic" => look.metallic = number.unwrap_or(0.0),
             "smoothness" => opts.smoothness = number.unwrap_or(0.4),
@@ -1908,6 +2356,8 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
                 look.tonemap = match value {
                     "none" => Tonemap::None,
                     "aces" => Tonemap::Aces,
+                    "pbr" => Tonemap::PbrNeutral,
+                    "agx" => Tonemap::Agx,
                     _ => Tonemap::Neutral,
                 }
             }
@@ -1927,6 +2377,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
                     "metal" => (Finish::Metal, METALS.iter().position(|p| p.id == preset)),
                     "clay" => (Finish::Clay, CLAYS.iter().position(|p| p.id == preset)),
                     "wood" => (Finish::Wood, WOODS.iter().position(|p| p.id == preset)),
+                    "resin" => (Finish::Resin, RESINS.iter().position(|p| p.id == preset)),
                     _ => (Finish::None, None),
                 };
                 match found {
@@ -1938,4 +2389,183 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
         }
     }
     hdri
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_shadow_map_holds_the_whole_scene_and_little_else() {
+        let (min, max) = (Vec3::new(-1.0, 0.0, -0.5), Vec3::new(2.0, 0.5, 0.5));
+        for key in [Vec3::Y, Vec3::new(-0.49, 0.64, 0.59).normalize(), Vec3::new(0.3, -0.2, -0.93).normalize()] {
+            let fit = ShadowFit::around(key, min, max, None);
+            let m = fit.view_proj();
+            let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+            for i in 0..8 {
+                let p = Vec3::new(
+                    if i & 1 == 0 { min.x } else { max.x },
+                    if i & 2 == 0 { min.y } else { max.y },
+                    if i & 4 == 0 { min.z } else { max.z },
+                );
+                let q = m.project_point3(p);
+                lo = lo.min(q);
+                hi = hi.max(q);
+            }
+            // Every corner on the map, inside the room left for soft edges...
+            assert!(lo.x >= -1.0 && hi.x <= 1.0 && lo.y >= -1.0 && hi.y <= 1.0, "{key}: {lo} {hi}");
+            // ...the longer side filling it bar that room...
+            let filled = (hi.x - lo.x).max(hi.y - lo.y) / 2.0;
+            assert!((filled - 1.0 / 1.1).abs() < 1e-4, "{key}: {filled}");
+            // ...and in depth the middle half, nearest the light first.
+            assert!((lo.z - 0.25).abs() < 1e-4 && (hi.z - 0.75).abs() < 1e-4, "{key}: {lo} {hi}");
+            let toward = m.project_point3((min + max) * 0.5 + key);
+            assert!(toward.z < 0.5, "nearer the light is smaller depth");
+        }
+        // Nothing to fit, or bounds that are not numbers: a unit box instead.
+        let fit = ShadowFit::around(Vec3::Y, Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY), None);
+        assert!(fit.side.is_finite() && fit.side > 0.0 && fit.depth > 0.0);
+    }
+
+    #[test]
+    fn with_a_floor_the_shadow_map_takes_in_where_the_shadow_lands() {
+        let (min, max) = (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        // A low light from the side: the shadow runs a long way over the floor.
+        let key = Vec3::new(1.0, 0.4, 0.0).normalize();
+        let bare = ShadowFit::around(key, min, max, None);
+        let floored = ShadowFit::around(key, min, max, Some(0.0));
+        // Along the light a shadow stays where its caster is across the map;
+        // what the floor needs is depth, out to where the shadow lands.
+        assert!((floored.side - bare.side).abs() < 1e-5);
+        assert!(floored.depth > bare.depth * 1.5, "{} {}", floored.depth, bare.depth);
+        // The tip of the shadow of the top far corner is on the map, and
+        // within its depth (beyond it would read as lit).
+        let top = Vec3::new(0.5, 1.0, 0.5);
+        let tip = top - key * (top.y / key.y);
+        let q = floored.view_proj().project_point3(tip);
+        assert!(q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && q.z > 0.0 && q.z < 1.0, "{q}");
+        assert!(bare.view_proj().project_point3(tip).z > 1.0, "without the floor it was beyond the map");
+        // A light below the floor casts nothing onto it: no change.
+        let under = Vec3::new(0.3, -0.5, 0.2).normalize();
+        assert_eq!(ShadowFit::around(under, min, max, Some(0.0)).depth, ShadowFit::around(under, min, max, None).depth);
+    }
+
+    #[test]
+    fn the_floor_lies_under_the_lowest_point_and_is_off_in_a_file_from_before() {
+        let mut look: Look = crate::io::read_over(&Look::default(), &serde_json::json!({ "shadows": true })).unwrap();
+        assert!(!look.floor.on);
+        let frame = Frame {
+            cam_right: Vec3::X,
+            cam_up: Vec3::Y,
+            cam_forward: Vec3::NEG_Z,
+            ortho_half_height: None,
+            eye_offset: 0.0,
+            scene_min: Vec3::new(-1.0, -0.25, -2.0),
+            scene_max: Vec3::new(3.0, 1.0, 2.0),
+            model_size: 4.0,
+            time: 0.0,
+            gradient_background: false,
+            smoothness: 0.4,
+            shadow_size: 2048,
+        };
+        assert_eq!(look.uniform(&frame).floor[0], 0.0, "off: the shader draws none");
+        look.floor.on = true;
+        let u = look.uniform(&frame);
+        assert_eq!(u.floor[0], 1.0);
+        assert_eq!(u.floor[1], -0.25, "under the lowest point");
+        assert_eq!([u.floor_more[0], u.floor_more[1]], [1.0, 0.0], "centred under the scene");
+        assert!(u.floor[2] >= 4.0 * 1.5, "reaching well past the scene before it fades out");
+    }
+
+    #[test]
+    fn a_softbox_lights_the_subject_as_the_light_it_stands_for() {
+        let look = Look { five_point: true, ..Look::default() };
+        let frame = Frame {
+            cam_right: Vec3::X,
+            cam_up: Vec3::Y,
+            cam_forward: Vec3::NEG_Z,
+            ortho_half_height: None,
+            eye_offset: 0.0,
+            scene_min: Vec3::splat(-1.0),
+            scene_max: Vec3::splat(1.0),
+            model_size: 2.0,
+            time: 0.0,
+            gradient_background: false,
+            smoothness: 0.4,
+            shadow_size: 2048,
+        };
+        let u = look.uniform(&frame);
+        for i in 0..5 {
+            assert_eq!(u.light_pos[i][3], 1.0, "light {i} is a softbox");
+            let d = Vec3::from_slice(&u.light_dir[i][..3]);
+            let c = Vec3::from_slice(&u.light_pos[i][..3]);
+            let (side, up) = (Vec3::from_slice(&u.light_side[i][..3]), Vec3::from_slice(&u.light_up[i][..3]));
+            let corners = [c - side - up, c + side - up, c + side + up, c - side + up];
+            // At the middle of the scene, facing the light: what a direction
+            // of the same intensity gives, nl = 1.
+            let diffuse = crate::render::ltc_integral(d, d, Vec3::ZERO, glam::Mat3::IDENTITY, corners)
+                * u.light_side[i][3]
+                / std::f32::consts::TAU;
+            assert!((diffuse - 1.0).abs() < 0.02, "light {i}: {diffuse}");
+            // Turned 60 degrees from it: half, as the cosine has it.
+            let away = (d.any_orthonormal_vector() * 3f32.sqrt() + d).normalize() * 1.0;
+            let n = (d * 0.5 + d.cross(away).cross(d).normalize() * (3f32.sqrt() / 2.0)).normalize();
+            let tilted = crate::render::ltc_integral(n, n, Vec3::ZERO, glam::Mat3::IDENTITY, corners)
+                * u.light_side[i][3]
+                / std::f32::consts::TAU;
+            assert!((tilted - 0.5).abs() < 0.03, "light {i} at 60 degrees: {tilted}");
+        }
+    }
+
+    #[test]
+    fn softness_widens_the_key_light_and_zero_makes_it_a_point() {
+        let mut look = Look::default();
+        let frame = Frame {
+            cam_right: Vec3::X,
+            cam_up: Vec3::Y,
+            cam_forward: Vec3::NEG_Z,
+            ortho_half_height: None,
+            eye_offset: 0.0,
+            scene_min: Vec3::splat(-1.0),
+            scene_max: Vec3::splat(1.0),
+            model_size: 2.0,
+            time: 0.0,
+            gradient_background: false,
+            smoothness: 0.4,
+            shadow_size: 2048,
+        };
+        let usual = look.uniform(&frame).shadow_soft[2];
+        let expected = (look.preset().light_size.to_radians() * 0.5).tan();
+        assert!((usual - expected).abs() < 1e-6);
+        look.shadow_softness = 2.0;
+        assert!(look.uniform(&frame).shadow_soft[2] > usual * 1.9);
+        look.shadow_softness = 0.0;
+        assert_eq!(look.uniform(&frame).shadow_soft[2], 0.0);
+        // A bigger map has finer texels.
+        let fine = look.uniform(&frame).shadow_params;
+        let coarse = look.uniform(&Frame { shadow_size: 512, ..frame }).shadow_params;
+        assert_eq!(fine[0] * 4.0, coarse[0]);
+        assert!(fine[1] < coarse[1] && fine[2] < coarse[2]);
+    }
+
+    #[test]
+    fn new_scenes_get_pbr_neutral_and_saved_ones_keep_their_curve() {
+        assert_eq!(Look::default().tonemap, Tonemap::PbrNeutral);
+        assert_eq!(Look::default().exposure, 0.0);
+        // A scene from before: its curve as it was, and no change of exposure.
+        let saved = serde_json::json!({ "tonemap": "Neutral", "bloom": false });
+        let look: Look = crate::io::read_over(&Look::default(), &saved).unwrap();
+        assert_eq!((look.tonemap, look.exposure, look.bloom), (Tonemap::Neutral, 0.0, false));
+        // Each curve has its own number in the shader and its own place in the card.
+        let mut numbers: Vec<f32> = Tonemap::ALL.iter().map(|t| t.shader_index()).collect();
+        numbers.sort_by(f32::total_cmp);
+        assert_eq!(numbers, [0.0, 1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn a_scene_saved_before_soft_shadows_reads_as_the_presets_own() {
+        let look: Look = crate::io::read_over(&Look::default(), &serde_json::json!({ "shadows": false })).unwrap();
+        assert_eq!(look.shadow_softness, 1.0);
+        assert!(!look.shadows);
+    }
 }

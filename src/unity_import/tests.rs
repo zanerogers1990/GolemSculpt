@@ -1053,6 +1053,7 @@ fn every_light_falls_on_the_same_side_of_the_model() {
             time: 0.0,
             gradient_background: false,
             smoothness: 0.4,
+            shadow_size: 2048,
         });
         let unity_camera = Quat::from_rotation_y(yaw.to_radians()) * Quat::from_rotation_x(pitch.to_radians());
         let frame = if follow { unity_camera } else { Quat::from_rotation_y(world_yaw.to_radians()) };

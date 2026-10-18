@@ -186,5 +186,6 @@ pub fn frame(view: &crate::camera::View, bounds: crate::mesh::bvh::Aabb) -> crat
         time: 1.25,
         gradient_background: false,
         smoothness: 0.4,
+        shadow_size: crate::render::quality::Quality::default().shadow_size(),
     }
 }

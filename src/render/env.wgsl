@@ -21,8 +21,6 @@ struct EnvU {
 
 const PI: f32 = 3.14159265;
 const TAU: f32 = 6.2831853;
-// Side of the cube's largest level, and how many levels are blurred.
-const CUBE_SIZE: f32 = 128.0;
 
 struct EnvOut {
     @builtin(position) pos: vec4<f32>,
@@ -189,8 +187,10 @@ fn fs_source(in: EnvOut) -> @location(0) vec4<f32> {
     var color: vec3<f32>;
     if (env.params.x > 1.5) {
         // Read a level of the picture about as fine as this cube's texels.
+        // (The cube bound here is the blurred one, the size being drawn.)
+        let cube_size = f32(textureDimensions(src_cube).x);
         let width = f32(textureDimensions(hdri_tex).x);
-        let lod = max(log2(width / (4.0 * CUBE_SIZE)), 0.0);
+        let lod = max(log2(width / (4.0 * cube_size)), 0.0);
         color = textureSampleLevel(hdri_tex, hdri_smp, hdri_uv(dir, env.params.y), lod).rgb * env.params.z;
     } else if (env.params.x > 0.5) {
         let t = pow(saturate(dir.y * 0.5 + 0.5), 1.0 / max(env.params.w, 0.001));
@@ -234,7 +234,8 @@ fn fs_blur(in: EnvOut) -> @location(0) vec4<f32> {
     let up = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.z) < 0.999);
     let tx = normalize(cross(up, n));
     let ty = cross(n, tx);
-    let texel_angle = 4.0 * PI / (6.0 * CUBE_SIZE * CUBE_SIZE);
+    let cube_size = f32(textureDimensions(src_cube).x);
+    let texel_angle = 4.0 * PI / (6.0 * cube_size * cube_size);
     const SAMPLES: u32 = 256u;
     var color = vec3<f32>(0.0);
     var total = 0.0;

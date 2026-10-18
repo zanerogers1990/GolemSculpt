@@ -231,6 +231,7 @@ mod tests {
             tools: Default::default(),
             turntable: Default::default(),
             timelapse: Default::default(),
+            still: Default::default(),
         };
         doc.history.target = doc.scene.active_mesh();
         (doc, view)

@@ -159,10 +159,10 @@ fn kinds(list: &[Kind]) -> BTreeSet<Kind> {
 #[test]
 fn the_painted_shader_compiles_for_any_palette() {
     validate(&source(&kinds(&[]), &[])).unwrap();
-    for kind in [Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Glow, Kind::Custom, Kind::Swatch] {
+    for kind in [Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Resin, Kind::Glow, Kind::Custom, Kind::Swatch] {
         validate(&source(&kinds(&[kind]), &[])).unwrap_or_else(|e| panic!("{kind:?}: {e}"));
     }
-    let every = kinds(&[Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Glow, Kind::Custom]);
+    let every = kinds(&[Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Resin, Kind::Glow, Kind::Custom]);
     let example = Code {
         id: custom::EXAMPLE_ID.into(),
         function: format!("finish_{}", custom::EXAMPLE_ID),
@@ -185,7 +185,8 @@ fn no_finish_takes_screen_space_derivatives() {
     // where dpdx, dpdy, fwidth and textureSample give garbage: none of the
     // finish functions, nor anything they call, may use them.
     let shader = concat!(include_str!("../shader.wgsl"), include_str!("../sculpt_pbr.wgsl"), include_str!("../painted.wgsl"));
-    let full = format!("{shader}{}", generated(&kinds(&[Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Glow]), &[]));
+    let finishes = [Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Resin, Kind::Glow];
+    let full = format!("{shader}{}", generated(&kinds(&finishes), &[]));
     let module = naga::front::wgsl::parse_str(&full).unwrap();
     let mut checked = 0;
     for (handle, f) in module.functions.iter() {

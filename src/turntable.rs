@@ -49,6 +49,9 @@ pub const POINTER_REST_SECONDS: f32 = 1.5;
 pub const LOOP_SIZES: [(&str, u32, u32); 4] =
     [("16:9", 1920, 1080), ("1:1", 1080, 1080), ("9:16", 1080, 1920), ("4K", 3840, 2160)];
 pub const FRAME_RATES: [u32; 3] = [24, 30, 60];
+/// Samples each picture of a loop can be refined to (render/refine.rs): 1
+/// is drawn once, as the viewport is while it moves.
+pub const LOOP_SAMPLES: [u32; 3] = [1, 16, 64];
 
 /// What the Turntable card sets. Plain values with defaults, so a settings
 /// file can keep them as they are (a field the file lacks keeps its default).
@@ -66,6 +69,8 @@ pub struct Settings {
     pub loop_fps: u32,
     /// A video, or numbered pictures.
     pub loop_format: LoopFormat,
+    /// Samples each picture is refined to: one of [`LOOP_SAMPLES`].
+    pub loop_samples: u32,
 }
 
 impl Default for Settings {
@@ -77,6 +82,7 @@ impl Default for Settings {
             loop_height: 1080,
             loop_fps: 30,
             loop_format: LoopFormat::Video,
+            loop_samples: 1,
         }
     }
 }
@@ -94,6 +100,7 @@ impl Settings {
             loop_height: self.loop_height.clamp(64, 8192),
             loop_fps: self.loop_fps.clamp(1, 120),
             loop_format: self.loop_format,
+            loop_samples: self.samples(),
         }
     }
 
@@ -113,6 +120,12 @@ impl Settings {
     /// Which way yaw runs: negative moves the camera to its own right.
     pub fn direction(&self) -> f32 {
         if self.reverse { 1.0 } else { -1.0 }
+    }
+
+    /// Samples each picture of a loop is refined to: the one of
+    /// `LOOP_SAMPLES` nearest what was set.
+    pub fn samples(&self) -> u32 {
+        LOOP_SAMPLES.into_iter().min_by_key(|&n| n.abs_diff(self.loop_samples)).unwrap_or(1)
     }
 
     /// Frames in one turn at this speed and frame rate.
@@ -321,6 +334,20 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc) {
                     let button = theme::button(ui, w, &format!("{fps} fps"), style);
                     if tip(button, &format!("{fps} frames per second in the finished loop.")).clicked() {
                         s.loop_fps = fps;
+                    }
+                }
+            });
+            // Samples per picture: each refined as the viewport is when still.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let w = theme::row_width(ui, LOOP_SAMPLES.len(), 4.0);
+                for samples in LOOP_SAMPLES {
+                    let active = (s.samples() == samples).then_some(ACCENT());
+                    let style = ButtonStyle { active, height: 24.0, ..Default::default() };
+                    let label = if samples == 1 { "1 sample".to_owned() } else { format!("{samples} samples") };
+                    let what = "Samples per picture: more draws each one several times and averages them, for smooth edges and clean soft shadows. Slower to record.";
+                    if tip(theme::button(ui, w, &label, style), what).clicked() {
+                        s.loop_samples = samples;
                     }
                 }
             });
@@ -579,6 +606,7 @@ mod tests {
             loop_height: 100_000,
             loop_fps: 0,
             loop_format: LoopFormat::Pictures,
+            loop_samples: 50,
         };
         let fitted = wild.in_range();
         let expected = Settings {
@@ -588,6 +616,8 @@ mod tests {
             loop_height: 8192,
             loop_fps: 1,
             loop_format: LoopFormat::Pictures,
+            // The nearest count there is.
+            loop_samples: 64,
         };
         assert_eq!(fitted, expected);
         assert_eq!(Settings { speed: f32::NAN, ..Default::default() }.in_range(), Settings::default());

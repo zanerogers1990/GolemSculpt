@@ -368,6 +368,7 @@ impl Running {
     pub(super) fn recording_step(&mut self, dt: f32) {
         self.recording.dt = dt;
         self.recording_requests();
+        self.still_requests();
         self.script_step();
 
         if let Some(run) = &mut self.recording.looping {
@@ -451,6 +452,8 @@ impl Running {
     /// pictures that are due.
     pub(super) fn recording_capture(&mut self, event_loop: &ActiveEventLoop) {
         self.loop_capture();
+        // Render Picture's samples (app/still.rs).
+        self.still_capture(event_loop);
         self.timelapse_capture();
         self.script_end(event_loop);
     }
@@ -493,7 +496,7 @@ impl Running {
 
     /// A camera at `shot`, with the working camera's lens unless `fov_y`
     /// gives another.
-    fn camera_at(&self, shot: Shot, fov_y: f32) -> Camera {
+    pub(super) fn camera_at(&self, shot: Shot, fov_y: f32) -> Camera {
         let mut camera = Camera::default();
         (camera.yaw, camera.pitch, camera.distance, camera.pivot) = (shot.yaw, shot.pitch, shot.distance, shot.pivot);
         camera.ortho = shot.ortho;
@@ -502,7 +505,7 @@ impl Running {
     }
 
     /// Where the working camera is.
-    fn artist_shot(&self) -> Shot {
+    pub(super) fn artist_shot(&self) -> Shot {
         let c = &self.doc.camera;
         Shot { yaw: c.yaw, pitch: c.pitch, distance: c.distance, pivot: c.pivot, ortho: c.ortho }
     }
@@ -540,8 +543,20 @@ impl Running {
     }
 
     /// Draws what the window just drew into `target`, as `camera` sees it,
-    /// with nothing over the model.
-    fn draw_capture(&mut self, target: &mut Target, camera: Camera) {
+    /// with nothing over the model: once, or refined toward `samples`
+    /// (render/refine.rs), at most `draws` of them and only while `budget`
+    /// lasts. With `transparent` the backdrop is left out. Gives back
+    /// whether the picture now has all its samples, how many it drew, and
+    /// how many it holds (fewer, if what it shows changed meanwhile).
+    pub(super) fn draw_capture(
+        &mut self,
+        target: &mut Target,
+        camera: Camera,
+        samples: u32,
+        transparent: bool,
+        draws: u32,
+        budget: Duration,
+    ) -> (bool, u32, u32) {
         let view = self.capture_view(&camera, target.size);
         // The frame's inputs are worked out from the app's own view and
         // camera, so those are lent this shot for the moment.
@@ -556,24 +571,46 @@ impl Running {
 
         self.show_skin_only(&view);
         self.renderer.overlays = false;
-        // This goes out as its own batch of work: the renderer's settings
-        // are shared with the window's frame, and each batch reads them as
-        // they were last written.
-        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        self.renderer.picture = true;
+        self.renderer.transparent = transparent;
+        let refine_to = std::mem::replace(&mut self.renderer.refine_to, samples.max(1));
+        let started = Instant::now();
         self.renderer.swap_side(&mut target.side);
-        self.renderer.draw(
-            &self.gpu,
-            &mut encoder,
-            &target.view,
-            target.size,
-            &globals,
-            &look,
-            &self.doc.opts,
-            &self.recording.items,
-        );
+        let (mut done, mut drawn) = (false, 0);
+        while !done && drawn < draws.max(1) {
+            // Each sample goes out as its own batch of work: the renderer's
+            // settings are shared with the window's frame, and each batch
+            // reads them as they were last written.
+            let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+            self.renderer.draw(
+                &self.gpu,
+                &mut encoder,
+                &target.view,
+                target.size,
+                &globals,
+                &look,
+                &self.doc.opts,
+                &self.recording.items,
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+            drawn += 1;
+            done = !self.renderer.refining();
+            if !done && budget != Duration::MAX {
+                // Waited for, so the budget is the graphics card's time and
+                // not only the time to hand it the work.
+                let _ = self.gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if started.elapsed() >= budget {
+                    break;
+                }
+            }
+        }
+        let shown = self.renderer.samples_shown();
         self.renderer.swap_side(&mut target.side);
-        self.gpu.queue.submit([encoder.finish()]);
         self.renderer.overlays = !self.doc.opts.clean_view;
+        self.renderer.picture = false;
+        self.renderer.transparent = false;
+        self.renderer.refine_to = refine_to;
+        (done, drawn, shown)
     }
 
     /// Whether the graphics card can hold a picture this large.
@@ -663,7 +700,9 @@ impl Running {
             let picture = run.target.size.0 as f32 / run.target.size.1 as f32;
             let fov_y = capture::widened_fov(self.doc.camera.fov_y, window, picture);
             let camera = self.camera_at(self.artist_shot(), fov_y);
-            self.draw_capture(&mut run.target, camera);
+            // Every sample asked for, before the picture is read.
+            let samples = self.doc.turntable.settings.samples();
+            self.draw_capture(&mut run.target, camera, samples, false, samples, Duration::MAX);
             writer.push(crate::render::read_texture(&self.gpu, &run.target.texture));
         }
         let (written, total, video) = (writer.written(), writer.total(), writer.is_video());
@@ -817,7 +856,7 @@ impl Running {
                 },
             );
             let camera = self.camera_at(shot, self.doc.camera.fov_y);
-            self.draw_capture(&mut run.target, camera);
+            self.draw_capture(&mut run.target, camera, 1, false, 1, Duration::MAX);
             run.recorder.capture(&self.gpu, &run.target.texture);
         }
 

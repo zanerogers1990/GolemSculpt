@@ -192,6 +192,9 @@ impl Running {
         let rig = self.ui.materials.rig.get_or_insert_with(|| crate::ui::materials::Rig::new(&self.gpu, side));
         let mut opts = thumbs::options();
         opts.paint.palette = paint.palette;
+        // The window's shadow and reflection sizes, so the maps they share
+        // are not made afresh for each thumbnail.
+        opts.quality = self.doc.opts.quality;
         let mut camera = crate::camera::Camera::default();
         (camera.yaw, camera.pitch) = (-25.0, -18.0);
         camera.frame(ball.bounds(), 1.0, false);
@@ -208,9 +211,12 @@ impl Running {
         (renderer.want_curvature, renderer.overlays, renderer.wire.enabled, renderer.groups.enabled) = (true, false, false, false);
         renderer.sync_mesh(&self.gpu, BALL_ID, ball, false);
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        // Each thumbnail is a still picture, never one in motion.
+        let picture = std::mem::replace(&mut renderer.picture, true);
         renderer.swap_side(&mut rig.side);
         renderer.draw(&self.gpu, &mut encoder, &rig.view, (side, side), &globals, &look, &opts, &items);
         renderer.swap_side(&mut rig.side);
+        renderer.picture = picture;
         self.gpu.queue.submit([encoder.finish()]);
         renderer.painted.set_palette(&self.gpu, &scene_palette);
         (renderer.want_curvature, renderer.overlays, renderer.wire.enabled, renderer.groups.enabled) = kept;

@@ -30,6 +30,7 @@ const FINISH_METAL: u32 = 2u;
 const FINISH_CLAY: u32 = 3u;
 const FINISH_WOOD: u32 = 4u;
 const FINISH_MATCAP: u32 = 5u;
+const FINISH_RESIN: u32 = 6u;
 
 // Which surface this pipeline shades (one of the FINISH_ values).
 override FINISH: u32 = 0u;
@@ -49,8 +50,13 @@ struct Look {
     // x count, y shadows on, z shadow strength, w time in seconds
     light_params: vec4<f32>,
     shadow_view_proj: mat4x4<f32>,
-    // x one shadow texel in uv, y depth bias, z normal bias (world units)
+    // x one shadow texel in uv, y depth bias, z normal bias (world units),
+    // w 1 while the shadow changes frame after frame (half the taps then)
     shadow_params: vec4<f32>,
+    // x the map's width in world units (world per uv), y world units per unit
+    // of map depth, z tangent of the key light's angular radius, w the part
+    // of the texture the map fills (less than 1 while it is drawn small)
+    shadow_soft: vec4<f32>,
     // Ambient light as nine spherical harmonic terms, ready to evaluate.
     sh: array<vec4<f32>, 9>,
     ambient_sky: vec4<f32>,
@@ -74,6 +80,22 @@ struct Look {
     // The finish's settings, and the glow's (glow.v[2].x is 1 while it is on).
     finish: FinishParams,
     glow: FinishParams,
+    // The floor (render/floor.rs): x 1 when it shows, y its height, z how far
+    // it reaches from its middle, w how dark shadows on it get
+    floor: vec4<f32>,
+    // xy (world x and z) its middle, z how strongly it reflects, w how blurred
+    floor_more: vec4<f32>,
+    // Each light as a softbox (render/ltc.rs): its middle, w 1 for a softbox
+    // (0 for a plain direction)...
+    light_pos: array<vec4<f32>, 5>,
+    // ...half its width as a vector, w the radiance that gives the light's
+    // intensity at the subject (pi over its solid angle)...
+    light_side: array<vec4<f32>, 5>,
+    // ...and half its height, w its distance from the subject squared.
+    light_up: array<vec4<f32>, 5>,
+    // x how far the contact shadows march toward each light, as a fraction of
+    // the view's height at the surface's depth (0 for none)
+    contact: vec4<f32>,
 };
 
 @group(0) @binding(4) var<uniform> look: Look;
@@ -82,12 +104,21 @@ struct Look {
 @group(0) @binding(6) var env_smp: sampler;
 @group(0) @binding(7) var shadow_tex: texture_depth_2d;
 @group(0) @binding(8) var shadow_smp: sampler_comparison;
-// 1 = open, 0 = fully occluded.
+// The ambient occlusion (post.wgsl): the bent normal in rgb (view space, z
+// forward, as 0.5 + 0.5 n) and how open in alpha (1 = open).
 @group(0) @binding(9) var ao_tex: texture_2d<f32>;
 // Eye depth of the nearest back face under each pixel, 0 = none.
 @group(0) @binding(10) var back_tex: texture_2d<f32>;
 @group(0) @binding(11) var hdri_tex: texture_2d<f32>;
 @group(0) @binding(12) var hdri_smp: sampler;
+// The split-sum reflection table (render/dfg.rs): view angle across,
+// roughness down; x what grazing fresnel adds, y all a white mirror reflects.
+@group(0) @binding(13) var dfg_tex: texture_2d<f32>;
+// The model mirrored in the floor, at half size (render/floor.rs).
+@group(0) @binding(14) var floor_tex: texture_2d<f32>;
+// The softboxes' fitted highlight matrices (render/ltc.rs): roughness
+// across, sqrt(1 - cos) of the view angle down.
+@group(0) @binding(15) var ltc_tex: texture_2d<f32>;
 
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
@@ -133,7 +164,9 @@ fn fs_background(in: BgOut) -> @location(0) vec4<f32> {
         t = pow(t, 1.0 / max(look.bg_params.w, 0.001));
         color = mix(g.bg_bottom.rgb, g.bg_top.rgb, t);
     }
-    return vec4<f32>(color, 1.0);
+    // Alpha 0 marks the backdrop (the model is drawn with 1): a backdrop
+    // colour is shown as it was picked, outside the tone curve (post.wgsl).
+    return vec4<f32>(color, 0.0);
 }
 
 // ---- noise ----------------------------------------------------------------
@@ -219,9 +252,15 @@ struct Surface {
     curv: f32,
     // Light reaching the surface from the key: 1 lit, 0 in its shadow.
     shadow: f32,
+    // Each light's contact shadow (lights 0 to 3, then 4): 1 lit.
+    contact: vec4<f32>,
+    contact_last: f32,
     // Ambient occlusion (1 = open), and what direct light keeps of it.
     ao: f32,
     ao_direct: f32,
+    // Which way the open sky lies (the occlusion's bent normal, world
+    // space): the smooth normal where nothing closes it in.
+    bent: vec3<f32>,
     // The model's colour here, before any finish: the base colour (later,
     // whatever is painted on).
     base_color: vec3<f32>,
@@ -300,44 +339,102 @@ fn to_object_normal(s: Surface, n: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(s.mx, n), dot(s.my, n), dot(s.mz, n));
 }
 
-// Soft shadow of the key light: a 7x7 tent over the shadow map.
-fn key_shadow(world: vec3<f32>) -> f32 {
+// A number in 0..1 that changes from pixel to pixel without a pattern the
+// eye picks out (Jimenez's interleaved gradient noise), moved on for each
+// sample of a picture being refined, so every sample turns its filters a
+// different way and their average is smooth.
+fn pixel_noise(pixel: vec2<f32>) -> f32 {
+    let p = pixel + 5.588238 * look.cam_params.z;
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// The soft shadow's taps go round Vogel's spiral, which spreads any number
+// of points evenly over a disc: each is a golden angle on from the one
+// before, at the radius that gives it an equal share of the area. Sixteen
+// for the filter, eight for finding the casters (each of those reads four
+// texels at once); half as many while the shadow changes every frame, when
+// it costs what the fixed filter before it did.
+const SHADOW_TAPS: i32 = 16;
+const CASTER_TAPS: i32 = 8;
+
+// Where a point of the shadow map (0..1 across it) is in its texture: the
+// map fills only the texture's corner while it is drawn small, and a tap
+// off its edge reads the edge.
+fn shadow_uv(at: vec2<f32>) -> vec2<f32> {
+    return clamp(at, vec2<f32>(0.0), vec2<f32>(1.0)) * look.shadow_soft.w;
+}
+// A turn by the golden angle (2.39996 radians).
+const GOLDEN_TURN: mat2x2<f32> = mat2x2<f32>(-0.7373688, 0.6754903, -0.6754903, -0.7373688);
+
+// The key light's shadow at `world`, as dark as the preset lets it get.
+fn key_shadow(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    return mix(1.0, key_light_reaching(world, n, pixel), look.light_params.z);
+}
+
+// How much of the key light reaches `world`, whose surface faces `n` (1 all,
+// 0 none): a shadow crisp where it meets what casts it and softer the
+// farther that is, as under a real light of the preset's size
+// (percentage-closer soft shadows). The casters near this point are found
+// first and their average distance sets how wide the filter is; `pixel`
+// turns the filter's taps.
+fn key_light_reaching(world: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>) -> f32 {
     if (look.light_params.y < 0.5) {
         return 1.0;
     }
-    let clip = look.shadow_view_proj * vec4<f32>(world, 1.0);
+    let texel = look.shadow_params.x;
+    let world_per_uv = look.shadow_soft.x;
+    let world_per_depth = look.shadow_soft.y;
+    let light_tan = look.shadow_soft.z;
+    // A step off the surface along its normal, more where it turns from the
+    // light: the wider filter reaches across a slope, which must not shadow
+    // itself.
+    let l = look.light_dir[0].xyz;
+    let lift = world_per_uv * texel * (1.0 + 2.0 * (1.0 - saturate(dot(n, l))));
+    let clip = look.shadow_view_proj * vec4<f32>(world + n * lift, 1.0);
     let pos = vec3<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5, clip.z);
     if (pos.z <= 0.0 || pos.z >= 1.0 || any(pos.xy <= vec2<f32>(0.0)) || any(pos.xy >= vec2<f32>(1.0))) {
         return 1.0;
     }
-    let texel = look.shadow_params.x;
-    let uv = pos.xy / texel;
-    var base = floor(uv + 0.5);
-    let s = uv.x + 0.5 - base.x;
-    let t = uv.y + 0.5 - base.y;
-    base = (base - 0.5) * texel;
+    let turn = pixel_noise(pixel) * TAU;
+    let start = vec2<f32>(cos(turn), sin(turn));
 
-    let uw = vec4<f32>(5.0 * s - 6.0, 11.0 * s - 28.0, -(11.0 * s + 17.0), -(5.0 * s + 1.0));
-    let u = vec4<f32>(
-        (4.0 * s - 5.0) / uw.x - 3.0,
-        (4.0 * s - 16.0) / uw.y - 1.0,
-        -(7.0 * s + 5.0) / uw.z + 1.0,
-        -s / uw.w + 3.0);
-    let vw = vec4<f32>(5.0 * t - 6.0, 11.0 * t - 28.0, -(11.0 * t + 17.0), -(5.0 * t + 1.0));
-    let v = vec4<f32>(
-        (4.0 * t - 5.0) / vw.x - 3.0,
-        (4.0 * t - 16.0) / vw.y - 1.0,
-        -(7.0 * t + 5.0) / vw.z + 1.0,
-        -t / vw.w + 3.0);
-    var sum = 0.0;
-    for (var j = 0; j < 4; j++) {
-        for (var i = 0; i < 4; i++) {
-            let at = base + vec2<f32>(u[i], v[j]) * texel;
-            sum += uw[i] * vw[j] * textureSampleCompareLevel(shadow_tex, shadow_smp, at, pos.z);
-        }
+    // The casters: over the widest the shadow could spread here, which is
+    // from a caster at the near side of the scene (a quarter of the map's
+    // depth). Each tap gathers the four texels around it.
+    let reach = max(pos.z - 0.25, 0.0) * world_per_depth * light_tan / world_per_uv;
+    let search = clamp(reach, texel * 2.0, 0.08);
+    let moving = look.shadow_params.w > 0.5;
+    let caster_taps = select(CASTER_TAPS, CASTER_TAPS / 2, moving);
+    let filter_taps = select(SHADOW_TAPS, SHADOW_TAPS / 2, moving);
+    var found = 0.0;
+    var caster_depth = 0.0;
+    var way = start;
+    for (var i = 0; i < caster_taps; i++) {
+        let r = sqrt((f32(i) + 0.5) / f32(caster_taps));
+        let d = textureGather(shadow_tex, env_smp, shadow_uv(pos.xy + way * (r * search)));
+        way = GOLDEN_TURN * way;
+        let blocked = select(vec4<f32>(0.0), vec4<f32>(1.0), d < vec4<f32>(pos.z));
+        found += dot(blocked, vec4<f32>(1.0));
+        caster_depth += dot(d, blocked);
     }
-    // Shadow strength: how dark the preset lets the key's shadow get.
-    return mix(1.0, sum / 2704.0, look.light_params.z);
+    if (found < 0.5) {
+        return 1.0;
+    }
+    if (found > f32(caster_taps * 4) - 0.5) {
+        // Everything around is in shadow, wider than the edge could be.
+        return 0.0;
+    }
+    // How wide the shadow's edge is at this distance from its casters.
+    let gap = (pos.z - caster_depth / found) * world_per_depth;
+    let radius = max(gap * light_tan / world_per_uv, texel * 1.5);
+    var lit = 0.0;
+    way = vec2<f32>(-start.y, start.x);
+    for (var i = 0; i < filter_taps; i++) {
+        let r = sqrt((f32(i) + 0.5) / f32(filter_taps));
+        lit += textureSampleCompareLevel(shadow_tex, shadow_smp, shadow_uv(pos.xy + way * (r * radius)), pos.z);
+        way = GOLDEN_TURN * way;
+    }
+    return lit / f32(filter_taps);
 }
 
 struct Light {
@@ -350,8 +447,10 @@ fn get_light(i: i32, s: Surface) -> Light {
     var l: Light;
     l.dir = look.light_dir[i].xyz;
     l.color = look.light_color[i].rgb;
-    // Only the key casts shadows.
-    l.shadow = select(1.0, s.shadow, i == 0);
+    // Only the key casts a shadow from its map; every light has its contact
+    // shadow.
+    let contact = select(s.contact_last, s.contact[min(i, 3)], i < 4);
+    l.shadow = select(1.0, s.shadow, i == 0) * contact;
     return l;
 }
 
@@ -378,45 +477,286 @@ fn ambient(n: vec3<f32>) -> vec3<f32> {
     return max(eq + (look.ambient_sky.rgb - eq) * up + (look.ambient_ground.rgb - eq) * down, vec3<f32>(0.0));
 }
 
-// The surroundings mirrored in a surface of the given roughness.
+// The surroundings mirrored in a surface of the given roughness: the cube,
+// each smaller level blurred for a rougher surface. A near-mirror under an
+// HDRI reads the picture itself instead, as sharp as the reflection is
+// (the cube holds it only at its own size), so chrome and gloss show the
+// HDRI crisply.
 fn environment(r: vec3<f32>, perceptual_roughness: f32) -> vec3<f32> {
     let level = perceptual_roughness * (1.7 - 0.7 * perceptual_roughness) * 6.0;
-    return textureSampleLevel(env_cube, env_smp, r, level).rgb * look.env_params.y;
+    var color = textureSampleLevel(env_cube, env_smp, r, level).rgb;
+    if (look.env_params.x > 0.5 && level < 1.5) {
+        // How wide the reflection's lobe is, or else the angle one pixel
+        // spans (times a little, for a curved surface spreading it): read a
+        // level of the picture as fine as that. No screen derivatives: a
+        // painted material may be shaded in a branch of its own.
+        let a = perceptual_roughness * perceptual_roughness;
+        let pixel = select(2.0 * g.viewport.z / max(g.viewport.y, 1.0), 0.002, g.viewport.z <= 0.0) * 3.0;
+        let width = f32(textureDimensions(hdri_tex).x);
+        let lod = max(log2(max(a, pixel) * width / TAU), 0.0);
+        let sharp = textureSampleLevel(hdri_tex, hdri_smp, hdri_uv(r, look.bg_params.y), lod).rgb * look.bg_params.z;
+        color = mix(sharp, color, saturate(level / 1.5));
+    }
+    return color * look.env_params.y;
 }
 
-// Physically based shading under the whole rig: the Unity pipeline's lit
-// model (a GGX highlight in its cheap normalised form, ambient from the sky
-// colours or the HDRI, a blurred environment reflection).
+fn pow5(x: f32) -> f32 {
+    let x2 = x * x;
+    return x2 * x2 * x;
+}
+
+// What the split-sum table holds for a surface seen at `nv` with this
+// perceptual roughness (see render/dfg.rs), read between its texel centres.
+fn dfg_lookup(nv: f32, perceptual_roughness: f32) -> vec2<f32> {
+    let size = f32(textureDimensions(dfg_tex).x);
+    let uv = vec2<f32>(nv, perceptual_roughness) * ((size - 1.0) / size) + 0.5 / size;
+    return textureSampleLevel(dfg_tex, env_smp, uv, 0.0).xy;
+}
+
+// The GGX spread of microfacet normals, for linear roughness `a`.
+fn d_ggx(nh: f32, a: f32) -> f32 {
+    let a2 = a * a;
+    let d = (nh * a2 - nh) * nh + 1.0;
+    return a2 / (3.14159265 * d * d);
+}
+
+// Height-correlated Smith visibility for GGX: how much of the light the
+// microfacets shadow and mask, with the 1 / (4 nl nv) of the highlight in it.
+fn v_smith(nv: f32, nl: f32, a: f32) -> f32 {
+    let a2 = a * a;
+    let gv = nl * sqrt(nv * nv * (1.0 - a2) + a2);
+    let gl = nv * sqrt(nl * nl * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-6);
+}
+
+// How much of the reflected surroundings a crease still sees (Lagarde's fit
+// from the ambient occlusion): a smooth surface's narrow reflection is
+// blocked less than the open sky above it, a rough one's about as much.
+fn specular_occlusion(nv: f32, ao: f32, a: f32) -> f32 {
+    return saturate(pow(nv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao);
+}
+
+// Whether the reflection points where the sky is open (Jimenez 2016): the
+// open sky as a cone round the bent normal, as wide as the openness says,
+// against the reflection's lobe as a cone round the reflected view; how
+// much the two overlap (Unreal's approximation), 1 when one holds the other.
+fn reflection_in_open_sky(open: f32, bent: vec3<f32>, r: vec3<f32>, a: f32) -> f32 {
+    let sky = acos(sqrt(saturate(1.0 - open)));
+    let lobe = clamp(a * 1.2, 0.05, 1.5707963);
+    let between = acos(clamp(dot(bent, r), -1.0, 1.0));
+    let difference = abs(sky - lobe);
+    return smoothstep(0.0, 1.0, 1.0 - saturate((between - difference) / max(sky + lobe - difference, 1e-4)));
+}
+
+// ---- softboxes ------------------------------------------------------------
+//
+// Rectangle lights by linearly transformed cosines (render/ltc.rs): the
+// highlight for this roughness and view angle is a cosine lobe put through a
+// matrix, so its integral over a rectangle is a cosine's over the rectangle
+// put through the inverse, which has a closed form edge by edge.
+
+// The inverse lobe matrix for this view angle and roughness.
+fn ltc_inverse(nv: f32, perceptual_roughness: f32) -> mat3x3<f32> {
+    let size = f32(textureDimensions(ltc_tex).x);
+    let uv = vec2<f32>(perceptual_roughness, sqrt(max(1.0 - nv, 0.0))) * ((size - 1.0) / size) + 0.5 / size;
+    let t = textureSampleLevel(ltc_tex, env_smp, uv, 0.0);
+    return mat3x3<f32>(vec3<f32>(t.x, 0.0, t.y), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(t.z, 0.0, t.w));
+}
+
+// One edge's part of the integral, from unit vector a to b: the angle it
+// spans over its sine times their cross product's height. The angle over
+// its sine is Hill's fit (steadier than acos near 1), which comes divided by
+// 2 pi: that is put back.
+fn ltc_edge(a: vec3<f32>, b: vec3<f32>) -> f32 {
+    let x = dot(a, b);
+    let y = abs(x);
+    let p = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+    let q = 3.4175940 + (4.1616724 + y) * y;
+    let v = p / q;
+    let angle_over_sine = select(0.5 * inverseSqrt(max(1.0 - x * x, 1e-7)) - v, v, x > 0.0) * TAU;
+    return cross(a, b).z * angle_over_sine;
+}
+
+// Walking round the light's outline clipped to above the surface, one
+// corner at a time, adding up the edges as they come (no array of corners).
+struct LtcWalk {
+    first: vec3<f32>,
+    last: vec3<f32>,
+    started: bool,
+    sum: f32,
+};
+
+fn ltc_add(w: LtcWalk, corner: vec3<f32>) -> LtcWalk {
+    var out = w;
+    let q = normalize(corner);
+    if (w.started) {
+        out.sum += ltc_edge(w.last, q);
+    } else {
+        out.first = q;
+        out.started = true;
+    }
+    out.last = q;
+    return out;
+}
+
+// The corner a if it is above the surface, and where the edge to b crosses
+// the surface if it does.
+fn ltc_side(w: LtcWalk, a: vec3<f32>, b: vec3<f32>) -> LtcWalk {
+    var out = w;
+    if (a.z > 0.0) {
+        out = ltc_add(out, a);
+    }
+    if ((a.z > 0.0) != (b.z > 0.0)) {
+        let above = select(b, a, a.z > 0.0);
+        let below = select(a, b, a.z > 0.0);
+        out = ltc_add(out, -below.z * above + above.z * below);
+    }
+    return out;
+}
+
+// The integral, times 2 pi, of the lobe `minv` undoes over the rectangle
+// `c` +- `side` +- `up`, for a surface at `p` facing `n` seen from `v`. 0
+// from behind the light. The GPU twin of `ltc::integral`.
+fn ltc_integral(n: vec3<f32>, v: vec3<f32>, p: vec3<f32>, minv: mat3x3<f32>, c: vec3<f32>, side: vec3<f32>, up: vec3<f32>) -> f32 {
+    var t1 = v - n * dot(v, n);
+    if (dot(t1, t1) < 1e-10) {
+        t1 = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9);
+        t1 -= n * dot(t1, n);
+    }
+    t1 = normalize(t1);
+    let m = minv * transpose(mat3x3<f32>(t1, cross(n, t1), n));
+    let l0 = m * (c - side - up - p);
+    let l1 = m * (c + side - up - p);
+    let l2 = m * (c + side + up - p);
+    let l3 = m * (c - side + up - p);
+    var w: LtcWalk;
+    w.started = false;
+    w.sum = 0.0;
+    w = ltc_side(w, l0, l1);
+    w = ltc_side(w, l1, l2);
+    w = ltc_side(w, l2, l3);
+    w = ltc_side(w, l3, l0);
+    if (!w.started) {
+        return 0.0;
+    }
+    return max(w.sum + ltc_edge(w.last, w.first), 0.0);
+}
+
+// A softbox's highlight by its representative point (Karis): the point of
+// it nearest the reflection of the view, lit as a plain light with the lobe
+// widened by how big the softbox looks and its peak lowered to keep the
+// energy. For frames that change every frame; `ltc_integral` otherwise.
+fn softbox_glint(s: Surface, n: vec3<f32>, nv: f32, a: f32, f0: vec3<f32>, energy: vec3<f32>,
+                 c: vec3<f32>, side: vec3<f32>, up: vec3<f32>, far: f32) -> vec3<f32> {
+    let r = reflect(-s.v, n);
+    let facing = cross(side, up);
+    let along = dot(r, facing);
+    var q = c;
+    let t = dot(c - s.world, facing) / select(along, 1e-6, abs(along) < 1e-6);
+    if (t > 0.0) {
+        let hit = s.world + r * t - c;
+        q = c + side * clamp(dot(hit, side) / dot(side, side), -1.0, 1.0)
+            + up * clamp(dot(hit, up) / dot(up, up), -1.0, 1.0);
+    }
+    let l = normalize(q - s.world);
+    let nl = saturate(dot(n, l));
+    let h = normalize(l + s.v);
+    let nh = saturate(dot(n, h));
+    let lh = saturate(dot(l, h));
+    let size = sqrt(length(side) * length(up));
+    let wide = saturate(a + size / (2.0 * sqrt(far)));
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - lh);
+    let keep = (a / wide) * (a / wide);
+    return fresnel * (d_ggx(nh, wide) * v_smith(nv, nl, wide) * 3.14159265 * keep * nl) * energy;
+}
+
+// Physically based shading under the whole rig: ambient from the sky
+// colours or the HDRI, the surroundings reflected through the split-sum
+// table with the second bounce of rough surfaces given back, and each light
+// through a GGX highlight with height-correlated visibility and Schlick's
+// fresnel. Lights carry pi in their colour, as in the Unity pipeline this
+// came from, so the highlight is the BRDF times pi and diffuse has no 1 / pi.
 fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, smoothness: f32, occlusion: f32) -> vec3<f32> {
-    let one_minus_reflectivity = 0.96 * (1.0 - metallic);
-    let reflectivity = 1.0 - one_minus_reflectivity;
-    let diffuse = albedo * one_minus_reflectivity;
-    let specular = mix(vec3<f32>(0.04), albedo, metallic);
-    let perceptual_roughness = 1.0 - smoothness;
-    let roughness = max(perceptual_roughness * perceptual_roughness, 0.0078125);
-    let roughness2 = max(roughness * roughness, 6.103515625e-5);
-    let grazing = saturate(smoothness + reflectivity);
-    let normalization = roughness * 4.0 + 2.0;
+    let diffuse = albedo * (1.0 - metallic);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let perceptual_roughness = saturate(1.0 - smoothness);
+    let a = max(perceptual_roughness * perceptual_roughness, 0.0078125);
+    let nv = max(dot(n, s.v), 1e-4);
+    let dfg = dfg_lookup(nv, perceptual_roughness);
+    // What the surroundings give back, all of the lobe, and the factor that
+    // returns what bounces between microfacets more than once.
+    let reflected = mix(vec3<f32>(dfg.x), vec3<f32>(dfg.y), f0);
+    let energy = 1.0 + f0 * (1.0 / max(dfg.y, 1e-3) - 1.0);
 
-    // Indirect.
-    let nv = saturate(dot(n, s.v));
-    let fresnel = pow(1.0 - nv, 4.0);
-    let reflection = environment(reflect(-s.v, n), perceptual_roughness);
-    var color = ambient(n) * diffuse
-        + reflection * (1.0 / (roughness2 + 1.0)) * mix(specular, vec3<f32>(grazing), fresnel);
-    color *= min(s.ao, occlusion);
+    // Indirect. A bumped normal can reflect a direction below the surface's
+    // real horizon, which it could not see: that fades out.
+    let r = reflect(-s.v, n);
+    let horizon = min(1.0 + dot(r, s.smooth_n), 1.0);
+    let ao = min(s.ao, occlusion);
+    let reflection = environment(r, perceptual_roughness);
+    // Ambient light from where the sky is open, the surface's own detail
+    // kept on it; reflections dimmed as much as the crease hides them and
+    // more where they point into it.
+    let sky = normalize(n + (s.bent - s.smooth_n));
+    var hidden = specular_occlusion(nv, ao, a);
+    let moving = look.shadow_params.w > 0.5;
+    if (!moving && look.env_params.z > 0.5) {
+        // The finer test, once the picture holds still: how much of the lobe
+        // the open sky holds, against how much a surface with nothing round
+        // it would see (the table already counts what falls below its
+        // horizon, so an open surface keeps all of its reflection).
+        let unhidden = reflection_in_open_sky(1.0, s.smooth_n, r, a);
+        hidden *= saturate(reflection_in_open_sky(s.ao, s.bent, r, a) / max(unhidden, 1e-3));
+    }
+    var color = ambient(sky) * diffuse * (1.0 - reflected) * ao
+        + reflection * reflected * energy * (hidden * horizon * horizon);
 
-    // Direct.
+    // Direct. Diffuse keeps what the surface does not reflect at normal
+    // incidence (the Unity pipeline's 0.96 for a dielectric).
+    let direct_diffuse = diffuse * (1.0 - 0.04);
+    // The softboxes' lobe, read only when their highlights are integrated.
+    var lobe = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    if (!moving) {
+        lobe = ltc_inverse(nv, perceptual_roughness);
+    }
     let count = light_count();
     for (var i = 0; i < count; i++) {
         let light = get_light(i, s);
+        if (look.light_pos[i].w > 0.5) {
+            // A softbox. Diffuse light from its middle, falling off with
+            // distance as it does (as near the integral over its face as
+            // makes no difference at these sizes, for half the work); the
+            // highlight integrated over its face, at the radiance that gives
+            // its intensity, unless all of it is behind the surface.
+            let c = look.light_pos[i].xyz;
+            let side = look.light_side[i].xyz;
+            let up = look.light_up[i].xyz;
+            let to_light = c - s.world;
+            let far = dot(to_light, to_light);
+            let falloff = look.light_up[i].w / max(far, 1e-12);
+            var lit = direct_diffuse * (saturate(dot(n, to_light) * inverseSqrt(far)) * falloff);
+            let height = dot(n, to_light);
+            let reach = abs(dot(n, side)) + abs(dot(n, up));
+            if (moving) {
+                // While the picture changes every frame (an orbit, a stroke):
+                // the highlight of the softbox's point nearest the reflected
+                // view, the lobe widened by the softbox's size (Karis). Close
+                // to the integral, at a plain light's cost.
+                lit += softbox_glint(s, n, nv, a, f0, energy, c, side, up, far) * falloff;
+            } else if (height + reach > 0.0) {
+                let spec = ltc_integral(n, s.v, s.world, lobe, c, side, up);
+                lit += reflected * energy * (spec * look.light_side[i].w / TAU);
+            }
+            color += lit * light.color * (s.ao_direct * light.shadow);
+            continue;
+        }
         let nl = saturate(dot(n, light.dir));
         let h = normalize(light.dir + s.v);
         let nh = saturate(dot(n, h));
         let lh = saturate(dot(light.dir, h));
-        let d = nh * nh * (roughness2 - 1.0) + 1.00001;
-        let spec = roughness2 / (d * d * max(0.1, lh * lh) * normalization);
-        color += (diffuse + specular * spec) * light.color * (s.ao_direct * light.shadow * nl);
+        let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - lh);
+        let spec = fresnel * (d_ggx(nh, a) * v_smith(nv, nl, a) * 3.14159265) * energy;
+        color += (direct_diffuse + spec) * light.color * (s.ao_direct * light.shadow * nl);
     }
     return color;
 }
@@ -1220,6 +1560,75 @@ fn finish_glow(s: Surface, params: FinishParams) -> MaterialSample {
     return out;
 }
 
+// ---- cast resin -----------------------------------------------------------
+//
+// Clear or tinted resin, as a print or a casting is: a glossy surface that
+// reflects at a glance (the lighting does that, as for any gloss) and lets
+// what is behind it through head on, bent by the resin, tinted and darkened
+// by as much resin as the view crosses (the plastic's back-face thickness,
+// Beer and Lambert's law over it), a little milky haze lit like a surface,
+// and light from behind glowing through.
+
+// What the view sees in direction `dir` past the model: the backdrop as it
+// is drawn, so a resin in a dark studio looks dark through and one in front
+// of an HDRI shows it.
+fn backdrop(dir: vec3<f32>) -> vec3<f32> {
+    let mode = look.bg_params.x;
+    if (mode > 1.5) {
+        return textureSampleLevel(hdri_tex, hdri_smp, hdri_uv(dir, look.bg_params.y), 2.0).rgb * look.bg_params.z;
+    }
+    if (mode > 0.5) {
+        let t = pow(clamp(dir.y * 0.5 + 0.5, 0.0, 1.0), 1.0 / max(look.bg_params.w, 0.001));
+        return mix(g.bg_bottom.rgb, g.bg_top.rgb, t);
+    }
+    return g.bg_bottom.rgb;
+}
+
+// v[0] the colour light takes on through `w` of resin (world units); v[1]
+// x haze, y smoothness, z transmission.
+fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
+    let tint = params.v[0].rgb;
+    let depth = max(params.v[0].w, 1e-5);
+    let haze = saturate(params.v[1].x);
+    let n = s.n;
+    // How much resin the view crosses; with nothing behind, a solid body.
+    var thickness = depth * 2.0;
+    if (s.back_depth > 0.0) {
+        let front = dot(s.world - g.cam_pos.xyz, g.cam_forward.xyz);
+        if (s.back_depth >= front - depth * 0.02) {
+            thickness = max(s.back_depth - front, 0.0);
+        }
+    }
+    let through = pow(max(tint, vec3<f32>(1e-3)), vec3<f32>(thickness / depth));
+    // What is behind, along the view bent into the resin, and only what the
+    // surface does not reflect (the lighting adds the reflection).
+    var bent = refract(-s.v, n, 1.0 / 1.5);
+    if (dot(bent, bent) < 0.5) {
+        bent = -s.v;
+    }
+    let nv = saturate(dot(n, s.v));
+    let passes = 1.0 - (0.04 + 0.96 * pow5(1.0 - nv));
+    let behind = backdrop(bent) * through * passes * (1.0 - haze);
+    // A light behind the model seen through it, tinted by the resin: where
+    // the bent view points at it, sharply in clear resin and spread wide in
+    // milky.
+    var glow = vec3<f32>(0.0);
+    let spread = mix(48.0, 3.0, sqrt(haze));
+    let count = light_count();
+    for (var i = 0; i < count; i++) {
+        let light = get_light(i, s);
+        glow += light.color * pow(saturate(dot(bent, light.dir)), spread);
+    }
+    var m = material(s, tint * haze);
+    m.smoothness = params.v[1].y;
+    m.emission = behind + glow * through * params.v[1].z * passes;
+    // A milky resin scatters light past the shadow line, as clay does.
+    m.scatter_color = tint * haze * 0.5;
+    m.scatter_wrap = 0.6;
+    m.scatter_shadow = 0.5;
+    return m;
+}
+
 // ---- the surface ----------------------------------------------------------
 
 // What this pipeline's finish makes of the pixel.
@@ -1235,6 +1644,9 @@ fn surface_material(s: Surface) -> MaterialSample {
     }
     if (FINISH == FINISH_WOOD) {
         return finish_wood(s, look.finish);
+    }
+    if (FINISH == FINISH_RESIN) {
+        return finish_resin(s, look.finish);
     }
     return finish_pbr(s, look.finish);
 }
@@ -1268,8 +1680,11 @@ fn mesh_surface(in: VsOut, front: bool) -> Surface {
     s.curv = in.curv;
     s.base_color = g.base_color.rgb;
     s.shadow = 1.0;
+    s.contact = vec4<f32>(1.0);
+    s.contact_last = 1.0;
     s.ao = 1.0;
     s.ao_direct = 1.0;
+    s.bent = smooth_n;
     s.back_depth = 0.0;
 
     // Surface grain: a small bump straight from the object-space position,
@@ -1281,14 +1696,79 @@ fn mesh_surface(in: VsOut, front: bool) -> Surface {
     return s;
 }
 
-// The surface with what reaches it of the lights: the key's shadow, the
-// ambient occlusion, and the back faces behind it for the plastic.
+// A crease's own shadow toward the light `dir`, too fine for the shadow
+// map: a short march from the surface toward the light through the depth
+// the normals prepass drew. A point of the march with something drawn in
+// front of it, but not so far in front that it is a different surface
+// passing behind, is in shadow; the farther along the march, the less.
+fn contact_shadow(s: Surface, dir: vec3<f32>) -> f32 {
+    if (look.contact.x <= 0.0 || dot(s.smooth_n, dir) <= 0.0) {
+        return 1.0;
+    }
+    // Short on screen, so it reaches fine detail and no further at any zoom.
+    let depth = dot(s.world - g.cam_pos.xyz, g.cam_forward.xyz);
+    let view_height = select(2.0 * look.cam_params.x, 2.0 * g.viewport.z * depth, g.viewport.z > 0.0);
+    let reach = view_height * look.contact.x;
+    let size = vec2<f32>(textureDimensions(gbuf));
+    let steps = 8;
+    let jitter = pixel_noise(vec2<f32>(s.pixel) + 0.5);
+    // Off the surface by a couple of its pixels, so it does not shadow itself.
+    let start = s.world + s.smooth_n * (s.footprint * 2.0);
+    // Deeper in front than this is taken for another surface passing in
+    // front, not one the light has to get past. Generous: a march that
+    // starts under an overhang is inside the solid, far behind its front.
+    let thickness = reach * 8.0;
+    for (var k = 0; k < steps; k++) {
+        let t = (f32(k) + jitter) / f32(steps);
+        let q = start + dir * (t * reach);
+        let clip = g.view_proj * vec4<f32>(q, 1.0);
+        if (clip.w <= 0.0) {
+            break;
+        }
+        let ndc = clip.xy / clip.w;
+        let at = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * size;
+        if (any(at < vec2<f32>(0.0)) || any(at >= size)) {
+            break;
+        }
+        let drawn = textureLoad(gbuf, vec2<i32>(at), 0).w;
+        let behind = dot(q - g.cam_pos.xyz, g.cam_forward.xyz) - drawn;
+        if (drawn > 0.0 && behind > s.footprint && behind < thickness) {
+            // Full right at the crease, fading out along the march: the
+            // light's own size softens a shadow that far from its caster.
+            return sqrt(t);
+        }
+    }
+    return 1.0;
+}
+
+// The surface with what reaches it of the lights: the key's shadow, each
+// light's contact shadow, the ambient occlusion and its bent normal, and the
+// back faces behind it for the plastic.
 fn lit_surface(surface: Surface) -> Surface {
     var s = surface;
-    s.shadow = key_shadow(s.world);
+    s.shadow = key_shadow(s.world, s.smooth_n, vec2<f32>(s.pixel));
+    if (look.contact.x > 0.0) {
+        let count = light_count();
+        for (var i = 0; i < min(count, 4); i++) {
+            s.contact[i] = contact_shadow(s, look.light_dir[i].xyz);
+        }
+        if (count > 4) {
+            s.contact_last = contact_shadow(s, look.light_dir[4].xyz);
+        }
+    }
     if (look.env_params.z > 0.5) {
-        s.ao = textureLoad(ao_tex, s.pixel, 0).r;
+        let occlusion = textureLoad(ao_tex, s.pixel, 0);
+        s.ao = occlusion.a;
         s.ao_direct = mix(1.0, s.ao, look.env_params.w);
+        // Back from the occlusion's view space (z forward) to the world.
+        let b = occlusion.rgb * 2.0 - 1.0;
+        let to_world = transpose(mat3x3<f32>(g.view[0].xyz, g.view[1].xyz, g.view[2].xyz));
+        let bent = to_world * vec3<f32>(b.x, b.y, -b.z);
+        if (dot(bent, bent) > 0.01) {
+            s.bent = normalize(bent);
+            // Facing the eye as the surface does.
+            s.bent = select(s.bent, -s.bent, dot(s.bent, s.smooth_n) < -0.5);
+        }
     }
     if (look.matcap_params.w > 0.5) {
         s.back_depth = textureLoad(back_tex, s.pixel, 0).r;
@@ -1373,6 +1853,110 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<
         color = light_sample(s, surface_material(s));
     }
     return mesh_finish(color, s, in, front);
+}
+
+// ---- the floor ------------------------------------------------------------
+//
+// A shadow catcher (render/floor.rs): a square under the model that is the
+// backdrop itself, darkened by the key's shadow and the occlusion where the
+// model meets it, with the model's reflection on it, all fading out toward
+// its edge. Drawn over the backdrop, premultiplied: alpha is how much of the
+// backdrop it takes away, colour what it adds.
+
+struct FloorOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) world: vec3<f32>,
+};
+
+@vertex
+fn vs_floor(@builtin(vertex_index) i: u32) -> FloorOut {
+    // Two triangles over the square, out to where it has faded away.
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
+    let c = corners[i] * look.floor.z;
+    var out: FloorOut;
+    out.world = vec3<f32>(look.floor_more.x + c.x, look.floor.y, look.floor_more.y + c.y);
+    out.pos = g.view_proj * vec4<f32>(out.world, 1.0);
+    if (look.floor.x < 0.5) {
+        // Off: every corner in one place, so nothing is drawn.
+        out.pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    return out;
+}
+
+// How much of the floor there is here: all of it near the model, none at
+// its edge.
+fn floor_fade(world: vec3<f32>) -> f32 {
+    let d = length(world.xz - look.floor_more.xy) / max(look.floor.z, 1e-6);
+    return 1.0 - smoothstep(0.35, 1.0, d);
+}
+
+// Toward the eye from a point on the floor.
+fn floor_view(world: vec3<f32>) -> vec3<f32> {
+    if (g.viewport.z <= 0.0) {
+        return -g.cam_forward.xyz;
+    }
+    return normalize(g.cam_pos.xyz - world);
+}
+
+// The floor in the normals prepass: facing up, at its eye depth.
+@fragment
+fn fs_floor_prepass(in: FloorOut) -> @location(0) vec4<f32> {
+    if (floor_view(in.world).y <= 0.0) {
+        discard;
+    }
+    let vn = (g.view * vec4<f32>(0.0, 1.0, 0.0, 0.0)).xyz;
+    let depth = dot(in.world - g.cam_pos.xyz, g.cam_forward.xyz);
+    return vec4<f32>(vn, max(depth, 1e-6));
+}
+
+@fragment
+fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
+    let v = floor_view(in.world);
+    // Seen from below there is no floor.
+    if (v.y <= 0.0) {
+        discard;
+    }
+    let fade = floor_fade(in.world);
+    let pixel = in.pos.xy;
+    let up = vec3<f32>(0.0, 1.0, 0.0);
+    // The key's shadow, as dark as the floor's own setting, and the
+    // occlusion where the model comes close above it.
+    var lit = 1.0;
+    if (look.light_params.y > 0.5) {
+        lit = 1.0 - (1.0 - key_light_reaching(in.world, up, pixel)) * look.floor.w;
+    }
+    var open = 1.0;
+    if (look.env_params.z > 0.5) {
+        open = textureLoad(ao_tex, vec2<i32>(pixel), 0).a;
+    }
+    let dark = (1.0 - lit * open) * fade;
+
+    // The model's reflection, blurred by the floor's roughness: taps over a
+    // disc as wide as that, turned for each pixel and each sample.
+    var reflected = vec4<f32>(0.0);
+    let strength = look.floor_more.z;
+    if (strength > 0.0) {
+        let uv = pixel / g.viewport.xy;
+        let blur = look.floor_more.w * look.floor_more.w * 0.05;
+        let turn = pixel_noise(pixel) * TAU;
+        var way = vec2<f32>(cos(turn), sin(turn));
+        let aspect = vec2<f32>(1.0 / max(g.viewport.w, 1e-3), 1.0);
+        const TAPS: i32 = 8;
+        for (var i = 0; i < TAPS; i++) {
+            let r = sqrt((f32(i) + 0.5) / f32(TAPS)) * blur;
+            reflected += textureSampleLevel(floor_tex, env_smp, uv + way * aspect * r, 0.0);
+            way = GOLDEN_TURN * way;
+        }
+        reflected /= f32(TAPS);
+        // A glossy floor reflects more at a glancing angle.
+        let k = strength * (0.3 + 0.7 * pow5(1.0 - saturate(v.y))) * fade;
+        reflected *= k;
+    }
+    // Premultiplied: the reflection is added, and it and the shadow take
+    // that much of the backdrop away.
+    return vec4<f32>(reflected.rgb, dark + reflected.a * (1.0 - dark));
 }
 
 // ---- helper passes --------------------------------------------------------

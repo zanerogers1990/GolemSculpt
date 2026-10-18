@@ -25,6 +25,7 @@ const KIND_LURE: u32 = 1u;
 const KIND_METAL: u32 = 2u;
 const KIND_CLAY: u32 = 3u;
 const KIND_WOOD: u32 = 4u;
+const KIND_RESIN: u32 = 5u;
 const KIND_GLOW: u32 = 6u;
 const KIND_CUSTOM: u32 = 7u;
 

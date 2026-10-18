@@ -64,6 +64,9 @@ pub struct Options {
     pub gizmo_axes: crate::gizmo::Orientation,
     /// Finishes, lighting, environment and post effects.
     pub look: Look,
+    /// How hard the renderer works (see render/quality.rs). Kept in the
+    /// settings file, not the scene.
+    pub quality: crate::render::quality::Quality,
     /// The Face Groups card: whether group colours show, and the group picked (see ui/groups.rs).
     pub groups: crate::ui::groups::Card,
     /// The Deform card: the deformer picked and its settings (see ui/deform.rs). Not kept between runs.
@@ -110,6 +113,7 @@ impl Default for Options {
             theme: 0,
             gizmo_axes: Default::default(),
             look: Look::default(),
+            quality: Default::default(),
             groups: Default::default(),
             deform: Default::default(),
             paint: Default::default(),
@@ -152,6 +156,8 @@ pub struct Doc {
     pub turntable: crate::turntable::Turntable,
     /// The timelapse recorder's settings and status.
     pub timelapse: crate::timelapse::Timelapse,
+    /// Render Picture's settings and how a render is going (still.rs).
+    pub still: crate::still::Still,
 }
 
 impl Doc {
@@ -428,6 +434,9 @@ pub enum Action {
     /// Pick an HDRI picture to light the scene with.
     LoadHdri,
     ClearHdri,
+    /// Pick a .cube colour table to grade the picture by, or drop it.
+    LoadLut,
+    ClearLut,
     Frame,
     /// Turn to an axis view (yaw, pitch in degrees) and switch to orthographic.
     Snap(f32, f32),

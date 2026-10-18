@@ -10,14 +10,20 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use crate::doc::Options;
-use crate::look::{LookUniform, Tonemap, SHADOW_SIZE};
+use crate::look::LookUniform;
 use pipelines::{Cull, MeshKey};
 use crate::mesh::Mesh;
 
 mod cache;
 mod chunks;
+mod dfg;
 mod dof;
 pub mod env;
+mod floor;
+mod ltc;
+pub mod lut;
+#[cfg(test)]
+pub use ltc::integral as ltc_integral;
 mod mips;
 pub mod paint;
 mod pipelines;
@@ -25,6 +31,8 @@ pub mod flash;
 pub mod groups;
 pub mod post;
 pub mod preview;
+pub mod quality;
+mod refine;
 pub mod spheres;
 pub mod wire;
 
@@ -35,11 +43,16 @@ const GBUF_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Full floats: plastic thickness is a small difference of two eye depths.
 const BACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-/// Ambient occlusion reach and strength. The Unity app's 0.3 and 0.4, with
-/// the reach halved because shapes here are built at half its size.
+/// Ambient occlusion reach, and the power its openness is raised to: the
+/// Unity app's reach of 0.3, halved because shapes here are built at half
+/// its size, and the strength that looks as its occlusion did.
 const AO_RADIUS: f32 = 0.15;
-const AO_INTENSITY: f32 = 0.4;
+const AO_POWER: f32 = 1.6;
 pub const MSAA_SAMPLES: u32 = 4;
+/// The side the shadow map is drawn at while it changes frame after frame
+/// (see `Renderer::draw`): the size it always was, so orbiting and sculpting
+/// cost what they did.
+const QUICK_SHADOW: u32 = 512;
 
 pub struct Gpu {
     pub device: wgpu::Device,
@@ -205,11 +218,23 @@ struct Targets {
     gbuf_depth: wgpu::TextureView,
     /// Eye depth of the nearest back face, for the lure plastic.
     back: wgpu::TextureView,
+    /// The model mirrored in the floor, at half size, for the floor to read
+    /// (floor.rs), and what it is drawn with, made the first time it is.
+    floor_reflection: wgpu::TextureView,
+    reflection: Option<floor::Reflection>,
     /// The finished picture with its overlays, kept for frames in which
     /// nothing of it changes (see cache.rs), and what it was drawn from.
     finished: wgpu::TextureView,
     blit_finished: wgpu::BindGroup,
     drawn: Option<cache::SceneKey>,
+    /// What the picture was last drawn from, before this file's own marks,
+    /// and whether that had changed from the frame before: two changes in a
+    /// row are a picture in motion (an orbit, a stroke).
+    last_inputs: Option<cache::SceneKey>,
+    changing: bool,
+    /// The running average of the still picture's samples (refine.rs),
+    /// made the first time this size refines.
+    refine: Option<refine::Buffers>,
 }
 
 /// One object to draw: which mesh, and its per-object shader input (the
@@ -346,6 +371,10 @@ pub struct Renderer {
     layout_main: wgpu::BindGroupLayout,
     bind_pre: wgpu::BindGroup,
     bind_main: Option<wgpu::BindGroup>,
+    /// The same, with nothing where the floor's reflection goes: what the
+    /// reflection itself is drawn with (floor.rs).
+    bind_mirror: Option<wgpu::BindGroup>,
+    floor: floor::Floor,
     pipe_background: wgpu::RenderPipeline,
     /// The main pass's, one per finish and culling (pipelines.rs).
     mesh_pipes: pipelines::MeshPipelines,
@@ -356,10 +385,22 @@ pub struct Renderer {
     matcap: wgpu::TextureView,
     sampler: wgpu::Sampler,
     shadow: wgpu::TextureView,
+    /// The shadow map's side, and how many times it has been made afresh
+    /// (a bind group made before reads the old one).
+    shadow_size: u32,
+    shadow_generation: u32,
     shadow_sampler: wgpu::Sampler,
+    /// The split-sum reflection table (dfg.rs), and the softboxes' (ltc.rs).
+    dfg: wgpu::TextureView,
+    ltc: wgpu::TextureView,
+    /// The colour table the picture is graded by (lut.rs), as the composite
+    /// pass reads it, and its points a side.
+    lut: wgpu::BindGroup,
+    lut_size: u32,
     env: env::Env,
-    /// The `env.generation` the main bind group was built against.
-    env_seen: u32,
+    /// The `env.generation` and `shadow_generation` the main bind group was
+    /// built against.
+    bound_to: (u32, u32),
     post: post::Post,
     targets: Option<Targets>,
     /// Keyed by the scene's mesh id.
@@ -397,6 +438,22 @@ pub struct Renderer {
     /// as this key has them. It is drawn again only when that changes (see
     /// `shadow_key`), not every frame.
     shadow_drawn: Option<cache::SceneKey>,
+    /// The shadow map holds the quick small version (`QUICK_SHADOW` in its
+    /// corner).
+    shadow_quick: bool,
+    /// Set while drawing a picture to keep (a recording's frame): every pass
+    /// at its own quality, never the quick versions used while things move.
+    pub picture: bool,
+    /// How many samples a still picture is refined to (refine.rs); 1 for
+    /// none. The app sets it every frame: off during a stroke.
+    pub refine_to: u32,
+    /// Set while drawing a picture with no backdrop (a render saved with
+    /// a transparent background): what is not model comes out see-through.
+    pub transparent: bool,
+    refine: refine::Refine,
+    /// The last frame left the picture short of `refine_to` samples, so
+    /// the next one will refine it further.
+    refine_pending: bool,
     blit: cache::Blit,
     /// Painted objects' pipelines, the palette and the local tables (paint.rs).
     pub painted: paint::Painted,
@@ -408,13 +465,14 @@ pub struct Renderer {
 pub struct Side {
     targets: Option<Targets>,
     bind_main: Option<wgpu::BindGroup>,
-    env_seen: u32,
+    bind_mirror: Option<wgpu::BindGroup>,
+    bound_to: (u32, u32),
     post: post::Post,
 }
 
 impl Side {
     pub fn new(gpu: &Gpu) -> Side {
-        Side { targets: None, bind_main: None, env_seen: 0, post: post::Post::new(gpu) }
+        Side { targets: None, bind_main: None, bind_mirror: None, bound_to: (0, 0), post: post::Post::new(gpu) }
     }
 }
 
@@ -550,6 +608,9 @@ impl Renderer {
                 texture_entry(10, exact, flat),
                 texture_entry(11, smooth, flat),
                 sampler_entry(12, wgpu::SamplerBindingType::Filtering),
+                texture_entry(13, smooth, flat),
+                texture_entry(14, smooth, flat),
+                texture_entry(15, smooth, flat),
             ],
         });
         let bind_pre = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -614,6 +675,7 @@ impl Renderer {
         let mesh_pipes =
             pipelines::MeshPipelines::new(device, &shader, &layout, HDR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES);
         let painted = paint::Painted::new(gpu, &layout_main, HDR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES);
+        let floor = floor::Floor::new(device, &shader, &layout, &pipeline_layout(&layout_pre), GBUF_FORMAT);
         let layout = pipeline_layout(&layout_pre);
         let helper = |label, fragment: &str, format: wgpu::TextureFormat, cull: Cull| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -678,7 +740,8 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        let shadow = target_texture(device, "shadow", (SHADOW_SIZE, SHADOW_SIZE), DEPTH_FORMAT, 1, true);
+        let shadow_size = quality::Quality::default().shadow_size();
+        let shadow = target_texture(device, "shadow", (shadow_size, shadow_size), DEPTH_FORMAT, 1, true);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -693,6 +756,8 @@ impl Renderer {
             layout_main,
             bind_pre,
             bind_main: None,
+            bind_mirror: None,
+            floor,
             pipe_background,
             mesh_pipes,
             pipe_prepass,
@@ -701,9 +766,15 @@ impl Renderer {
             matcap: matcap_texture(device, &gpu.queue, matcap),
             sampler,
             shadow,
+            shadow_size,
+            shadow_generation: 0,
             shadow_sampler,
+            dfg: dfg::texture(gpu),
+            ltc: ltc::texture(gpu),
+            lut: post::lut_bind(device, &post::lut_layout(device), &lut::texture(gpu, &lut::Lut::identity())),
+            lut_size: 2,
             env: env::Env::new(gpu),
-            env_seen: 0,
+            bound_to: (0, 0),
             post: post::Post::new(gpu),
             targets: None,
             meshes: HashMap::new(),
@@ -720,6 +791,12 @@ impl Renderer {
             forced: 0,
             uploads: cache::Stamp::default(),
             shadow_drawn: None,
+            shadow_quick: false,
+            picture: false,
+            refine_to: 1,
+            transparent: false,
+            refine: refine::Refine::new(gpu, HDR_FORMAT),
+            refine_pending: false,
             blit: cache::Blit::new(gpu),
             painted,
         }
@@ -738,7 +815,8 @@ impl Renderer {
     pub fn swap_side(&mut self, side: &mut Side) {
         std::mem::swap(&mut self.targets, &mut side.targets);
         std::mem::swap(&mut self.bind_main, &mut side.bind_main);
-        std::mem::swap(&mut self.env_seen, &mut side.env_seen);
+        std::mem::swap(&mut self.bind_mirror, &mut side.bind_mirror);
+        std::mem::swap(&mut self.bound_to, &mut side.bound_to);
         std::mem::swap(&mut self.post, &mut side.post);
     }
 
@@ -748,10 +826,33 @@ impl Renderer {
         self.scene_dirty = true;
     }
 
+    /// Takes a colour table to grade the picture by, or drops it.
+    pub fn set_lut(&mut self, gpu: &Gpu, table: Option<&lut::Lut>) {
+        let identity = lut::Lut::identity();
+        let table = table.unwrap_or(&identity);
+        let view = lut::texture(gpu, table);
+        self.lut = post::lut_bind(&gpu.device, &post::lut_layout(&gpu.device), &view);
+        self.lut_size = table.size as u32;
+        self.scene_dirty = true;
+    }
+
     /// Takes a new HDRI picture for the environment, or drops the current one.
     pub fn set_hdri(&mut self, gpu: &Gpu, image: Option<crate::look::HdriImage>) {
         self.env.set_hdri(gpu, image);
         self.scene_dirty = true;
+    }
+
+    /// Makes the shadow map afresh at the side the quality settings ask for,
+    /// if it is not that already.
+    fn ensure_shadow(&mut self, gpu: &Gpu, quality: &quality::Quality) {
+        let size = quality.shadow_size();
+        if size == self.shadow_size {
+            return;
+        }
+        self.shadow = target_texture(&gpu.device, "shadow", (size, size), DEPTH_FORMAT, 1, true);
+        self.shadow_size = size;
+        self.shadow_generation += 1;
+        self.shadow_drawn = None;
     }
 
     fn ensure_targets(&mut self, gpu: &Gpu, size: (u32, u32)) {
@@ -770,9 +871,14 @@ impl Renderer {
             gbuf: target_texture(device, "normals", size, GBUF_FORMAT, 1, true),
             gbuf_depth: target_texture(device, "normals depth", size, DEPTH_FORMAT, 1, false),
             back: target_texture(device, "back depth", size, BACK_FORMAT, 1, true),
+            floor_reflection: target_texture(device, "floor reflection", floor::reflection_size(size), HDR_FORMAT, 1, true),
+            reflection: None,
             blit_finished: self.blit.bind(gpu, &finished),
             finished,
             drawn: None,
+            last_inputs: None,
+            changing: false,
+            refine: None,
         };
         self.post.resize(gpu, size, &targets.gbuf, &targets.scene, &targets.depth);
         self.targets = Some(targets);
@@ -800,6 +906,17 @@ impl Renderer {
         }
         self.wire.sync(gpu, id, mesh);
         self.groups.sync(gpu, id, mesh, self.meshes.get(&id));
+    }
+
+    /// Whether the picture is still being refined: the app should draw
+    /// another frame even if nothing changes.
+    pub fn refining(&self) -> bool {
+        self.refine_pending
+    }
+
+    /// How many samples the picture last drawn into the current target holds.
+    pub fn samples_shown(&self) -> u32 {
+        self.targets.as_ref().and_then(|t| t.refine.as_ref()).map_or(1, refine::Buffers::shown)
     }
 
     /// Moves whenever any mesh's buffers are sent again or let go: the
@@ -994,6 +1111,7 @@ impl Renderer {
         items: &[DrawItem],
     ) {
         self.ensure_targets(gpu, size);
+        self.ensure_shadow(gpu, &opts.quality);
 
         // What this frame needs. A matcap carries its own lighting, so none
         // of the lighting's helper passes run under one.
@@ -1007,7 +1125,10 @@ impl Renderer {
         let surface = if globals.shading[0] > 0.5 {
             pipelines::SURFACE_MATCAP
         } else {
-            ((look.matcap_params[2] + 0.5) as u32).clamp(0, 4)
+            match (look.matcap_params[2] + 0.5) as u32 {
+                f @ 0..=4 => f,
+                _ => pipelines::SURFACE_RESIN,
+            }
         };
         let glow = look.glow.v[2][0] > 0.5;
         // Which objects are drawn with their paint (paint.rs): those whose
@@ -1025,25 +1146,74 @@ impl Renderer {
             && items.iter().zip(&painted).any(|(i, &p)| {
                 p && self.meshes.get(&i.mesh).is_some_and(|m| upload.back_depth_for(m.table.iter().copied()))
             });
-        let plastic = lit && (surface == 1 || painted_lure);
+        let plastic = lit && (surface == 1 || surface == pipelines::SURFACE_RESIN || painted_lure);
+        // The floor (floor.rs), under lit shading only: it is the lights'
+        // shadow. Its reflection is the model drawn a second time.
+        let floor = lit && look.floor[0] > 0.5;
+        let reflect = floor && look.floor_more[2] > 0.0;
         let source = lit.then(|| env_source(globals, look, opts));
-        let post_params = post_params(globals, look, settings);
+        let mut post_params = post_params(globals, look, settings, self.transparent);
+        post_params.extras[3] = self.lut_size as f32;
 
         // Nothing it is drawn from has changed: the picture is the one kept.
         if std::mem::take(&mut self.scene_dirty) {
             self.forced += 1;
         }
-        let key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
+        let mut key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
+        // A picture that changes frame after frame is in motion: its costlier
+        // parts (the soft shadow's taps, the occlusion's, the softboxes'
+        // highlights) are drawn the cheaper way meanwhile, and the first
+        // frame it holds still at full quality.
         let targets = self.targets.as_mut().unwrap();
-        if targets.drawn.as_ref() == Some(&key) {
+        let changed = targets.last_inputs.as_ref() != Some(&key);
+        let moving = changed && targets.changing && !self.picture;
+        (targets.changing, targets.last_inputs) = (changed, Some(key.clone()));
+        key.push(&(moving as u32));
+
+        // The key light's shadow map is drawn again only when what it is
+        // drawn from changes. While that happens in a picture in motion (the
+        // lights turning with an orbit, a stroke moving the model) it is
+        // drawn small, as cheap as it always was; the first frame it holds
+        // still it is drawn at its own size.
+        let shadow_key = shadows.then(|| self.shadow_key(look, items, opts.show_backfaces));
+        let shadow_changes = shadows && shadow_key != self.shadow_drawn;
+        let quick_shadow = shadow_changes && moving && self.shadow_size > QUICK_SHADOW;
+        let draw_shadow = shadow_changes || (shadows && self.shadow_quick && !quick_shadow);
+        // A picture kept but with fewer samples than asked for is refined
+        // instead (refine.rs). Never under the matcap, which stays exactly
+        // as it was.
+        let wanted = if lit { self.refine_to.max(1) } else { 1 };
+        let targets = self.targets.as_mut().unwrap();
+        let same = targets.drawn.as_ref() == Some(&key);
+        let shown = targets.refine.as_ref().map_or(1, refine::Buffers::shown);
+        let refining = same && shown < wanted;
+        self.refine_pending = false;
+        if same && !refining {
             self.blit.draw(encoder, &targets.blit_finished, target);
             return;
         }
-        targets.drawn = None;
+        if !same {
+            targets.drawn = None;
+            if let Some(buffers) = &mut targets.refine {
+                buffers.count = 0;
+            }
+        }
+        // Which sample this frame draws: 0 for a picture drawn afresh, then
+        // each refining one with the camera moved a little.
+        let sample = if refining { shown } else { 0 };
+        if refining && targets.refine.is_none() {
+            targets.refine = Some(self.refine.buffers(gpu, size, &targets.scene, HDR_FORMAT));
+        }
+        let mut globals = *globals;
+        globals.view_proj = refine::jittered(globals.view_proj, refine::jitter(sample), size);
+        let globals = &globals;
 
+        // The objects' placements, and for the floor's reflection each
+        // mirrored in it after them.
+        let placed = items.len() * if reflect { 2 } else { 1 };
         if !items.is_empty() {
-            if self.objects.as_ref().is_none_or(|(_, room)| *room < items.len()) {
-                let room = items.len().next_power_of_two().max(16);
+            if self.objects.as_ref().is_none_or(|(_, room)| *room < placed) {
+                let room = placed.next_power_of_two().max(16);
                 let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("objects"),
                     size: room as u64 * 64,
@@ -1052,11 +1222,24 @@ impl Renderer {
                 });
                 self.objects = Some((buffer, room));
             }
-            let data: Vec<[[f32; 4]; 4]> = items.iter().map(|i| i.model).collect();
+            let mut data: Vec<[[f32; 4]; 4]> = items.iter().map(|i| i.model).collect();
+            if reflect {
+                data.extend(mirrored_items(items, look.floor[1]).iter().map(|i| i.model));
+            }
             gpu.queue.write_buffer(&self.objects.as_ref().unwrap().0, 0, bytemuck::cast_slice(&data));
         }
+        self.env.set_size(gpu, opts.quality.reflection_size());
         if let Some(source) = &source {
-            self.env.update(gpu, encoder, source);
+            if reflect && !self.env.is_current(source) {
+                // The floor's reflection goes out as a batch of its own
+                // before the frame's (below), and reflects the cube too: the
+                // cube goes out before it.
+                let mut first = gpu.device.create_command_encoder(&Default::default());
+                self.env.update(gpu, &mut first, source);
+                gpu.queue.submit([first.finish()]);
+            } else {
+                self.env.update(gpu, encoder, source);
+            }
         }
 
         let mut look = *look;
@@ -1065,20 +1248,44 @@ impl Renderer {
             look.sh = self.env.ambient(look.bg_params[1], strength);
         }
         look.light_params[1] = if shadows { 1.0 } else { 0.0 };
+        // Contact shadows march through the normals prepass, and only while
+        // the picture holds still.
+        if !(cavity || occlusion) || moving {
+            look.contact[0] = 0.0;
+        }
+        look.shadow_params[3] = if moving { 1.0 } else { 0.0 };
+        if quick_shadow {
+            // The map fills only its corner, with texels as much bigger as
+            // it is smaller, and the biases that keep a surface from
+            // shadowing itself grow with them.
+            let grow = self.shadow_size as f32 / QUICK_SHADOW as f32;
+            look.shadow_params[0] = 1.0 / QUICK_SHADOW as f32;
+            look.shadow_params[1] *= grow;
+            look.shadow_params[2] *= grow;
+            look.shadow_soft[3] = 1.0 / grow;
+        }
         look.env_params[2] = if occlusion { 1.0 } else { 0.0 };
         look.matcap_params[3] = if plastic { 1.0 } else { 0.0 };
+        look.floor[0] = if floor { 1.0 } else { 0.0 };
+        // Every noisy filter turns its own way for each sample.
+        look.cam_params[2] = sample as f32;
+        let mut post_params = post_params;
+        post_params.ao[3] = sample as f32;
+        post_params.occlusion[0] = if moving { 1.0 } else { 0.0 };
         gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
         gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&look));
         self.post.set_params(gpu, &post_params);
         // Depth of field: sets its lens, or puts its textures away if off.
-        self.post.focus(gpu, settings, globals, look.cam_params[1]);
+        self.post.focus(gpu, settings, globals, look.cam_params[1], sample as f32 * GOLDEN_ANGLE);
 
         let targets = self.targets.as_ref().unwrap();
-        if self.bind_main.is_none() || self.env_seen != self.env.generation {
-            self.env_seen = self.env.generation;
+        let generations = (self.env.generation, self.shadow_generation);
+        if self.bind_main.is_none() || self.bound_to != generations {
+            self.bound_to = generations;
             let view = wgpu::BindingResource::TextureView;
-            self.bind_main = Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("main"),
+            // Everything the scene pass reads; `reflection` is the floor's.
+            let bind = |label, reflection| gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
                 layout: &self.layout_main,
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: self.globals.as_entire_binding() },
@@ -1094,10 +1301,14 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 10, resource: view(&targets.back) },
                     wgpu::BindGroupEntry { binding: 11, resource: view(&self.env.hdri_view) },
                     wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::Sampler(&self.env.hdri_sampler) },
+                    wgpu::BindGroupEntry { binding: 13, resource: view(&self.dfg) },
+                    wgpu::BindGroupEntry { binding: 14, resource: view(reflection) },
+                    wgpu::BindGroupEntry { binding: 15, resource: view(&self.ltc) },
                 ],
-            }));
+            });
+            let (main, mirror) = (bind("main", &targets.floor_reflection), bind("mirror", &self.floor.nothing));
+            (self.bind_main, self.bind_mirror) = (Some(main), Some(mirror));
         }
-        let bind_main = self.bind_main.as_ref().unwrap();
 
         // Which parts of each object are in view (chunks.rs).
         let view_proj = glam::Mat4::from_cols_array_2d(&globals.view_proj);
@@ -1120,55 +1331,63 @@ impl Renderer {
                     rows
                 })
                 .collect();
+            let tables = if reflect { [tables.clone(), tables].concat() } else { tables };
             self.painted.set_tables(gpu, &tables);
         }
         // The main pass's pipelines: for each way of culling in use, the
         // finish's own for objects without paint and the palette's painted
         // one for objects with. A painted pipeline that cannot be built
         // leaves its objects drawn without their paint.
-        let module = self.painted.module_key();
-        let mut mesh_pipes: Vec<(Cull, bool, wgpu::RenderPipeline)> = Vec::new();
-        for cull in Cull::ALL {
-            let with_paint = |painted: &[bool]| (0..items.len()).any(|i| culls[i] == cull && painted[i]);
-            if with_paint(&painted) {
-                let key = paint::Key { module: module.clone(), surface, glow, cull };
-                match self.painted.pipeline(&key) {
-                    Some(pipeline) => mesh_pipes.push((cull, true, pipeline)),
-                    None => (0..items.len()).filter(|&i| culls[i] == cull).for_each(|i| painted[i] = false),
+        let mesh_pipes = scene_pipelines(&mut self.painted, &mut self.mesh_pipes, &culls, &mut painted, surface, glow);
+        let paint_bind = painted.contains(&true).then(|| self.painted.bind().clone());
+
+        // The floor's reflection: the model mirrored in it, drawn with
+        // uniforms of its own as a batch of work before the frame's
+        // (floor.rs), after which the frame's are written back.
+        if reflect {
+            let mirrored = mirrored_items(items, look.floor[1]);
+            let mirror_culls: Vec<Cull> =
+                mirrored.iter().map(|i| Cull::of(opts.show_backfaces, pipelines::mirrored(&i.model))).collect();
+            let mut mirror_painted = painted.clone();
+            let mirror_pipes =
+                scene_pipelines(&mut self.painted, &mut self.mesh_pipes, &mirror_culls, &mut mirror_painted, surface, glow);
+            let mirror_runs = self.visible_runs(&view_proj, &mirrored);
+            let (mirror_globals, mirror_look) = floor::mirrored_uniforms(globals, &look);
+            gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&mirror_globals));
+            gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&mirror_look));
+            let mut mirror_encoder = gpu.device.create_command_encoder(&Default::default());
+            let targets = self.targets.as_mut().unwrap();
+            let reflection = targets.reflection.get_or_insert_with(|| floor::Reflection::new(gpu, size));
+            if let (Some(bind_mirror), Some((objects, _))) = (&self.bind_mirror, &self.objects) {
+                let mut pass = reflection.pass(&mut mirror_encoder, &targets.floor_reflection);
+                pass.set_bind_group(0, bind_mirror, &[]);
+                for (cull, with_paint, pipeline) in &mirror_pipes {
+                    pass.set_pipeline(pipeline);
+                    if let (true, Some(bind)) = (*with_paint, &paint_bind) {
+                        pass.set_bind_group(1, bind, &[]);
+                    }
+                    let first = items.len() as u32;
+                    let drawn = Drawn { items: &mirrored, first, runs: &mirror_runs, culls: &mirror_culls, painted: &mirror_painted };
+                    draw_objects(&mut pass, &self.meshes, objects, &drawn, *cull, Some(*with_paint));
                 }
             }
-            if (0..items.len()).any(|i| culls[i] == cull && !painted[i]) {
-                mesh_pipes.push((cull, false, self.mesh_pipes.get(MeshKey { surface, glow, cull }).clone()));
-            }
+            gpu.queue.submit([mirror_encoder.finish()]);
+            gpu.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
+            gpu.queue.write_buffer(&self.look, 0, bytemuck::bytes_of(&look));
         }
-        let paint_bind = painted.contains(&true).then(|| self.painted.bind().clone());
+        let targets = self.targets.as_ref().unwrap();
+        let bind_main = self.bind_main.as_ref().unwrap();
+
         // Draws the objects culled as `cull`, the parts of each in `runs`:
         // all of them, or with `paint` only those drawn with their paint or
         // only those without.
         let draw_items = |pass: &mut wgpu::RenderPass, runs: &[Vec<std::ops::Range<u32>>], cull: Cull, paint: Option<bool>| {
             let Some((objects, _)) = &self.objects else { return };
-            for (i, item) in items.iter().enumerate() {
-                let Some(mesh) = self.meshes.get(&item.mesh) else { continue };
-                if runs[i].is_empty() || culls[i] != cull || paint.is_some_and(|p| p != painted[i]) {
-                    continue;
-                }
-                pass.set_vertex_buffer(0, mesh.positions.slice(..));
-                pass.set_vertex_buffer(1, mesh.normals.slice(..));
-                pass.set_vertex_buffer(2, mesh.mask.slice(..));
-                pass.set_vertex_buffer(3, objects.slice(..));
-                pass.set_vertex_buffer(4, mesh.curv.slice(..));
-                if paint == Some(true) {
-                    let Some(colour) = &mesh.paint else { continue };
-                    pass.set_vertex_buffer(5, colour.slice(..));
-                }
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                for run in &runs[i] {
-                    pass.draw_indexed(run.clone(), 0, i as u32..i as u32 + 1);
-                }
-            }
+            let drawn = Drawn { items, first: 0, runs, culls: &culls, painted: &painted };
+            draw_objects(pass, &self.meshes, objects, &drawn, cull, paint);
         };
         // A colour buffer cleared to "nothing here", with its own depth.
-        let helper_pass = |encoder: &mut wgpu::CommandEncoder, label: &str, view: &wgpu::TextureView, pipelines: &[wgpu::RenderPipeline; 3]| {
+        let helper_pass = |encoder: &mut wgpu::CommandEncoder, label: &str, view: &wgpu::TextureView, pipelines: &[wgpu::RenderPipeline; 3], with_floor: bool| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1195,17 +1414,25 @@ impl Renderer {
                 pass.set_pipeline(&pipelines[cull.index()]);
                 draw_items(&mut pass, &in_view, cull, None);
             }
+            if with_floor {
+                pass.set_pipeline(&self.floor.pipe_prepass);
+                pass.draw(0..floor::VERTICES, 0..1);
+            }
         };
 
-        let shadow_key = shadows.then(|| self.shadow_key(&look, items, opts.show_backfaces));
-        if shadows && shadow_key != self.shadow_drawn {
+        if draw_shadow {
             self.shadow_drawn = shadow_key;
+            self.shadow_quick = quick_shadow;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
                 color_attachments: &[],
                 depth_stencil_attachment: depth_attachment(&self.shadow, 1.0),
                 ..Default::default()
             });
+            if quick_shadow {
+                let side = QUICK_SHADOW as f32;
+                pass.set_viewport(0.0, 0.0, side, side, 0.0, 1.0);
+            }
             pass.set_bind_group(0, &self.bind_pre, &[]);
             let light = glam::Mat4::from_cols_array_2d(&look.shadow_view_proj);
             let runs = self.visible_runs(&light, items);
@@ -1215,24 +1442,36 @@ impl Renderer {
             }
         }
         if cavity || occlusion {
-            helper_pass(encoder, "normals prepass", &targets.gbuf, &self.pipe_prepass);
+            // The floor too, for the occlusion where the model meets it.
+            helper_pass(encoder, "normals prepass", &targets.gbuf, &self.pipe_prepass, floor);
         }
         if plastic {
-            helper_pass(encoder, "back depth", &targets.back, &self.pipe_back);
+            helper_pass(encoder, "back depth", &targets.back, &self.pipe_back, false);
         }
         if occlusion {
             self.post.occlusion(encoder);
         }
 
         {
+            // With no backdrop, the picture starts as black marked as not
+            // model, so the model's smoothed outline blends with nothing; the
+            // reflections and the resin still see the backdrop.
+            let (clear, backdrop) = match self.transparent {
+                true => (wgpu::Color::TRANSPARENT, false),
+                false => (wgpu::Color::BLACK, true),
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &targets.msaa,
                     depth_slice: None,
-                    resolve_target: Some(&targets.scene),
+                    // A refining sample goes beside the scene, to be folded in.
+                    resolve_target: Some(match (sample, &targets.refine) {
+                        (1.., Some(buffers)) => &buffers.sample,
+                        _ => &targets.scene,
+                    }),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Discard,
                     },
                 })],
@@ -1240,8 +1479,10 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, bind_main, &[]);
-            pass.set_pipeline(&self.pipe_background);
-            pass.draw(0..3, 0..1);
+            if backdrop {
+                pass.set_pipeline(&self.pipe_background);
+                pass.draw(0..3, 0..1);
+            }
             for (cull, with_paint, pipeline) in &mesh_pipes {
                 pass.set_pipeline(pipeline);
                 if let (true, Some(bind)) = (*with_paint, &paint_bind) {
@@ -1249,7 +1490,23 @@ impl Renderer {
                 }
                 draw_items(&mut pass, &in_view, *cull, Some(*with_paint));
             }
+            if floor {
+                pass.set_pipeline(&self.floor.pipe);
+                pass.draw(0..floor::VERTICES, 0..1);
+            }
         }
+        // The sample into the average, which then stands in the scene's
+        // place for the post effects.
+        if sample > 0 {
+            let targets = self.targets.as_mut().unwrap();
+            if let Some(buffers) = &mut targets.refine {
+                self.refine.fold(gpu, encoder, buffers, &targets.scene);
+                self.refine_pending = buffers.shown() < wanted;
+            }
+        } else {
+            self.refine_pending = wanted > 1;
+        }
+        let targets = self.targets.as_ref().unwrap();
 
         // Bloom, vignette and the tone curve, into the finished picture:
         // straight into the one kept when nothing goes over it, otherwise
@@ -1260,12 +1517,12 @@ impl Renderer {
             || self.wire.active()
             || self.spheres.active();
         if !overlaid {
-            self.post.finish(encoder, &targets.finished, bloom, true);
+            self.post.finish(encoder, &targets.finished, bloom, true, &self.lut);
             self.blit.draw(encoder, &targets.blit_finished, target);
             self.targets.as_mut().unwrap().drawn = Some(key);
             return;
         }
-        self.post.finish(encoder, &targets.ldr, bloom, false);
+        self.post.finish(encoder, &targets.ldr, bloom, false, &self.lut);
 
         // Overlays go on the finished picture, hidden by whatever of the
         // scene is in front of them.
@@ -1357,9 +1614,11 @@ impl Renderer {
             key.push(source);
         }
         let flag = |on: bool| if on { 1.0f32 } else { 0.0 };
+        key.push(&[opts.quality.shadow_size(), opts.quality.reflection_size()]);
         key.push(&[
             flag(settings.hdri.active()),
             settings.hdri.ambient,
+            flag(settings.ambient_occlusion),
             flag(settings.depth_of_field),
             settings.focus_distance,
             settings.aperture,
@@ -1373,15 +1632,108 @@ impl Renderer {
             self.forced,
             self.uploads.count(),
             self.env.generation as u64,
-            self.flash.stamp.count(),
-            self.spheres.stamp.count(),
-            self.previews.stamp.count(),
+            // Pick flashes and previews show only with the overlays.
+            if self.overlays { self.flash.stamp.count() } else { 0 },
+            // The SSpheres by what they show, not by how often it was sent:
+            // a render's view and the window's take turns sending theirs.
+            self.spheres.stamp.content(),
+            if self.overlays { self.previews.stamp.count() } else { 0 },
             self.wire.stamp.count(),
             self.groups.stamp.count(),
             self.painted.stamp.count(),
         ]);
         key
     }
+}
+
+/// The scene pass's pipelines for objects culled as `culls`: for each way of
+/// culling in use, the finish's own for objects without paint and the
+/// palette's painted one for those with. A painted pipeline that cannot be
+/// built leaves its objects drawn without their paint (`painted` says so).
+fn scene_pipelines(
+    painted_pipes: &mut paint::Painted,
+    mesh_pipes: &mut pipelines::MeshPipelines,
+    culls: &[Cull],
+    painted: &mut [bool],
+    surface: u32,
+    glow: bool,
+) -> Vec<(Cull, bool, wgpu::RenderPipeline)> {
+    let module = painted_pipes.module_key();
+    let mut out = Vec::new();
+    for cull in Cull::ALL {
+        let with_paint = |painted: &[bool]| (0..culls.len()).any(|i| culls[i] == cull && painted[i]);
+        if with_paint(painted) {
+            let key = paint::Key { module: module.clone(), surface, glow, cull };
+            match painted_pipes.pipeline(&key) {
+                Some(pipeline) => out.push((cull, true, pipeline)),
+                None => (0..culls.len()).filter(|&i| culls[i] == cull).for_each(|i| painted[i] = false),
+            }
+        }
+        if (0..culls.len()).any(|i| culls[i] == cull && !painted[i]) {
+            out.push((cull, false, mesh_pipes.get(MeshKey { surface, glow, cull }).clone()));
+        }
+    }
+    out
+}
+
+/// Objects to draw in a pass: each with the runs of its corners in view,
+/// how it is culled and whether it is drawn with its paint. Their
+/// placements are in the objects buffer from instance `first` on.
+struct Drawn<'a> {
+    items: &'a [DrawItem],
+    first: u32,
+    runs: &'a [Vec<std::ops::Range<u32>>],
+    culls: &'a [Cull],
+    painted: &'a [bool],
+}
+
+/// Draws those of `drawn` culled as `cull`: all of them, or with `paint`
+/// only those drawn with their paint or only those without.
+fn draw_objects(
+    pass: &mut wgpu::RenderPass,
+    meshes: &HashMap<u64, MeshBuffers>,
+    objects: &wgpu::Buffer,
+    drawn: &Drawn,
+    cull: Cull,
+    paint: Option<bool>,
+) {
+    for (i, item) in drawn.items.iter().enumerate() {
+        let Some(mesh) = meshes.get(&item.mesh) else { continue };
+        if drawn.runs[i].is_empty() || drawn.culls[i] != cull || paint.is_some_and(|p| p != drawn.painted[i]) {
+            continue;
+        }
+        pass.set_vertex_buffer(0, mesh.positions.slice(..));
+        pass.set_vertex_buffer(1, mesh.normals.slice(..));
+        pass.set_vertex_buffer(2, mesh.mask.slice(..));
+        pass.set_vertex_buffer(3, objects.slice(..));
+        pass.set_vertex_buffer(4, mesh.curv.slice(..));
+        if paint == Some(true) {
+            let Some(colour) = &mesh.paint else { continue };
+            pass.set_vertex_buffer(5, colour.slice(..));
+        }
+        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+        let instance = drawn.first + i as u32;
+        for run in &drawn.runs[i] {
+            pass.draw_indexed(run.clone(), 0, instance..instance + 1);
+        }
+    }
+}
+
+/// `items` mirrored in the floor at `height`, each keeping its active flag.
+fn mirrored_items(items: &[DrawItem], height: f32) -> Vec<DrawItem> {
+    let mirror = floor::mirror(height);
+    items
+        .iter()
+        .map(|item| {
+            let mut model = glam::Mat4::from_cols_array_2d(&item.model);
+            // The last element carries the active flag, not the matrix's own 1.
+            let active = model.w_axis.w;
+            model.w_axis.w = 1.0;
+            let mut out = (mirror * model).to_cols_array_2d();
+            out[3][3] = active;
+            DrawItem { mesh: item.mesh, model: out }
+        })
+        .collect()
 }
 
 /// `look` with the clock zeroed unless a glow is moving: nothing else reads
@@ -1396,6 +1748,10 @@ fn look_without_clock(look: &LookUniform) -> LookUniform {
     }
     out
 }
+
+/// A turn by the golden angle, in radians: each sample's filters turn this
+/// far from the last one's, which spreads any number of them evenly.
+const GOLDEN_ANGLE: f32 = 2.399_963;
 
 /// What the model reflects: the HDRI, else the background gradient, else
 /// the default sky with the key light as its sun.
@@ -1423,11 +1779,11 @@ fn env_source(globals: &Globals, look: &LookUniform, opts: &Options) -> env::Env
 }
 
 /// The post effects' settings for this frame.
-fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Look) -> post::PostParams {
+fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Look, transparent: bool) -> post::PostParams {
     let srgb_to_linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
     post::PostParams {
         viewport: globals.viewport,
-        ao: [look.cam_params[0], AO_RADIUS, AO_INTENSITY, 0.0],
+        ao: [look.cam_params[0], AO_RADIUS, AO_POWER, 0.0],
         bloom: [
             if settings.bloom { settings.bloom_intensity.max(0.0) } else { 0.0 },
             srgb_to_linear(settings.bloom_threshold.max(0.0)),
@@ -1442,14 +1798,24 @@ fn post_params(globals: &Globals, look: &LookUniform, settings: &crate::look::Lo
             0.0,
         ],
         grade: [
-            match settings.tonemap {
-                Tonemap::None => 0.0,
-                Tonemap::Neutral => 1.0,
-                Tonemap::Aces => 2.0,
-            },
+            settings.tonemap.shader_index(),
             if settings.grading { 1.0 } else { 0.0 },
             settings.saturation.clamp(-100.0, 100.0) / 100.0 + 1.0,
             settings.contrast.clamp(-100.0, 100.0) / 100.0 + 1.0,
+        ],
+        exposure: [
+            settings.exposure.clamp(-10.0, 10.0).exp2(),
+            // Flat or gradient: a colour picked to be seen as it is.
+            if look.bg_params[0] < 1.5 { 1.0 } else { 0.0 },
+            if transparent { 1.0 } else { 0.0 },
+            0.0,
+        ],
+        occlusion: [0.0; 4],
+        extras: [
+            settings.film_grain.clamp(0.0, 1.0),
+            settings.sharpen.clamp(0.0, 1.0),
+            if settings.lut.loaded { settings.lut.strength.clamp(0.0, 1.0) } else { 0.0 },
+            2.0,
         ],
     }
 }
@@ -1464,8 +1830,15 @@ fn depth_attachment(view: &wgpu::TextureView, clear: f32) -> Option<wgpu::Render
     })
 }
 
-/// Reads a rendered texture back as an image (used for screenshots).
+/// Reads a rendered texture back as an image (used for screenshots), every
+/// pixel opaque.
 pub fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> image::RgbaImage {
+    read_texture_as(gpu, texture, false)
+}
+
+/// The same, keeping the texture's alpha when `alpha` is set (a picture
+/// rendered with no backdrop).
+pub fn read_texture_as(gpu: &Gpu, texture: &wgpu::Texture, alpha: bool) -> image::RgbaImage {
     let (width, height) = (texture.width(), texture.height());
     let row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1501,7 +1874,8 @@ pub fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> image::RgbaImage {
     for y in 0..height {
         let src = &data[(y * row) as usize..(y * row + width * 4) as usize];
         for (x, px) in src.chunks_exact(4).enumerate() {
-            let rgba = if bgra { [px[2], px[1], px[0], 255] } else { [px[0], px[1], px[2], 255] };
+            let a = if alpha { px[3] } else { 255 };
+            let rgba = if bgra { [px[2], px[1], px[0], a] } else { [px[0], px[1], px[2], a] };
             out.put_pixel(x as u32, y, image::Rgba(rgba));
         }
     }

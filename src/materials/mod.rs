@@ -42,7 +42,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::look::{
-    ClaySettings, FinishParams, GlowSettings, Look, LureSettings, MetalSettings, WoodSettings, linear,
+    ClaySettings, FinishParams, GlowSettings, Look, LureSettings, MetalSettings, ResinSettings, WoodSettings, linear,
 };
 
 pub use library::{Ask, Library};
@@ -77,6 +77,7 @@ pub enum Kind {
     Metal = 2,
     Clay = 3,
     Wood = 4,
+    Resin = 5,
     Glow = 6,
     Custom = 7,
     /// Nothing but the swatch colour, plainly lit: what a material that
@@ -92,6 +93,7 @@ impl Kind {
             Kind::Metal => "Metal",
             Kind::Clay => "Clay",
             Kind::Wood => "Wood",
+            Kind::Resin => "Resin",
             Kind::Glow => "Glow",
             Kind::Custom => "Custom",
             Kind::Swatch => "Swatch",
@@ -105,7 +107,7 @@ impl Kind {
 
     /// Whether the finish reads the depth of the back faces behind it.
     pub fn reads_back_depth(self) -> bool {
-        self == Kind::Lure
+        matches!(self, Kind::Lure | Kind::Resin)
     }
 }
 
@@ -209,6 +211,7 @@ pub enum Settings {
     Metal(MetalSettings),
     Clay(ClaySettings),
     Wood(WoodSettings),
+    Resin(ResinSettings),
     Glow(Glow),
     Custom(Custom),
 }
@@ -221,6 +224,7 @@ impl Settings {
             Settings::Metal(_) => Kind::Metal,
             Settings::Clay(_) => Kind::Clay,
             Settings::Wood(_) => Kind::Wood,
+            Settings::Resin(_) => Kind::Resin,
             Settings::Glow(_) => Kind::Glow,
             Settings::Custom(_) => Kind::Custom,
         }
@@ -236,6 +240,7 @@ impl Settings {
             Kind::Metal => Settings::Metal(look.metal),
             Kind::Clay => Settings::Clay(look.clay),
             Kind::Wood => Settings::Wood(look.wood),
+            Kind::Resin => Settings::Resin(look.resin),
             Kind::Glow => Settings::Glow(Glow { glow: GlowSettings { on: true, ..look.glow }, base: Plain::default() }),
             Kind::Custom => Settings::Custom(Custom::default()),
         }
@@ -244,7 +249,7 @@ impl Settings {
     /// The finish named `word` in a file, whatever its case.
     pub fn kind_named(word: &str) -> Option<Kind> {
         let word = word.trim();
-        [Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Glow, Kind::Custom]
+        [Kind::Plain, Kind::Lure, Kind::Metal, Kind::Clay, Kind::Wood, Kind::Resin, Kind::Glow, Kind::Custom]
             .into_iter()
             .find(|k| format!("{k:?}").eq_ignore_ascii_case(word))
     }
@@ -337,6 +342,10 @@ impl Material {
                 look.wood = s.clone();
                 finish(Kind::Wood, look.pack_wood(size))
             }
+            Settings::Resin(s) => {
+                look.resin = s.clone();
+                finish(Kind::Resin, look.pack_resin(size))
+            }
             Settings::Glow(g) => {
                 look.glow = GlowSettings { on: true, ..g.glow.clone() };
                 let (base, base_metal_smooth) = plain(&g.base);
@@ -381,6 +390,11 @@ impl Material {
                 s.pattern_size = fit(s.pattern_size, 0.25, 3.0, 1.0);
                 s.gloss = fit(s.gloss, 0.0, 2.0, 1.0);
                 s.seed = unit(s.seed, 0.0);
+            }
+            Settings::Resin(s) => {
+                s.clarity = fit(s.clarity, 0.1, 4.0, 1.0);
+                s.haze = fit(s.haze, 0.0, 3.0, 1.0);
+                s.gloss = unit(s.gloss, 1.0);
             }
             Settings::Clay(s) => {
                 s.gloss = fit(s.gloss, 0.0, 2.0, 1.0);

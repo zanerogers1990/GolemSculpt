@@ -252,6 +252,7 @@ impl Stage {
             time: CLOCK,
             gradient_background: self.opts.gradient_background,
             smoothness: self.opts.smoothness,
+            shadow_size: self.opts.quality.shadow_size(),
         });
         let items = self
             .objects
@@ -269,6 +270,7 @@ impl Stage {
     /// Draws one frame into the target and waits for the card to finish it.
     fn draw(&mut self, gpu: &Gpu) {
         self.sync(gpu);
+        self.renderer.refine_to = self.opts.quality.refine_samples();
         let (globals, look, items) = self.inputs();
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         self.renderer.draw(gpu, &mut encoder, &self.view_target, self.size, &globals, &look, &self.opts, &items);
@@ -298,14 +300,26 @@ impl Motion {
 }
 
 /// The looks timed on every size: name and look setting (see `look::apply_spec`).
-const LOOKS: [(&str, &str); 6] = [
+const LOOKS: [(&str, &str); 8] = [
     ("lit", "matcap=off"),
+    // The smallest shadow map (Shadow Detail: Fast).
+    ("lit 512", "matcap=off,shadowmap=512"),
     ("lure", "matcap=off,finish=lure"),
     ("metal", "matcap=off,finish=metal"),
     ("clay", "matcap=off,finish=clay"),
     ("wood", "matcap=off,finish=wood"),
     ("matcap", "matcap=on"),
+    // Still, refining: each cursor frame is one more sample (refine.rs).
+    ("lit refining", "matcap=off,refine,samples=256"),
 ];
+
+/// The usual options with refining off: a picture is drawn once, as in a
+/// build from before there was refining. A spec's `refine` turns it on.
+fn unrefined() -> Options {
+    let mut opts = Options::default();
+    opts.quality.refine = false;
+    opts
+}
 
 /// Median milliseconds per frame over the timed frames.
 fn time_frames(gpu: &Gpu, stage: &mut Stage, motion: Motion) -> f64 {
@@ -339,7 +353,7 @@ pub fn run(sizes: &[usize]) {
             let row = |stage: &mut Stage, name: &str, spec: &str, motions: &[Motion]| {
                 let mut cells = Vec::new();
                 for &motion in motions {
-                    stage.opts = Options::default();
+                    stage.opts = unrefined();
                     look::apply_spec(&mut stage.opts, spec, 2.0);
                     stage.frame_camera(30.0, -15.0);
                     let ms = time_frames(gpu, stage, motion);
@@ -356,7 +370,7 @@ pub fn run(sizes: &[usize]) {
             let mut half = Stage::new(gpu, BENCH_SIZE);
             half.meshes.push(stage.meshes.pop().unwrap());
             half.objects.push((1, Mat4::IDENTITY));
-            half.opts = Options::default();
+            half.opts = unrefined();
             look::apply_spec(&mut half.opts, "matcap=off", 2.0);
             half.frame_camera(30.0, -15.0);
             let aspect = BENCH_SIZE.0 as f32 / BENCH_SIZE.1 as f32;
@@ -440,7 +454,7 @@ fn painted_rows(gpu: &Gpu, n: usize) {
     for (name, spec, shown, motions) in cases {
         let mut cells = Vec::new();
         for &motion in motions {
-            stage.opts = Options::default();
+            stage.opts = unrefined();
             look::apply_spec(&mut stage.opts, spec, 2.0);
             stage.opts.paint.palette = paint.palette.clone();
             (stage.opts.paint.show_polypaint, stage.opts.paint.show_materials) = (shown, shown);
@@ -571,6 +585,14 @@ fn shots() -> Vec<Shot> {
         shot("lit_world_lights", "matcap=off,follow=off,rotation=40"),
         shot("lit_wire", "matcap=off,wire"),
         shot("matcap_wire", "matcap=on,wire"),
+        shot("lit_tone_old_neutral", "matcap=off,tonemap=neutral"),
+        shot("lit_tone_agx", "matcap=off,tonemap=agx"),
+        shot("lit_tone_aces", "matcap=off,tonemap=aces"),
+        shot("lit_exposure_up", "matcap=off,exposure=1"),
+        shot("lit_grain", "matcap=off,grain=0.6"),
+        shot("lit_sharpen", "matcap=off,sharpen=1"),
+        // Graded by the colour table SCULPT_SHOT_LUT names, if one is named.
+        shot("lit_lut", "matcap=off"),
     ];
     for p in look::LURES {
         out.push(shot(&format!("lure_{}", p.id), &format!("matcap=off,finish=lure:{}", p.id)));
@@ -584,6 +606,10 @@ fn shots() -> Vec<Shot> {
     for p in look::WOODS {
         out.push(shot(&format!("wood_{}", p.id), &format!("matcap=off,finish=wood:{}", p.id)));
     }
+    for p in look::RESINS {
+        out.push(shot(&format!("resin_{}", p.id), &format!("matcap=off,finish=resin:{}", p.id)));
+    }
+    out.push(shot("resin_clear_gradient", "matcap=off,finish=resin:clear,gradient"));
     for p in look::GLOWS {
         out.push(shot(&format!("glow_{}", p.id), &format!("matcap=off,glow={}", p.id)));
     }
@@ -629,6 +655,7 @@ pub fn run_shots(folder: &Path) {
             stage.objects.push((1, Mat4::IDENTITY));
             let mirror = Mat4::from_translation(Vec3::new(2.6, 0.0, 0.0)) * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
             stage.objects.push((1, mirror * Mat4::from_rotation_y(0.6)));
+            stage.opts = unrefined();
             look::apply_spec(&mut stage.opts, &shot.spec, 2.0);
             set_backfaces(&mut stage.opts, shot.backfaces);
             stage.renderer.groups.enabled = shot.groups;
@@ -636,6 +663,17 @@ pub fn run_shots(folder: &Path) {
             stage.frame_camera(-20.0, -12.0);
             // Closer than framed, so the surface has pixels to compare.
             stage.camera.distance *= 0.6;
+            if shot.name == "lit_lut" {
+                if let Some(path) = std::env::var_os("SCULPT_SHOT_LUT") {
+                    match crate::render::lut::Lut::load(Path::new(&path)) {
+                        Ok(table) => {
+                            stage.renderer.set_lut(gpu, Some(&table));
+                            stage.opts.look.lut.loaded = true;
+                        }
+                        Err(e) => eprintln!("could not load the colour table: {e}"),
+                    }
+                }
+            }
             if shot.flash {
                 stage.sync(gpu);
                 let (globals, _, items) = stage.inputs();
@@ -653,10 +691,151 @@ pub fn run_shots(folder: &Path) {
                 Err(e) => eprintln!("could not write {}: {e}", path.display()),
             }
         }
+        for (name, spec) in SWEEPS {
+            sweep(gpu, folder, name, spec);
+        }
+        for (name, spec) in STUDIO {
+            studio(gpu, folder, name, spec);
+        }
+        // Under an HDRI, when one is named: the same picture on every machine
+        // needs the same file, so it is not built in.
+        if let Some(hdri) = std::env::var_os("SCULPT_SHOT_HDRI") {
+            for (name, spec) in HDRI_SHOTS {
+                let spec = format!("{spec},hdri={}", hdri.to_string_lossy());
+                studio(gpu, folder, name, &spec);
+            }
+        }
     });
     if let Err(e) = result {
         eprintln!("{e}");
     }
+}
+
+/// The studio pictures: shapes standing on a slab, one floating above it,
+/// for the shadows (crisp where they touch, soft farther off) and later the
+/// floor and the lights.
+const STUDIO: [(&str, &str); 16] = [
+    ("studio", "matcap=off"),
+    ("studio_hard", "matcap=off,softness=0"),
+    ("studio_softbox", "matcap=off,light=softclay"),
+    ("studio_shadowmap_512", "matcap=off,shadowmap=512"),
+    ("studio_metal", "matcap=off,metallic=1,smoothness=0.85"),
+    // The lights as plain directions rather than softboxes.
+    ("studio_metal_points", "matcap=off,metallic=1,smoothness=0.85,softboxes=off"),
+    // As drawn while orbiting (the cheaper softbox highlight, half the shadow taps).
+    ("studio_metal_moving", "matcap=off,metallic=1,smoothness=0.85"),
+    ("studio_gloss_refined", "matcap=off,metallic=0,smoothness=0.9,refine,samples=64"),
+    // Refined to 64 samples, as the viewport is when it holds still.
+    ("studio_refined", "matcap=off,refine,samples=64"),
+    ("studio_refined_no_contact", "matcap=off,refine,samples=64,contact=off"),
+    ("studio_metal_refined", "matcap=off,metallic=1,smoothness=0.85,refine,samples=64"),
+    // The shapes alone over a shadow floor, and a glossy one (no slab).
+    ("floor", "matcap=off,floor,refine,samples=64"),
+    ("floor_glossy", "matcap=off,floor,floorreflect=0.6,floorrough=0.25,refine,samples=64"),
+    ("floor_white_glossy", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=64,light=highkey,backdrop=1"),
+    ("studio_resin_amber", "matcap=off,finish=resin:amber,refine,samples=64"),
+    ("studio_resin_clear_white", "matcap=off,finish=resin:clear,refine,samples=64,light=highkey,backdrop=1,floor"),
+];
+
+/// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is
+/// also behind it: a mirror, gloss and satin, for the reflections.
+const HDRI_SHOTS: [(&str, &str); 3] = [
+    ("hdri_chrome", "matcap=off,hdribg,metallic=1,smoothness=1"),
+    ("hdri_gloss", "matcap=off,hdribg,metallic=0,smoothness=0.95"),
+    ("hdri_satin_metal", "matcap=off,hdribg,metallic=1,smoothness=0.6"),
+];
+
+fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
+    let mut stage = Stage::new(gpu, SHOT_SIZE);
+    stage.meshes.push((1, primitives::build(Primitive::Cube, 20_000, 1.0)));
+    stage.meshes.push((2, primitives::build(Primitive::Sphere, 60_000, 1.0)));
+    stage.meshes.push((3, primitives::build(Primitive::Capsule, 60_000, 1.0)));
+    stage.meshes.push((4, primitives::build(Primitive::Cone, 30_000, 1.0)));
+    // The first object is the active one; the slab is not, so it has no guides.
+    // Primitives are built at radius (or half-width) 1, then placed.
+    let at = |x: f32, y: f32, z: f32, scale: Vec3| Mat4::from_translation(Vec3::new(x, y, z)) * Mat4::from_scale(scale);
+    stage.objects.push((2, at(-0.7, 0.25, 0.2, Vec3::splat(0.25))));
+    if !spec.contains("floor") {
+        stage.objects.push((1, at(0.0, -0.05, 0.0, Vec3::new(2.0, 0.05, 1.5))));
+    }
+    stage.objects.push((3, at(0.6, 0.3, -0.3, Vec3::splat(0.15))));
+    stage.objects.push((4, at(0.3, 0.9, 0.6, Vec3::splat(0.2))));
+    stage.opts = unrefined();
+    if let Some(path) = look::apply_spec(&mut stage.opts, spec, 2.0) {
+        match look::load_hdri(&path) {
+            Ok(image) => {
+                stage.renderer.set_hdri(gpu, Some(image));
+                (stage.opts.look.hdri.loaded, stage.opts.look.hdri.enabled) = (true, true);
+            }
+            Err(e) => eprintln!("could not load {}: {e}", path.display()),
+        }
+    }
+    // Looking down on the slab a little.
+    stage.frame_camera(-25.0, 28.0);
+    stage.camera.distance *= 0.75;
+    if name.ends_with("_moving") {
+        // Two frames of an orbit first, so this one is drawn as one in motion.
+        for nudge in [-0.2, 0.2] {
+            stage.camera.add_yaw(nudge);
+            stage.draw(gpu);
+        }
+    }
+    stage.draw(gpu);
+    // A refined picture: drawn again until it has all its samples.
+    for _ in 0..1024 {
+        if !stage.renderer.refining() {
+            break;
+        }
+        stage.draw(gpu);
+    }
+    let picture = crate::render::read_texture(gpu, &stage.target);
+    let path = folder.join(format!("{name}.png"));
+    match picture.save(&path) {
+        Ok(()) => println!("{}", path.display()),
+        Err(e) => eprintln!("could not write {}: {e}", path.display()),
+    }
+}
+
+/// The roughness sweeps: a plain sphere at smoothness 1 down to 0 in steps
+/// of a tenth, side by side in one picture, as metal and as plastic.
+const SWEEPS: [(&str, &str); 2] = [("sweep_metal", "matcap=off,metallic=1"), ("sweep_dielectric", "matcap=off,metallic=0")];
+const SWEEP_CELL: u32 = 160;
+
+/// One sweep picture, and a line per sphere of how bright it is on average
+/// (0-255 over the pixels it covers), so a sweep that loses or gains light
+/// as it gets rougher shows in numbers as well as on sight.
+fn sweep(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
+    let steps = 11u32;
+    let mut sheet = image::RgbaImage::new(SWEEP_CELL * steps, SWEEP_CELL);
+    let mut means = Vec::new();
+    for step in 0..steps {
+        let smoothness = 1.0 - step as f32 / (steps - 1) as f32;
+        let mut stage = Stage::new(gpu, (SWEEP_CELL, SWEEP_CELL));
+        stage.meshes.push((1, primitives::build(Primitive::Sphere, 40_000, 1.0)));
+        stage.objects.push((1, Mat4::IDENTITY));
+        look::apply_spec(&mut stage.opts, &format!("{spec},smoothness={smoothness},vignette=off,bloom=off"), 2.0);
+        stage.frame_camera(-20.0, -12.0);
+        stage.draw(gpu);
+        let cell = crate::render::read_texture(gpu, &stage.target);
+        // The sphere is what differs from the corner's background.
+        let background = *cell.get_pixel(0, 0);
+        let (mut sum, mut count) = (0u64, 0u64);
+        for px in cell.pixels() {
+            if (0..3).any(|c| px[c].abs_diff(background[c]) > 6) {
+                sum += (px[0] as u64 + px[1] as u64 + px[2] as u64) / 3;
+                count += 1;
+            }
+        }
+        means.push(sum as f64 / count.max(1) as f64);
+        image::imageops::replace(&mut sheet, &cell, (step * SWEEP_CELL) as i64, 0);
+    }
+    let path = folder.join(format!("{name}.png"));
+    match sheet.save(&path) {
+        Ok(()) => println!("{}", path.display()),
+        Err(e) => eprintln!("could not write {}: {e}", path.display()),
+    }
+    let row: Vec<String> = means.iter().map(|m| format!("{m:.0}")).collect();
+    println!("{name} brightness, smoothness 1 to 0: {}", row.join(" "));
 }
 
 /// `sculpt --compare-shots <folder a> <folder b>`: per picture, the largest

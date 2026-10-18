@@ -149,6 +149,7 @@ pub fn material(ui: &mut egui::Ui, o: &mut Options, size: f32, actions: &mut Vec
         Finish::Metal => metal(ui, &mut o.look, tips, size),
         Finish::Clay => clay(ui, &mut o.look, tips, size),
         Finish::Wood => wood(ui, &mut o.look, tips, size),
+        Finish::Resin => resin(ui, &mut o.look, tips, size),
     }
 
     theme::heading(ui, "Surface Grain");
@@ -276,6 +277,21 @@ pub(super) fn wood(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
 }
 
 /// A number in 0..1 that differs from click to click.
+pub(super) fn resin(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
+    let presets = look::RESINS.iter().map(|p| (p.name, p.description, p.color));
+    if let Some(i) = preset_grid(ui, tips, Some(look.resin.preset), presets) {
+        look.pick_preset(Finish::Resin, i, size);
+    }
+    let s = &mut look.resin;
+    tip(
+        theme::slider(ui, "Clarity", &mut s.clarity, 0.1..=4.0, two),
+        tips,
+        "How see-through it is: more lets the light further in before the resin's colour takes over.",
+    );
+    tip(theme::slider(ui, "Haze", &mut s.haze, 0.0..=3.0, two), tips, "Milkiness: light scattered inside, as in a frosted print.");
+    theme::slider(ui, "Gloss", &mut s.gloss, 0.0..=1.0, two);
+}
+
 fn random(ui: &egui::Ui) -> f32 {
     let t = ui.input(|i| i.time);
     (t * 1000.0).sin().abs().fract() as f32
@@ -305,6 +321,25 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
             "Keep the key light at the upper left of the view. Off freezes the lights where they are.",
         );
         tip(theme::checkbox(ui, &mut look.shadows, "Shadows", ACCENT()), tips, "The key light casts a soft shadow.");
+        tip(
+            theme::checkbox(ui, &mut look.softboxes, "Softbox Lights", ACCENT()),
+            tips,
+            "Light with softboxes, as a photo studio does: long soft highlights on glossy surfaces. Off, each light is a point far away.",
+        );
+        tip(
+            theme::slider(ui, "Light Size", &mut look.shadow_softness, 0.0..=4.0, two),
+            tips,
+            "How big the lights are: bigger spreads the highlights and softens the shadows, which stay crisp where they touch. 1 is the preset's own, 0 is hard points.",
+        );
+        if look.shadows {
+            let sizes = crate::render::quality::SHADOW_SIZES;
+            let at = sizes.iter().position(|&s| s == o.quality.shadow_size()).unwrap_or(1);
+            // The shadow map's size: a setting of this computer, not of the scene.
+            ui.label(egui::RichText::new("Shadow Detail").font(theme::font(12.0)).color(theme::TEXT()));
+            if let Some(i) = choice(ui, &["Fast", "Sharp", "Finest"], at) {
+                o.quality.shadow_map = sizes[i];
+            }
+        }
 
         theme::heading(ui, "HDRI Environment");
         let hdri = &mut look.hdri;
@@ -330,11 +365,18 @@ pub fn lighting(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
             theme::slider(ui, "Ambient", &mut hdri.ambient, 0.0..=3.0, two);
             theme::slider(ui, "Reflection", &mut hdri.reflection, 0.0..=1.0, two);
         }
+        // The reflection cube's size: a setting of this computer, not of the scene.
+        let sizes = crate::render::quality::REFLECTION_SIZES;
+        let at = sizes.iter().position(|&s| s == o.quality.reflection_size()).unwrap_or(0);
+        ui.label(egui::RichText::new("Reflection Detail").font(theme::font(12.0)).color(theme::TEXT()));
+        if let Some(i) = choice(ui, &["Sharp", "Finest"], at) {
+            o.quality.reflections = sizes[i];
+        }
     });
 }
 
 /// The backdrop and the post effects.
-pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
+pub fn effects(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
     let tips = o.tooltips;
     theme::category(ui, "Backdrop & Effects", Color32::from_rgb(150, 205, 240), "", false, |ui| {
         theme::heading(ui, "Background");
@@ -364,6 +406,24 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
         }
 
         let look = &mut o.look;
+        theme::heading(ui, "Floor");
+        tip(
+            theme::checkbox(ui, &mut look.floor.on, "Shadow Floor", ACCENT()),
+            tips,
+            "A floor under the model that is the background itself: it catches the key light's shadow and the contact shading where the model meets it, and fades out all round. Lit shading only.",
+        );
+        if look.floor.on {
+            let floor = &mut look.floor;
+            theme::slider(ui, "Shadow", &mut floor.shadow, 0.0..=1.0, two);
+            tip(
+                theme::slider(ui, "Reflection", &mut floor.reflection, 0.0..=1.0, two),
+                tips,
+                "A glossy floor: the model reflected in it. Draws the model a second time while it is on.",
+            );
+            if floor.reflection > 0.0 {
+                theme::slider(ui, "Blur", &mut floor.roughness, 0.0..=1.0, two);
+            }
+        }
         theme::heading(ui, "Bloom");
         theme::checkbox(ui, &mut look.bloom, "Enabled", ACCENT());
         if look.bloom {
@@ -402,14 +462,58 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
             theme::slider(ui, "Saturation", &mut look.saturation, -100.0..=100.0, |v| format!("{v:.0}"));
             theme::slider(ui, "Contrast", &mut look.contrast, -100.0..=100.0, |v| format!("{v:.0}"));
         }
+        // A colour table: a grade made in a photo or video tool.
+        let lut = &mut look.lut;
+        let color = if lut.failed { theme::ERROR } else { theme::HINT() };
+        ui.add(egui::Label::new(egui::RichText::new(&lut.status).font(theme::font(11.0)).color(color)).wrap());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let w = theme::row_width(ui, 2, 6.0);
+            let load = theme::button(ui, w, "Load LUT...", ButtonStyle::default());
+            if tip(load, tips, "Grade the picture with a colour table (.cube) made in a photo or video tool.").clicked() {
+                actions.push(Action::LoadLut);
+            }
+            ui.add_enabled_ui(lut.loaded, |ui| {
+                if theme::button(ui, w, "Clear", ButtonStyle::default()).clicked() {
+                    actions.push(Action::ClearLut);
+                }
+            });
+        });
+        if lut.loaded {
+            theme::slider(ui, "LUT Strength", &mut lut.strength, 0.0..=1.0, percent);
+        }
+        tip(
+            theme::slider(ui, "Film Grain", &mut look.film_grain, 0.0..=1.0, percent),
+            tips,
+            "A fine grain over the picture, as film has: strongest in the mid tones.",
+        );
+        tip(
+            theme::slider(ui, "Sharpen", &mut look.sharpen, 0.0..=1.0, percent),
+            tips,
+            "Crisper edges and detail, without the bright halos plain sharpening leaves.",
+        );
         theme::heading(ui, "Tone Curve");
-        let at = match look.tonemap {
-            Tonemap::None => 0,
-            Tonemap::Neutral => 1,
-            Tonemap::Aces => 2,
+        tip(
+            theme::slider(ui, "Exposure", &mut look.exposure, -4.0..=4.0, |v| format!("{v:+.1} EV")),
+            tips,
+            "Brightens or darkens the whole picture in camera stops: +1 is twice the light.",
+        );
+        // Two rows: the curves for presenting work, then the older ones.
+        let at = Tonemap::ALL.iter().position(|&t| t == look.tonemap).unwrap_or(0);
+        let labels = Tonemap::ALL.map(Tonemap::label);
+        if let Some(i) = choice(ui, &labels[..2], at) {
+            look.tonemap = Tonemap::ALL[i];
+        }
+        if let Some(i) = choice(ui, &labels[2..], at.wrapping_sub(2)) {
+            look.tonemap = Tonemap::ALL[i + 2];
+        }
+        let note = match look.tonemap {
+            Tonemap::PbrNeutral => "Keeps colours true: the one for product shots.",
+            Tonemap::Agx => "Filmic: rolls bright colours off gently.",
+            _ => "",
         };
-        if let Some(i) = choice(ui, &["None", "Neutral", "ACES"], at) {
-            look.tonemap = [Tonemap::None, Tonemap::Neutral, Tonemap::Aces][i];
+        if tips && !note.is_empty() {
+            theme::hint(ui, note);
         }
         ui.add_space(4.0);
         tip(
@@ -417,6 +521,28 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options) {
             tips,
             "Soft contact shadows in creases and where forms meet (lit shading only).",
         );
+        tip(
+            theme::checkbox(ui, &mut look.contact_shadows, "Contact Shadows", ACCENT()),
+            tips,
+            "Crisp shadows in fine creases from every light, finer than the key light's shadow can draw. Added once the view holds still (lit shading with Cavity or Ambient Occlusion on).",
+        );
+        // How the still picture is refined: settings of this computer.
+        theme::heading(ui, "Still Picture");
+        let quality = &mut o.quality;
+        tip(
+            theme::checkbox(ui, &mut quality.refine, "Refine When Still", ACCENT()),
+            tips,
+            "When nothing moves, keep drawing the picture a little differently and average it: smooth edges, clean soft shadows. Never during a stroke or an orbit.",
+        );
+        if quality.refine {
+            let counts = crate::render::quality::SAMPLE_COUNTS;
+            let at = counts.iter().position(|&n| n == quality.refine_samples()).unwrap_or(1);
+            let labels = counts.map(|n| n.to_string());
+            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+            if let Some(i) = choice(ui, &labels, at) {
+                quality.samples = counts[i];
+            }
+        }
         // The space the last row's hover needs before the card's edge.
         let _ = ui.allocate_exact_size(vec2(1.0, 2.0), Sense::hover());
     });

@@ -33,6 +33,7 @@ fn frame(size: f32) -> Frame {
         time: 1.0,
         gradient_background: false,
         smoothness: 0.4,
+        shadow_size: 2048,
     }
 }
 
@@ -43,8 +44,14 @@ fn library_material(library: &Library, name: &str) -> Material {
 #[test]
 fn every_preset_is_a_built_in_material() {
     let library = Library::default();
-    let count = 1 + look::LURES.len() + look::METALS.len() + look::CLAYS.len() + look::WOODS.len() + look::GLOWS.len();
-    assert_eq!(count, 33);
+    let count = 1
+        + look::LURES.len()
+        + look::METALS.len()
+        + look::CLAYS.len()
+        + look::WOODS.len()
+        + look::RESINS.len()
+        + look::GLOWS.len();
+    assert_eq!(count, 40);
     assert_eq!(library.entries().len(), count);
     assert!(library.entries().iter().all(|e| e.origin == Origin::BuiltIn));
     for name in ["Plain", "Metal - Rust", "Lure - Blue Flake", "Clay - Terracotta", "Wood - Golden Oak", "Glow - Lava Cracks"] {

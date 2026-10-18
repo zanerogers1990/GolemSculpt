@@ -80,6 +80,12 @@ impl Stamp {
     pub fn count(&self) -> u64 {
         self.count
     }
+
+    /// What was noted last, as a number: the same whenever the same was
+    /// noted, however often something else was noted in between.
+    pub fn content(&self) -> u64 {
+        self.hash
+    }
 }
 
 const BLIT_WGSL: &str = r"
@@ -198,6 +204,23 @@ mod tests {
         let second = stamp.count();
         stamp.bump();
         assert_ne!(stamp.count(), second);
+    }
+
+    #[test]
+    fn a_stamps_content_comes_back_with_what_was_noted() {
+        // Two views taking turns, as a render's and the window's do: the
+        // count moves every time, what was noted comes back each turn.
+        let mut stamp = Stamp::default();
+        stamp.note(&[b"window"]);
+        let window = stamp.content();
+        stamp.note(&[b"render"]);
+        let render = stamp.content();
+        let count = stamp.count();
+        stamp.note(&[b"window"]);
+        stamp.note(&[b"render"]);
+        assert_ne!(window, render);
+        assert_eq!(stamp.content(), render);
+        assert_ne!(stamp.count(), count);
     }
 
     #[test]

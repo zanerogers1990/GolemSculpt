@@ -201,7 +201,9 @@ impl Dof {
 
     /// Sets the lens for this frame. `eye_offset` is how far behind its
     /// perspective position the camera is parked (orthographic views).
-    pub fn set_params(&self, gpu: &Gpu, look: &Look, globals: &Globals, eye_offset: f32) {
+    /// `turn` turns the disc of taps (radians), so a refined picture's
+    /// samples each gather a different way and average to a smooth blur.
+    pub fn set_params(&self, gpu: &Gpu, look: &Look, globals: &Globals, eye_offset: f32, turn: f32) {
         let Some(t) = &self.targets else { return };
         let (width, height) = (t.size.0 as f32, t.size.1 as f32);
         let focus = look.focus_distance.clamp(0.1, 10.0);
@@ -221,7 +223,7 @@ impl Dof {
             depth_terms(globals),
             [focus / UNITY_SCALE, blur, max_radius, eye_offset],
         ];
-        data.extend(disc(max_radius * half_height, half_height));
+        data.extend(disc(max_radius * half_height, half_height, turn));
         gpu.queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&data));
     }
 
@@ -272,7 +274,7 @@ fn depth_terms(globals: &Globals) -> [f32; 4] {
 /// the picture's height. Each tap is its offset in whole half-size pixels
 /// (the gather reads pixels, not blends of them) and how far out that is as
 /// a fraction of the height.
-fn disc(max_radius: f32, height: f32) -> Vec<[f32; 4]> {
+fn disc(max_radius: f32, height: f32, turn: f32) -> Vec<[f32; 4]> {
     const RINGS: usize = 3;
     const FIRST_RING: usize = 7;
     let mut taps = Vec::with_capacity(TAPS);
@@ -282,7 +284,7 @@ fn disc(max_radius: f32, height: f32) -> Vec<[f32; 4]> {
         let radius = (ring as f32 + bias) / (RINGS as f32 + bias) * max_radius;
         let points = ring * FIRST_RING;
         for point in 0..points {
-            let (sin, cos) = (std::f32::consts::TAU * point as f32 / points as f32).sin_cos();
+            let (sin, cos) = (std::f32::consts::TAU * point as f32 / points as f32 + turn).sin_cos();
             let (x, y) = ((radius * cos).round(), (radius * sin).round());
             taps.push([x, y, x.hypot(y) / height, 0.0]);
         }
@@ -328,7 +330,7 @@ mod tests {
 
     #[test]
     fn disc_is_the_pipelines_42_taps_within_its_radius() {
-        let taps = disc(7.0, 480.0);
+        let taps = disc(7.0, 480.0, 0.0);
         assert_eq!(taps.len(), TAPS);
         for [x, y, away, _] in taps {
             // Whole pixels, no further out than the radius (give or take

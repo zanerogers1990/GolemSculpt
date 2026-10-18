@@ -15,8 +15,8 @@
 //! corners the other way round on the screen, so for a copy it is the
 //! hardware's front faces that are culled.
 //!
-//! **When they are built.** Twelve surfaces times three ways of culling is
-//! thirty-six pipelines, a few seconds of compiling. The app has them built
+//! **When they are built.** Fourteen surfaces times three ways of culling is
+//! forty-two pipelines, a few seconds of compiling. The app has them built
 //! on a thread of their own from the start ([`MeshPipelines::prewarm`]), the
 //! likeliest first, so picking a finish later does not stop the window for a
 //! moment; any that is asked for before it has arrived is built there and
@@ -80,8 +80,8 @@ pub fn mirrored(model: &[[f32; 4]; 4]) -> bool {
 }
 
 /// What the main pass shades with: `FINISH` in sculpt_pbr.wgsl (0 plain,
-/// 1 plastic, 2 metal, 3 clay, 4 wood, 5 the matcap), the glow over it or
-/// not, and the culling.
+/// 1 plastic, 2 metal, 3 clay, 4 wood, 5 the matcap, 6 resin), the glow over
+/// it or not, and the culling.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct MeshKey {
     pub surface: u32,
@@ -90,6 +90,7 @@ pub struct MeshKey {
 }
 
 pub const SURFACE_MATCAP: u32 = 5;
+pub const SURFACE_RESIN: u32 = 6;
 
 /// The main pass's vertex buffers: positions, normals, mask, the objects'
 /// matrices (per instance) and curvature, at the shader's locations.
@@ -193,7 +194,7 @@ impl MeshPipelines {
     /// matcap and the plain lit look first, culled as for an ordinary
     /// object), for [`Self::prewarm`].
     pub fn every_key() -> Vec<MeshKey> {
-        let surfaces = [SURFACE_MATCAP, 0, 3, 2, 4, 1];
+        let surfaces = [SURFACE_MATCAP, 0, 3, 2, 4, 1, SURFACE_RESIN];
         let mut keys = Vec::new();
         for cull in [Cull::Back, Cull::Front, Cull::Nothing] {
             for glow in [false, true] {
@@ -243,7 +244,8 @@ mod tests {
     #[test]
     fn every_pipeline_is_built_once_and_the_likeliest_first() {
         let keys = MeshPipelines::every_key();
-        assert_eq!(keys.len(), 6 * 2 * 3);
+        // Six finishes and the matcap, with and without the glow, three cullings.
+        assert_eq!(keys.len(), 7 * 2 * 3);
         let unique: std::collections::HashSet<MeshKey> = keys.iter().copied().collect();
         assert_eq!(unique.len(), keys.len());
         assert_eq!(keys[0], MeshKey { surface: SURFACE_MATCAP, glow: false, cull: Cull::Back });
@@ -328,8 +330,9 @@ mod layout_tests {
             };
         }
         same!(
-            light_dir, light_color, light_params, shadow_view_proj, shadow_params, sh, ambient_sky, ambient_equator,
-            ambient_ground, env_params, cam_params, bg_params, base_params, matcap_params, mask_tint, finish, glow
+            light_dir, light_color, light_params, shadow_view_proj, shadow_params, shadow_soft, sh, ambient_sky, ambient_equator,
+            ambient_ground, env_params, cam_params, bg_params, base_params, matcap_params, mask_tint, finish, glow,
+            floor, floor_more, light_pos, light_side, light_up, contact
         );
     }
 
@@ -355,6 +358,7 @@ mod layout_tests {
         assert_eq!(slots_read("metal"), look::METAL_SLOTS);
         assert_eq!(slots_read("clay"), look::CLAY_SLOTS);
         assert_eq!(slots_read("wood"), look::WOOD_SLOTS);
+        assert_eq!(slots_read("resin"), look::RESIN_SLOTS);
         // The glow reads the clock, which is not one of its settings.
         let glow = &SHADER[SHADER.find("fn finish_glow(").unwrap()..];
         let glow = &glow[..glow.find("\n}").unwrap()];
@@ -375,6 +379,7 @@ mod layout_tests {
             time: 3.0,
             gradient_background: false,
             smoothness: 0.37,
+            shadow_size: 2048,
         }
     }
 
@@ -397,7 +402,7 @@ mod layout_tests {
         let u = look.uniform(&frame());
         assert_eq!(u.glow, look.pack_glow(2.0));
         assert_eq!(u.glow.v[2][0], 1.0, "on");
-        for finish in [look::Finish::None, look::Finish::LurePlastic, look::Finish::Metal, look::Finish::Wood] {
+        for finish in [look::Finish::None, look::Finish::LurePlastic, look::Finish::Metal, look::Finish::Wood, look::Finish::Resin] {
             look.set_finish(finish, 2.0);
             assert_eq!(look.uniform(&frame()).finish, look.finish_params(finish, &frame()));
         }
