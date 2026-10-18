@@ -300,7 +300,7 @@ impl Motion {
 }
 
 /// The looks timed on every size: name and look setting (see `look::apply_spec`).
-const LOOKS: [(&str, &str); 8] = [
+const LOOKS: [(&str, &str); 9] = [
     ("lit", "matcap=off"),
     // The smallest shadow map (Shadow Detail: Fast).
     ("lit 512", "matcap=off,shadowmap=512"),
@@ -311,6 +311,9 @@ const LOOKS: [(&str, &str); 8] = [
     ("matcap", "matcap=on"),
     // Still, refining: each cursor frame is one more sample (refine.rs).
     ("lit refining", "matcap=off,refine,samples=256"),
+    // Ray traced, as a render with Ray Traced on is: each orbit frame is one
+    // sample's cost (render/ray.rs).
+    ("lit rays", "matcap=off,rays"),
 ];
 
 /// The usual options with refining off: a picture is drawn once, as in a
@@ -354,7 +357,9 @@ pub fn run(sizes: &[usize]) {
                 let mut cells = Vec::new();
                 for &motion in motions {
                     stage.opts = unrefined();
-                    look::apply_spec(&mut stage.opts, spec, 2.0);
+                    stage.renderer.ray_traced = spec.split(',').any(|part| part == "rays");
+                    let spec = spec.split(',').filter(|part| *part != "rays").collect::<Vec<_>>().join(",");
+                    look::apply_spec(&mut stage.opts, &spec, 2.0);
                     stage.frame_camera(30.0, -15.0);
                     let ms = time_frames(gpu, stage, motion);
                     println!("RESULT\t{tris}\t{name}\t{}\t{ms:.3}", motion.name());
@@ -629,6 +634,20 @@ fn shots() -> Vec<Shot> {
     out.push(Shot { groups: true, open: true, ..shot("groups_open", "matcap=off") });
     out.push(Shot { ortho: true, ..shot("ortho_lit", "matcap=off") });
     out.push(Shot { ortho: true, ..shot("ortho_clay", "matcap=off,finish=clay") });
+    // Ray traced (render/ray.rs), refined as a render is.
+    for (name, spec) in [
+        ("lit", "matcap=off"),
+        ("metal", "matcap=off,finish=metal"),
+        ("clay", "matcap=off,finish=clay"),
+        ("lure", "matcap=off,finish=lure"),
+        ("wood", "matcap=off,finish=wood"),
+        ("resin", "matcap=off,finish=resin:clear,gradient"),
+    ] {
+        out.push(shot(&format!("{name}_refined"), &format!("{spec},refine,samples=128")));
+        out.push(shot(&format!("{name}_rays"), &format!("{spec},refine,samples=128,rays")));
+    }
+    out.push(open("open_lit_backfaces_rays", "matcap=off,refine,samples=128,rays", true));
+    out.push(Shot { ortho: true, ..shot("ortho_lit_rays", "matcap=off,refine,samples=128,rays") });
     out
 }
 
@@ -639,7 +658,7 @@ pub fn run_shots(folder: &Path) {
         return;
     }
     let result = with_gpu(|gpu| {
-        for shot in shots() {
+        for shot in shots().into_iter().filter(|s| wanted_shot(&s.name)) {
             let mut stage = Stage::new(gpu, SHOT_SIZE);
             stage.guides = true;
             let mut mesh = bumpy_sphere(150_000);
@@ -656,7 +675,10 @@ pub fn run_shots(folder: &Path) {
             let mirror = Mat4::from_translation(Vec3::new(2.6, 0.0, 0.0)) * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
             stage.objects.push((1, mirror * Mat4::from_rotation_y(0.6)));
             stage.opts = unrefined();
-            look::apply_spec(&mut stage.opts, &shot.spec, 2.0);
+            // Ray traced: not a look setting but how a render is drawn.
+            stage.renderer.ray_traced = shot.spec.split(',').any(|part| part == "rays");
+            let spec = shot.spec.split(',').filter(|part| *part != "rays").collect::<Vec<_>>().join(",");
+            look::apply_spec(&mut stage.opts, &spec, 2.0);
             set_backfaces(&mut stage.opts, shot.backfaces);
             stage.renderer.groups.enabled = shot.groups;
             stage.camera.ortho = shot.ortho;
@@ -684,6 +706,13 @@ pub fn run_shots(folder: &Path) {
                 stage.renderer.flash.show(gpu, &globals.view_proj, &pulses);
             }
             stage.draw(gpu);
+            // A refined picture: drawn again until it has all its samples.
+            for _ in 0..1024 {
+                if !stage.renderer.refining() {
+                    break;
+                }
+                stage.draw(gpu);
+            }
             let picture = crate::render::read_texture(gpu, &stage.target);
             let path = folder.join(format!("{}.png", shot.name));
             match picture.save(&path) {
@@ -714,7 +743,7 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 16] = [
+const STUDIO: [(&str, &str); 22] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
@@ -735,18 +764,44 @@ const STUDIO: [(&str, &str); 16] = [
     ("floor_white_glossy", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=64,light=highkey,backdrop=1"),
     ("studio_resin_amber", "matcap=off,finish=resin:amber,refine,samples=64"),
     ("studio_resin_clear_white", "matcap=off,finish=resin:clear,refine,samples=64,light=highkey,backdrop=1,floor"),
+    // Ray traced, as a render with Ray Traced on is (render/ray.rs), on a
+    // card that traces rays.
+    ("studio_rays", "matcap=off,refine,samples=256,rays"),
+    ("studio_metal_rays", "matcap=off,metallic=1,smoothness=0.85,refine,samples=256,rays"),
+    ("floor_rays", "matcap=off,floor,refine,samples=256,rays"),
+    ("floor_white_glossy_rays", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=256,light=highkey,backdrop=1,rays"),
+    ("studio_resin_amber_rays", "matcap=off,finish=resin:amber,refine,samples=256,rays"),
+    ("studio_resin_clear_white_rays", "matcap=off,finish=resin:clear,refine,samples=256,light=highkey,backdrop=1,floor,rays"),
 ];
 
 /// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is
 /// also behind it: a mirror, gloss and satin, for the reflections.
-const HDRI_SHOTS: [(&str, &str); 3] = [
+const HDRI_SHOTS: [(&str, &str); 5] = [
     ("hdri_chrome", "matcap=off,hdribg,metallic=1,smoothness=1"),
     ("hdri_gloss", "matcap=off,hdribg,metallic=0,smoothness=0.95"),
     ("hdri_satin_metal", "matcap=off,hdribg,metallic=1,smoothness=0.6"),
+    ("hdri_chrome_rays", "matcap=off,hdribg,metallic=1,smoothness=1,refine,samples=256,rays"),
+    ("hdri_gloss_rays", "matcap=off,hdribg,metallic=0,smoothness=0.95,refine,samples=256,rays"),
 ];
 
+/// Whether the picture `name` is drawn: all of them, or with `SCULPT_SHOTS`
+/// set only those whose names have one of its comma-separated words in them.
+fn wanted_shot(name: &str) -> bool {
+    match std::env::var("SCULPT_SHOTS") {
+        Ok(words) => words.split(',').any(|w| !w.is_empty() && name.contains(w)),
+        Err(_) => true,
+    }
+}
+
 fn studio(gpu: &Gpu, folder: &Path, name: &str, spec: &str) {
+    if !wanted_shot(name) {
+        return;
+    }
+    // Ray traced: not a look setting but how a render is drawn.
+    let rays = spec.split(',').any(|part| part == "rays");
+    let spec = &spec.split(',').filter(|part| *part != "rays").collect::<Vec<_>>().join(",");
     let mut stage = Stage::new(gpu, SHOT_SIZE);
+    stage.renderer.ray_traced = rays;
     stage.meshes.push((1, primitives::build(Primitive::Cube, 20_000, 1.0)));
     stage.meshes.push((2, primitives::build(Primitive::Sphere, 60_000, 1.0)));
     stage.meshes.push((3, primitives::build(Primitive::Capsule, 60_000, 1.0)));

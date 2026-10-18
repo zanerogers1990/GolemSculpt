@@ -1689,6 +1689,10 @@ pub struct LookUniform {
     /// of the view's height at the surface's depth (0 for none; the renderer
     /// clears it while the picture moves)
     pub contact: [f32; 4],
+    /// Ray traced (render/ray.rs): x 1 when the shadows and the light from
+    /// around come from the rays, y 1 when the view through resin does too.
+    /// The renderer sets it.
+    pub rays: [f32; 4],
 }
 
 /// A finish's settings as its shader function reads them: sixteen groups of

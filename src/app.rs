@@ -153,12 +153,14 @@ pub struct Args {
     /// Record a timelapse of a few scripted strokes to this file, then close.
     pub demo_timelapse: Option<PathBuf>,
     /// Render Picture to this PNG, then close (see app/still.rs); with
-    /// `render_scale` times the window's size, `render_samples` samples and
-    /// `render_transparent` no backdrop.
+    /// `render_scale` times the window's size, `render_samples` samples,
+    /// `render_transparent` no backdrop and `render_no_rays` without ray
+    /// tracing.
     pub render_picture: Option<PathBuf>,
     pub render_scale: Option<u32>,
     pub render_samples: Option<u32>,
     pub render_transparent: bool,
+    pub render_no_rays: bool,
     /// Import this picture as a matcap and shade with it, by the routine
     /// under Import Matcap (for visual checks; no file box is opened).
     pub demo_matcap: Option<PathBuf>,

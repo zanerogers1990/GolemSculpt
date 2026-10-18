@@ -32,6 +32,7 @@ pub mod groups;
 pub mod post;
 pub mod preview;
 pub mod quality;
+mod ray;
 mod refine;
 pub mod spheres;
 pub mod wire;
@@ -63,6 +64,8 @@ pub struct Gpu {
     /// which is also what the UI renderer expects).
     pub format: wgpu::TextureFormat,
     pub adapter_name: String,
+    /// The device traces rays (ray.rs): Ray Traced renders can be made.
+    pub rays: bool,
 }
 
 impl Gpu {
@@ -79,21 +82,44 @@ impl Gpu {
             .await
             .map_err(|e| format!("No usable graphics adapter: {e}"))?;
         let info = adapter.get_info();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("sculpt"),
-                required_limits: wgpu::Limits {
-                    // Dense meshes need index buffers beyond the 256 MB default.
-                    max_buffer_size: adapter.limits().max_buffer_size,
-                    // The face group colours read a dense mesh's own buffers (render/groups.rs).
-                    max_storage_buffer_binding_size: adapter.limits().max_storage_buffer_binding_size,
-                    ..Default::default()
-                },
-                memory_hints: wgpu::MemoryHints::Performance,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("Could not open the graphics device: {e}"))?;
+        let limits = wgpu::Limits {
+            // Dense meshes need index buffers beyond the 256 MB default.
+            max_buffer_size: adapter.limits().max_buffer_size,
+            // The face group colours read a dense mesh's own buffers (render/groups.rs).
+            max_storage_buffer_binding_size: adapter.limits().max_storage_buffer_binding_size,
+            ..Default::default()
+        };
+        let descriptor = |rays: bool| wgpu::DeviceDescriptor {
+            label: Some("sculpt"),
+            required_features: if rays { ray::FEATURES } else { wgpu::Features::empty() },
+            required_limits: if rays {
+                limits.clone().using_acceleration_structure_values(adapter.limits())
+            } else {
+                limits.clone()
+            },
+            experimental_features: if rays {
+                // SAFETY: ray tracing is still marked experimental in wgpu.
+                // It is asked for only of a card that has it, and only a
+                // render with Ray Traced on traces rays (render/ray.rs).
+                unsafe { wgpu::ExperimentalFeatures::enabled() }
+            } else {
+                wgpu::ExperimentalFeatures::disabled()
+            },
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        };
+        // With ray tracing where the card has it; a device that will not
+        // open with it opens without.
+        let mut rays = ray::wanted_by(&adapter);
+        let opened = match adapter.request_device(&descriptor(rays)).await {
+            Err(e) if rays => {
+                log::warn!("the graphics device would not open with ray tracing: {e}");
+                rays = false;
+                adapter.request_device(&descriptor(false)).await
+            }
+            other => other,
+        };
+        let (device, queue) = opened.map_err(|e| format!("Could not open the graphics device: {e}"))?;
 
         let caps = surface.get_capabilities(&adapter);
         let surface_format = caps
@@ -123,6 +149,7 @@ impl Gpu {
             config,
             format,
             adapter_name: format!("{} ({:?})", info.name, info.backend),
+            rays,
         })
     }
 
@@ -235,6 +262,9 @@ struct Targets {
     /// The running average of the still picture's samples (refine.rs),
     /// made the first time this size refines.
     refine: Option<refine::Buffers>,
+    /// What the rays found for each pixel (ray.rs), made the first time
+    /// this size is ray traced.
+    rays: Option<ray::Outputs>,
 }
 
 /// One object to draw: which mesh, and its per-object shader input (the
@@ -353,11 +383,19 @@ fn sync_paint(
 /// An index buffer holding `corners`. It is never made empty: a mesh with
 /// every face hidden still has to bind one, and a buffer of no size cannot
 /// be bound.
+/// What a mesh's positions and faces are made for besides drawing: read by
+/// the face group colours (groups.rs), and built into what rays meet on a
+/// card that traces them (ray.rs).
+fn shape_usage(gpu: &Gpu) -> wgpu::BufferUsages {
+    let rays = if gpu.rays { wgpu::BufferUsages::BLAS_INPUT } else { wgpu::BufferUsages::empty() };
+    groups::READ | rays
+}
+
 fn index_buffer(gpu: &Gpu, corners: &[u32]) -> wgpu::Buffer {
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("indices"),
         size: corners.len().max(3) as u64 * 4,
-        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST | groups::READ,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST | shape_usage(gpu),
         mapped_at_creation: false,
     });
     gpu.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(corners));
@@ -399,8 +437,8 @@ pub struct Renderer {
     lut_size: u32,
     env: env::Env,
     /// The `env.generation` and `shadow_generation` the main bind group was
-    /// built against.
-    bound_to: (u32, u32),
+    /// built against, and whether the rays' outputs were in it.
+    bound_to: (u32, u32, bool),
     post: post::Post,
     targets: Option<Targets>,
     /// Keyed by the scene's mesh id.
@@ -450,6 +488,16 @@ pub struct Renderer {
     /// Set while drawing a picture with no backdrop (a render saved with
     /// a transparent background): what is not model comes out see-through.
     pub transparent: bool,
+    /// Set while drawing a render with Ray Traced on: on a card that traces
+    /// rays (`Gpu::rays`), its shadows and light come from them (ray.rs).
+    pub ray_traced: bool,
+    /// The ray pass, made the first time a render asks for it, and whether
+    /// that was tried (a card refusing its shader is not asked again).
+    rays: Option<ray::Rays>,
+    rays_tried: bool,
+    /// What the main pass reads in place of the rays' outputs while there
+    /// are none.
+    ray_none: wgpu::TextureView,
     refine: refine::Refine,
     /// The last frame left the picture short of `refine_to` samples, so
     /// the next one will refine it further.
@@ -466,13 +514,13 @@ pub struct Side {
     targets: Option<Targets>,
     bind_main: Option<wgpu::BindGroup>,
     bind_mirror: Option<wgpu::BindGroup>,
-    bound_to: (u32, u32),
+    bound_to: (u32, u32, bool),
     post: post::Post,
 }
 
 impl Side {
     pub fn new(gpu: &Gpu) -> Side {
-        Side { targets: None, bind_main: None, bind_mirror: None, bound_to: (0, 0), post: post::Post::new(gpu) }
+        Side { targets: None, bind_main: None, bind_mirror: None, bound_to: (0, 0, false), post: post::Post::new(gpu) }
     }
 }
 
@@ -611,6 +659,11 @@ impl Renderer {
                 texture_entry(13, smooth, flat),
                 texture_entry(14, smooth, flat),
                 texture_entry(15, smooth, flat),
+                // What the rays found (ray.rs).
+                texture_entry(16, exact, flat),
+                texture_entry(17, exact, flat),
+                texture_entry(18, exact, flat),
+                texture_entry(19, exact, flat),
             ],
         });
         let bind_pre = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -774,7 +827,7 @@ impl Renderer {
             lut: post::lut_bind(device, &post::lut_layout(device), &lut::texture(gpu, &lut::Lut::identity())),
             lut_size: 2,
             env: env::Env::new(gpu),
-            bound_to: (0, 0),
+            bound_to: (0, 0, false),
             post: post::Post::new(gpu),
             targets: None,
             meshes: HashMap::new(),
@@ -795,6 +848,21 @@ impl Renderer {
             picture: false,
             refine_to: 1,
             transparent: false,
+            ray_traced: false,
+            rays: None,
+            rays_tried: false,
+            ray_none: device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("no rays"),
+                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
             refine: refine::Refine::new(gpu, HDR_FORMAT),
             refine_pending: false,
             blit: cache::Blit::new(gpu),
@@ -879,6 +947,7 @@ impl Renderer {
             last_inputs: None,
             changing: false,
             refine: None,
+            rays: None,
         };
         self.post.resize(gpu, size, &targets.gbuf, &targets.scene, &targets.depth);
         self.targets = Some(targets);
@@ -906,6 +975,23 @@ impl Renderer {
         }
         self.wire.sync(gpu, id, mesh);
         self.groups.sync(gpu, id, mesh, self.meshes.get(&id));
+    }
+
+    /// The ray pass, made the first time a render asks for it on a card
+    /// that traces rays. Whether there is one.
+    fn ensure_rays(&mut self, gpu: &Gpu) -> bool {
+        if self.rays.is_none() && !self.rays_tried && gpu.rays {
+            self.rays_tried = true;
+            self.rays = ray::Rays::new(gpu);
+        }
+        self.rays.is_some()
+    }
+
+    /// Lets go of what rays were traced against, once a render is done.
+    pub fn release_rays(&mut self) {
+        if let Some(rays) = &mut self.rays {
+            rays.release();
+        }
     }
 
     /// Whether the picture is still being refined: the app should draw
@@ -972,7 +1058,7 @@ impl Renderer {
         let paint_bytes = if painted.is_some() { stream.len() * paint::STRIDE as usize } else { 0 };
         let buffers = MeshBuffers {
             uid: mesh.uid,
-            positions: make("positions", bytemuck::cast_slice(&mesh.positions), vertex | groups::READ),
+            positions: make("positions", bytemuck::cast_slice(&mesh.positions), vertex | shape_usage(gpu)),
             normals: make("normals", bytemuck::cast_slice(&mesh.normals), vertex),
             mask: make("mask", bytemuck::cast_slice(&mesh.mask), vertex),
             curv: make("curvature", bytemuck::cast_slice(curv), vertex),
@@ -1005,7 +1091,7 @@ impl Renderer {
             let vertex = wgpu::BufferUsages::VERTEX;
             let make = |label, data: &[u8], stride: u64| roomy_buffer(gpu, label, data, room as u64 * stride, vertex);
             let positions: &[u8] = bytemuck::cast_slice(&mesh.positions);
-            buffers.positions = roomy_buffer(gpu, "positions", positions, room as u64 * 12, vertex | groups::READ);
+            buffers.positions = roomy_buffer(gpu, "positions", positions, room as u64 * 12, vertex | shape_usage(gpu));
             buffers.normals = make("normals", bytemuck::cast_slice(&mesh.normals), 12);
             buffers.mask = make("mask", bytemuck::cast_slice(&mesh.mask), 4);
             // Neutral all the way to the end while no finish reads it, so the
@@ -1069,7 +1155,7 @@ impl Renderer {
             if corners > buffers.index_room {
                 let room = corners + corners / 2;
                 let data: &[u8] = bytemuck::cast_slice(&mesh.indices);
-                let usage = wgpu::BufferUsages::INDEX | groups::READ;
+                let usage = wgpu::BufferUsages::INDEX | shape_usage(gpu);
                 buffers.indices = roomy_buffer(gpu, "indices", data, room as u64 * 4, usage);
                 buffers.index_room = room;
                 bytes += data.len();
@@ -1119,8 +1205,16 @@ impl Renderer {
         let lit = globals.shading[0] < 0.5 && !items.is_empty();
         let cavity = (globals.shading[2] > 0.0 || globals.shading[3] > 0.0) && !items.is_empty();
         let hdri = settings.hdri.active();
-        let occlusion = lit && settings.ambient_occlusion;
-        let shadows = lit && look.light_params[1] > 0.5;
+        // A render with Ray Traced on (ray.rs): the rays' shadows and light
+        // in place of the shadow map's, the occlusion's and the contact
+        // shadows'. What they meet is built here, ahead of the frame.
+        let material = ray::hit_material(settings, globals.base_color);
+        let traced = lit
+            && self.ray_traced
+            && self.ensure_rays(gpu)
+            && self.rays.as_mut().unwrap().prepare(gpu, encoder, &self.meshes, items, self.uploads.count(), material);
+        let occlusion = lit && settings.ambient_occlusion && !traced;
+        let shadows = lit && look.light_params[1] > 0.5 && !traced;
         // The pipeline: the matcap, or the finish the look names, with the glow or not.
         let surface = if globals.shading[0] > 0.5 {
             pipelines::SURFACE_MATCAP
@@ -1147,6 +1241,8 @@ impl Renderer {
                 p && self.meshes.get(&i.mesh).is_some_and(|m| upload.back_depth_for(m.table.iter().copied()))
             });
         let plastic = lit && (surface == 1 || surface == pipelines::SURFACE_RESIN || painted_lure);
+        // The view through resin is traced too when the picture may have some.
+        let through = traced && (surface == pipelines::SURFACE_RESIN || painted_lure);
         // The floor (floor.rs), under lit shading only: it is the lights'
         // shadow. Its reflection is the model drawn a second time.
         let floor = lit && look.floor[0] > 0.5;
@@ -1160,6 +1256,7 @@ impl Renderer {
             self.forced += 1;
         }
         let mut key = self.scene_key(size, globals, look, opts, items, source.as_ref(), &post_params);
+        key.push(&(traced as u32));
         // A picture that changes frame after frame is in motion: its costlier
         // parts (the soft shadow's taps, the occlusion's, the softboxes'
         // highlights) are drawn the cheaper way meanwhile, and the first
@@ -1250,7 +1347,7 @@ impl Renderer {
         look.light_params[1] = if shadows { 1.0 } else { 0.0 };
         // Contact shadows march through the normals prepass, and only while
         // the picture holds still.
-        if !(cavity || occlusion) || moving {
+        if !(cavity || occlusion) || moving || traced {
             look.contact[0] = 0.0;
         }
         look.shadow_params[3] = if moving { 1.0 } else { 0.0 };
@@ -1267,6 +1364,7 @@ impl Renderer {
         look.env_params[2] = if occlusion { 1.0 } else { 0.0 };
         look.matcap_params[3] = if plastic { 1.0 } else { 0.0 };
         look.floor[0] = if floor { 1.0 } else { 0.0 };
+        look.rays = [if traced { 1.0 } else { 0.0 }, if through { 1.0 } else { 0.0 }, 0.0, 0.0];
         // Every noisy filter turns its own way for each sample.
         look.cam_params[2] = sample as f32;
         let mut post_params = post_params;
@@ -1278,11 +1376,18 @@ impl Renderer {
         // Depth of field: sets its lens, or puts its textures away if off.
         self.post.focus(gpu, settings, globals, look.cam_params[1], sample as f32 * GOLDEN_ANGLE);
 
+        if traced {
+            let targets = self.targets.as_mut().unwrap();
+            if targets.rays.is_none() {
+                targets.rays = Some(ray::Outputs::new(gpu, targets.size));
+            }
+        }
         let targets = self.targets.as_ref().unwrap();
-        let generations = (self.env.generation, self.shadow_generation);
+        let generations = (self.env.generation, self.shadow_generation, targets.rays.is_some());
         if self.bind_main.is_none() || self.bound_to != generations {
             self.bound_to = generations;
             let view = wgpu::BindingResource::TextureView;
+            let rays = targets.rays.as_ref();
             // Everything the scene pass reads; `reflection` is the floor's.
             let bind = |label, reflection| gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
@@ -1304,6 +1409,10 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 13, resource: view(&self.dfg) },
                     wgpu::BindGroupEntry { binding: 14, resource: view(reflection) },
                     wgpu::BindGroupEntry { binding: 15, resource: view(&self.ltc) },
+                    wgpu::BindGroupEntry { binding: 16, resource: view(rays.map_or(&self.ray_none, |r| &r.lights)) },
+                    wgpu::BindGroupEntry { binding: 17, resource: view(rays.map_or(&self.ray_none, |r| &r.diffuse)) },
+                    wgpu::BindGroupEntry { binding: 18, resource: view(rays.map_or(&self.ray_none, |r| &r.specular)) },
+                    wgpu::BindGroupEntry { binding: 19, resource: view(rays.map_or(&self.ray_none, |r| &r.through)) },
                 ],
             });
             let (main, mirror) = (bind("main", &targets.floor_reflection), bind("mirror", &self.floor.nothing));
@@ -1441,9 +1550,25 @@ impl Renderer {
                 draw_items(&mut pass, &runs, cull, None);
             }
         }
-        if cavity || occlusion {
+        if cavity || occlusion || traced {
             // The floor too, for the occlusion where the model meets it.
             helper_pass(encoder, "normals prepass", &targets.gbuf, &self.pipe_prepass, floor);
+        }
+        if traced {
+            // The rays, from every pixel the prepass drew (ray.rs).
+            let inputs = ray::Inputs {
+                globals: &self.globals,
+                look: &self.look,
+                gbuf: &targets.gbuf,
+                env: &self.env.view,
+                env_sampler: &self.env.sampler,
+                hdri: &self.env.hdri_view,
+                hdri_sampler: &self.env.hdri_sampler,
+            };
+            let params = ray::params(&globals.view_proj, sample, through, &material);
+            if let (Some(rays), Some(outputs)) = (&self.rays, &targets.rays) {
+                rays.trace(gpu, encoder, &inputs, outputs, &params);
+            }
         }
         if plastic {
             helper_pass(encoder, "back depth", &targets.back, &self.pipe_back, false);
