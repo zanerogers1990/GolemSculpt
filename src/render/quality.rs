@@ -26,11 +26,16 @@ pub struct Quality {
     pub refine: bool,
     /// How many samples a still picture is refined to: one of [`SAMPLE_COUNTS`].
     pub samples: u32,
+    /// Draw every frame of the viewport the same way, moving or still: the
+    /// quick versions of the costlier parts always, the full shadow map,
+    /// no refining. The light never shifts when a stroke or an orbit stops.
+    /// Renders and recordings are still drawn at full quality.
+    pub steady: bool,
 }
 
 impl Default for Quality {
     fn default() -> Self {
-        Self { shadow_map: 2048, reflections: 256, refine: true, samples: 64 }
+        Self { shadow_map: 2048, reflections: 256, refine: true, samples: 64, steady: false }
     }
 }
 
@@ -52,7 +57,7 @@ impl Quality {
 
     /// How many samples a still picture is refined to: 1 for none.
     pub fn refine_samples(&self) -> u32 {
-        if self.refine { nearest(&SAMPLE_COUNTS, self.samples) } else { 1 }
+        if self.refine && !self.steady { nearest(&SAMPLE_COUNTS, self.samples) } else { 1 }
     }
 
     /// The same settings, each brought to a value the renderer has.
@@ -62,6 +67,7 @@ impl Quality {
             reflections: self.reflection_size(),
             refine: self.refine,
             samples: nearest(&SAMPLE_COUNTS, self.samples),
+            steady: self.steady,
         }
     }
 }
@@ -80,6 +86,7 @@ mod tests {
         assert_eq!(Quality::default().refine_samples(), 64);
         assert_eq!(Quality { refine: false, ..Default::default() }.refine_samples(), 1);
         assert_eq!(Quality { samples: 0, ..Default::default() }.refine_samples(), 16);
+        assert_eq!(Quality { steady: true, ..Default::default() }.refine_samples(), 1);
         assert_eq!(Quality { reflections: 1024, ..Default::default() }.sanitized().reflections, 512);
     }
 

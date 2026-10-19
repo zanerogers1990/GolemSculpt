@@ -2306,6 +2306,7 @@ pub fn model_size(scene: &crate::scene::Scene, slot: &crate::mesh::Mesh) -> f32 
 /// `metallic`, `smoothness`, `normal`, `focus`, `aperture`, `softness`
 /// (numbers); `shadowmap`, `reflections` (the shadow map's and the
 /// reflection cube's sides); `refine` (on / off) and `samples` (how many);
+/// `steady` (on / off, Steady Lighting);
 /// `floor` (on / off) with `floorshadow`, `floorreflect`, `floorrough` (numbers);
 /// `softboxes` (on / off);
 /// `backdrop` (a grey, 0 black to 1 white); `grain`, `sharpen` (0 to 1);
@@ -2338,6 +2339,7 @@ pub fn apply_spec(opts: &mut crate::doc::Options, spec: &str, size: f32) -> Opti
             "floorrough" => look.floor.roughness = number.unwrap_or(0.3),
             "reflections" => opts.quality.reflections = number.map_or(256, |n| n as u32),
             "refine" => opts.quality.refine = on,
+            "steady" => opts.quality.steady = on,
             "samples" => opts.quality.samples = number.map_or(64, |n| n as u32),
             "ao" => look.ambient_occlusion = on,
             "contact" => look.contact_shadows = on,

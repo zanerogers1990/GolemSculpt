@@ -530,11 +530,19 @@ pub fn effects(ui: &mut egui::Ui, o: &mut Options, actions: &mut Vec<Action>) {
         theme::heading(ui, "Still Picture");
         let quality = &mut o.quality;
         tip(
-            theme::checkbox(ui, &mut quality.refine, "Refine When Still", ACCENT()),
+            theme::checkbox(ui, &mut quality.steady, "Steady Lighting", ACCENT()),
             tips,
-            "When nothing moves, keep drawing the picture a little differently and average it: smooth edges, clean soft shadows. Never during a stroke or an orbit.",
+            "Draw every frame the same way, moving or still, so the light never shifts when you stop a stroke or an orbit. Softbox highlights and shadows are drawn the quicker way and Contact Shadows are left out. Render Picture still uses full quality.",
         );
-        if quality.refine {
+        // Steady Lighting never refines: the choice is hidden meanwhile.
+        if !quality.steady {
+            tip(
+                theme::checkbox(ui, &mut quality.refine, "Refine When Still", ACCENT()),
+                tips,
+                "When nothing moves, keep drawing the picture a little differently and average it: smooth edges, clean soft shadows. Never during a stroke or an orbit.",
+            );
+        }
+        if quality.refine && !quality.steady {
             let counts = crate::render::quality::SAMPLE_COUNTS;
             let at = counts.iter().position(|&n| n == quality.refine_samples()).unwrap_or(1);
             let labels = counts.map(|n| n.to_string());

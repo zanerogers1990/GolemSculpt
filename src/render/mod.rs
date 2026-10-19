@@ -485,6 +485,10 @@ pub struct Renderer {
     /// How many samples a still picture is refined to (refine.rs); 1 for
     /// none. The app sets it every frame: off during a stroke.
     pub refine_to: u32,
+    /// Steady Lighting (quality.rs): every frame drawn the way a picture in
+    /// motion is, so nothing changes when it stops. The app sets it every
+    /// frame; `picture` still draws at full quality.
+    pub steady: bool,
     /// Set while drawing a picture with no backdrop (a render saved with
     /// a transparent background): what is not model comes out see-through.
     pub transparent: bool,
@@ -847,6 +851,7 @@ impl Renderer {
             shadow_quick: false,
             picture: false,
             refine_to: 1,
+            steady: false,
             transparent: false,
             ray_traced: false,
             rays: None,
@@ -1260,10 +1265,11 @@ impl Renderer {
         // A picture that changes frame after frame is in motion: its costlier
         // parts (the soft shadow's taps, the occlusion's, the softboxes'
         // highlights) are drawn the cheaper way meanwhile, and the first
-        // frame it holds still at full quality.
+        // frame it holds still at full quality. Under Steady Lighting every
+        // frame is drawn the cheaper way, so nothing jumps when it stops.
         let targets = self.targets.as_mut().unwrap();
         let changed = targets.last_inputs.as_ref() != Some(&key);
-        let moving = changed && targets.changing && !self.picture;
+        let moving = (self.steady || changed && targets.changing) && !self.picture;
         (targets.changing, targets.last_inputs) = (changed, Some(key.clone()));
         key.push(&(moving as u32));
 
@@ -1271,15 +1277,16 @@ impl Renderer {
         // drawn from changes. While that happens in a picture in motion (the
         // lights turning with an orbit, a stroke moving the model) it is
         // drawn small, as cheap as it always was; the first frame it holds
-        // still it is drawn at its own size.
+        // still it is drawn at its own size. Under Steady Lighting it is
+        // always drawn at its own size, as the renderer used to.
         let shadow_key = shadows.then(|| self.shadow_key(look, items, opts.show_backfaces));
         let shadow_changes = shadows && shadow_key != self.shadow_drawn;
-        let quick_shadow = shadow_changes && moving && self.shadow_size > QUICK_SHADOW;
+        let quick_shadow = shadow_changes && moving && !self.steady && self.shadow_size > QUICK_SHADOW;
         let draw_shadow = shadow_changes || (shadows && self.shadow_quick && !quick_shadow);
         // A picture kept but with fewer samples than asked for is refined
         // instead (refine.rs). Never under the matcap, which stays exactly
         // as it was.
-        let wanted = if lit { self.refine_to.max(1) } else { 1 };
+        let wanted = if lit && !(self.steady && moving) { self.refine_to.max(1) } else { 1 };
         let targets = self.targets.as_mut().unwrap();
         let same = targets.drawn.as_ref() == Some(&key);
         let shown = targets.refine.as_ref().map_or(1, refine::Buffers::shown);

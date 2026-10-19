@@ -2057,6 +2057,7 @@ impl Running {
         // dabs of a stroke: a pause there is not the end of it.
         let quality = &self.doc.opts.quality;
         self.renderer.refine_to = if self.doc.sculptor.is_active() { 1 } else { quality.refine_samples() };
+        self.renderer.steady = quality.steady;
         self.renderer.draw(&self.gpu, &mut encoder, &target, size, &globals, &look, &self.doc.opts, &items);
         self.redraw |= self.renderer.refining();
 
