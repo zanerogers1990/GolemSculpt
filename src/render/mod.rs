@@ -38,7 +38,11 @@ pub mod spheres;
 pub mod wire;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const GBUF_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The normals prepass: view normal and eye depth. Full floats, because the
+/// contact shadows, the occlusion and the rays compare depths finer than a
+/// half float holds: rounded to a 2048th of itself, a smooth surface seemed
+/// to pass in front of itself and shadowed itself in bands.
+const GBUF_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 /// The scene is shaded in linear colour with room above white, so glow can
 /// bloom and the tone curve has something to roll off.
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;

@@ -117,6 +117,8 @@ struct Targets {
 pub struct Post {
     uniform: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
+    /// The occlusion passes' layout: the first texture read unfiltered.
+    layout_ao: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     pipe_ssao: wgpu::RenderPipeline,
     pipe_ssao_blur: wgpu::RenderPipeline,
@@ -148,42 +150,54 @@ impl Post {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+        let texture_entry = |binding, filterable| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                sample_type: wgpu::TextureSampleType::Float { filterable },
                 view_dimension: wgpu::TextureViewDimension::D2,
                 multisampled: false,
             },
             count: None,
         };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("post"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        // `first_filterable` false for the occlusion passes, whose first
+        // texture is the normals prepass: full-size floats, which are read
+        // texel by texel and cannot be filtered.
+        let make_layout = |label, first_filterable| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(label),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                texture_entry(1),
-                texture_entry(2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+                    texture_entry(1, first_filterable),
+                    texture_entry(2, true),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            })
+        };
+        let layout = make_layout("post", true);
+        let layout_ao = make_layout("post occlusion", false);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("post"),
             bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let ao_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("post occlusion"),
+            bind_group_layouts: &[Some(&layout_ao)],
             immediate_size: 0,
         });
         // The composite pass reads the colour table too, as a second group.
@@ -194,7 +208,11 @@ impl Post {
             immediate_size: 0,
         });
         let pipeline = |entry: &'static str, format: wgpu::TextureFormat, samples: u32| {
-            let pipeline_layout = if entry == "fs_composite" { &composite_layout } else { &pipeline_layout };
+            let pipeline_layout = match entry {
+                "fs_composite" => &composite_layout,
+                "fs_ssao" | "fs_ssao_blur" => &ao_pipeline_layout,
+                _ => &pipeline_layout,
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(pipeline_layout),
@@ -236,6 +254,7 @@ impl Post {
             pipe_composite_single: pipeline("fs_composite", gpu.format, 1),
             uniform,
             layout,
+            layout_ao,
             sampler,
             targets: None,
             ao: None,
@@ -244,9 +263,19 @@ impl Post {
     }
 
     fn bind(&self, device: &wgpu::Device, a: &wgpu::TextureView, b: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.bind_with(device, &self.layout, a, b)
+    }
+
+    fn bind_with(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        a: &wgpu::TextureView,
+        b: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("post"),
-            layout: &self.layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(a) },
@@ -291,6 +320,7 @@ impl Post {
         }
 
         let bind = |a: &wgpu::TextureView, b: &wgpu::TextureView| self.bind(device, a, b);
+        let bind_ao = |a: &wgpu::TextureView, b: &wgpu::TextureView| self.bind_with(device, &self.layout_ao, a, b);
         let bind_blur = (1..levels)
             .map(|i| (bind(&bloom_down[i - 1], &bloom_down[i - 1]), bind(&bloom_up[i], &bloom_up[i])))
             .collect();
@@ -306,9 +336,11 @@ impl Post {
         let result = if levels > 1 { &bloom_up[0] } else { &bloom_down[0] };
         self.targets = Some(Targets {
             size,
-            bind_ssao: bind(normals, normals),
-            bind_ssao_across: bind(normals, &ao),
-            bind_ssao_down: bind(normals, &ao_scratch),
+            // The raw pass reads only the normals; the scratch fills the
+            // second slot, which must be a texture that can be filtered.
+            bind_ssao: bind_ao(normals, &ao_scratch),
+            bind_ssao_across: bind_ao(normals, &ao),
+            bind_ssao_down: bind_ao(normals, &ao_scratch),
             bind_prefilter: bind(scene, scene),
             bind_blur,
             bind_up,
