@@ -1959,12 +1959,18 @@ fn evened(mesh: &Mesh, v: u32, q: Vec3, heading: Vec3, k: f32) -> Vec3 {
     let n = mesh.normals[v as usize];
     let along = (heading - n * heading.dot(n)).normalize_or_zero();
     let (mut sum, mut weight) = (DVec3::ZERO, 0.0f64);
+    // How far the neighbours stand off the vertex's tangent plane, against
+    // how far off they are: how sharp a point the vertex is.
+    let (mut off_plane, mut reach2, mut count) = (0.0f64, 0.0f64, 0.0f64);
     for &o in mesh.neighbours(v) {
         let p = mesh.positions[o as usize];
+        let to = p - q;
+        off_plane += to.dot(n) as f64;
+        reach2 += to.length_squared() as f64;
+        count += 1.0;
         let w = if along == Vec3::ZERO {
             1.0
         } else {
-            let to = p - q;
             let flat = to - n * to.dot(n);
             let len2 = flat.length_squared();
             let cos2 = if len2 > 1e-24 { flat.dot(along).powi(2) / len2 } else { 0.5 };
@@ -1973,12 +1979,27 @@ fn evened(mesh: &Mesh, v: u32, q: Vec3, heading: Vec3, k: f32) -> Vec3 {
         sum += p.as_dvec3() * w;
         weight += w;
     }
-    if weight <= 0.0 {
+    if weight <= 0.0 || reach2 <= 0.0 {
+        return q;
+    }
+    // A sharp point (the tip of a cone pulled out with Move) is left where
+    // it is: slid toward its neighbours it can only go back down its own
+    // flanks, and the point came out blunted and short. A ball's surface,
+    // even coarsely meshed, is far below this.
+    let sharp = (off_plane / count).abs() / (reach2 / count).sqrt();
+    let k = k * smooth((SHARP_POINT - sharp as f32) / (0.8 * SHARP_POINT));
+    if k <= 0.0 {
         return q;
     }
     let toward = (sum / weight).as_vec3() - q;
     slid(mesh, v, q, n, (toward - n * toward.dot(n)) * k)
 }
+
+/// How sharp a point Even Out leaves alone ([`evened`]): its neighbours
+/// stand this far off its tangent plane, on average, for how far off they
+/// are (a ball meshed ten edges to its radius is a twentieth). It slides
+/// one a fifth as sharp in full.
+const SHARP_POINT: f32 = 0.3;
 
 /// What every neighbour counts for in Even Out along a heading, besides how
 /// nearly it lies along or across it (at most a quarter): a fifth of that.
@@ -2367,10 +2388,18 @@ fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
             // where the tip has got to (Blender's, which leaves out the
             // falloff here).
             let off = pos - d.center - d.step;
-            let off = off - along * off.dot(along);
+            let ahead = off.dot(along);
+            let off = off - along * ahead;
             // Drawn in, it eases off toward the axis, or it would pinch
-            // the middle of the pull into nothing.
-            let ease = if pinch > 0.0 { (off.length() / r).min(1.0).powi(2) } else { 1.0 };
+            // the middle of the pull into nothing. Pushed out, only what
+            // trails behind the tip is: the round end of the pull, ahead
+            // of where the tip is, pushed out with it, was spread into a
+            // flat, crumpled disc.
+            let ease = if pinch > 0.0 {
+                (off.length() / r).min(1.0).powi(2)
+            } else {
+                smooth(-ahead / (0.5 * r))
+            };
             moved -= off * (pinch * w * ease);
         }
         if let Some(turn) = turn {

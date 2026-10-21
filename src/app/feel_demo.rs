@@ -16,7 +16,8 @@
 //! a ball coarse enough to see them); `pull` makes each stroke a pull out of
 //! the ball's outline to the right, four brush sizes long (Snake Hook, Move);
 //! `plain` turns Auto Smooth, Even Out and Snake Hook's Thickness off, for
-//! the picture without them; `finger` is one stroke gone over ten times, at
+//! the picture without them, and `even` turns Even Out up to 40%; `finger`
+//! is one stroke gone over ten times, at
 //! full Strength, along a finger of clay lying across the view (what
 //! smoothing does to a thin form).
 
@@ -61,8 +62,11 @@ impl Running {
         let bounds = self.doc.scene.bounds(&self.doc.mesh);
         self.doc.camera.frame(bounds, aspect, false);
         (self.doc.camera.yaw, self.doc.camera.pitch) = (0.0, 0.0);
-        // Close enough that the strokes are worth looking at.
-        self.doc.camera.distance /= 1.8;
+        // Close enough that the strokes are worth looking at (a pull out of
+        // the outline needs the room beside it).
+        if !pull && !finger {
+            self.doc.camera.distance /= 1.8;
+        }
         self.sync_view();
 
         self.doc.opts.wireframe = wire;
@@ -75,7 +79,15 @@ impl Running {
             let bs = sculptor.settings.current_mut();
             (bs.auto_smooth, bs.even_out, bs.thickness) = (0.0, 0.0, 0.0);
         }
-        let radius = 0.03 * self.view.size.y;
+        if has("even") {
+            sculptor.settings.current_mut().even_out = 0.4;
+        }
+        // Along the finger, a brush a little wider than it is thick.
+        let finger_px = self.view.project(Vec3::Y * 0.06).zip(self.view.project(Vec3::ZERO)).map(|(a, b)| a.distance(b));
+        let radius = match finger_px {
+            Some(px) if finger => 1.3 * px,
+            _ => 0.03 * self.view.size.y,
+        };
         let settings = &mut sculptor.settings;
         (settings.mask_mode, settings.screen_space_size, settings.radius_px) = (false, true, radius);
         let own = settings.current().strength;
@@ -83,8 +95,10 @@ impl Running {
         let middle = self.doc.scene.active().matrix().transform_point3(Vec3::Z * front);
         let Some(middle) = self.view.project(middle) else { return };
         if finger {
-            self.doc.sculptor.settings.current_mut().strength = 1.0;
-            let (from, to) = (Vec2::new(middle.x - 6.0 * radius, middle.y), Vec2::new(middle.x + 6.0 * radius, middle.y));
+            // Round the finger, not only its front: what thins it shows in its outline.
+            let bs = self.doc.sculptor.settings.current_mut();
+            (bs.strength, bs.front_facing) = (1.0, false);
+            let (from, to) = (Vec2::new(middle.x - 4.0 * radius, middle.y), Vec2::new(middle.x + 4.0 * radius, middle.y));
             if !self.feel_stroke(from, to, false, 10) {
                 eprintln!("demo-feel: the stroke along the finger missed it");
             }
