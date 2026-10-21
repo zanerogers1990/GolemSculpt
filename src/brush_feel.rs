@@ -49,16 +49,29 @@
 //!    rose nine tenths as far as the most (low on a rounded bead, high on a
 //!    peaked ridge; the ball's own is 0.2).
 //!
+//!  - `lumps`: for the brushes that smooth, how much of a lumpy ball's lumps
+//!    (a third of a radius across) is left along the stroke after one pass;
+//!  - `dV10`, `rough10`, `lumps10`: for the Smooth brushes, after ten strokes
+//!    one after another: the change in the ball's volume, and what is left
+//!    of the fine noise and of the lumps.
+//!
 //! Move and Snake Hook are a drag of two radii to the side instead of a
 //! line, and `move1` is then how far the point under the pen went, as a
-//! share of the drag.
+//! share of the drag. Snake Hook is also pulled straight out of the ball's
+//! outline, four radii on the screen (`pull:`): how far past the outline it
+//! reached (`reach`), how thick the pull is half, one and a half and two and
+//! a half radii out (`thick`, root mean square off its middle, in radii), and
+//! the triangles it pulled out (`angleP`, `edgeCVP`) and the volume (`dVP`).
+//!
+//! `SCULPT_FEEL_ROWS` (row names, comma separated) runs only those rows, and
+//! then also the tuning rows the starting values were picked from.
 
 use glam::{DVec3, Vec2, Vec3};
 
 use crate::camera::{Camera, View};
 use crate::mesh::primitives::{self, Primitive};
 use crate::mesh::{Mesh, StrokeDelta};
-use crate::sculpt::{Brush, BrushSettings, PointerSample, Sculptor};
+use crate::sculpt::{Brush, BrushSettings, PointerSample, Sculptor, Settings, SmoothMode};
 
 const SIZE: Vec2 = Vec2::new(1920.0, 1080.0);
 
@@ -120,6 +133,28 @@ fn ball(rough: bool) -> Mesh {
         })
         .collect();
     Mesh::new(positions, mesh.indices.clone(), None)
+}
+
+/// A ball with lumps over it the size of the brush's middle (bumps a third
+/// of a radius across, a hundredth of the ball's radius high): what a
+/// smoothing brush is mostly for.
+fn lumpy() -> Mesh {
+    let mesh = primitives::build(Primitive::Sphere, 200_000, BALL);
+    let positions = mesh.positions.iter().map(|&p| p * (1.0 + 0.012 * (p.x * 90.0).sin() * (p.y * 90.0).sin())).collect();
+    Mesh::new(positions, mesh.indices.clone(), None)
+}
+
+/// How lumpy the surface is along the stroke: the root mean square of how
+/// far the vertices within half a radius of the path stand off the ball.
+fn lumpiness(mesh: &Mesh, path: &[Vec3]) -> f64 {
+    let (mut sum, mut n) = (0.0f64, 0.0f64);
+    for &p in &mesh.positions {
+        if p.z > 0.0 && p.x.abs() < 0.8 * HALF_LENGTH * RADIUS && off_path(path, p.normalize() * BALL) < 0.5 * RADIUS {
+            sum += (p.length() as f64 - BALL as f64).powi(2);
+            n += 1.0;
+        }
+    }
+    (sum / n.max(1.0)).sqrt()
 }
 
 /// How far apart the ribs of the ribbed ball are, from crest to crest.
@@ -371,13 +406,29 @@ enum Held {
     Preset(&'static str),
     /// A base brush with something of its settings changed, under a name of its own.
     Tuned(&'static str, Brush, fn(&mut BrushSettings)),
+    /// The same with something of the kernel's own numbers changed too (Clay Depth).
+    Set(&'static str, Brush, fn(&mut Settings)),
+    /// A library brush with something of its settings changed.
+    PresetTuned(&'static str, &'static str, fn(&mut BrushSettings)),
 }
 
 impl Held {
     fn name(self) -> &'static str {
         match self {
             Held::Base(brush) => brush.name(),
-            Held::Preset(name) | Held::Tuned(name, ..) => name,
+            Held::Preset(name) | Held::Tuned(name, ..) | Held::Set(name, ..) | Held::PresetTuned(name, ..) => name,
+        }
+    }
+
+    /// The kernel the row's brush is over.
+    fn kernel(self) -> Brush {
+        match self {
+            Held::Base(brush) | Held::Tuned(_, brush, _) | Held::Set(_, brush, _) => brush,
+            Held::Preset(name) | Held::PresetTuned(_, name, _) => {
+                let mut sculptor = Sculptor::default();
+                assert!(sculptor.library.select_named(name, &mut sculptor.settings), "no brush {name}");
+                sculptor.settings.brush
+            }
         }
     }
 
@@ -388,6 +439,14 @@ impl Held {
             Held::Preset(name) => assert!(sculptor.library.select_named(name, &mut sculptor.settings), "no brush {name}"),
             Held::Tuned(_, brush, tune) => {
                 sculptor.settings.brush = brush;
+                tune(sculptor.settings.current_mut());
+            }
+            Held::Set(_, brush, tune) => {
+                sculptor.settings.brush = brush;
+                tune(&mut sculptor.settings);
+            }
+            Held::PresetTuned(_, name, tune) => {
+                assert!(sculptor.library.select_named(name, &mut sculptor.settings), "no brush {name}");
                 tune(sculptor.settings.current_mut());
             }
         }
@@ -401,24 +460,100 @@ impl Held {
 
     /// Whether the brush is dragged (Move, Snake Hook) rather than laid along a line.
     fn drags(self) -> bool {
-        matches!(self, Held::Base(Brush::Move | Brush::SnakeHook))
+        matches!(self.kernel(), Brush::Move | Brush::SnakeHook)
     }
 
     /// Whether the brush works to a plane: Clay, Flatten and what is made of them.
     fn levels(self) -> bool {
-        match self {
-            Held::Base(brush) | Held::Tuned(_, brush, _) => matches!(brush, Brush::Clay | Brush::Flatten),
-            Held::Preset(name) => matches!(name, "Clay Strips" | "Clay Tubes" | "Trim" | "Fill" | "Planar" | "Polish"),
-        }
+        matches!(self.kernel(), Brush::Clay | Brush::Flatten)
     }
 
     fn smooths(self) -> bool {
-        matches!(
-            self,
-            Held::Base(Brush::Smooth | Brush::Flatten)
-                | Held::Preset("Relax" | "Keep Volume" | "Smooth Peaks" | "Smooth Valleys" | "Polish")
-        )
+        matches!(self.kernel(), Brush::Smooth | Brush::Flatten)
     }
+}
+
+/// Whether the row called `name` is to be run: all of them, unless
+/// `SCULPT_FEEL_ROWS` names some (comma separated), for tuning a few.
+fn wanted(name: &str) -> bool {
+    match std::env::var("SCULPT_FEEL_ROWS") {
+        Ok(rows) if !rows.trim().is_empty() => rows.split(',').any(|row| row.trim() == name),
+        _ => true,
+    }
+}
+
+/// Snake Hook pulled straight out of the ball's outline, four radii, on the
+/// screen: how far the pull reached past the outline (`reach`, in radii),
+/// how thick it is a quarter and three quarters of the way out (`thick`,
+/// the root mean square of how far its vertices are from its middle there,
+/// in radii), and how good the triangles that were pulled out stay.
+fn pull(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) -> String {
+    let target = &mut bench.ball;
+    let x0 = 0.96 * BALL;
+    let from = Vec3::new(x0, 0.0, (BALL * BALL - x0 * x0).sqrt());
+    let (a, b) = (target.view.project(from).unwrap(), target.view.project(from + Vec3::X * 4.0 * RADIUS).unwrap());
+    let points: Vec<Vec2> = (0..=SAMPLES).map(|i| a.lerp(b, i as f32 / SAMPLES as f32)).collect();
+    let delta = draw(target, &mut held.sculptor(strength), &points, pressure);
+    let mesh = &target.mesh;
+    let before = &bench.ball_before;
+    let reach = mesh.positions.iter().map(|p| p.x).fold(BALL, f32::max) - BALL;
+    // Measured across slices of the pull, half, one and a half and two and a
+    // half radii out from the outline, over the vertices it carried out
+    // there; "-" where the pull did not reach or is down to a few vertices.
+    let thick_at = |out: f32| {
+        let x = BALL + out * RADIUS;
+        let slice: Vec<Vec3> = mesh.positions.iter().copied().filter(|p| (p.x - x).abs() < 0.15 * RADIUS).collect();
+        if slice.len() < 6 || reach < (out + 0.2) * RADIUS {
+            return "    -".to_owned();
+        }
+        let mid = slice.iter().map(|p| Vec2::new(p.y, p.z)).sum::<Vec2>() / slice.len() as f32;
+        let ms = slice.iter().map(|p| Vec2::new(p.y, p.z).distance_squared(mid)).sum::<f32>() / slice.len() as f32;
+        format!("{:>5.3}", ms.sqrt() / RADIUS)
+    };
+    let thick = [0.5, 1.5, 2.5].map(thick_at).join("/");
+    let pulled: Vec<bool> =
+        mesh.positions.iter().zip(&before.positions).map(|(p, p0)| p.distance(*p0) > 0.1 * RADIUS).collect();
+    let tris: Vec<[u32; 3]> = mesh
+        .indices
+        .chunks_exact(3)
+        .map(|t| [t[0], t[1], t[2]])
+        .filter(|t| t.iter().all(|&v| pulled[v as usize]))
+        .collect();
+    let (mean, worst, edges) = quality(&mesh.positions, &tris);
+    let dv = ((volume(mesh) - before.volume) / (RADIUS as f64).powi(3)) as f32;
+    undo(target, delta);
+    format!(
+        "  pull: reach {:>5.2}  thick {thick}  angleP {mean:>5.1}/{worst:>5.1}  edgeCVP {edges:>5.3}  dVP {dv:>8.4}",
+        reach / RADIUS
+    )
+}
+
+/// Ten strokes of a smoothing brush along the line, one after another: how
+/// much they took from the ball's volume, in cubic radii, and how much of
+/// the fine noise of the rough ball is left under them.
+fn ten(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) -> String {
+    let line = bench.ball.line.clone();
+    let strokes: Vec<Option<StrokeDelta>> =
+        (0..10).map(|_| draw(&mut bench.ball, &mut held.sculptor(strength), &line, pressure)).collect();
+    let dv = ((volume(&bench.ball.mesh) - bench.ball_before.volume) / (RADIUS as f64).powi(3)) as f32;
+    for delta in strokes.into_iter().rev() {
+        undo(&mut bench.ball, delta);
+    }
+    let line = bench.rough.line.clone();
+    let strokes: Vec<Option<StrokeDelta>> =
+        (0..10).map(|_| draw(&mut bench.rough, &mut held.sculptor(strength), &line, pressure)).collect();
+    let left = roughness(&bench.rough.mesh, &bench.rough_before.under) / bench.rough_start;
+    for delta in strokes.into_iter().rev() {
+        undo(&mut bench.rough, delta);
+    }
+    let line = bench.lumps.line.clone();
+    let strokes: Vec<Option<StrokeDelta>> =
+        (0..10).map(|_| draw(&mut bench.lumps, &mut held.sculptor(strength), &line, pressure)).collect();
+    let lumps = lumpiness(&bench.lumps.mesh, &bench.lumps.path) / bench.lumps_start;
+    for delta in strokes.into_iter().rev() {
+        undo(&mut bench.lumps, delta);
+    }
+    format!("  dV10 {dv:>8.4}  rough10 {left:>5.3}  lumps10 {lumps:>5.3}")
 }
 
 /// The drag Move and Snake Hook are given: from the middle of the line two
@@ -437,11 +572,16 @@ struct Bench {
     rough_start: f64,
     ribs: Target,
     ribs_start: f64,
+    lumps: Target,
+    lumps_start: f64,
     fin: Target,
     fin_before: Before,
 }
 
 fn row(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) {
+    if !wanted(held.name()) {
+        return;
+    }
     let shown = held.sculptor(strength).settings.current().strength;
     let setting = if pressure < 1.0 { format!("{shown:.3} light") } else { format!("{shown:.3}") };
     let mut line = format!("{:<18} {:<11}", held.name(), setting);
@@ -461,6 +601,9 @@ fn row(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) {
             " follow {went:>5.3}  out1 {:>6.3}  move1 {:>6.3}  angle {:>5.1}/{:>5.1}  edgeCV {:>5.3}  dV {:>8.4}",
             pass.out, pass.moved / 2.0, pass.angle.0, pass.angle.1, pass.edges, pass.dv
         );
+        if held.kernel() == Brush::SnakeHook {
+            line += &pull(bench, held, strength, pressure);
+        }
         println!("{line}");
         return;
     }
@@ -496,7 +639,7 @@ fn row(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) {
         / RADIUS;
     undo(&mut bench.fin, delta);
     line += &format!(
-        " out1 {:>6.3}  out3 {:>6.3}  in1 {:>6.3}  move1 {:>6.3}  ridge {:>6.2}/{:>5.2}  angle {:>5.1}/{:>5.1}  edgeCV {:>5.3}  dV {:>8.4}  fin {:>6.3}",
+        " out1 {:>6.3}  out3 {:>6.3}  in1 {:>7.4}  move1 {:>6.3}  ridge {:>6.2}/{:>5.2}  angle {:>5.1}/{:>5.1}  edgeCV {:>5.3}  dV {:>8.4}  fin {:>6.3}",
         one.out, three.out, one.sank, one.moved, one.ridge.0, one.ridge.1, one.angle.0, one.angle.1, one.edges, one.dv, back
     );
     if held.smooths() {
@@ -505,6 +648,14 @@ fn row(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) {
         let left = roughness(&bench.rough.mesh, &bench.rough_before.under) / bench.rough_start;
         undo(&mut bench.rough, delta);
         line += &format!("  rough {left:>5.3}");
+        let lump_line = bench.lumps.line.clone();
+        let delta = draw(&mut bench.lumps, &mut held.sculptor(strength), &lump_line, pressure);
+        let lumps = lumpiness(&bench.lumps.mesh, &bench.lumps.path) / bench.lumps_start;
+        undo(&mut bench.lumps, delta);
+        line += &format!("  lumps {lumps:>5.3}");
+        if held.kernel() == Brush::Smooth {
+            line += &ten(bench, held, strength, pressure);
+        }
     }
     if held.levels() {
         let rib_line = bench.ribs.line.clone();
@@ -529,6 +680,8 @@ pub fn run() {
     let rough_start = roughness(&rough_t.mesh, &rough_before.under);
     let ribs_t = Target::ball(ribbed());
     let ribs_start = rib_height(&ribs_t.mesh, &ribs_t.path);
+    let lumps_t = Target::ball(lumpy());
+    let lumps_start = lumpiness(&lumps_t.mesh, &lumps_t.path);
     let fin_t = fin();
     let fin_before = Before::of(&fin_t);
     let (mean, worst, edges) = quality(&ball_before.positions, &ball_before.tris);
@@ -547,6 +700,8 @@ pub fn run() {
         rough_start,
         ribs: ribs_t,
         ribs_start,
+        lumps: lumps_t,
+        lumps_start,
         fin: fin_t,
         fin_before,
     };
@@ -574,7 +729,7 @@ pub fn run() {
         row(&mut bench, Held::Preset(name), None, 1.0);
         row(&mut bench, Held::Preset(name), None, LIGHT);
     }
-    for name in ["Smooth Peaks", "Smooth Valleys", "Relax", "Keep Volume", "Spread"] {
+    for name in ["Smooth Peaks", "Smooth Valleys", "Relax", "Keep Volume", "Surface Smooth", "Spread"] {
         row(&mut bench, Held::Preset(name), None, 1.0);
     }
     // The brushes that build, with Accumulate each way, at their own Strength.
@@ -598,5 +753,63 @@ pub fn run() {
     ];
     for held in without {
         row(&mut bench, held, None, 1.0);
+    }
+    // What Auto Smooth and Even Out do, and Smooth's two ways of smoothing:
+    // the brushes with each of them at nought, at their own Strength.
+    let clean: [Held; 9] = [
+        Held::Tuned("Smooth surface", Brush::Smooth, |b| b.smooth_mode = SmoothMode::Surface),
+        Held::Tuned("Standard smooth0", Brush::Standard, |b| b.auto_smooth = 0.0),
+        Held::Tuned("Layer smooth0", Brush::Layer, |b| b.auto_smooth = 0.0),
+        Held::Tuned("Inflate tidy0", Brush::Inflate, |b| (b.auto_smooth, b.even_out) = (0.0, 0.0)),
+        Held::Tuned("Inflate even0", Brush::Inflate, |b| b.even_out = 0.0),
+        Held::Tuned("Snake Hook thick0", Brush::SnakeHook, |b| b.thickness = 0.0),
+        // What the plan's starting values for Snake Hook did to a pull.
+        Held::Tuned("Snake Hook smooth.2", Brush::SnakeHook, |b| b.auto_smooth = 0.2),
+        Held::Tuned("Snake Hook even.2", Brush::SnakeHook, |b| b.even_out = 0.2),
+        Held::Tuned("Move even0", Brush::Move, |b| b.even_out = 0.0),
+    ];
+    for held in clean {
+        row(&mut bench, held, None, 1.0);
+    }
+    // Rows for tuning, run only when asked for by name (`SCULPT_FEEL_ROWS`).
+    if std::env::var("SCULPT_FEEL_ROWS").is_ok_and(|rows| !rows.trim().is_empty()) {
+        tuning(&mut bench);
+    }
+}
+
+/// Plain Clay at other Clay Depths, Trim at other Strengths and Snake Hook
+/// at other Thicknesses: what the starting values were picked from.
+fn tuning(bench: &mut Bench) {
+    let rows: [Held; 27] = [
+        Held::Set("Clay d0.3", Brush::Clay, |s| s.clay_depth = 0.3),
+        Held::Set("Clay d0.4", Brush::Clay, |s| s.clay_depth = 0.4),
+        Held::Set("Clay d0.5", Brush::Clay, |s| s.clay_depth = 0.5),
+        Held::Set("Clay d0.55", Brush::Clay, |s| s.clay_depth = 0.55),
+        Held::Set("Clay d0.6", Brush::Clay, |s| s.clay_depth = 0.6),
+        Held::Set("Clay d0.7", Brush::Clay, |s| s.clay_depth = 0.7),
+        Held::PresetTuned("Trim s0.62", "Trim", |b| (b.strength, b.steady_plane) = (0.62, 0.5)),
+        Held::PresetTuned("Trim s0.711", "Trim", |b| (b.strength, b.steady_plane) = (0.711, 0.5)),
+        Held::PresetTuned("Trim st0.3", "Trim", |b| (b.strength, b.steady_plane) = (0.711, 0.3)),
+        Held::PresetTuned("Trim st0.3 s0.69", "Trim", |b| (b.strength, b.steady_plane) = (0.69, 0.3)),
+        Held::PresetTuned("Trim st0.4 s0.67", "Trim", |b| (b.strength, b.steady_plane) = (0.67, 0.4)),
+        Held::PresetTuned("Trim st0", "Trim", |b| (b.strength, b.steady_plane) = (0.711, 0.0)),
+        Held::Tuned("Snake t-0.5", Brush::SnakeHook, |b| b.thickness = -0.5),
+        Held::Tuned("Snake t0.25", Brush::SnakeHook, |b| b.thickness = 0.25),
+        Held::Tuned("Snake t0.5", Brush::SnakeHook, |b| b.thickness = 0.5),
+        Held::Tuned("Snake t0.75", Brush::SnakeHook, |b| b.thickness = 0.75),
+        Held::Tuned("Snake t1", Brush::SnakeHook, |b| b.thickness = 1.0),
+        Held::Tuned("Snake s.02", Brush::SnakeHook, |b| b.auto_smooth = 0.02),
+        Held::Tuned("Snake s.05", Brush::SnakeHook, |b| b.auto_smooth = 0.05),
+        Held::Tuned("Snake e.1", Brush::SnakeHook, |b| b.even_out = 0.1),
+        Held::Tuned("Snake s.2 e.2", Brush::SnakeHook, |b| (b.auto_smooth, b.even_out) = (0.2, 0.2)),
+        Held::Tuned("Inflate s.3 e.4", Brush::Inflate, |b| (b.auto_smooth, b.even_out) = (0.3, 0.4)),
+        Held::Tuned("Inflate 1.0 tidy0", Brush::Inflate, |b| (b.strength, b.auto_smooth, b.even_out) = (1.0, 0.0, 0.0)),
+        Held::Tuned("Inflate 1.0 even0", Brush::Inflate, |b| (b.strength, b.even_out) = (1.0, 0.0)),
+        Held::Tuned("Inflate acc 1.0", Brush::Inflate, |b| (b.strength, b.accumulate) = (1.0, true)),
+        Held::Tuned("Inflate acc 1.0 even0", Brush::Inflate, |b| (b.strength, b.accumulate, b.even_out) = (1.0, true, 0.0)),
+        Held::Tuned("Inflate acc 1.0 tidy0", Brush::Inflate, |b| (b.strength, b.accumulate, b.auto_smooth, b.even_out) = (1.0, true, 0.0, 0.0)),
+    ];
+    for held in rows {
+        row(bench, held, Some(0.5).filter(|_| held.name().starts_with("Clay d")), 1.0);
     }
 }

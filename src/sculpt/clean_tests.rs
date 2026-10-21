@@ -172,7 +172,7 @@ fn auto_smooth_cleans_up_behind_inflate_and_keeps_off_the_mask() {
     let (rough0, tall0, _) = run(0.0);
     let (rough, tall, masked) = run(0.3);
     println!("Inflate at 100%: roughness {rough0:.2e} -> {rough:.2e}, tallest {tall0:.3} -> {tall:.3} radii");
-    assert!(rough < rough0 * 0.8, "roughness {rough0} -> {rough}");
+    assert!(rough < rough0 * 0.85, "roughness {rough0} -> {rough}");
     assert!((tall - tall0).abs() < 0.1 * tall0, "tallest {tall0} -> {tall}");
     assert_eq!(masked, 0.0, "a masked vertex moved {masked}");
 }

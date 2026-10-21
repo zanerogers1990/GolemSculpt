@@ -172,6 +172,7 @@ pub fn run(sizes: &[usize]) {
             ("SmoothVall", "Smooth Valleys"),
             ("Relax", "Relax"),
             ("KeepVolume", "Keep Volume"),
+            ("SurfSmooth", "Surface Smooth"),
         ] {
             row(&mut mesh, &camera, label, across, |r, mirror| preset(name, r, mirror));
         }
@@ -204,6 +205,13 @@ pub fn run(sizes: &[usize]) {
         row(&mut mesh, &camera, "InflAccR0", across, tuned(Brush::Inflate, |b| (b.accumulate, b.relax_normals) = (true, 0.0)));
         row(&mut mesh, &camera, "ClayAcc", across, tuned(Brush::Clay, |b| b.accumulate = true));
         row(&mut mesh, &camera, "ClaySt0", across, tuned(Brush::Clay, |b| b.steady_plane = 0.0));
+        // The brushes without what tidies the surface behind them (Auto
+        // Smooth, Even Out): what the rows of builds from before 2026-10-21's
+        // third phase time.
+        row(&mut mesh, &camera, "StdTidy0", across, tuned(Brush::Standard, |b| b.auto_smooth = 0.0));
+        row(&mut mesh, &camera, "InflTidy0", across, tuned(Brush::Inflate, |b| (b.auto_smooth, b.even_out) = (0.0, 0.0)));
+        row(&mut mesh, &camera, "SnakeTidy0", across, tuned(Brush::SnakeHook, |b| (b.auto_smooth, b.even_out) = (0.0, 0.0)));
+        row(&mut mesh, &camera, "SnakeThk0", across, tuned(Brush::SnakeHook, |b| b.thickness = 0.0));
 
         // The voxel remesh of the same sphere, as the Remesh button runs it:
         // the rebuild itself and making a sculpt mesh of the result.

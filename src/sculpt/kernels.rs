@@ -21,7 +21,7 @@ use super::erase::{self, Erased};
 use super::falloff::Falloff;
 use super::modes::{FlattenMode, SmoothMode};
 use super::share::{Shared, Sharing};
-use crate::mesh::{Mesh, StrokeVertex};
+use crate::mesh::{Mesh, Rings, StrokeVertex};
 use crate::mesh::bvh::Leaf;
 use crate::util::SharedMut;
 
@@ -143,6 +143,13 @@ pub struct Params {
     /// what makes Spacing change how smooth a stroke is and not how much it
     /// builds.
     pub dose: f32,
+    /// Auto Smooth and Even Out ([`tidy`]): how many dabs at the tuned
+    /// spacing this dab tidies the surface for, nought for a dab that leaves
+    /// it to a later one. A stroke tidies every other dab or so, each for
+    /// the dabs since the last (`Sculptor::emit`): what they come to does
+    /// not depend on how often (as Spacing does not change what a stroke
+    /// builds), and it costs half as much. Its own dose, unless a stroke says.
+    pub tidy: f32,
     /// Erase Layer: the sculpt layer the stroke rubs out, if there is one
     /// for it to (`erase.rs`).
     pub erase: Option<Erased>,
@@ -243,7 +250,7 @@ impl Params {
             self.radius = radius;
             self.alpha = self.alpha.map(|stamp| stamp.sized(radius));
         }
-        (self.spacing, self.dose) = (spacing, dose);
+        (self.spacing, self.dose, self.tidy) = (spacing, dose, dose);
         self
     }
 
@@ -740,7 +747,7 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
     }
     // Smooth is smoothing already. A brush with neither at nought is left
     // exactly as it was: nothing more is read or written.
-    if p.brush != Brush::Smooth && (p.auto_smooth > 0.0 || p.even_out > 0.0) {
+    if p.brush != Brush::Smooth && p.tidy > 0.0 && (p.auto_smooth > 0.0 || p.even_out > 0.0) {
         tidy(mesh, p, d, leaves, scratch);
     }
 }
@@ -1514,42 +1521,47 @@ pub(super) enum Ring {
 impl Ring {
     #[inline]
     pub(super) fn of(mesh: &Mesh, v: u32) -> Ring {
-        let ring = mesh.neighbours(v);
+        Ring::in_rings(mesh.rings(), v)
+    }
+
+    #[inline]
+    fn in_rings(rings: Rings<'_>, v: u32) -> Ring {
+        let ring = rings.neighbours(v);
         if ring.len() <= 2 {
             return Ring::Held;
         }
         // Round a vertex inside a surface there are as many triangles as
         // neighbours; round one on a rim, fewer.
-        if mesh.vert_tris(v).len() >= ring.len() {
+        if rings.vert_tris(v).len() >= ring.len() {
             return Ring::All;
         }
-        if ring.iter().filter(|&&o| on_rim(mesh, v, o)).count() >= 2 { Ring::Rim } else { Ring::Held }
+        if ring.iter().filter(|&&o| on_rim(rings, v, o)).count() >= 2 { Ring::Rim } else { Ring::Held }
     }
 
     /// Whether neighbour `o` of `v` is one this vertex is averaged with.
     #[inline]
-    fn counts(self, mesh: &Mesh, v: u32, o: u32) -> bool {
+    fn counts(self, rings: Rings<'_>, v: u32, o: u32) -> bool {
         match self {
             Ring::All => true,
-            Ring::Rim => on_rim(mesh, v, o),
+            Ring::Rim => on_rim(rings, v, o),
             Ring::Held => false,
         }
     }
 }
 
 /// Whether the edge from `v` to `o` is on an open rim: one triangle has it.
-fn on_rim(mesh: &Mesh, v: u32, o: u32) -> bool {
-    let tris = mesh.vert_tris(v).iter();
-    tris.filter(|&&t| mesh.indices[t as usize * 3..t as usize * 3 + 3].contains(&o)).count() == 1
+fn on_rim(rings: Rings<'_>, v: u32, o: u32) -> bool {
+    let tris = rings.vert_tris(v).iter();
+    tris.filter(|&&t| rings.indices()[t as usize * 3..t as usize * 3 + 3].contains(&o)).count() == 1
 }
 
 /// The mean of `value` over the neighbours of `v` that `ring` counts,
 /// summed in double (see module docs); `None` if it counts none.
 #[inline]
-fn ring_mean(mesh: &Mesh, v: u32, ring: Ring, value: impl Fn(u32) -> Vec3) -> Option<Vec3> {
+fn ring_mean(rings: Rings<'_>, v: u32, ring: Ring, value: impl Fn(u32) -> Vec3) -> Option<Vec3> {
     let (mut sum, mut count) = (DVec3::ZERO, 0u32);
-    for &o in mesh.neighbours(v) {
-        if ring.counts(mesh, v, o) {
+    for &o in rings.neighbours(v) {
+        if ring.counts(rings, v, o) {
             sum += value(o).as_dvec3();
             count += 1;
         }
@@ -1562,7 +1574,7 @@ fn ring_mean(mesh: &Mesh, v: u32, ring: Ring, value: impl Fn(u32) -> Vec3) -> Op
 /// the plain mean of every neighbour, to the bit as it always was.
 #[inline]
 fn neighbour_mean(mesh: &Mesh, v: u32) -> Option<Vec3> {
-    ring_mean(mesh, v, Ring::of(mesh, v), |o| mesh.positions[o as usize])
+    ring_mean(mesh.rings(), v, Ring::of(mesh, v), |o| mesh.positions[o as usize])
 }
 
 /// Jacobi relaxation passes over the vertices of `leaves` that
@@ -1824,11 +1836,10 @@ pub(super) struct Tidy {
 /// Where the smoothing that keeps volume holds a vertex to.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Anchor {
-    /// Where it is: Auto Smooth after a dab, which keeps what the dab did.
+    /// Where it is, as each pass finds it: Auto Smooth after a dab, which
+    /// keeps what the dab did. A pass of it is a step of the smoothing of
+    /// a smoothing (bi-Laplacian), which takes ripples off and leaves forms.
     Here,
-    /// Where it was before the dab's first pass (`Scratch::before`), for an
-    /// Auto Smooth of more than one pass.
-    Saved,
     /// Where the stroke found it: the Smooth brush in Surface mode.
     Start,
 }
@@ -1841,10 +1852,10 @@ enum Anchor {
 ///
 /// Jacobi, as every smoothing here is: the pass reads the surface as it
 /// found it and moves every vertex at once, so the order the work is shared
-/// out in cannot show and mirror twins stay twins. In three walks over the
+/// out in cannot show and mirror twins stay twins. In two walks over the
 /// leaves, each on all threads: the first works out each vertex's move and
 /// the smoothing's first half (written by vertex, for its neighbours to
-/// read), the second the second half, and the last moves the vertices.
+/// read), and the second the second half as it moves the vertices.
 fn relax_step(
     mesh: &mut Mesh,
     leaves: &[u32],
@@ -1854,14 +1865,13 @@ fn relax_step(
     smoothing: bool,
     weigh: impl Fn(&Mesh, usize, u32) -> (f32, f32) + Sync,
 ) {
-    let Scratch { starts, tidy, held_off, targets, before, .. } = scratch;
+    let Scratch { starts, tidy, held_off, .. } = scratch;
     {
         let mesh = &*mesh;
         if smoothing {
             per_vertex(held_off, mesh);
         }
         let off = SharedMut::new(held_off);
-        let before = &*before;
         fill(mesh, leaves, starts, tidy, |at, v| {
             let (smooth, even) = weigh(mesh, at, v);
             if smooth <= 0.0 && even <= 0.0 {
@@ -1874,16 +1884,15 @@ fn relax_step(
             let q = mesh.positions[v as usize];
             let mut tidied = Tidy::default();
             if smooth > 0.0 {
-                if let Some(mean) = ring_mean(mesh, v, ring, |o| mesh.positions[o as usize]) {
+                if let Some(mean) = ring_mean(mesh.rings(), v, ring, |o| mesh.positions[o as usize]) {
                     let o = match anchor {
                         Anchor::Here => q,
-                        Anchor::Saved => before[at],
                         Anchor::Start => mesh.start_pos(v),
                     };
                     let held = mean - (o * HC_ALPHA + q * (1.0 - HC_ALPHA));
                     // SAFETY: `fill` gives each leaf's vertices to one task.
                     unsafe { off.write(v as usize, held.to_array()) };
-                    let smooth = smooth.min(1.0);
+                    let smooth = smooth.min(MOST_PER_PASS);
                     tidied = Tidy { moved: (mean - q) * smooth - held * (smooth * HC_BETA), smooth };
                 }
             }
@@ -1902,21 +1911,21 @@ fn relax_step(
         });
     }
     {
-        let mesh = &*mesh;
         let off = &*held_off;
-        fill(mesh, leaves, starts, targets, |at, v| {
+        mesh.move_vertices_ringed(leaves, |at, vt, rings| {
             let t = tidy[at];
-            let pos = mesh.positions[v as usize] + t.moved;
-            if t.smooth <= 0.0 {
-                return pos;
+            if t == Tidy::default() {
+                return None;
             }
-            let ring = Ring::of(mesh, v);
-            let theirs = ring_mean(mesh, v, ring, |o| Vec3::from_array(off[o as usize])).unwrap_or(Vec3::ZERO);
-            pos - theirs * (t.smooth * (1.0 - HC_BETA))
+            let mut pos = vt.pos + t.moved;
+            if t.smooth > 0.0 {
+                let ring = Ring::in_rings(rings, vt.index);
+                let theirs = ring_mean(rings, vt.index, ring, |o| Vec3::from_array(off[o as usize])).unwrap_or(Vec3::ZERO);
+                pos -= theirs * (t.smooth * (1.0 - HC_BETA));
+            }
+            Some(pos)
         });
     }
-    let targets = &*targets;
-    mesh.move_vertices(leaves, |at, vt| (tidy[at] != Tidy::default()).then(|| targets[at]).filter(|&to| to != vt.pos));
     // Nought again for the next pass: every vertex written is one of these
     // leaves', and a leaf's vertices are one run.
     let off = SharedMut::new(held_off);
@@ -1996,6 +2005,8 @@ fn weighs_by_start(brush: Brush) -> bool {
 ///
 /// Measured where the brush measures its own weights, from the dab's centre.
 fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
+    // For the dabs since the last that tidied (`Params::tidy`).
+    let p = &Params { dose: p.tidy, ..*p };
     let passes = (p.auto_smooth * d.pressure * p.dose * SMOOTH_MOST_PASSES).clamp(0.0, SMOOTH_MOST_PASSES);
     // Snake Hook evens out once, at the release ([`even_out_moved`]):
     // slid at every step, the surface it was pulling slipped back out of
@@ -2020,22 +2031,17 @@ fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scra
         }
         p.falloff.at(d2.sqrt() / r, smooth) * (1.0 - mesh.mask[i]) * facing(p.front_facing, mesh.normals[i], pos, d.cam)
     };
-    let full = passes.floor() as usize;
-    let frac = passes - full as f32;
-    let count = (full + usize::from(frac > 0.001)).max(1);
-    // More than one pass holds each vertex to where the dab left it, not
-    // where the pass before did.
-    let anchor = if count > 1 {
-        let shown = &*mesh;
-        fill(shown, leaves, &mut scratch.starts, &mut scratch.before, |_, v| shown.positions[v as usize]);
-        Anchor::Saved
-    } else {
-        Anchor::Here
-    };
+    // In as few passes as can take it: a pass may go up to half as far
+    // again as to the middle of a vertex's neighbours (the smoothing still
+    // settles, every way the surface can ripple), which a dab that tidies
+    // for two at a fifth or so of Auto Smooth (Inflate's) needs. Each pass
+    // is a walk over the footprint, and a pass is what tidying costs.
+    let count = ((passes / MOST_PER_PASS).ceil() as usize).max(1);
+    let per_pass = passes / count as f32;
     for pass in 0..count {
-        let smooth = if pass < full { 1.0 } else if frac > 0.001 { frac } else { 0.0 };
+        let smooth = per_pass;
         let even = if pass == 0 { even } else { 0.0 };
-        relax_step(mesh, leaves, scratch, anchor, d.heading, smooth > 0.0, |mesh, _, v| {
+        relax_step(mesh, leaves, scratch, Anchor::Here, d.heading, smooth > 0.0, |mesh, _, v| {
             let w = weight(mesh, v);
             // Even Out takes a vertex a share of the way, which a dab at
             // another spacing closes as the dabs it stands in for would have
@@ -2044,6 +2050,10 @@ fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scra
         });
     }
 }
+
+/// The most of the way to the middle of its neighbours one pass of Auto
+/// Smooth takes a vertex (see [`tidy`]).
+const MOST_PER_PASS: f32 = 1.5;
 
 /// How many passes of Even Out Move and Snake Hook make at full setting,
 /// once, as the stroke is let go: at the fifth they start with, six.
@@ -2333,6 +2343,9 @@ fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let follow = (p.strength * d.pressure).clamp(0.0, 1.0);
     let along = d.step.normalize_or_zero();
     let pinch = -p.thickness.clamp(-1.0, 1.0) * d.step.length() / r.max(1e-12);
+    // Each vertex goes its weight's share of the way to where the whole turn
+    // takes it: as good as turning it that share of the angle for the small
+    // turns of a step, and no sine or cosine for every vertex.
     let turn = (d.dir != Vec3::ZERO && d.heading != Vec3::ZERO && d.dir != d.heading)
         .then(|| glam::Quat::from_rotation_arc(d.dir, d.heading));
     mesh.move_within(leaves, d.center, r2, |_, vt| {
@@ -2362,7 +2375,7 @@ fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         }
         if let Some(turn) = turn {
             let from = pos - d.center;
-            moved += glam::Quat::IDENTITY.slerp(turn, w) * from - from;
+            moved += (turn * from - from) * w;
         }
         Some(pos + moved)
     });

@@ -200,6 +200,36 @@ impl StrokeArrays<'_> {
     }
 }
 
+/// Who neighbours whom on a mesh: each vertex's edge neighbours and the
+/// triangles round it, and the triangles' corners. What a pass that moves
+/// vertices by their neighbours reads ([`Mesh::move_vertices_ringed`]).
+#[derive(Clone, Copy)]
+pub struct Rings<'a> {
+    vv: &'a Lists,
+    vt: &'a Lists,
+    indices: &'a [u32],
+}
+
+impl Rings<'_> {
+    /// Edge-connected neighbours of a vertex.
+    #[inline]
+    pub fn neighbours(&self, v: u32) -> &[u32] {
+        self.vv.row(v as usize)
+    }
+
+    /// Triangles incident to a vertex.
+    #[inline]
+    pub fn vert_tris(&self, v: u32) -> &[u32] {
+        self.vt.row(v as usize)
+    }
+
+    /// The corners of every triangle, three to a triangle.
+    #[inline]
+    pub fn indices(&self) -> &[u32] {
+        self.indices
+    }
+}
+
 /// What a finished stroke changed; enough to undo and redo it.
 pub enum StrokeDelta {
     /// Vertices moved. `topology` is there when dynamic topology also added
@@ -367,7 +397,7 @@ impl Mesh {
     }
 
     /// Triangles incident to a vertex.
-    #[inline]
+    #[cfg(test)]
     pub fn vert_tris(&self, v: u32) -> &[u32] {
         self.vt.row(v as usize)
     }
@@ -784,6 +814,29 @@ impl Mesh {
         f: impl Fn(usize, &StrokeVertex) -> Option<Vec3> + Sync,
     ) {
         self.edit_leaves(leaves, |_| true, |at, vertex| f(at, vertex).map(|pos| (pos, vertex.mask)));
+    }
+
+    /// [`Self::move_vertices`] for a pass that reads the neighbours of each
+    /// vertex it moves: `f` is also handed who neighbours whom ([`Rings`]),
+    /// which moving vertices does not change. (Not where the neighbours are:
+    /// that is being written.) The lists are lent out of the mesh for the
+    /// pass and put back after it, which costs nothing.
+    pub fn move_vertices_ringed(
+        &mut self,
+        leaves: &[u32],
+        f: impl Fn(usize, &StrokeVertex, Rings<'_>) -> Option<Vec3> + Sync,
+    ) {
+        let lent = (std::mem::take(&mut self.vv), std::mem::take(&mut self.vt), std::mem::take(&mut self.indices));
+        {
+            let rings = Rings { vv: &lent.0, vt: &lent.1, indices: &lent.2 };
+            self.move_vertices(leaves, |at, vertex| f(at, vertex, rings));
+        }
+        (self.vv, self.vt, self.indices) = lent;
+    }
+
+    /// Who neighbours whom on the mesh (see [`Rings`]).
+    pub fn rings(&self) -> Rings<'_> {
+        Rings { vv: &self.vv, vt: &self.vt, indices: &self.indices }
     }
 
     /// [`Self::move_vertices`] for a brush that leaves alone every vertex

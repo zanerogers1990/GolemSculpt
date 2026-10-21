@@ -11,6 +11,14 @@
 //! slab seen from behind once the strokes are made on its front. `:thrice`
 //! makes each stroke three passes (there, back and there again) in one go:
 //! what a stroke gone over again builds, a rounded bead or a peaked ridge.
+//!
+//! More words can follow, each after a colon: `wire` shows the triangles (on
+//! a ball coarse enough to see them); `pull` makes each stroke a pull out of
+//! the ball's outline to the right, four brush sizes long (Snake Hook, Move);
+//! `plain` turns Auto Smooth, Even Out and Snake Hook's Thickness off, for
+//! the picture without them; `finger` is one stroke gone over ten times, at
+//! full Strength, along a finger of clay lying across the view (what
+//! smoothing does to a thin form).
 
 use glam::{Vec2, Vec3};
 
@@ -21,9 +29,22 @@ use crate::sculpt::PointerSample;
 
 impl Running {
     pub(super) fn feel_demo(&mut self, spec: &str) {
-        let (name, what) = spec.split_once(':').unwrap_or((spec, ""));
+        let mut words = spec.split(':');
+        let name = words.next().unwrap_or_default();
+        let words: Vec<&str> = words.collect();
+        let has = |word: &str| words.contains(&word);
+        let what = words.iter().copied().find(|w| ["fin", "back", "rough", "thrice"].contains(w)).unwrap_or("");
+        let (wire, pull, finger) = (has("wire"), has("pull"), has("finger"));
         let slab = what == "fin" || what == "back";
-        let mesh = if slab {
+        let mesh = if finger {
+            // A capsule (long along Y) laid across the view and thinned.
+            let capsule = primitives::build(Primitive::Capsule, 300_000, 0.5);
+            let reach = capsule.positions.iter().fold(Vec3::ZERO, |m, p| m.max(p.abs()));
+            let thin = capsule.positions.iter().map(|p| Vec3::new(p.y / reach.y * 0.45, p.x / reach.x * 0.06, p.z / reach.z * 0.06));
+            Mesh::new(thin.collect(), capsule.indices.clone(), None)
+        } else if wire {
+            primitives::build(Primitive::Sphere, 60_000, 0.5)
+        } else if slab {
             let cube = primitives::build(Primitive::Cube, 400_000, 0.5);
             let thin = cube.positions.iter().map(|p| Vec3::new(p.x, p.y, p.z * 0.015)).collect();
             Mesh::new(thin, cube.indices.clone(), None)
@@ -44,23 +65,51 @@ impl Running {
         self.doc.camera.distance /= 1.8;
         self.sync_view();
 
+        self.doc.opts.wireframe = wire;
         let sculptor = &mut self.doc.sculptor;
         if !sculptor.library.select_named(name, &mut sculptor.settings) {
             eprintln!("demo-feel: there is no brush called {name:?}");
             return;
         }
+        if has("plain") {
+            let bs = sculptor.settings.current_mut();
+            (bs.auto_smooth, bs.even_out, bs.thickness) = (0.0, 0.0, 0.0);
+        }
         let radius = 0.03 * self.view.size.y;
         let settings = &mut sculptor.settings;
         (settings.mask_mode, settings.screen_space_size, settings.radius_px) = (false, true, radius);
         let own = settings.current().strength;
-        let middle = self.doc.scene.active().matrix().transform_point3(Vec3::Z * if slab { 0.0075 } else { 0.5 });
+        let front = if slab { 0.0075 } else if finger { 0.06 } else { 0.5 };
+        let middle = self.doc.scene.active().matrix().transform_point3(Vec3::Z * front);
         let Some(middle) = self.view.project(middle) else { return };
+        if finger {
+            self.doc.sculptor.settings.current_mut().strength = 1.0;
+            let (from, to) = (Vec2::new(middle.x - 6.0 * radius, middle.y), Vec2::new(middle.x + 6.0 * radius, middle.y));
+            if !self.feel_stroke(from, to, false, 10) {
+                eprintln!("demo-feel: the stroke along the finger missed it");
+            }
+            self.doc.sculptor.settings.current_mut().strength = own;
+            self.input.inside = false;
+            self.sync_view();
+            println!("demo-feel: {name}, ten passes at 100% along a finger");
+            return;
+        }
+        // The ball's outline on the right, as far out as its middle is.
+        let edge = self.doc.scene.active().matrix().transform_point3(Vec3::X * 0.5);
+        let outline = self.view.project(edge).map_or(0.0, |edge| edge.x - middle.x);
         let rows: [(f32, bool); 4] = [(0.1, false), (0.5, false), (1.0, false), (own, true)];
         let passes = if what == "thrice" { 3 } else { 1 };
         for (row, (strength, taper)) in rows.into_iter().enumerate() {
             self.doc.sculptor.settings.current_mut().strength = strength;
             let y = middle.y + (row as f32 - 1.5) * 3.0 * radius;
-            let (from, to) = (Vec2::new(middle.x - 4.0 * radius, y), Vec2::new(middle.x + 4.0 * radius, y));
+            let (from, to) = if pull {
+                // Just inside the outline at this height, and out of it.
+                let dy = y - middle.y;
+                let x = middle.x + (outline * outline - dy * dy).max(0.0).sqrt() - 0.4 * radius;
+                (Vec2::new(x, y), Vec2::new(x + 4.0 * radius, y))
+            } else {
+                (Vec2::new(middle.x - 4.0 * radius, y), Vec2::new(middle.x + 4.0 * radius, y))
+            };
             if !self.feel_stroke(from, to, taper, passes) {
                 eprintln!("demo-feel: the stroke at {strength} missed the model");
             }

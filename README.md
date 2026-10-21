@@ -126,7 +126,26 @@ shared by them all.
   the stroke, so it does not tip and bob over every bump it passes: a more
   even strip. 0% lets each dab find its own level; 100% holds the one the
   stroke started with. Clay Strips and Clay Tubes keep it at 0%, as they
-  were. Brushes saved by an earlier version keep 0% too.
+  were. Brushes saved by an earlier version keep 0% too. Trim keeps it at
+  30% and a touch less Strength, so it cuts as deep as it always did.
+- **Auto Smooth** smooths the surface a little behind every dab, the way
+  that keeps its volume, so a stroke leaves it clean: no lumps or spikes at
+  the edge of a swelling, and nothing gets thinner. It leans on the pen as
+  the brush does. It starts at 15% on Inflate and 5% on Standard, and at 0%
+  on every other brush (Clay Strips and Dam Standard are as they were; on
+  Snake Hook it would smooth the pull back as you pull, and on Layer it
+  would ripple the step's edge).
+- **Even Out** slides the mesh within the surface so the triangles a brush
+  stretched come back even, without the shape changing much: cleaner for
+  the next stroke. Move does it once, as you let go of the drag (starts at
+  20%), and the evening out is part of the same undo step; what is right
+  under the pen stays there. Inflate and Snake Hook have it too, at 0%:
+  turned up, Inflate evens out behind every dab, and Snake Hook as you let
+  go (a long thin pull comes out shorter for it).
+- **Clay Depth** on the plain Clay starts at 0.50 (it was 0.30): with
+  Accumulate off, one pass at 50% Strength builds about a third of the
+  brush's size. Settings from an earlier version that had 0.30, where it
+  started, take the new start once; a depth you had set stays.
 - **Strength** on Move is how far the surface follows the pen: at 100% (where
   it starts) the grabbed point stays under it; lower is a gentler pull that
   goes only part of the way.
@@ -142,6 +161,13 @@ shared by them all.
   whole grab goes one way, by the brush's falloff and Strength.
 - **Connected Only** (Move) grabs only the piece of surface under the pointer,
   so moving one finger leaves the finger next to it alone.
+- **Snake Hook** follows the pen's pressure: press lightly and the pulled
+  clay lags and thins, press firmly and it stays with the pen. **Thickness
+  (Thin - Full)** says how a pull keeps its thickness: at 50, where it
+  starts, a long pull stays about as thick out to its tip as where it left
+  the surface; at 0 it thins to a point as before; below 0 it draws in to a
+  spike, for horns and claws. The pulled tip also turns with the stroke, so
+  a pull that curves keeps its shape round the bend.
 - Mask painting has **Mask Hardness** for its edge; the selected brush's
   falloff and Front Facing Only do not apply to it.
 - **Pinch** draws the surface in toward the line of the stroke, from both
@@ -170,11 +196,17 @@ light pass raises a low step, a firm pass or another one in the same stroke
 raises it to the full height and never past it. A new stroke builds a new
 step on top.
 
-**Smooth** (and Shift + drag with any brush, which is Smooth) has four modes
+**Smooth** (and Shift + drag with any brush, which is Smooth) has five modes
 and one slider. Each dab smooths up to four times over (all four at 100%
-Strength); it starts at 22%, which smooths as much as it always has.
+Strength); it starts at 22%, which smooths as much as it always has. Every
+mode smooths an open edge (the rim of a hole, the edge of a sheet) along
+itself, so the opening keeps its place, and leaves a lone spike's tip alone.
 
 - **All** is plain smoothing: bumps go down, pits come up.
+- **Surface** takes fine roughness off and keeps every form its size: a
+  finger, a horn or a thin edge does not get thinner however often you go
+  over it. It leaves lumps as big as the brush mostly alone, which is why
+  Smooth starts on All; the **Surface Smooth** brush is Smooth set to it.
 - **Peaks** only lowers what stands up: it knocks bumps off and leaves the
   creases beside them as deep as they were.
 - **Valleys** only fills what lies low: pits and creases come up and the
@@ -275,6 +307,7 @@ everything else that can be done with it:
 | Smooth Valleys | Smooth | Smooths only the hollows |
 | Relax | Smooth | Evens out the triangles without changing the shape |
 | Keep Volume | Smooth | Smooths without thinning |
+| Surface Smooth | Smooth | Polishes fine roughness away and keeps every form its size |
 | Rake | Standard | Light parallel scratches that follow the stroke |
 | Surface Noise | Standard | Roughens the surface with scattered, turned prints of a noise picture |
 | Scales | Layer | Press and drag out one print of scales |
@@ -299,7 +332,7 @@ A stroke is a run of dabs laid along the pen's path. How a brush lays them is
 that brush's own, under **Dabs** and **Pen Pressure** in its settings card
 (Clay Settings, Crease Settings and so on); what holds for every brush is in
 the **Stroke** card below it. Move, Pose and Snake Hook lay no dabs and have
-none of the per-brush ones.
+none of the per-brush ones, but for Snake Hook's Pressure -> Strength.
 
 - **Spacing** is how far apart the dabs are, as a share of the brush's size:
   2% to 250%. It starts at 20% (10% for Crease). Lower is a smoother stroke

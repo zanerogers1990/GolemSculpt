@@ -649,9 +649,9 @@ fn tools() -> Value {
                 "lock_plane": boolean("Flatten: the whole stroke levels to the plane its first dab found, for a true flat facet. It works on what lies within half a brush radius of that plane."),
                 "relax_normals": number("Inflate: 0 to 1, how far the directions it pushes the surface in are evened out with their neighbours', so the swelling stays smooth. The base Inflate starts at 0.3."),
                 "steady_plane": number("Clay and Flatten: 0 to 1, how steadily the plane the brush works to follows the surface along a stroke, so it does not tip over every bump. 0: each dab finds its own; 1: the stroke keeps its first. Clay and Flatten start at 0.5, Clay Strips at 0."),
-                "auto_smooth": number("0 to 1: how much each dab smooths what it has just worked, keeping the volume. Inflate starts at 0.15, Snake Hook 0.2, Standard and Layer 0.05, the rest 0."),
-                "even_out": number("0 to 1: how much each dab slides the triangles it stretched back to even within the surface (Move: once, at the release). Inflate, Snake Hook and Move start at 0.2, the rest 0."),
-                "thickness": number("Snake Hook: -1 to 1, how a pull keeps its thickness. Above 0 it stays thick out to the tip; below 0 it tapers to a point."),
+                "auto_smooth": number("0 to 1: how much each dab smooths what it has just worked, keeping the volume. Inflate starts at 0.15, Standard 0.05, the rest 0."),
+                "even_out": number("0 to 1: how much each dab slides the triangles it stretched back to even within the surface (Move and Snake Hook: once, at the release). Move starts at 0.2, the rest 0."),
+                "thickness": number("Snake Hook: -1 to 1, how a pull keeps its thickness. Above 0 it stays thick out to the tip; below 0 it tapers to a point. Starts at 0.5."),
                 "alpha": string(
                     "The picture this brush prints, by its name in the app's alpha list, or \"none\" for the plain \
                      round tip. Standard, Clay, Inflate and Layer take one.",

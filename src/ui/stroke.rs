@@ -9,7 +9,7 @@
 use egui::{Align2, Sense, Ui, vec2};
 
 use super::theme::{self, ACCENT};
-use crate::sculpt::{BrushSettings, PenMeter, Sculptor, Settings};
+use crate::sculpt::{Brush, BrushSettings, PenMeter, Sculptor, Settings};
 
 fn percent(v: f32) -> String {
     format!("{:.0}%", v * 100.0)
@@ -29,8 +29,13 @@ pub fn pressure_strength(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
 
 /// The part of the brush's own settings that shapes its stroke: how far
 /// apart its dabs are, how they are scattered, and what the pen's pressure
-/// does to it. Not shown for the brushes that lay no dabs.
+/// does to it. Not shown for the brushes that lay no dabs, but for Snake
+/// Hook's Pressure -> Strength: its pull follows the pen's pressure.
 pub fn brush_section(ui: &mut Ui, s: &mut Settings, tips: bool) {
+    if !s.mask_mode && s.brush == Brush::SnakeHook {
+        theme::heading(ui, "Pen");
+        return pressure_strength(ui, s.current_mut(), tips);
+    }
     if s.mask_mode || !s.brush.lays_dabs() {
         return;
     }

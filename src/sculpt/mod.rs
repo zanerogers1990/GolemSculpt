@@ -355,11 +355,14 @@ pub const DEFAULT_STEADY_PLANE: f32 = 0.5;
 /// over where two mirror planes cross.
 pub const DEFAULT_AUTO_SMOOTH: [(Brush, f32); 2] = [(Brush::Inflate, 0.15), (Brush::Standard, 0.05)];
 
-/// Where Even Out starts on the brushes that stretch the surface: Inflate
-/// behind every dab, Move once at the release. Not Snake Hook: slid along
-/// even once at the release, a long thin pull lost a third of its length
-/// (`--brush-feel`), so it is there to turn up, not on.
-pub const DEFAULT_EVEN_OUT: [(Brush, f32); 2] = [(Brush::Inflate, 0.2), (Brush::Move, 0.2)];
+/// Where Even Out starts: on Move, once at the release. Not on Snake Hook:
+/// slid even once at the release, a long thin pull lost a third of its
+/// length. Nor on Inflate: building a stroke to a height, it stretches the
+/// triangles so little that a fifth evened them out by next to nothing (the
+/// worst angle after three passes at full Strength 39.7 to 40.5 degrees)
+/// and cost a dab half as much again (`--brush-feel`, `--bench`). Both have
+/// it to turn up.
+pub const DEFAULT_EVEN_OUT: [(Brush, f32); 1] = [(Brush::Move, 0.2)];
 
 /// Where Snake Hook's Thickness starts.
 pub const DEFAULT_THICKNESS: f32 = 0.5;
@@ -908,6 +911,9 @@ struct Stroke {
     /// (eased, zero until it has gone anywhere).
     tip: Vec3,
     tip_heading: Vec3,
+    /// How many dabs' worth (at the tuned spacing) have been laid since the
+    /// last that tidied the surface (Auto Smooth, Even Out: `Params::tidy`).
+    untidied: f32,
     object_size: f32,
     relax: f32,
     /// What Clay's finishing pass measures curvature against.
@@ -1062,6 +1068,17 @@ impl Stroke {
         self.widen = self.widen.max((self.dabs_waiting() / most).clamp(1.0, MAX_WIDEN));
     }
 
+    /// For a dab of `dose`: the dose its Auto Smooth and Even Out run at,
+    /// which is every dab's since the last one that ran them once they come
+    /// to [`TIDY_EVERY`], and nought until then (`Params::tidy`).
+    fn tidy_after(&mut self, dose: f32) -> f32 {
+        self.untidied += dose;
+        if self.untidied + 1e-4 < TIDY_EVERY {
+            return 0.0;
+        }
+        std::mem::take(&mut self.untidied)
+    }
+
     /// Nothing is waiting any more: the dabs are spaced as the brush asks.
     fn caught_up(&mut self) {
         if !self.behind() {
@@ -1096,6 +1113,12 @@ pub struct Lag {
 /// sets off, as a hand does, has set off first; short enough that a press
 /// meant as one print shows it without having to lift.
 const OPENING_HOLD: f64 = 0.25;
+
+/// How many dabs at the tuned spacing go by between two that tidy the
+/// surface (`Params::tidy`): every third at the brush's own spacing. The
+/// brush's whole ring is tidied, and three dabs apart are three fifths of
+/// it, so every part of a stroke is still gone over more than once.
+const TIDY_EVERY: f32 = 3.0;
 
 /// How far Snake Hook pulls the surface in one step, in radii.
 const SNAKE_STEP: f32 = 0.15;
@@ -1400,6 +1423,7 @@ impl Sculptor {
             flatten_mode: bs.flatten_mode,
             spacing: bs.spacing,
             dose: Stroke::dose(bs.spacing, tuned_spacing),
+            tidy: Stroke::dose(bs.spacing, tuned_spacing),
             erase: if !mask && brush == Brush::EraseLayer { erase::Erased::of(mesh) } else { None },
             paint: painting.flatten(),
         };
@@ -1474,6 +1498,7 @@ impl Sculptor {
             grab: None,
             tip: hit.pos,
             tip_heading: Vec3::ZERO,
+            untidied: 0.0,
             object_size: bounds.size().max_element().max(1e-6),
             relax,
             curvature,
@@ -1711,6 +1736,7 @@ impl Sculptor {
                     copy: SymOp::IDENTITY,
                     heading: if was == Vec3::ZERO { heading } else { turned((s + 1) as f32 / steps as f32) },
                 };
+                let p = Params { tidy: stroke.tidy_after(p.dose), ..p };
                 let began = Instant::now();
                 Self::apply_symmetric(mesh, stroke, &p, dab);
                 stroke.meter.dab(began.elapsed());
@@ -1931,7 +1957,8 @@ impl Sculptor {
         let sized = stroke.radius_at(pen);
         let gap = (sized * spacing).max(0.0005);
         let radius = (sized * (1.0 - bs.size_jitter * draw.shrink)).max(stroke.params.radius * input::MIN_PEN_SIZE);
-        let p = stroke.params.for_dab(radius, spacing, Stroke::dose(spacing, stroke.tuned_spacing));
+        let mut p = stroke.params.for_dab(radius, spacing, Stroke::dose(spacing, stroke.tuned_spacing));
+        p.tidy = stroke.tidy_after(p.dose);
         // Clay sweeps its tip here from the dab before. After a gap (the
         // pointer came back on to the mesh) from one spacing back rather
         // than across the whole gap; and not at all between dabs that are
