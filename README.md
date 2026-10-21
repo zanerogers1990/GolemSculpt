@@ -106,6 +106,27 @@ shared by them all.
   brushes saved by an earlier version are brought over once: a Strength you
   had chosen becomes the one that does the same (as far as 100% reaches),
   and one left where the brush started takes the new starting value.
+- **Accumulate** starts off on every brush that has it (Standard, Inflate,
+  Clay and Crease). Off, a stroke builds up to a height and no further:
+  going back and forth over the same place in one stroke smooths the stroke
+  out rather than piling it up, and its cross-section stays the soft,
+  rounded shape of the brush. Lift the pen and stroke again to build on top.
+  Strength and the pen's pressure set how tall a stroke stands, and
+  **Build-Up** how quickly it gets there. With Accumulate on, every pass adds
+  more, with no limit. Standard and Inflate weigh the surface where the
+  stroke found it, so a stroke laid over itself is a rounded bead, not a
+  peaked ridge. (Settings from an earlier version: Accumulate on Standard,
+  Inflate and Clay where they started, which was on, becomes off once.)
+- **Relax Normals** (Inflate, starts at 30%) evens out the directions
+  Inflate pushes the surface in, so neighbouring bits swell together and a
+  strong stroke does not split into spikes. With Accumulate on, Inflate also
+  works out which way the surface faces afresh before every dab.
+- **Steady Plane** (Clay and Flatten, and Trim, Fill and Polish made of
+  Flatten; starts at 50%) keeps the level the brush works to steady along
+  the stroke, so it does not tip and bob over every bump it passes: a more
+  even strip. 0% lets each dab find its own level; 100% holds the one the
+  stroke started with. Clay Strips and Clay Tubes keep it at 0%, as they
+  were. Brushes saved by an earlier version keep 0% too.
 - **Strength** on Move is how far the surface follows the pen: at 100% (where
   it starts) the grabbed point stays under it; lower is a gentler pull that
   goes only part of the way.
