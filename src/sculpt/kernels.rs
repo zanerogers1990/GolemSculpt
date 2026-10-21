@@ -522,6 +522,9 @@ pub struct Scratch {
     pub(super) shared: Vec<Shared>,
     /// What a dab of the Paint brush fills (`paint.rs`).
     pub(super) paint: super::paint::Buffers,
+    /// Layer: each vertex's normal as the stroke found the surface, by
+    /// vertex, once a dab has needed it (zero until then).
+    start_normals: Vec<[f32; 3]>,
 }
 
 /// Totals `add` over every vertex owned by `leaves` that is not hidden. The
@@ -731,13 +734,41 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scr
     let sign = p.sign;
     let grow = p.e_off(d.pressure).max(0.0);
     // Each vertex's normal as the stroke found the surface, laid out as the
-    // moves below count vertices.
+    // moves below count vertices: only for the vertices the dab reaches, and
+    // worked out once a stroke (it cannot change while the stroke lasts),
+    // the first time a dab reaches the vertex. A vertex dynamic topology adds
+    // comes after every one there was, and is worked out when it is reached.
     {
+        let Scratch { starts, targets, start_normals, .. } = scratch;
+        if start_normals.is_empty() {
+            // Zeroed by the system, so a big mesh pays only for the pages a
+            // stroke reaches.
+            *start_normals = vec![[0.0; 3]; mesh.vertex_count()];
+        } else if start_normals.len() < mesh.vertex_count() {
+            start_normals.resize(mesh.vertex_count(), [0.0; 3]);
+        }
         let mesh = &*mesh;
-        fill(mesh, leaves, &mut scratch.starts, &mut scratch.targets, |_, v| mesh.stroke_start_normal(v));
+        let known = SharedMut::new(start_normals);
+        fill(mesh, leaves, starts, targets, |_, v| {
+            if mesh.start_pos(v).distance_squared(d.center) >= r2 {
+                return Vec3::ZERO;
+            }
+            // SAFETY: a vertex is in one leaf, and each leaf is filled by one task.
+            let kept = Vec3::from_array(unsafe { known.read(v as usize) });
+            if kept != Vec3::ZERO {
+                return kept;
+            }
+            let n = mesh.stroke_start_normal(v);
+            unsafe { known.write(v as usize, n.to_array()) };
+            n
+        });
     }
     let normals = &scratch.targets;
-    mesh.move_vertices(leaves, |at, vt| {
+    // A vertex is never further from where the stroke found it than the
+    // height: what is further than that from the dab is out of its reach,
+    // and is passed over before the rest of it is read.
+    let near = r + height;
+    mesh.move_within(leaves, d.center, near * near, |at, vt| {
         let start = vt.start;
         // Weighed where the stroke found the surface: the footprint stays
         // where it was laid as the surface rises.
