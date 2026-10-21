@@ -97,9 +97,22 @@ shared by them all.
   same size on screen as you zoom. Off, the brush keeps one size on the model;
   the Size slider, S + drag and the scroll wheel then set that size, over a
   range that follows how big the model is.
-- **Strength** on Move is how far the surface follows the pen: at 100% the
-  grabbed point stays under it, at 50% (where it starts) it goes half as far,
-  for a gentler pull that is easier to place.
+- **Strength** is how hard a brush works. On Standard, Inflate, Layer,
+  Smooth, Flatten, Pinch and Nudge the slider gives the gentle end the most
+  room: one pass of Standard, Inflate or Layer at full pressure barely shows
+  at 10%, is a clear stroke at 50% (about a tenth of the brush's size high)
+  and a strong one at 100% (about a third). Clay, Crease and the brushes made
+  of them (Clay Strips, Dam Standard) work as they always have. Settings and
+  brushes saved by an earlier version are brought over once: a Strength you
+  had chosen becomes the one that does the same (as far as 100% reaches),
+  and one left where the brush started takes the new starting value.
+- **Strength** on Move is how far the surface follows the pen: at 100% (where
+  it starts) the grabbed point stays under it; lower is a gentler pull that
+  goes only part of the way.
+- **Front Facing Only** starts on for Standard, Clay, Inflate, Layer,
+  Flatten, Smooth, Pinch and Nudge: a stroke on a thin form (an ear, a fin)
+  leaves its far side alone. It starts off for Move, Snake Hook and Crease,
+  and Clay Strips and Dam Standard are as they were.
 - **Ctrl + drag** with Move (or a right drag) pushes the surface in or pulls
   it out along the way it faces, instead of sliding it across the screen:
   the one direction a plain Move cannot go without turning the camera. Where
@@ -119,7 +132,7 @@ shared by them all.
   with a thumb: whatever is under the ring is carried along and left behind
   as the brush moves on, staying on the surface. Its Strength is how far the
   surface follows the pen (at 100% what is under the middle of the ring
-  stays under it; it starts at 50%). Unlike Move it works on what is under
+  stays under it; it starts at 63%). Unlike Move it works on what is under
   the ring now, all along the stroke. It leaves stretched triangles behind,
   which Smooth's Relax evens out. It has no number key.
 - **Erase Layer** rubs a sculpt layer out under the ring: the layer's
@@ -131,8 +144,14 @@ shared by them all.
   it: see Polypaint, below. P takes it up (and puts it down again), and it
   starts off the Space wheel.
 
+**Layer** raises an even step of the Layer Height and eases up to it: a
+light pass raises a low step, a firm pass or another one in the same stroke
+raises it to the full height and never past it. A new stroke builds a new
+step on top.
+
 **Smooth** (and Shift + drag with any brush, which is Smooth) has four modes
-and one slider:
+and one slider. Each dab smooths up to four times over (all four at 100%
+Strength); it starts at 22%, which smooths as much as it always has.
 
 - **All** is plain smoothing: bumps go down, pits come up.
 - **Peaks** only lowers what stands up: it knocks bumps off and leaves the
@@ -280,12 +299,17 @@ none of the per-brush ones.
   dabs stay as close together for their size all the way along.
 - **Pressure → Strength** makes the brush weaker the more lightly you press:
   at 100% a feather touch does next to nothing, at 0% pressure does not
-  change the strength. It starts at 88%, which is how every brush has always
-  felt (it takes the place of the one Light-Touch Floor there used to be for
-  all brushes; a setting of that from before is carried over into every
-  brush). A brush with Accumulate on takes half as much notice of pressure.
+  change the strength. It starts at 100% (Clay Strips keeps the 88% it has
+  always had, and Dam Standard its 60%). A setting of the one Light-Touch
+  Floor there used to be for all brushes is carried over into every brush.
   Mask painting uses the selected brush's Strength and this with it, and
   none of that brush's other stroke settings.
+- The pen's pressure is smoothed a little, to take the grain out of the
+  sensor, and follows the pen within a few hundredths of a second. Every
+  stroke starts from the pen's own first pressure, so a light touch after a
+  firm stroke starts light, with no blob, and a firm one starts firm. With
+  Lazy Mouse on, the pressure trails the pen as the brush trails the pointer,
+  and still comes down as the pen lifts, so a stroke tapers at its end.
 - Random does not mean different every time: the same stroke on the same
   surface always comes out the same, and mirrored and radial copies of a
   scattered stroke are still exact copies of each other.

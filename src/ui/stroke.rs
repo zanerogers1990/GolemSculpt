@@ -23,8 +23,7 @@ pub fn pressure_strength(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
         tips,
         "How much weaker the brush gets as you press more lightly. At 100% a feather touch does next to nothing; \
          at 0% pressure does not change the strength at all. Full pressure is always the Strength set above, and \
-         so is a mouse. (A brush with Accumulate on takes half as much notice of pressure, which keeps its \
-         build-up even.)",
+         so is a mouse. Most brushes start at 100%.",
     );
 }
 

@@ -332,8 +332,11 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
             "How far the surface follows the pen: at 100% it stays under it, lower is a gentler pull. Hold F and drag."
         } else if brush == Brush::Paint && !s.mask_mode {
             "Flow: how much of the Opacity each dab of paint lays. Low builds paint up softly as you go over a place. Hold F and drag."
+        } else if brush == Brush::SnakeHook && !s.mask_mode {
+            "How far the pulled clay follows the pen: at 100% it stays with it, lower lets it lag and thin out. Hold F and drag."
         } else {
-            "How hard the brush works. Hold F and drag."
+            "How hard the brush works. The slider gives the gentle end the most room: on Standard, Inflate and Layer \
+             one pass at 10% barely shows, at 50% it is a clear stroke and at 100% a strong one. Hold F and drag."
         };
         // The Paint brush's Strength is its Flow (sculpt/paint.rs).
         let label = if brush == Brush::Paint && !s.mask_mode { "Flow" } else { "Strength" };
