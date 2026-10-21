@@ -482,6 +482,10 @@ fn widely_spaced_dabs_are_prints_as_tall_as_the_stroke() {
         let view = view_of(&mesh);
         // As strong as 3% was before the slider was mapped (`strength.rs`).
         let mut sculptor = sculptor_with(Brush::Inflate, 0.06, strength::from_old(Brush::Inflate, 0.03));
+        // A brush that adds, as Inflate started until 2026-10-21: how much a
+        // print does is the dose (one that builds to a height for the stroke
+        // stands about a sixth taller as a print than as a stroke).
+        sculptor.settings.current_mut().accumulate = true;
         sculptor.settings.current_mut().spacing = spacing;
         let dabs = draw(&mut mesh, &mut sculptor, &view, &across(&view, -0.5, 0.5, 200), 4, None);
         (ridge(&mesh, -0.5, 0.5, 50), dabs)

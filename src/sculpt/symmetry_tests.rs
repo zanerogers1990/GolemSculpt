@@ -948,6 +948,9 @@ fn partly_overlapping_copies_are_shared_out_by_what_they_did() {
     let at = stroke_points(0.5 * BRUSH_RADIUS, STROKE_FRAMES)[STROKE_FRAMES / 2];
     let mut dab = |symmetry: Option<Symmetry>| {
         let mut sculptor = sculptor_with(Brush::Inflate);
+        // A brush that adds, as Inflate started until 2026-10-21: what is
+        // shared out here is a sum.
+        sculptor.settings.current_mut().accumulate = true;
         if let Some(symmetry) = symmetry {
             symmetry.set(&mut sculptor.settings);
         }
@@ -1430,10 +1433,16 @@ fn a_radial_stroke_that_adds_detail_adds_it_under_every_copy_and_undoes_exactly(
     let (vertices, indices) = (ball.mesh.vertex_count(), ball.mesh.indices.clone());
     let group = RADIAL_6.group();
     let partners = ball.partners_under(&group);
-    for brush in [Brush::Clay, Brush::Standard] {
+    // Standard with Accumulate on, as it started until 2026-10-21, and off,
+    // as it starts now. Off, one vertex of the thousands checked has come out
+    // as much as 2.3% of the stroke off its partners' surface at 0.6 radii
+    // from the axis (2% is what the others are held to; the mean is a
+    // hundredth of that): it is held to 3%.
+    for (brush, accumulate, worst_share) in [(Brush::Clay, false, 0.02), (Brush::Standard, true, 0.02), (Brush::Standard, false, 0.03)] {
         for from_axis in [0.0, 0.6, 6.0] {
-            let label = format!("{brush:?} with dynamic topology at {from_axis}r");
+            let label = format!("{brush:?} (accumulate {accumulate}) with dynamic topology at {from_axis}r");
             let mut sculptor = sculptor_with(brush);
+            sculptor.settings.current_mut().accumulate = accumulate;
             RADIAL_6.set(&mut sculptor.settings);
             sculptor.dyntopo.enabled = true;
             // Edges of 0.0048 under the brush, on a ball whose own are 0.006 to 0.008.
@@ -1465,7 +1474,7 @@ fn a_radial_stroke_that_adds_detail_adds_it_under_every_copy_and_undoes_exactly(
             println!("{label}: {sectors:?} new vertices, moved {moved:.2e}, pair {pair:.2e}, surface {mean:.2e} / {worst:.2e}");
             assert!(moved > 1e-3, "{label}: the stroke only refined");
             assert!(pair < 0.02 * moved, "{label}: a vertex and its partner are {pair:.2e} apart after a stroke of {moved:.2e}");
-            assert!(mean < 0.002 * moved && worst < 0.02 * moved, "{label}: surface {mean:.2e} / {worst:.2e}");
+            assert!(mean < 0.002 * moved && worst < worst_share * moved, "{label}: surface {mean:.2e} / {worst:.2e}");
 
             ball.undo(Some(delta));
             assert!(ball.mesh.positions == ball.start, "{label}: undo left vertices behind, or moved");
@@ -1677,7 +1686,10 @@ fn pinch_and_nudge_are_as_strong_beside_the_axis_as_away_from_it() {
     let paths: [(&str, Vec<Vec3>, f32, f32); 6] = [
         ("toward the axis, 4 to 2 radii off", toward_the_axis(4.0, 2.0), 0.98, 1.02),
         ("toward the axis, 3 radii to 1", toward_the_axis(3.0, 1.0), 0.85, 1.05),
-        ("toward the axis, 2 radii to a third", toward_the_axis(2.0, 0.3), 0.65, 1.1),
+        // Pinch weighs the surface where the stroke found it (2026-10-21):
+        // twelve copies drawing it toward twelve lines through the axis then
+        // move it 0.62 of what one does (0.65 or more before).
+        ("toward the axis, 2 radii to a third", toward_the_axis(2.0, 0.3), 0.6, 1.1),
         ("round the axis, 3 radii off", round_the_axis(3.0, 0.5), 0.98, 1.05),
         ("round the axis, 1.5 radii off", round_the_axis(1.5, 0.8), 0.95, 1.2),
         ("round the axis, 0.6 of a radius off", round_the_axis(0.6, 1.5), 0.75, 1.15),

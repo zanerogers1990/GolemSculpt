@@ -30,6 +30,8 @@ mod radial;
 mod share;
 pub mod strength;
 #[cfg(test)]
+mod build_tests;
+#[cfg(test)]
 mod feel_tests;
 #[cfg(test)]
 mod kernel_tests;
@@ -244,10 +246,14 @@ impl Brush {
         !matches!(self, Brush::Move | Brush::Pose | Brush::SnakeHook)
     }
 
-    /// Standard and Clay place their dabs on the surface as it was when the
-    /// stroke began; the others follow the live surface.
+    /// Standard, Clay and Flatten place their dabs on the surface as it was
+    /// when the stroke began; the others follow the live surface. Flatten's
+    /// plane is fitted to that surface, and Steady Plane steadies how high
+    /// it stands over the dab's centre: measured from the surface Flatten
+    /// had just cut down, each dab's plane stood higher over its centre than
+    /// the last, and the steadied plane cut deeper and deeper.
     fn uses_start_surface(self) -> bool {
-        matches!(self, Brush::Standard | Brush::Clay)
+        matches!(self, Brush::Standard | Brush::Clay | Brush::Flatten)
     }
 }
 
@@ -288,6 +294,15 @@ pub struct BrushSettings {
     /// dab found.
     pub flatten_mode: FlattenMode,
     pub lock_plane: bool,
+    /// For a brush that inflates: Relax Normals, how far the way it pushes
+    /// each vertex is evened out with its neighbours' (0 to 1), so that the
+    /// surface swells as one and does not split into spikes.
+    pub relax_normals: f32,
+    /// For a brush that works to a plane (Clay, Flatten): Steady Plane, how
+    /// steadily that plane follows the surface from dab to dab (0 to 1). At
+    /// nought each dab finds its own; higher, the plane holds its height and
+    /// tilt over bumps the ring passes across.
+    pub steady_plane: f32,
 }
 
 impl BrushSettings {
@@ -308,6 +323,12 @@ pub const DEFAULT_PRESSURE_STRENGTH: f32 = 1.0;
 /// the brush's Strength (the old Light-Touch Floor). Clay Strips keeps it;
 /// a settings file from then is read by it (`prefs.rs`).
 pub const OLD_PRESSURE_STRENGTH: f32 = 0.88;
+
+/// Where Inflate's Relax Normals starts.
+pub const DEFAULT_RELAX_NORMALS: f32 = 0.3;
+
+/// Where Steady Plane starts on Clay and Flatten.
+pub const DEFAULT_STEADY_PLANE: f32 = 0.5;
 
 /// The base brushes that start with Front Facing on (`Settings::default`).
 pub const FRONT_FACING: [Brush; 8] = [
@@ -435,13 +456,22 @@ impl Default for Settings {
             keep_volume: 0.0,
             flatten_mode: FlattenMode::Both,
             lock_plane: false,
+            relax_normals: 0.0,
+            steady_plane: 0.0,
         };
         let mut per_brush = [base; Brush::COUNT];
         for b in Brush::ALL {
             per_brush[b.index()].spacing = b.default_spacing();
         }
-        for b in [Brush::Clay, Brush::Inflate, Brush::Standard] {
-            per_brush[b.index()].accumulate = true;
+        // Accumulate starts off for every brush that has it (it was on for
+        // Standard, Inflate and Clay until 2026-10-21): a stroke builds to a
+        // height and no further however often it crosses itself, and the
+        // next stroke builds on top, as in Nomad and Blender.
+        // Inflate's pushes evened out a little, as Nomad's Relax (Normal).
+        per_brush[Brush::Inflate.index()].relax_normals = DEFAULT_RELAX_NORMALS;
+        // Clay and Flatten steady their plane along the stroke.
+        for b in [Brush::Clay, Brush::Flatten] {
+            per_brush[b.index()].steady_plane = DEFAULT_STEADY_PLANE;
         }
         per_brush[Brush::Crease.index()].positive = false;
         // Front Facing on, as in Blender's and ZBrush's brushes: a stroke on
@@ -1213,6 +1243,8 @@ impl Sculptor {
             smooth_mode: own.smooth_mode,
             keep_volume: own.keep_volume,
             flatten_mode: own.flatten_mode,
+            relax_normals: own.relax_normals,
+            steady_plane: own.steady_plane,
             erase: None,
             paint: None,
             ..*params
@@ -1290,6 +1322,8 @@ impl Sculptor {
             crease_depth: s.crease_depth,
             flatten_offset: s.flatten_offset,
             layer_height: s.layer_height,
+            relax_normals: bs.relax_normals,
+            steady_plane: bs.steady_plane,
             mask_hardness: s.mask_hardness,
             smooth_mode: bs.smooth_mode,
             keep_volume: bs.keep_volume,
@@ -1592,6 +1626,7 @@ impl Sculptor {
                     pressure,
                     frame: alpha::Frame::NONE,
                     plane: None,
+                    copy: SymOp::IDENTITY,
                 };
                 let began = Instant::now();
                 Self::apply_symmetric(mesh, stroke, &p, dab);
@@ -1839,13 +1874,15 @@ impl Sculptor {
             Some(travel) if !p.mask && p.brush == Brush::Nudge => travel,
             _ => Vec3::ZERO,
         };
-        let mut dab = Dab { center, normal, dir, step, prev, cam: stroke.cam, pressure, frame, plane: stroke.plane };
+        let mut dab =
+            Dab { center, normal, dir, step, prev, cam: stroke.cam, pressure, frame, plane: stroke.plane, copy: SymOp::IDENTITY };
         if bs.lock_plane && stroke.plane.is_none() && !p.mask && p.brush == Brush::Flatten {
             // Lock Plane: the plane this first dab finds is the stroke's.
             let mut leaves = Vec::new();
             mesh.bvh.leaves_in_sphere(center, radius, &mut leaves);
             leaves.sort_unstable();
-            stroke.plane = kernels::flatten_plane(mesh, &p, &dab, &leaves);
+            leaves.dedup();
+            stroke.plane = kernels::flatten_plane(mesh, &p, &dab, &leaves, stroke.scratch.start_normals());
             dab.plane = stroke.plane;
         }
         let began = Instant::now();

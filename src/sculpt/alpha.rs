@@ -467,7 +467,7 @@ impl Sculptor {
         let turn = stroke.params.alpha.map_or(0.0, |stamp| stamp.random_turn(Jitter::of(stroke.seed, 0).turn));
         let frame = frame.turned(turn);
         let (dir, step) = (Vec3::ZERO, Vec3::ZERO);
-        let dab = Dab { center: centre, normal, dir, step, prev: None, cam, pressure: 1.0, frame, plane: None };
+        let dab = Dab { center: centre, normal, dir, step, prev: None, cam, pressure: 1.0, frame, plane: None, copy: SymOp::IDENTITY };
         let mut leaves = Vec::new();
         for op in &stroke.ops {
             mesh.bvh.leaves_in_sphere(op.apply_point(centre), radius, &mut leaves);

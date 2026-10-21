@@ -6,7 +6,8 @@ use super::*;
 use crate::sculpt::strength;
 
 /// A settings file as the version before wrote it: today's, less the key
-/// that says what its numbers mean, with the old starting values in it.
+/// that says what its numbers mean and the keys it did not have, with the
+/// old starting values in it.
 fn old_file() -> serde_json::Value {
     let mut file = serde_json::to_value(Prefs::default()).unwrap();
     let brush = file["brush"].as_object_mut().unwrap();
@@ -17,6 +18,27 @@ fn old_file() -> serde_json::Value {
         tuning["strength"] = old_default_strength(b).into();
         tuning["pressure_strength"] = 0.88.into();
         tuning["front_facing"] = false.into();
+        tuning["accumulate"] = ACCUMULATED.contains(&b).into();
+        let tuning = tuning.as_object_mut().unwrap();
+        assert!(tuning.remove("relax_normals").is_some() && tuning.remove("steady_plane").is_some());
+    }
+    file
+}
+
+/// A settings file as the first pen-feel version wrote it (version 1): the
+/// numbers it would have written for `settings`, with Accumulate on where it
+/// then started on, and no Relax Normals or Steady Plane.
+fn version_1_file(settings: &Settings) -> serde_json::Value {
+    let mut file = serde_json::to_value(Prefs { brush: BrushPrefs::of(settings), ..Prefs::default() }).unwrap();
+    file["brush"]["feel_version"] = 1.into();
+    for (name, tuning) in file["brush"]["brushes"].as_object_mut().unwrap() {
+        let b = Brush::ALL.into_iter().find(|b| b.name() == name).unwrap();
+        if ACCUMULATED.contains(&b) {
+            tuning["accumulate"] = true.into();
+        }
+        let tuning = tuning.as_object_mut().unwrap();
+        tuning.remove("relax_normals");
+        tuning.remove("steady_plane");
     }
     file
 }
@@ -43,6 +65,61 @@ fn an_old_files_starting_values_become_todays() {
         );
     }
     assert_eq!(settings.per_brush[Brush::Move.index()].strength, 1.0, "Move follows the pen all the way");
+    for b in Brush::ALL {
+        let (got, want) = (settings.per_brush[b.index()], today.per_brush[b.index()]);
+        assert_eq!(
+            (got.accumulate, got.relax_normals, got.steady_plane),
+            (want.accumulate, want.relax_normals, want.steady_plane),
+            "{}: Accumulate starts off, Relax Normals and Steady Plane where they start",
+            b.name()
+        );
+    }
+}
+
+/// A version 1 file (Accumulate starting on): its Accumulate on Standard,
+/// Inflate and Clay was never chosen and goes off, the new settings take
+/// their starting values, and nothing else it says changes.
+#[test]
+fn a_version_1_file_has_accumulate_go_off_once() {
+    let mut chosen = Settings::default();
+    chosen.per_brush[Brush::Standard.index()].strength = 0.7;
+    chosen.per_brush[Brush::Clay.index()].strength = 0.35;
+    chosen.per_brush[Brush::Inflate.index()].front_facing = false;
+    chosen.per_brush[Brush::Crease.index()].accumulate = true;
+    let s = read(&version_1_file(&chosen));
+    let at = |b: Brush| s.per_brush[b.index()];
+    for b in ACCUMULATED {
+        assert!(!at(b).accumulate, "{}", b.name());
+    }
+    assert!(at(Brush::Crease).accumulate, "Crease's started off: on was chosen");
+    assert_eq!((at(Brush::Standard).strength, at(Brush::Clay).strength), (0.7, 0.35));
+    assert!(!at(Brush::Inflate).front_facing);
+    assert_eq!(at(Brush::Inflate).relax_normals, crate::sculpt::DEFAULT_RELAX_NORMALS);
+    assert_eq!((at(Brush::Clay).steady_plane, at(Brush::Flatten).steady_plane), (0.5, 0.5));
+    // Read once, written back, read again: as it was.
+    let written = serde_json::to_value(Prefs { brush: BrushPrefs::of(&s), ..Prefs::default() }).unwrap();
+    assert_eq!(written["brush"]["feel_version"], FEEL_VERSION);
+    assert_eq!(read(&written).per_brush, s.per_brush);
+}
+
+/// Standard with Accumulate chosen off, in a file from before version 2:
+/// its Strength becomes the one that builds a pass about as tall as it did.
+#[test]
+fn a_standard_set_to_build_to_a_height_keeps_its_height() {
+    let mut file = old_file();
+    file["brush"]["brushes"]["Standard"]["accumulate"] = false.into();
+    file["brush"]["brushes"]["Standard"]["strength"] = 0.3.into();
+    let got = read(&file).per_brush[Brush::Standard.index()];
+    assert!(!got.accumulate);
+    assert!((got.strength - strength::from_old_seeking(0.3)).abs() < 1e-6, "{}", got.strength);
+    // A version 1 file says it in the slider's units of then.
+    let mut s = Settings::default();
+    (s.per_brush[Brush::Standard.index()].strength, s.per_brush[Brush::Standard.index()].accumulate) = (0.6, false);
+    let mut file = version_1_file(&s);
+    file["brush"]["brushes"]["Standard"]["accumulate"] = false.into();
+    let got = read(&file).per_brush[Brush::Standard.index()];
+    let then = strength::effective(Brush::Standard, 0.6);
+    assert!((got.strength - strength::from_old_seeking(then)).abs() < 1e-6);
 }
 
 /// What was chosen is kept for what it did: a Strength on a mapped kernel

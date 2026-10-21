@@ -195,6 +195,8 @@ fn settings_in_range(mut b: BrushSettings) -> BrushSettings {
     b.pressure_size = fit(b.pressure_size, BrushSettings::PRESSURE, was.pressure_size);
     b.pressure_strength = fit(b.pressure_strength, BrushSettings::PRESSURE, was.pressure_strength);
     b.keep_volume = fit(b.keep_volume, 0.0..=1.0, was.keep_volume);
+    b.relax_normals = fit(b.relax_normals, 0.0..=1.0, was.relax_normals);
+    b.steady_plane = fit(b.steady_plane, 0.0..=1.0, was.steady_plane);
     b
 }
 

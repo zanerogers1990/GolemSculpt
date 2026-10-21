@@ -559,6 +559,8 @@ impl Running {
             "keep_volume": round(b.keep_volume),
             "flatten_mode": b.flatten_mode.name().to_ascii_lowercase(),
             "lock_plane": b.lock_plane,
+            "relax_normals": round(b.relax_normals),
+            "steady_plane": round(b.steady_plane),
             "alpha": s.alpha[s.brush.index()].image.map(|image| image.name.as_str()),
             "alpha_random_rotation": round(s.alpha[s.brush.index()].random_rotation),
             "mask_mode": s.mask_mode,
@@ -693,6 +695,8 @@ impl Running {
         // The kernel's own options: they are the brush's, whichever kernel reads them.
         b.keep_volume = within("keep_volume", 0.0..=1.0).unwrap_or(b.keep_volume);
         b.lock_plane = flag(args, "lock_plane").unwrap_or(b.lock_plane);
+        b.relax_normals = within("relax_normals", 0.0..=1.0).unwrap_or(b.relax_normals);
+        b.steady_plane = within("steady_plane", 0.0..=1.0).unwrap_or(b.steady_plane);
         if let Some(name) = text(args, "smooth_mode") {
             b.smooth_mode = SmoothMode::named(name).ok_or("smooth_mode is \"all\", \"peaks\", \"valleys\" or \"relax\".")?;
         }

@@ -172,6 +172,8 @@ impl RecordKept {
             keep_volume: t.keep_volume,
             flatten_mode: t.flatten_mode,
             lock_plane: t.lock_plane,
+            relax_normals: t.relax_normals,
+            steady_plane: t.steady_plane,
         };
         // A curve needs two points that are numbers (`Record::in_range` then
         // puts them in order, as after any edit).
@@ -211,7 +213,9 @@ struct BrushFile<'a> {
     brush: RecordKept,
     made: RecordKept,
     /// What its numbers mean (`prefs::FEEL_VERSION`). A file without it is
-    /// from before 2026-10-21, and its Strength is brought over (`parse`).
+    /// from before 2026-10-21, and its Strength is brought over; one older
+    /// than 2 has no Relax Normals or Steady Plane, and keeps both at nought
+    /// (`parse`).
     feel_version: u32,
 }
 
@@ -264,15 +268,45 @@ pub fn parse(text: &str, fallback_name: &str) -> Result<Read, String> {
     // (`sculpt::strength`): the Strength it gives is the one that does what
     // its number did then. A dragged print's Strength is its height, which
     // was not mapped. The rest of what it says is the user's and stays.
-    let old = file.get("feel_version").is_none();
+    let version = file.get("feel_version").and_then(Value::as_u64).unwrap_or(0);
     let read = |key: &str, over: &Record| {
         let start = RecordKept::of(over, kernel);
         let given = file.get(key);
         let kept = given.and_then(|value| crate::io::read_over(&start, value)).unwrap_or(start);
         let (mut record, missing) = kept.restored(kernel, &base);
         let prints = record.alpha.image.is_some() && record.alpha.drag;
-        if old && !prints && given.is_some_and(|value| value.get("strength").is_some_and(Value::is_number)) {
+        let has = |field: &str| given.is_some_and(|value| value.get(field).is_some());
+        let strength = given.and_then(|value| value.get("strength")).and_then(Value::as_f64).map(|s| s as f32);
+        if version < 1 && !prints && strength.is_some() {
             record.settings.strength = crate::sculpt::strength::from_old(kernel, record.settings.strength);
+        }
+        if version < 2 {
+            // Older than Relax Normals and Steady Plane: the brush did
+            // without them, and still does (a missing number is otherwise
+            // the base brush's starting value, which would change it).
+            if !has("relax_normals") {
+                record.settings.relax_normals = 0.0;
+            }
+            if !has("steady_plane") {
+                record.settings.steady_plane = 0.0;
+            }
+            // Accumulate started on for these then: a file that does not
+            // say keeps it so.
+            if !has("accumulate") && matches!(kernel, Brush::Standard | Brush::Inflate | Brush::Clay) {
+                record.settings.accumulate = true;
+            }
+            // Standard without Accumulate builds each stroke to a height
+            // now: its Strength is the one that builds a pass as tall.
+            if kernel == Brush::Standard && !record.settings.accumulate && !prints {
+                let old = match (version, strength) {
+                    (0, Some(old)) => Some(old),
+                    (_, Some(_)) => Some(crate::sculpt::strength::effective(kernel, record.settings.strength)),
+                    (_, None) => None,
+                };
+                if let Some(old) = old.filter(|old| old.is_finite()) {
+                    record.settings.strength = crate::sculpt::strength::from_old_seeking(old);
+                }
+            }
         }
         (record, missing)
     };

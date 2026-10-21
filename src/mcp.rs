@@ -615,7 +615,7 @@ fn tools() -> Value {
                 "strength": number("0.01 to 1. The app's default is 0.1. For Move it is how much of the drag the surface follows (default 0.5; 1 keeps the grabbed point under the pointer)."),
                 "focal_shift": number("-1 to 1: where the falloff sits between the centre and the rim."),
                 "direction": choice(&["add", "subtract"], "Whether the brush builds up or digs in."),
-                "accumulate": boolean("Whether passing over the same place again keeps adding."),
+                "accumulate": boolean("Whether passing over the same place again keeps adding. Off (every brush starts so): a stroke builds to a height and no further, and the next stroke builds on top."),
                 "spacing": number(
                     "This brush's distance between dabs as a fraction of its radius, 0.02 to 2.5. The app's default is \
                      0.2 (0.1 for Crease). It changes how smooth a stroke is, not how much it builds; from about 1 \
@@ -630,7 +630,7 @@ fn tools() -> Value {
                 ),
                 "pressure_strength": number(
                     "0 to 1: how much of its strength this brush loses at the lightest pen pressure. The app's \
-                     default is 0.88. 0: pressure does not change the strength.",
+                     default is 1 (Clay Strips 0.88). 0: pressure does not change the strength.",
                 ),
                 "smooth_mode": choice(
                     &["all", "peaks", "valleys", "relax"],
@@ -646,6 +646,8 @@ fn tools() -> Value {
                      pushes the surface away from the plane).",
                 ),
                 "lock_plane": boolean("Flatten: the whole stroke levels to the plane its first dab found, for a true flat facet. It works on what lies within half a brush radius of that plane."),
+                "relax_normals": number("Inflate: 0 to 1, how far the directions it pushes the surface in are evened out with their neighbours', so the swelling stays smooth. The base Inflate starts at 0.3."),
+                "steady_plane": number("Clay and Flatten: 0 to 1, how steadily the plane the brush works to follows the surface along a stroke, so it does not tip over every bump. 0: each dab finds its own; 1: the stroke keeps its first. Clay and Flatten start at 0.5, Clay Strips at 0."),
                 "alpha": string(
                     "The picture this brush prints, by its name in the app's alpha list, or \"none\" for the plain \
                      round tip. Standard, Clay, Inflate and Layer take one.",

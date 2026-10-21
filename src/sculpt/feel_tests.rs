@@ -177,7 +177,9 @@ fn shipped_brushes_keep_what_their_strength_did() {
         ("Smooth Valleys", 0.3),
         ("Relax", 0.5),
         ("Keep Volume", 0.3),
-        ("Rake", 0.06),
+        // Rake is Standard without Accumulate, which builds each stroke to a
+        // height now: its Strength was set by measuring it (`--brush-feel`),
+        // and its lines stand as deep after one pass as they did.
         ("Surface Noise", 0.045),
         ("Spread", 0.3),
     ] {

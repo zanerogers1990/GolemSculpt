@@ -78,6 +78,30 @@ pub fn from_old(brush: Brush, old: f32) -> f32 {
 /// The old Layer Strength that reached the layer's full height in one pass.
 const OLD_LAYER_FULL: f32 = 0.1;
 
+/// The slider value at which Standard without Accumulate builds one pass
+/// about as tall as Strength `old` (in the old units, what the slider meant
+/// before 2026-10-21) built without it then: a brush saved by an earlier
+/// version with Accumulate off.
+///
+/// Then each dab closed four tenths of its Strength of the way to a third of
+/// a radius, so one pass came to `OLD_SEEK_HEIGHT * (1 - e^(-OLD_SEEK_RATE *
+/// old))` of a radius under its middle (measured with `--brush-feel`). Now a
+/// pass comes to [`SEEK_PASS`] of a radius times the slider to the power
+/// [`POWER`] (`kernels::raised`).
+pub fn from_old_seeking(old: f32) -> f32 {
+    let built = OLD_SEEK_HEIGHT * (1.0 - (-OLD_SEEK_RATE * old.max(0.0)).exp());
+    (built / SEEK_PASS).powf(1.0 / POWER).clamp(0.01, 1.0)
+}
+
+/// What one pass of Standard without Accumulate built at old Strength `s`,
+/// in radii, was about `OLD_SEEK_HEIGHT * (1 - e^(-OLD_SEEK_RATE * s))`.
+const OLD_SEEK_HEIGHT: f32 = 0.3;
+const OLD_SEEK_RATE: f32 = 2.0;
+
+/// What one pass of Standard without Accumulate builds at 100% now, in
+/// radii (`--brush-feel`).
+const SEEK_PASS: f32 = 0.29;
+
 #[cfg(test)]
 mod tests {
     use super::*;

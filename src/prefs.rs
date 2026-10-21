@@ -191,6 +191,11 @@ pub struct BrushTuning {
     /// whether the plane is fixed where the stroke begins.
     pub flatten_mode: FlattenMode,
     pub lock_plane: bool,
+    /// For a brush that inflates: how far its pushes are evened out.
+    pub relax_normals: f32,
+    /// For a brush that works to a plane: how steadily the plane follows the
+    /// surface.
+    pub steady_plane: f32,
 }
 
 impl Default for BrushTuning {
@@ -221,6 +226,8 @@ impl BrushTuning {
             keep_volume: b.keep_volume,
             flatten_mode: b.flatten_mode,
             lock_plane: b.lock_plane,
+            relax_normals: b.relax_normals,
+            steady_plane: b.steady_plane,
         }
     }
 }
@@ -349,14 +356,19 @@ pub struct BrushPrefs {
     /// writes. A file without it is from before 2026-10-21, when Strength
     /// went straight through to every kernel, Pressure -> Strength started
     /// at 88%, Front Facing started off and Move followed half the pen's
-    /// travel. [`Prefs::parse`] brings such a file's numbers over once: see
-    /// [`old_feel`].
+    /// travel. One with 1 is from before Accumulate started off on
+    /// Standard, Inflate and Clay (later the same day). [`Prefs::parse`]
+    /// brings such a file's numbers over once: see [`old_feel`].
     pub feel_version: u32,
 }
 
 /// The version of what the brush numbers in the settings file mean (see
-/// `BrushPrefs::feel_version`).
-pub const FEEL_VERSION: u32 = 1;
+/// `BrushPrefs::feel_version`): 1 from the pen-feel changes of 2026-10-21,
+/// 2 from Accumulate starting off later that day.
+pub const FEEL_VERSION: u32 = 2;
+
+/// The brushes whose Accumulate started on until version 2.
+const ACCUMULATED: [Brush; 3] = [Brush::Standard, Brush::Inflate, Brush::Clay];
 
 impl Default for BrushPrefs {
     fn default() -> Self {
@@ -471,6 +483,8 @@ impl BrushPrefs {
             slot.pressure_strength = within(kept.pressure_strength, BrushSettings::PRESSURE, was.pressure_strength);
             (slot.smooth_mode, slot.flatten_mode, slot.lock_plane) = (kept.smooth_mode, kept.flatten_mode, kept.lock_plane);
             slot.keep_volume = fit(kept.keep_volume, 0.0, 1.0, was.keep_volume);
+            slot.relax_normals = fit(kept.relax_normals, 0.0, 1.0, was.relax_normals);
+            slot.steady_plane = fit(kept.steady_plane, 0.0, 1.0, was.steady_plane);
         }
         // A file from before brushes had their own: its one floor, in the
         // range its slider had, becomes every brush's Pressure -> Strength.
@@ -509,9 +523,58 @@ fn old_default_strength(brush: Brush) -> f32 {
     }
 }
 
-/// Brings the brush numbers of a settings file from before 2026-10-21 over
-/// to what they mean now, once: `raw` is the file's own `brush`, which says
-/// which numbers the file really has (the rest are already today's).
+/// Brings the brush numbers of a settings file written with an older
+/// [`FEEL_VERSION`] (`version`, 0 for a file without one) over to what they
+/// mean now, once, a version at a time: `raw` is the file's own `brush`,
+/// which says which numbers the file really has (the rest are already
+/// today's).
+fn old_feel(brush: &mut BrushPrefs, raw: &serde_json::Value, version: u32) {
+    if version < 1 {
+        feel_1(brush, raw);
+    }
+    if version < 2 {
+        feel_2(brush, raw, version);
+    }
+    brush.feel_version = FEEL_VERSION;
+}
+
+/// The file's own `accumulate` for `b`, if it has one.
+fn raw_accumulate(raw: &serde_json::Value, b: Brush) -> Option<bool> {
+    raw.get("brushes")?.get(b.name())?.get("accumulate")?.as_bool()
+}
+
+/// Version 2: Accumulate starts off on Standard, Inflate and Clay. A file's
+/// `true` there is what they started with, never chosen, and becomes `false`
+/// as they start now. Standard without Accumulate now builds each stroke to
+/// a height set by its Strength: one that was set that way keeps its
+/// Strength for what it built in one pass (`strength::from_old_seeking`).
+/// (Relax Normals and Steady Plane are new: a file without them gets their
+/// starting values, as for any missing key.) `version` is the file's own:
+/// in one from before version 1 the number is still in the old units, and
+/// is read from `raw` (what [`feel_1`] made of it is for Accumulate).
+fn feel_2(brush: &mut BrushPrefs, raw: &serde_json::Value, version: u32) {
+    for b in ACCUMULATED {
+        let Some(tuning) = brush.brushes.get_mut(b.name()) else { continue };
+        match raw_accumulate(raw, b) {
+            Some(true) => tuning.accumulate = false,
+            Some(false) if b == Brush::Standard => {
+                let given = raw["brushes"][b.name()].get("strength").and_then(serde_json::Value::as_f64);
+                let old = match (version, given) {
+                    // Before version 1 the file's number was in the old units.
+                    (0, Some(old)) => Some(old as f32),
+                    (_, Some(_)) => Some(crate::sculpt::strength::effective(b, tuning.strength)),
+                    (_, None) => None,
+                };
+                if let Some(old) = old.filter(|old| old.is_finite()) {
+                    tuning.strength = crate::sculpt::strength::from_old_seeking(old);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Version 1: the brush numbers of a settings file from before 2026-10-21.
 ///
 /// A number the file has that is what the brush started with then was
 /// never chosen, so it becomes what the brush starts with now: that is how
@@ -521,7 +584,7 @@ fn old_default_strength(brush: Brush) -> f32 {
 /// that does the same, as near as the slider reaches; Pressure -> Strength
 /// and Front Facing are kept as they were set. Snake Hook's Strength did
 /// nothing then, so whatever it was left at goes, as Move's once did.
-fn old_feel(brush: &mut BrushPrefs, raw: &serde_json::Value) {
+fn feel_1(brush: &mut BrushPrefs, raw: &serde_json::Value) {
     let now = Settings::default();
     let same = |a: f32, b: f32| (a - b).abs() < 1e-6;
     if let Some(kept) = raw.get("brushes").and_then(serde_json::Value::as_object) {
@@ -553,7 +616,6 @@ fn old_feel(brush: &mut BrushPrefs, raw: &serde_json::Value) {
     if brush.pressure_floor.is_some_and(|floor| floor.is_finite() && same(1.0 - floor.clamp(0.0, 0.5), crate::sculpt::OLD_PRESSURE_STRENGTH)) {
         brush.pressure_floor = None;
     }
-    brush.feel_version = FEEL_VERSION;
 }
 
 /// Everything in the settings file.
@@ -661,8 +723,11 @@ impl Prefs {
             return defaults;
         };
         let mut prefs = crate::io::read_over(&defaults, &file).unwrap_or(defaults);
-        if let Some(brush) = file.get("brush").filter(|brush| brush.is_object() && brush.get("feel_version").is_none()) {
-            old_feel(&mut prefs.brush, brush);
+        if let Some(brush) = file.get("brush").filter(|brush| brush.is_object()) {
+            let version = brush.get("feel_version").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            if version < FEEL_VERSION as u64 {
+                old_feel(&mut prefs.brush, brush, version as u32);
+            }
         }
         prefs
     }

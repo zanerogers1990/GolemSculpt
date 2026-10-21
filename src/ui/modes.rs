@@ -1,7 +1,9 @@
-//! The options of the Smooth and Flatten kernels in a brush's settings card:
-//! what Smooth evens out and how much volume it keeps, and which side of its
-//! plane Flatten works on and whether that plane is locked for the stroke.
-//! They are the brush's own (`sculpt::BrushSettings`).
+//! The options of the Smooth, Flatten, Clay and Inflate kernels in a brush's
+//! settings card: what Smooth evens out and how much volume it keeps, which
+//! side of its plane Flatten works on and whether that plane is locked for
+//! the stroke, how steady the plane Clay and Flatten work to is, and how far
+//! Inflate evens out the way it pushes. They are the brush's own
+//! (`sculpt::BrushSettings`).
 
 use egui::Ui;
 
@@ -44,6 +46,24 @@ pub fn smooth(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
     theme::hint(ui, "These are also what Shift + drag does with any other brush.");
 }
 
+/// Steady Plane, for the brushes that work to a plane (Clay, Flatten).
+pub fn steady_plane(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
+    theme::tip(
+        theme::slider(ui, "Steady Plane", &mut bs.steady_plane, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0)),
+        tips,
+        "Keeps the level the brush works to steady along the stroke, so it does not tip and bob over every bump          the brush passes: a smoother, more even strip. At 0% each dab finds its own level; at 100% the stroke          keeps the one it started with.",
+    );
+}
+
+/// Relax Normals, for Inflate.
+pub fn relax_normals(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
+    theme::tip(
+        theme::slider(ui, "Relax Normals", &mut bs.relax_normals, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0)),
+        tips,
+        "Evens out the directions Inflate pushes the surface in, so neighbouring bits swell together. Higher          keeps a swelling smooth over sharp or rough forms; at 0% every point pushes straight out its own way.",
+    );
+}
+
 /// Flatten's mode and Lock Plane, under its Plane Offset.
 pub fn flatten(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
     mode_row(ui, &mut bs.flatten_mode, &FlattenMode::ALL, FlattenMode::name, FlattenMode::tip, tips);
@@ -55,4 +75,7 @@ pub fn flatten(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
          true flat facet. It works on what lies within half the brush's size of the plane and leaves the rest \
          alone. Off: the plane follows the surface under the ring.",
     );
+    if !bs.lock_plane {
+        steady_plane(ui, bs, tips);
+    }
 }

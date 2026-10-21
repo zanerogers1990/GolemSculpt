@@ -378,7 +378,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
             tip(
                 theme::checkbox(ui, &mut bs.accumulate, label, ACCENT()),
                 tips,
-                "On: every pass over the same spot adds more. Off: the stroke builds to a fixed height.",
+                "On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height                  and no further, however often you go over the same place in it; lift the pen and stroke again                  to build on top.",
             );
         }
         // Layer has no Accumulate, but this still sets how fast it rises.
@@ -401,7 +401,9 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
                 theme::slider(ui, "Clay Depth", &mut s.clay_depth, 0.1..=1.5, |v| format!("{v:.2}"));
                 theme::slider(ui, "Tip Softness (Flat - Domed)", &mut s.clay_softness, 0.05..=1.0, |v| format!("{v:.2}"));
                 theme::slider(ui, "Surface Relax", &mut s.clay_relax, 0.0..=1.0, |v| format!("{v:.2}"));
+                modes::steady_plane(ui, s.current_mut(), tips);
             }
+            Brush::Inflate => modes::relax_normals(ui, s.current_mut(), tips),
             Brush::Crease => {
                 theme::slider(ui, "Pinch", &mut s.crease_pinch, 0.0..=1.0, |v| format!("{v:.2}"));
                 theme::slider(ui, "Depth", &mut s.crease_depth, 0.05..=1.0, |v| format!("{v:.2}"));

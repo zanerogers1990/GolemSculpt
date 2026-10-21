@@ -1636,6 +1636,7 @@ fn reset_shape_after_refining_goes_back_to_the_surface_it_was_refined_from() {
     let mut history = History::default();
     let view = view_of(&mesh);
     let mut sculptor = refining_sculptor(Brush::Clay, 0.1);
+    sculptor.settings.per_brush[Brush::Clay.index()].accumulate = true;
     for y in [0.1, -0.05] {
         scene.keep_baseline(&mesh);
         history.push_stroke(run_stroke(&mut mesh, &mut sculptor, &view, &across(-0.2, 0.2, y, 30)).unwrap());

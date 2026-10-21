@@ -55,6 +55,8 @@ fn every_brush_goes_to_a_file_and_comes_back_the_same() {
             keep_volume: 0.5,
             flatten_mode: FlattenMode::Fill,
             lock_plane: true,
+            relax_normals: 0.6,
+            steady_plane: 0.8,
         };
         s.falloff[slot] = Some(FalloffCurve::preset(FalloffPreset::Plateau));
         s.alpha[slot] = alpha::AlphaSettings {
@@ -506,4 +508,36 @@ fn an_old_brush_files_strength_does_what_it_did() {
     let again = parse(&written, "x").unwrap();
     assert_eq!(again.record.settings.strength, now.strength);
     assert_eq!(again.made.settings.strength, made.strength);
+}
+
+/// A brush file from before Relax Normals and Steady Plane (feel version 2)
+/// does without them, as it did: Zane's own Clay Strips, Clay Tubes and
+/// Trim among them, which a missing number would otherwise have given the
+/// plain brush's 50%. Accumulate that it does not mention is on where it
+/// started on then; Standard set to build to a height keeps its height; and
+/// a file of this version that leaves them out gets the base brush's.
+#[test]
+fn a_brush_file_from_before_steady_plane_does_without_it() {
+    use crate::sculpt::strength::{effective, from_old, from_old_seeking};
+    for (kernel, version) in [("Clay", ""), ("Flatten", r#""feel_version": 1,"#), ("Inflate", "")] {
+        let text = format!(r#"{{ "kernel": "{kernel}", {version} "brush": {{ "strength": 0.21 }} }}"#);
+        let read = parse(&text, "x").unwrap();
+        assert_eq!((read.record.settings.steady_plane, read.record.settings.relax_normals), (0.0, 0.0), "{kernel}");
+        assert_eq!(read.record.settings.accumulate, kernel != "Flatten", "{kernel}");
+    }
+    // Standard with Accumulate off, then and in version 1.
+    let then = parse(r#"{ "kernel": "Standard", "brush": { "strength": 0.06, "accumulate": false } }"#, "s").unwrap();
+    assert_eq!(then.record.settings.strength, from_old_seeking(0.06));
+    let one = parse(r#"{ "kernel": "Standard", "feel_version": 1, "brush": { "strength": 0.5, "accumulate": false } }"#, "s").unwrap();
+    assert_eq!(one.record.settings.strength, from_old_seeking(effective(Brush::Standard, 0.5)));
+    let piled = parse(r#"{ "kernel": "Standard", "brush": { "strength": 0.06, "accumulate": true } }"#, "s").unwrap();
+    assert_eq!(piled.record.settings.strength, from_old(Brush::Standard, 0.06));
+    // This version's, without them: the base brush's.
+    let now = format!(r#"{{ "kernel": "Clay", "feel_version": {}, "brush": {{ "strength": 0.21 }} }}"#, crate::prefs::FEEL_VERSION);
+    let read = parse(&now, "x").unwrap();
+    assert_eq!(read.record.settings.steady_plane, crate::sculpt::DEFAULT_STEADY_PLANE);
+    assert!(!read.record.settings.accumulate);
+    // And what this version writes reads back as it was.
+    let written = text("x", Brush::Clay, &read.record, &read.made);
+    assert_eq!(parse(&written, "x").unwrap().record.settings, read.record.settings);
 }

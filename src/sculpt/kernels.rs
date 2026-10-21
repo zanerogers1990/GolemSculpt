@@ -21,7 +21,7 @@ use super::erase::{self, Erased};
 use super::falloff::Falloff;
 use super::modes::{FlattenMode, SmoothMode};
 use super::share::{Shared, Sharing};
-use crate::mesh::Mesh;
+use crate::mesh::{Mesh, StrokeVertex};
 use crate::mesh::bvh::Leaf;
 use crate::util::SharedMut;
 
@@ -109,6 +109,12 @@ pub struct Params {
     pub crease_depth: f32,
     pub flatten_offset: f32,
     pub layer_height: f32,
+    /// Inflate: how far the normals it pushes along are evened out with
+    /// their neighbours' first (Relax Normals, 0 to 1).
+    pub relax_normals: f32,
+    /// Clay and Flatten: how steadily the plane they work to follows the
+    /// surface from dab to dab (Steady Plane, 0 to 1; see [`Steady`]).
+    pub steady_plane: f32,
     pub mask_hardness: f32,
     /// Smooth: what it evens out, and how much of the shrinkage it gives
     /// back (Keep Volume, 0 to 1).
@@ -151,11 +157,15 @@ pub struct Dab {
     /// Flatten with Lock Plane: the plane the whole stroke levels to (a
     /// point of it and its normal), from the stroke's first dab.
     pub plane: Option<(Vec3, Vec3)>,
+    /// Which copy of the stroke's dab this is under symmetry: what a copy
+    /// keeps of its own from dab to dab goes by it (Steady Plane).
+    pub copy: SymOp,
 }
 
 impl Dab {
     pub fn mirrored(&self, op: SymOp) -> Dab {
         Dab {
+            copy: op,
             center: op.apply_point(self.center),
             normal: op.apply_dir(self.normal),
             dir: op.apply_dir(self.dir),
@@ -233,9 +243,9 @@ impl Params {
     /// How copies of a dab that overlap share a vertex between them (see
     /// `share.rs`). A brush seeks when each dab closes a share of the gap to
     /// a place and stops there: a height above the surface the stroke began
-    /// on (Layer, and Standard and Crease without Accumulate), a plane
-    /// (Flatten), the mean of a vertex's neighbours (Smooth), a point
-    /// (Inflate without Accumulate). The rest add a step each dab, Clay
+    /// on (Layer, and Standard, Inflate and Crease without Accumulate), a
+    /// plane (Flatten), the mean of a vertex's neighbours (Smooth). The rest
+    /// add a step each dab, Clay
     /// among them with or without Accumulate: its plane rises with the
     /// surface, so it goes on building until its depth for the stroke is
     /// spent.
@@ -522,9 +532,56 @@ pub struct Scratch {
     pub(super) shared: Vec<Shared>,
     /// What a dab of the Paint brush fills (`paint.rs`).
     pub(super) paint: super::paint::Buffers,
-    /// Layer: each vertex's normal as the stroke found the surface, by
-    /// vertex, once a dab has needed it (zero until then).
+    /// Each vertex's normal as the stroke found the surface, by vertex, once
+    /// a dab has needed it (zero until then): what Layer and Inflate raise
+    /// along, and what Standard's and Flatten's directions are taken from.
     start_normals: Vec<[f32; 3]>,
+    /// Inflate without Accumulate: those normals evened out with their
+    /// neighbours' by Relax Normals, kept the same way.
+    relaxed_normals: Vec<[f32; 3]>,
+    /// Steady Plane: each copy of the brush's planes so far (see [`Steady`]).
+    steady: Vec<(SymOp, Steady)>,
+}
+
+impl Scratch {
+    /// The stroke's start normals, for a plane the stroke takes from its
+    /// first dab (Lock Plane).
+    pub(super) fn start_normals(&mut self) -> &mut Vec<[f32; 3]> {
+        &mut self.start_normals
+    }
+}
+
+/// Makes `kept`, a slot per vertex with zero for "not worked out yet", long
+/// enough for every vertex of `mesh`, those dynamic topology has added
+/// since too. Zeroed by the system the first time, so a big mesh pays only
+/// for the pages a stroke reaches.
+fn per_vertex(kept: &mut Vec<[f32; 3]>, mesh: &Mesh) {
+    let n = mesh.vertex_count();
+    if kept.is_empty() {
+        *kept = vec![[0.0; 3]; n];
+    } else if kept.len() < n {
+        kept.resize(n, [0.0; 3]);
+    }
+}
+
+/// Vertex `v`'s normal as the stroke found the surface
+/// ([`Mesh::stroke_start_normal`]): out of `kept`, or worked out and kept
+/// there. It cannot change while the stroke lasts, so it is worked out once
+/// a stroke, the first time a dab needs it.
+///
+/// # Safety
+/// No other thread may read or write `v`'s slot of `kept` while this runs:
+/// the caller works on the vertices of its own leaves only.
+#[inline]
+unsafe fn start_normal(mesh: &Mesh, kept: &SharedMut<'_, [f32; 3]>, v: u32) -> Vec3 {
+    // SAFETY: as the caller promises.
+    let known = Vec3::from_array(unsafe { kept.read(v as usize) });
+    if known != Vec3::ZERO {
+        return known;
+    }
+    let n = mesh.stroke_start_normal(v);
+    unsafe { kept.write(v as usize, n.to_array()) };
+    n
 }
 
 /// Totals `add` over every vertex owned by `leaves` that is not hidden. The
@@ -583,6 +640,37 @@ pub fn footprint_normal(mesh: &Mesh, center: Vec3, radius: f32, from_start: bool
     (sum.length_squared() > 1e-24).then(|| sum.normalize().as_vec3())
 }
 
+/// The way the surface faced under a dab as the stroke found it: the normals
+/// of the vertices whose stroke-start places are within `radius` of
+/// `center`, each as the stroke found it ([`Mesh::stroke_start_normal`],
+/// kept in `kept`), by linear weights from those places. Measured on what
+/// the stroke started from, it does not lean as the surface under it rises,
+/// and a vertex and its mirror twin count alike however late the stroke
+/// reached either.
+fn start_footprint_normal(mesh: &Mesh, center: Vec3, radius: f32, kept: &mut Vec<[f32; 3]>) -> Option<Vec3> {
+    let mut leaves = Vec::new();
+    mesh.bvh.leaves_in_sphere(center, radius, &mut leaves);
+    leaves.sort_unstable();
+    leaves.dedup();
+    per_vertex(kept, mesh);
+    let kept = SharedMut::new(kept);
+    let r2 = radius * radius;
+    let sum = fold_leaves(
+        mesh,
+        &leaves,
+        |sum: &mut DVec3, v| {
+            let d2 = mesh.start_pos(v).distance_squared(center);
+            if d2 < r2 {
+                // SAFETY: each leaf is totalled by one task, and owns its vertices.
+                let n = unsafe { start_normal(mesh, &kept, v) };
+                *sum += n.as_dvec3() * (1.0 - d2.sqrt() / radius) as f64;
+            }
+        },
+        |sum, part| *sum += part,
+    );
+    (sum.length_squared() > 1e-24).then(|| sum.normalize().as_vec3())
+}
+
 /// Applies one dab of the stroke's brush to the vertices in `leaves`.
 ///
 /// `fit` is `leaves` or more: the leaves that the sums a dab takes over its
@@ -608,11 +696,11 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
         return print(mesh, p, d, leaves);
     }
     match p.brush {
-        Brush::Inflate => inflate(mesh, p, d, leaves),
-        Brush::Standard => standard(mesh, p, d, leaves),
+        Brush::Inflate => inflate(mesh, p, d, leaves, scratch),
+        Brush::Standard => standard(mesh, p, d, leaves, scratch),
         Brush::Layer => layer(mesh, p, d, leaves, scratch),
-        Brush::Flatten => flatten(mesh, p, d, leaves, fit),
-        Brush::Clay => clay(mesh, p, d, leaves, fit),
+        Brush::Flatten => flatten(mesh, p, d, leaves, fit, scratch),
+        Brush::Clay => clay(mesh, p, d, leaves, fit, scratch),
         Brush::Crease => crease(mesh, p, d, leaves),
         Brush::Smooth => smooth_dab(mesh, p, d, leaves, scratch),
         Brush::SnakeHook => snake(mesh, p, d, leaves),
@@ -624,60 +712,243 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
     }
 }
 
-fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
+/// How tall a stroke of Standard without Accumulate stands at full Strength
+/// and full pressure, as a share of the brush's radius. One pass comes to
+/// about nine tenths of it ([`SEEK_RATE`]): a third of the radius, a tenth
+/// at half Strength, as Accumulate built in one pass at those Strengths.
+const STANDARD_HEIGHT: f32 = 0.35;
+
+/// The same for Inflate: a pass at full Strength swells the surface by a
+/// little over a quarter of the radius, as Accumulate did.
+const INFLATE_HEIGHT: f32 = 0.33;
+
+/// For Standard and Inflate without Accumulate: the share of the way to
+/// what it asks for that a dab at the tuned spacing takes a vertex, at
+/// Build-Up 1. About five dabs cover each point of a stroke at the brush's
+/// own spacing, so one pass takes the middle of the stroke about nine
+/// tenths of the way, and a second most of the rest.
+const SEEK_RATE: f32 = 0.35;
+
+/// Inflate brings the normals within this many radii of the dab up to date
+/// before it pushes along them: the ring, and the neighbours just outside it
+/// that Relax Normals reads.
+const REFRESH_REACH: f32 = 1.25;
+
+/// Where a vertex at `pos` goes under one dab of a brush that raises the
+/// surface to a height for the stroke and no further (Standard and Inflate
+/// without Accumulate): along `n`, `height` being the full height (signed),
+/// `cap` the share of it this dab asks for there (its weight there times
+/// the strength the pen gives it) and `k` the share of the way it goes.
+///
+/// How far it has risen is read back off the vertex, from `start`, where the
+/// stroke found it (as Layer reads its share). A dab takes it `k` of the way
+/// to what the dab asks for, aiming a little past it so the last of the way
+/// does not take for ever (Blender's 1.05), and never beyond it: what one
+/// dab asks for is the most the stroke gets there. So a stroke's
+/// cross-section is the brush's own falloff, a rounded bead, however often
+/// the stroke crosses itself; a second pass in the same stroke closes what
+/// is left of the way and stops; and a new stroke starts from the surface
+/// this one left and builds on top of it.
+#[inline]
+fn raised(pos: Vec3, start: Vec3, n: Vec3, height: f32, cap: f32, k: f32) -> Option<Vec3> {
+    let risen = (pos - start).dot(n) / height;
+    if risen >= cap {
+        return None;
+    }
+    let next = (risen + k * (LAYER_OVERSHOOT * cap - risen)).min(cap);
+    Some(pos + n * (height * (next - risen)))
+}
+
+/// The share of its full height a dab of `kernel` asks for under the middle
+/// of the ring: its Strength as the slider maps it (`strength.rs`), times the
+/// pen's pressure, out of what the slider's top gives.
+#[inline]
+fn seek_full(p: &Params, d: &Dab, kernel: Brush) -> f32 {
+    let top = super::strength::gain(kernel).unwrap_or(1.0);
+    (p.e(d.pressure) / top).clamp(0.0, 1.0)
+}
+
+/// The share of the way a dab of Standard or Inflate without Accumulate
+/// takes a vertex: Build-Up is how quickly the stroke comes to its height.
+#[inline]
+fn seek_rate(p: &Params) -> f32 {
+    p.share((SEEK_RATE * p.build_up).clamp(0.0, 1.0))
+}
+
+/// Vertex `v`'s normal, as `normal` gives each vertex's, evened out with its
+/// neighbours' by `relax`: that share of the way from its own to their
+/// mean. Summed in double (see the module docs).
+#[inline]
+fn relaxed(mesh: &Mesh, v: u32, relax: f32, normal: impl Fn(u32) -> Vec3) -> Vec3 {
+    let own = normal(v);
+    let ring = mesh.neighbours(v);
+    if relax <= 0.0 || ring.is_empty() {
+        return own;
+    }
+    let mut sum = DVec3::ZERO;
+    for &o in ring {
+        sum += normal(o).as_dvec3();
+    }
+    let mean = (sum / ring.len() as f64).as_vec3();
+    own.lerp(mean, relax).normalize_or(own)
+}
+
+/// Inflate's weight for a vertex: the falloff from where the stroke found
+/// it, the mask, Front Facing and the alpha.
+#[inline]
+fn inflate_weight(p: &Params, d: &Dab, vt: &StrokeVertex) -> f32 {
+    let r = p.radius;
+    let d2 = vt.start.distance_squared(d.center);
+    if d2 >= r * r {
+        return 0.0;
+    }
+    p.falloff.at(d2.sqrt() / r, smooth)
+        * (1.0 - vt.mask)
+        * facing(p.front_facing, vt.normal, vt.pos, d.cam)
+        * p.printed(d, vt.start - d.center)
+}
+
+/// Inflate: swells the surface out along its own normals.
+///
+/// Without Accumulate (as it starts) each vertex rises along its own normal
+/// as the stroke found it, evened out with its neighbours' by Relax Normals,
+/// to a height for the stroke and no further, as Standard does
+/// ([`raised`]). (It once drew every vertex toward one point above the dab,
+/// which gathered the surface in under the brush.)
+///
+/// With Accumulate every dab pushes each vertex a step along its normal as
+/// the surface is now. The normals under the dab are brought up to date
+/// first ([`Mesh::refresh_normals_within`]): left for the frame to do, a
+/// push went the way the surface faced several dabs before, and a strong
+/// stroke split the surface into spikes. They are evened out by Relax
+/// Normals too (Nomad's Relax (Normal)), so neighbours do not push apart.
+///
+/// Either way a vertex is weighed by where the stroke found it, so the
+/// footprint stays where it was laid as the surface swells.
+fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let r2 = r * r;
-    let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
-    let ease = p.e_off(d.pressure) * 4.0 * 0.1;
-    let target = d.center + d.normal * (0.6 * r * p.sign);
-    mesh.move_within(leaves, d.center, r2, |_, vt| {
-        let pos = vt.pos;
-        let d2 = pos.distance_squared(d.center);
-        if d2 >= r2 {
-            return None;
+    let relax = p.relax_normals.clamp(0.0, 1.0);
+    let within = |mesh: &Mesh, v: u32| mesh.start_pos(v).distance_squared(d.center) < r2;
+    if p.accumulate {
+        mesh.refresh_normals_within(leaves, d.center, r * REFRESH_REACH);
+        {
+            let mesh = &*mesh;
+            fill(mesh, leaves, &mut scratch.starts, &mut scratch.targets, |_, v| {
+                if !within(mesh, v) {
+                    return Vec3::ZERO;
+                }
+                relaxed(mesh, v, relax, |o| mesh.normals[o as usize])
+            });
         }
-        let n = vt.normal;
-        let w = p.falloff.at(d2.sqrt() / r, smooth)
-            * (1.0 - vt.mask)
-            * facing(p.front_facing, n, pos, d.cam)
-            * p.printed(d, vt.start - d.center);
+        let normals = &scratch.targets;
+        let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
+        return mesh.move_vertices(leaves, |at, vt| {
+            let w = inflate_weight(p, d, vt);
+            (w > 0.0).then(|| vt.pos + normals[at] * (w * rate))
+        });
+    }
+    // Each vertex's normal as the stroke found the surface, laid out as the
+    // moves below count vertices, and then evened out with its neighbours'.
+    // Both are worked out once a stroke, the first time a dab reaches the
+    // vertex, and kept.
+    {
+        let Scratch { starts, targets, start_normals, relaxed_normals, .. } = scratch;
+        per_vertex(start_normals, mesh);
+        let mesh = &*mesh;
+        let kept = SharedMut::new(start_normals);
+        fill(mesh, leaves, starts, targets, |_, v| {
+            if !within(mesh, v) {
+                return Vec3::ZERO;
+            }
+            // SAFETY: a vertex is in one leaf, and each leaf is filled by one task.
+            unsafe { start_normal(mesh, &kept, v) }
+        });
+        if relax > 0.0 {
+            per_vertex(relaxed_normals, mesh);
+            let evened = SharedMut::new(relaxed_normals);
+            fill(mesh, leaves, starts, targets, |_, v| {
+                if !within(mesh, v) {
+                    return Vec3::ZERO;
+                }
+                // SAFETY: as above, for the vertex's own slot.
+                let known = Vec3::from_array(unsafe { evened.read(v as usize) });
+                if known != Vec3::ZERO {
+                    return known;
+                }
+                // The neighbours' normals are only read in this pass (the
+                // pass before wrote them), and worked out where it did not
+                // reach them.
+                let n = relaxed(mesh, v, relax, |o| {
+                    // SAFETY: nothing writes `kept` while this pass runs.
+                    let known = Vec3::from_array(unsafe { kept.read(o as usize) });
+                    if known != Vec3::ZERO { known } else { mesh.stroke_start_normal(o) }
+                });
+                unsafe { evened.write(v as usize, n.to_array()) };
+                n
+            });
+        }
+    }
+    let normals = &scratch.targets;
+    let height = p.sign * r * INFLATE_HEIGHT;
+    let (full, k) = (seek_full(p, d, Brush::Inflate), seek_rate(p));
+    // No vertex is further from where the stroke found it than the height.
+    let near = r + height.abs();
+    mesh.move_within(leaves, d.center, near * near, |at, vt| {
+        let w = inflate_weight(p, d, vt);
         if w <= 0.0 {
             return None;
         }
-        Some(if p.accumulate { pos + n * (w * rate) } else { pos + (target - pos) * p.share((w * ease).clamp(0.0, 1.0)) })
+        raised(vt.pos, vt.start, normals[at], height, w * full, k)
     });
 }
 
-fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
+/// Standard: raises a soft, rounded stroke.
+///
+/// Every vertex is weighed by where the stroke found it, and each dab has
+/// one direction: the normals under it as the stroke found the surface,
+/// averaged ([`start_footprint_normal`]). Weighed where they are now, the
+/// vertices a dab raised left its ring as they rose, the next dab found the
+/// bump's flank instead, and passes over the same place peaked into a
+/// ridge.
+///
+/// Without Accumulate (as it starts) a stroke raises the surface to a height
+/// and no further ([`raised`]): Strength and the pen's pressure say how
+/// tall, Build-Up how quickly the stroke gets there. With it every dab adds
+/// a step, as Standard always did.
+fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let r2 = r * r;
-    // Direction comes from the stroke-start surface: on the live surface the
-    // brush runs away up its own ridge.
-    let dir = footprint_normal(mesh, d.center, r, true).unwrap_or(d.normal);
-    let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
-    let height = p.sign * 0.3 * r;
-    let ease = p.share((p.e_off(d.pressure) * 4.0 * 0.1).clamp(0.0, 1.0));
-    mesh.move_within(leaves, d.center, r2, |_, vt| {
-        let pos = vt.pos;
-        let d2 = pos.distance_squared(d.center);
+    let dir = start_footprint_normal(mesh, d.center, r, &mut scratch.start_normals).unwrap_or(d.normal);
+    let weight = |vt: &StrokeVertex| {
+        let d2 = vt.start.distance_squared(d.center);
         if d2 >= r2 {
-            return None;
+            return 0.0;
         }
-        let w = p.falloff.at(d2.sqrt() / r, quintic)
+        p.falloff.at(d2.sqrt() / r, quintic)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam)
-            * p.printed(d, vt.start - d.center);
+            * facing(p.front_facing, vt.normal, vt.pos, d.cam)
+            * p.printed(d, vt.start - d.center)
+    };
+    if p.accumulate {
+        let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
+        return mesh.move_vertices(leaves, |_, vt| {
+            let w = weight(vt);
+            (w > 0.0).then(|| vt.pos + dir * (rate * w))
+        });
+    }
+    let height = p.sign * r * STANDARD_HEIGHT;
+    let (full, k) = (seek_full(p, d, Brush::Standard), seek_rate(p));
+    // No vertex is further from where the stroke found it than the height.
+    let near = r + height.abs();
+    mesh.move_within(leaves, d.center, near * near, |_, vt| {
+        let w = weight(vt);
         if w <= 0.0 {
             return None;
         }
-        if p.accumulate {
-            return Some(pos + dir * (rate * w));
-        }
-        let remaining = height * w - (pos - vt.start).dot(dir);
-        (remaining * height > 0.0).then(|| pos + dir * (remaining * ease))
+        raised(vt.pos, vt.start, dir, height, w * full, k)
     });
 }
-
 /// A print of the brush's alpha placed by dragging: every vertex under it
 /// is set to its full height above where the stroke found it, in one dab,
 /// whichever brush is in hand. The dab is made afresh, on the surface as the
@@ -740,27 +1011,15 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scr
     // comes after every one there was, and is worked out when it is reached.
     {
         let Scratch { starts, targets, start_normals, .. } = scratch;
-        if start_normals.is_empty() {
-            // Zeroed by the system, so a big mesh pays only for the pages a
-            // stroke reaches.
-            *start_normals = vec![[0.0; 3]; mesh.vertex_count()];
-        } else if start_normals.len() < mesh.vertex_count() {
-            start_normals.resize(mesh.vertex_count(), [0.0; 3]);
-        }
+        per_vertex(start_normals, mesh);
         let mesh = &*mesh;
-        let known = SharedMut::new(start_normals);
+        let kept = SharedMut::new(start_normals);
         fill(mesh, leaves, starts, targets, |_, v| {
             if mesh.start_pos(v).distance_squared(d.center) >= r2 {
                 return Vec3::ZERO;
             }
             // SAFETY: a vertex is in one leaf, and each leaf is filled by one task.
-            let kept = Vec3::from_array(unsafe { known.read(v as usize) });
-            if kept != Vec3::ZERO {
-                return kept;
-            }
-            let n = mesh.stroke_start_normal(v);
-            unsafe { known.write(v as usize, n.to_array()) };
-            n
+            unsafe { start_normal(mesh, &kept, v) }
         });
     }
     let normals = &scratch.targets;
@@ -798,6 +1057,71 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scr
     });
 }
 
+/// Steady Plane: the plane Clay and Flatten work to, steadied along the
+/// stroke for one copy of the brush, so that it does not rock with every
+/// bump the ring passes over (after Blender's `calc_stabilized_plane`).
+///
+/// Each dab's own plane is drawn toward the one the dab before worked to,
+/// by Steady Plane's share: its normal turned that far toward that one's,
+/// and its height over the dab's centre moved that far toward that one's.
+/// So the plane worked to is a running average of the planes the stroke has
+/// found, the nearer ones counting for most.
+///
+/// Two things differ from Blender's, each for what `--brush-feel` showed.
+/// Blender also averages the last so many dabs' planes, which a dab further
+/// apart makes a longer stretch of the stroke: at half and twice the
+/// spacing Flatten then did a quarter more and a quarter less. Here a dab
+/// at another spacing is drawn by the share the dabs it stands in for would
+/// have been in turn, and there is nothing else to it. And Blender steadies
+/// the plane's place in space, drawing each centre on to the plane before,
+/// which on a rounded form holds the plane up off a surface that curves away
+/// from it: Fill raised a ball that had nothing to fill. Here it is how high
+/// the plane stands over the dab's own centre that is steadied, which does
+/// not change as a stroke goes over a smooth form and does over a bump.
+///
+/// A plane that follows the surface with any lag tilts away from a rounded
+/// form, and Flatten cuts or fills a little more for it there (Trim a
+/// seventh deeper across a ball five times the brush's size, at the 50% it
+/// starts with): the price of not rocking.
+///
+/// Every copy of the brush under symmetry keeps its own: each works on its
+/// own part of the model, and a copy and its mirror image make the same sums
+/// of mirror images, so their planes stay mirror images.
+pub(super) struct Steady {
+    /// The plane the dab before worked to: its normal, and how high it stood
+    /// over that dab's centre.
+    last: (Vec3, f32),
+}
+
+impl Steady {
+    /// The normal and height of the plane to work to, for a dab whose own
+    /// plane has normal `n` and stands `height` over the dab's centre.
+    /// `amount` is Steady Plane, and `dose` the dab's.
+    fn plane(&mut self, amount: f32, dose: f32, n: Vec3, height: f32) -> (Vec3, f32) {
+        let pull = amount.powf(dose.max(1e-3));
+        let (last_n, last_h) = self.last;
+        self.last = (n.lerp(last_n, pull).normalize_or(n), height + (last_h - height) * pull);
+        self.last
+    }
+}
+/// The plane dab `d` works to, its own being (`origin`, `n`): steadied by
+/// the brush's Steady Plane, if it has any, over the planes that copy of
+/// the brush worked to before ([`Steady`]).
+fn steadied(scratch: &mut Scratch, p: &Params, d: &Dab, origin: Vec3, n: Vec3) -> (Vec3, Vec3) {
+    if p.steady_plane <= 0.0 {
+        return (origin, n);
+    }
+    let amount = p.steady_plane.min(1.0);
+    let height = (origin - d.center).dot(n);
+    let (normal, height) = match scratch.steady.iter_mut().find(|(copy, _)| *copy == d.copy) {
+        Some((_, steady)) => steady.plane(amount, p.dose, n, height),
+        None => {
+            scratch.steady.push((d.copy, Steady { last: (n, height) }));
+            (n, height)
+        }
+    };
+    (d.center + normal * height, normal)
+}
 /// Running totals for a weighted plane through a footprint.
 #[derive(Default)]
 struct PlaneSum {
@@ -849,13 +1173,25 @@ fn flatten_weight(p: &Params, d: &Dab, pos: Vec3, normal: Vec3) -> f32 {
 
 /// The plane a Flatten dab levels to: fitted to the surface under the ring
 /// and moved along its normal by Plane Offset. A point of it and its normal,
-/// or `None` where nothing under the ring carries weight.
+/// or `None` where nothing under the ring carries weight. `kept` is the
+/// stroke's start normals (`Scratch`).
 ///
 /// It is fitted with mask-free weights: a mask edge would otherwise tilt it
 /// and raise a ridge along the mask boundary. Its origin comes from the
 /// stroke-start positions: with a live origin a non-zero offset drills or
-/// balloons without limit.
-pub fn flatten_plane(mesh: &Mesh, p: &Params, d: &Dab, leaves: &[u32]) -> Option<(Vec3, Vec3)> {
+/// balloons without limit. Its normal comes from the normals as the stroke
+/// found the surface too ([`Mesh::stroke_start_normal`]), so that the two
+/// agree: with the live normals the plane tilted toward wherever the stroke
+/// had already levelled.
+pub fn flatten_plane(mesh: &Mesh, p: &Params, d: &Dab, leaves: &[u32], kept: &mut Vec<[f32; 3]>) -> Option<(Vec3, Vec3)> {
+    let (origin, n) = flatten_fit(mesh, p, d, leaves, kept)?;
+    Some((origin + n * (p.radius * p.flatten_offset), n))
+}
+
+/// [`flatten_plane`] before Plane Offset.
+fn flatten_fit(mesh: &Mesh, p: &Params, d: &Dab, leaves: &[u32], kept: &mut Vec<[f32; 3]>) -> Option<(Vec3, Vec3)> {
+    per_vertex(kept, mesh);
+    let kept = SharedMut::new(kept);
     let fit = fold_leaves(
         mesh,
         leaves,
@@ -863,13 +1199,13 @@ pub fn flatten_plane(mesh: &Mesh, p: &Params, d: &Dab, leaves: &[u32]) -> Option
             let i = v as usize;
             let w = flatten_weight(p, d, mesh.positions[i], mesh.normals[i]);
             if w > 0.0 {
-                sum.add(mesh.start_pos(v), mesh.normals[i], w);
+                // SAFETY: each leaf is totalled by one task, and owns its vertices.
+                sum.add(mesh.start_pos(v), unsafe { start_normal(mesh, &kept, v) }, w);
             }
         },
         PlaneSum::merge,
     );
-    let (origin, n) = fit.plane(d.normal)?;
-    Some((origin + n * (p.radius * p.flatten_offset), n))
+    fit.plane(d.normal)
 }
 
 /// How much of a dab's levelling a vertex `along` from a LOCKED plane gets,
@@ -885,10 +1221,18 @@ fn locked_reach(along: f32, r: f32) -> f32 {
     smooth(2.0 - 4.0 * along.abs() / r.max(1e-12))
 }
 
-fn flatten(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
+fn flatten(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
-    // The stroke's one plane with Lock Plane, else this dab's own.
-    let Some((origin, n)) = d.plane.or_else(|| flatten_plane(mesh, p, d, fit)) else { return };
+    // The stroke's one plane with Lock Plane, else this dab's own, steadied
+    // by Steady Plane before it is offset.
+    let plane = match d.plane {
+        Some(plane) => Some(plane),
+        None => flatten_fit(mesh, p, d, fit, &mut scratch.start_normals).map(|(origin, n)| {
+            let (origin, n) = steadied(scratch, p, d, origin, n);
+            (origin + n * (r * p.flatten_offset), n)
+        }),
+    };
+    let Some((origin, n)) = plane else { return };
     let locked = d.plane.is_some();
     let mode = p.flatten_mode.inverted(p.sign < 0.0);
     let e = p.e(d.pressure) * 4.0 * 0.1;
@@ -921,7 +1265,7 @@ fn flatten(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
     });
 }
 
-fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
+fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let pressure = d.pressure;
     // Pressure narrows and softens the tip a little, like pressing harder
@@ -957,6 +1301,8 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
         )
     };
     let Some((origin, n)) = fit.plane(d.normal) else { return };
+    // Steady Plane (none on Clay Strips, which is left exactly as it was).
+    let (origin, n) = steadied(scratch, p, d, origin, n);
 
     let per_dab = {
         let base = p.e(pressure) * 4.0 * 0.05;
@@ -1318,14 +1664,18 @@ const PINCH_RATE: f32 = 0.25;
 ///
 /// A dab with no direction (a press that never set off) pinches toward its
 /// centre: there is no line yet, only a point.
+///
+/// A vertex is weighed by where the stroke found it, so the footprint stays
+/// where it was laid: weighed where it is now, a vertex drawn in toward the
+/// line counted for more with every dab that drew it.
 fn pinch(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
     let r2 = r * r;
     let (n, dir) = (d.normal, d.dir);
     let rate = p.e(d.pressure) * PINCH_RATE;
-    mesh.move_within(leaves, d.center, r2, |_, vt| {
+    mesh.move_vertices(leaves, |_, vt| {
         let pos = vt.pos;
-        let d2 = pos.distance_squared(d.center);
+        let d2 = vt.start.distance_squared(d.center);
         if d2 >= r2 {
             return None;
         }

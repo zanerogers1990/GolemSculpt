@@ -66,6 +66,8 @@ const SHIPPED: [Shipped; 16] = [
             // its strength, and Front Facing off.
             r.settings.pressure_strength = OLD_PRESSURE_STRENGTH;
             r.settings.front_facing = false;
+            // Each dab finds its own plane, as it always has.
+            r.settings.steady_plane = 0.0;
         },
     },
     Shipped {
@@ -80,6 +82,9 @@ const SHIPPED: [Shipped; 16] = [
             r.settings.strength = 0.6;
             r.settings.spacing = 0.12;
             (r.numbers.clay_depth, r.numbers.clay_softness) = (0.7, 1.0);
+            // Each dab finds its own plane, as when the bead was tuned:
+            // steadied, the bead came out a tenth lower.
+            r.settings.steady_plane = 0.0;
         },
     },
     Shipped {
@@ -191,7 +196,10 @@ const SHIPPED: [Shipped; 16] = [
             // depth, and strokes crossed over each other build up stroke by
             // stroke. With it on, where two strokes met they ploughed.
             r.settings.accumulate = false;
-            r.settings.strength = from_old(Brush::Standard, 0.06);
+            // Standard without Accumulate now builds each stroke to a
+            // height set by its Strength: this is the Strength whose lines
+            // stand as deep after one pass as they did before 2026-10-21.
+            r.settings.strength = 0.26;
             r.settings.focal_shift = -0.5;
             // Close dabs: the picture turns a little with each on a curve,
             // and further apart every turn showed as a tick on the lines.
@@ -209,6 +217,9 @@ const SHIPPED: [Shipped; 16] = [
             // Light and close: at twice the spacing the prints stood apart
             // as clumps with bare surface between them.
             r.settings.strength = from_old(Brush::Standard, 0.045);
+            // Accumulate on, as Standard started until 2026-10-21: every
+            // print adds its noise to what is there.
+            r.settings.accumulate = true;
             r.settings.spacing = 0.3;
             r.settings.scatter = 0.8;
             r.settings.size_jitter = 0.3;
