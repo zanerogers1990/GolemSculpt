@@ -539,6 +539,10 @@ pub struct Scratch {
     /// Inflate without Accumulate: those normals evened out with their
     /// neighbours' by Relax Normals, kept the same way.
     relaxed_normals: Vec<[f32; 3]>,
+    /// Which leaves have all their vertices in those two (see
+    /// [`prepare_start_normals`]).
+    prepared: Vec<(u32, u32)>,
+    relaxed_prepared: Vec<(u32, u32)>,
     /// Steady Plane: each copy of the brush's planes so far (see [`Steady`]).
     steady: Vec<(SymOp, Steady)>,
 }
@@ -827,82 +831,134 @@ fn inflate_weight(p: &Params, d: &Dab, vt: &StrokeVertex) -> f32 {
 /// footprint stays where it was laid as the surface swells.
 fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
-    let r2 = r * r;
     let relax = p.relax_normals.clamp(0.0, 1.0);
-    let within = |mesh: &Mesh, v: u32| mesh.start_pos(v).distance_squared(d.center) < r2;
     if p.accumulate {
         mesh.refresh_normals_within(leaves, d.center, r * REFRESH_REACH);
+        let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
+        if relax <= 0.0 {
+            return mesh.move_vertices(leaves, |_, vt| {
+                let w = inflate_weight(p, d, vt);
+                (w > 0.0).then(|| vt.pos + vt.normal * (w * rate))
+            });
+        }
         {
             let mesh = &*mesh;
+            let r2 = r * r;
             fill(mesh, leaves, &mut scratch.starts, &mut scratch.targets, |_, v| {
-                if !within(mesh, v) {
+                if mesh.start_pos(v).distance_squared(d.center) >= r2 {
                     return Vec3::ZERO;
                 }
                 relaxed(mesh, v, relax, |o| mesh.normals[o as usize])
             });
         }
         let normals = &scratch.targets;
-        let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
         return mesh.move_vertices(leaves, |at, vt| {
             let w = inflate_weight(p, d, vt);
             (w > 0.0).then(|| vt.pos + normals[at] * (w * rate))
         });
     }
-    // Each vertex's normal as the stroke found the surface, laid out as the
-    // moves below count vertices, and then evened out with its neighbours'.
-    // Both are worked out once a stroke, the first time a dab reaches the
-    // vertex, and kept.
-    {
-        let Scratch { starts, targets, start_normals, relaxed_normals, .. } = scratch;
-        per_vertex(start_normals, mesh);
-        let mesh = &*mesh;
-        let kept = SharedMut::new(start_normals);
-        fill(mesh, leaves, starts, targets, |_, v| {
-            if !within(mesh, v) {
-                return Vec3::ZERO;
-            }
-            // SAFETY: a vertex is in one leaf, and each leaf is filled by one task.
-            unsafe { start_normal(mesh, &kept, v) }
-        });
-        if relax > 0.0 {
-            per_vertex(relaxed_normals, mesh);
-            let evened = SharedMut::new(relaxed_normals);
-            fill(mesh, leaves, starts, targets, |_, v| {
-                if !within(mesh, v) {
-                    return Vec3::ZERO;
-                }
-                // SAFETY: as above, for the vertex's own slot.
-                let known = Vec3::from_array(unsafe { evened.read(v as usize) });
-                if known != Vec3::ZERO {
-                    return known;
-                }
-                // The neighbours' normals are only read in this pass (the
-                // pass before wrote them), and worked out where it did not
-                // reach them.
-                let n = relaxed(mesh, v, relax, |o| {
-                    // SAFETY: nothing writes `kept` while this pass runs.
-                    let known = Vec3::from_array(unsafe { kept.read(o as usize) });
-                    if known != Vec3::ZERO { known } else { mesh.stroke_start_normal(o) }
-                });
-                unsafe { evened.write(v as usize, n.to_array()) };
-                n
-            });
-        }
-    }
-    let normals = &scratch.targets;
+    // Each vertex's normal as the stroke found the surface, evened out with
+    // its neighbours' by Relax Normals: worked out once a stroke, leaf by
+    // leaf the first time a dab reaches the leaf, and kept.
+    let Scratch { start_normals, prepared, relaxed_normals, relaxed_prepared, .. } = scratch;
+    prepare_start_normals(mesh, leaves, start_normals, prepared);
+    let normals = if relax > 0.0 {
+        prepare_relaxed_normals(mesh, leaves, relax, start_normals, relaxed_normals, relaxed_prepared);
+        &*relaxed_normals
+    } else {
+        &*start_normals
+    };
     let height = p.sign * r * INFLATE_HEIGHT;
     let (full, k) = (seek_full(p, d, Brush::Inflate), seek_rate(p));
     // No vertex is further from where the stroke found it than the height.
     let near = r + height.abs();
-    mesh.move_within(leaves, d.center, near * near, |at, vt| {
+    mesh.move_within(leaves, d.center, near * near, |_, vt| {
         let w = inflate_weight(p, d, vt);
         if w <= 0.0 {
             return None;
         }
-        raised(vt.pos, vt.start, normals[at], height, w * full, k)
+        raised(vt.pos, vt.start, Vec3::from_array(normals[vt.index as usize]), height, w * full, k)
     });
 }
 
+/// Which leaves have had every vertex's start normal (or relaxed start
+/// normal) worked out this stroke: the run of vertices each had then, by
+/// leaf. A leaf whose run has changed since (dynamic topology has given it
+/// vertices) is gone over again, and only what is missing is worked out.
+fn unprepared(mesh: &Mesh, leaves: &[u32], prepared: &mut Vec<(u32, u32)>) -> Vec<u32> {
+    if prepared.len() < mesh.bvh.leaves.len() {
+        prepared.resize(mesh.bvh.leaves.len(), (0, 0));
+    }
+    leaves
+        .iter()
+        .copied()
+        .filter(|&l| {
+            let leaf = &mesh.bvh.leaves[l as usize];
+            let run = (leaf.vert_start, leaf.vert_end);
+            run.0 != run.1 && std::mem::replace(&mut prepared[l as usize], run) != run
+        })
+        .collect()
+}
+
+/// Runs `f` on every leaf of `leaves`, on all threads once there are enough.
+fn each_leaf(mesh: &Mesh, leaves: &[u32], f: impl Fn(&Leaf) + Sync) {
+    if leaf_vertex_total(mesh, leaves) < PAR_MIN {
+        leaves.iter().for_each(|&l| f(&mesh.bvh.leaves[l as usize]));
+    } else {
+        leaves.par_iter().with_min_len(4).for_each(|&l| f(&mesh.bvh.leaves[l as usize]));
+    }
+}
+
+/// Works out the stroke-start normal of every vertex of `leaves` that does
+/// not have one in `kept` yet ([`start_normal`]), a leaf at a time, each
+/// leaf once a stroke (`prepared`). A brush that raises along these then
+/// reads them by vertex, with no pass of its own over the footprint each dab.
+fn prepare_start_normals(mesh: &Mesh, leaves: &[u32], kept: &mut Vec<[f32; 3]>, prepared: &mut Vec<(u32, u32)>) {
+    let fresh = unprepared(mesh, leaves, prepared);
+    if fresh.is_empty() {
+        return;
+    }
+    per_vertex(kept, mesh);
+    let kept = SharedMut::new(kept);
+    each_leaf(mesh, &fresh, |leaf| {
+        for v in leaf.vert_start..leaf.vert_end {
+            // SAFETY: each leaf is one task's, and owns its vertices.
+            unsafe { start_normal(mesh, &kept, v) };
+        }
+    });
+}
+
+/// [`prepare_start_normals`] for the start normals evened out by Relax
+/// Normals (`relax`), from `kept`, into `evened`. A neighbour in a leaf not
+/// prepared has its start normal worked out where it is needed, and not
+/// kept: its own leaf is another task's.
+fn prepare_relaxed_normals(
+    mesh: &Mesh,
+    leaves: &[u32],
+    relax: f32,
+    kept: &[[f32; 3]],
+    evened: &mut Vec<[f32; 3]>,
+    prepared: &mut Vec<(u32, u32)>,
+) {
+    let fresh = unprepared(mesh, leaves, prepared);
+    if fresh.is_empty() {
+        return;
+    }
+    per_vertex(evened, mesh);
+    let evened = SharedMut::new(evened);
+    let start = |o: u32| {
+        let known = kept.get(o as usize).map_or(Vec3::ZERO, |&n| Vec3::from_array(n));
+        if known != Vec3::ZERO { known } else { mesh.stroke_start_normal(o) }
+    };
+    each_leaf(mesh, &fresh, |leaf| {
+        for v in leaf.vert_start..leaf.vert_end {
+            // SAFETY: as in `prepare_start_normals`.
+            if Vec3::from_array(unsafe { evened.read(v as usize) }) == Vec3::ZERO {
+                unsafe { evened.write(v as usize, relaxed(mesh, v, relax, start).to_array()) };
+            }
+        }
+    });
+}
 /// Standard: raises a soft, rounded stroke.
 ///
 /// Every vertex is weighed by where the stroke found it, and each dab has
@@ -1004,30 +1060,19 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scr
     let height = r * p.layer_height;
     let sign = p.sign;
     let grow = p.e_off(d.pressure).max(0.0);
-    // Each vertex's normal as the stroke found the surface, laid out as the
-    // moves below count vertices: only for the vertices the dab reaches, and
-    // worked out once a stroke (it cannot change while the stroke lasts),
-    // the first time a dab reaches the vertex. A vertex dynamic topology adds
-    // comes after every one there was, and is worked out when it is reached.
-    {
-        let Scratch { starts, targets, start_normals, .. } = scratch;
-        per_vertex(start_normals, mesh);
-        let mesh = &*mesh;
-        let kept = SharedMut::new(start_normals);
-        fill(mesh, leaves, starts, targets, |_, v| {
-            if mesh.start_pos(v).distance_squared(d.center) >= r2 {
-                return Vec3::ZERO;
-            }
-            // SAFETY: a vertex is in one leaf, and each leaf is filled by one task.
-            unsafe { start_normal(mesh, &kept, v) }
-        });
-    }
-    let normals = &scratch.targets;
+    // Each vertex's normal as the stroke found the surface: worked out once
+    // a stroke (it cannot change while the stroke lasts), for a leaf's
+    // vertices the first time a dab reaches the leaf, and read by vertex. A
+    // vertex dynamic topology adds comes after every one there was, and is
+    // worked out when its leaf is next reached.
+    let Scratch { start_normals, prepared, .. } = scratch;
+    prepare_start_normals(mesh, leaves, start_normals, prepared);
+    let normals = &*start_normals;
     // A vertex is never further from where the stroke found it than the
     // height: what is further than that from the dab is out of its reach,
     // and is passed over before the rest of it is read.
     let near = r + height;
-    mesh.move_within(leaves, d.center, near * near, |at, vt| {
+    mesh.move_within(leaves, d.center, near * near, |_, vt| {
         let start = vt.start;
         // Weighed where the stroke found the surface: the footprint stays
         // where it was laid as the surface rises.
@@ -1044,7 +1089,7 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scr
         if w <= 0.0 {
             return None;
         }
-        let n = normals[at];
+        let n = Vec3::from_array(normals[vt.index as usize]);
         let share = (vt.pos - start).dot(n) * sign / height;
         if share >= free {
             return None;

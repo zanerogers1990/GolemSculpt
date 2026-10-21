@@ -136,6 +136,8 @@ pub struct StrokeVertex {
     pub mask: f32,
     /// Where the vertex was when the stroke began.
     pub start: Vec3,
+    /// Which vertex it is.
+    pub index: u32,
 }
 
 /// The arrays a stroke writes, opened so that several threads can each work
@@ -173,7 +175,7 @@ impl StrokeArrays<'_> {
             let mask = self.mask.read(i);
             let fresh = self.stamp.read(i) != self.stroke_id;
             let start = if fresh || !self.in_stroke { pos } else { self.orig_pos.read(i) };
-            let Some((new_pos, new_mask)) = f(&StrokeVertex { pos, normal, mask, start }) else {
+            let Some((new_pos, new_mask)) = f(&StrokeVertex { pos, normal, mask, start, index: v }) else {
                 return false;
             };
             let moved = new_pos.is_finite() && new_pos != pos;

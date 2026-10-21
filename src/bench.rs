@@ -188,6 +188,22 @@ pub fn run(sizes: &[usize]) {
             row(&mut mesh, &camera, label, along_plane, |r, mirror| kernel(brush, r, mirror));
         }
         row(&mut mesh, &camera, "ClayStrip|", along_plane, |r, mirror| preset("Clay Strips", r, mirror));
+        // The kernels as they started until 2026-10-21 (Accumulate on), which
+        // is what the rows of builds from before then time: Inflate with it
+        // brings the normals under each dab up to date first, and evens them
+        // out by Relax Normals (`InflAccR0` without that).
+        let tuned = |brush: Brush, tune: fn(&mut crate::sculpt::BrushSettings)| {
+            move |r: f32, mirror: bool| {
+                let mut sculptor = kernel(brush, r, mirror);
+                tune(sculptor.settings.current_mut());
+                sculptor
+            }
+        };
+        row(&mut mesh, &camera, "StdAcc", across, tuned(Brush::Standard, |b| b.accumulate = true));
+        row(&mut mesh, &camera, "InflateAcc", across, tuned(Brush::Inflate, |b| b.accumulate = true));
+        row(&mut mesh, &camera, "InflAccR0", across, tuned(Brush::Inflate, |b| (b.accumulate, b.relax_normals) = (true, 0.0)));
+        row(&mut mesh, &camera, "ClayAcc", across, tuned(Brush::Clay, |b| b.accumulate = true));
+        row(&mut mesh, &camera, "ClaySt0", across, tuned(Brush::Clay, |b| b.steady_plane = 0.0));
 
         // The voxel remesh of the same sphere, as the Remesh button runs it:
         // the rebuild itself and making a sculpt mesh of the result.
