@@ -45,6 +45,7 @@ mod recording;
 mod faces;
 mod file_arrays;
 mod file_undo;
+mod feel_demo;
 mod files;
 mod focus;
 mod groups;
@@ -135,6 +136,9 @@ pub struct Args {
     /// Stand a figure in the scene and pose it: `hover`, `bend`, `chain`...
     /// (for visual checks of the Pose brush; see app/pose.rs).
     pub demo_pose: Option<String>,
+    /// A brush drawn at three strengths and with a pen taper, on a ball or a
+    /// thin slab (for comparing how brushes feel; see app/feel_demo.rs).
+    pub demo_feel: Option<String>,
     /// Testing aid: keep treating the pointer as inside the window after the
     /// OS says it left, so input posted to the window by a script (while the
     /// real cursor is elsewhere) still gets hover behaviour.
@@ -645,6 +649,9 @@ impl Running {
         }
         if running.args.demo_symmetry {
             running.symmetry_demo();
+        }
+        if let Some(what) = running.args.demo_feel.clone() {
+            running.feel_demo(&what);
         }
         if running.args.demo {
             running.demo_strokes();

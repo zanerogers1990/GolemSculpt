@@ -228,6 +228,8 @@ fn window_options(args: &[String]) -> app::Args {
             "--demo-spheres" => opts.demo_spheres = it.next().cloned(),
             // A figure posed with the Pose brush: hover | bend | chain | twist | resize | slide | stretch | done | wheel | play
             "--demo-pose" => opts.demo_pose = it.next().cloned(),
+            // A brush at three strengths and a pen taper: <brush>[:rough|:fin|:back]
+            "--demo-feel" => opts.demo_feel = it.next().cloned(),
             // Saving, opening and the questions about unsaved work: recent | ask-exit | ask-open | ask-open-clean | play | open-undo
             "--demo-files" => opts.demo_files = it.next().cloned(),
             // A picture imported as a matcap and shaded with, without the file box: any size.
