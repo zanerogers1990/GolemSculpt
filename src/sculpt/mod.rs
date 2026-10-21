@@ -34,6 +34,8 @@ mod build_tests;
 #[cfg(test)]
 mod clean_tests;
 #[cfg(test)]
+mod cancel_tests;
+#[cfg(test)]
 mod feel_tests;
 #[cfg(test)]
 mod kernel_tests;
@@ -317,6 +319,14 @@ pub struct BrushSettings {
     /// Snake Hook's Thickness (-1 to 1): above nought a pull keeps its
     /// thickness out to the tip, below it tapers to a point.
     pub thickness: f32,
+    /// Lazy Mouse: the brush trails the pointer on a rope `lazy_radius`
+    /// screen pixels long, and `lazy_strength` (0 to 1) is how readily it
+    /// follows once the rope is taut (`input::LazyRope`). Each brush has its
+    /// own, as in ZBrush: on for a line brush such as Dam Standard, off for
+    /// Move. Move and Pose never trail, whatever this says.
+    pub lazy_mouse: bool,
+    pub lazy_radius: f32,
+    pub lazy_strength: f32,
 }
 
 impl BrushSettings {
@@ -327,6 +337,9 @@ impl BrushSettings {
     pub const SIZE_JITTER: RangeInclusive<f32> = 0.0..=0.9;
     /// Both of the pressure settings.
     pub const PRESSURE: RangeInclusive<f32> = 0.0..=1.0;
+    /// Lazy Mouse's rope, in screen pixels, and its smoothing.
+    pub const LAZY_RADIUS: RangeInclusive<f32> = 1.0..=150.0;
+    pub const LAZY_STRENGTH: RangeInclusive<f32> = 0.05..=1.0;
 }
 
 /// Where Pressure -> Strength starts: all of it, so the lightest touch of
@@ -459,9 +472,6 @@ pub struct Settings {
     /// `input::pen_curve`). How far pressure then changes a brush's strength
     /// and size is that brush's: `BrushSettings`.
     pub pressure_curve: f32,
-    pub lazy_mouse: bool,
-    pub lazy_radius: f32,
-    pub lazy_strength: f32,
     pub build_up_on_hold: bool,
     /// The brush Shift smooths with, when that is not the one in Smooth's
     /// own working set (the library says which it is, and keeps this in
@@ -505,6 +515,9 @@ impl Default for Settings {
             auto_smooth: 0.0,
             even_out: 0.0,
             thickness: 0.0,
+            lazy_mouse: false,
+            lazy_radius: 25.0,
+            lazy_strength: 1.0,
         };
         let mut per_brush = [base; Brush::COUNT];
         // A brush that swells or raises the surface keeps it clean as it
@@ -591,9 +604,6 @@ impl Default for Settings {
             flatten_offset: 0.0,
             layer_height: 0.15,
             pressure_curve: 1.6,
-            lazy_mouse: false,
-            lazy_radius: 25.0,
-            lazy_strength: 1.0,
             build_up_on_hold: false,
             shift: None,
             paint: paint::PaintSettings::default(),
@@ -1453,8 +1463,9 @@ impl Sculptor {
         };
         // The rope starts under the pointer, not where the last stroke left it.
         let mut rope = LazyRope::default();
-        let lazy = self.settings.lazy_mouse && (mask || !matches!(brush, Brush::Move | Brush::Pose));
-        rope.advance(sample.pos, 0.0, true, lazy, self.settings.lazy_radius, self.settings.lazy_strength);
+        // The brush's own Lazy Mouse (mask painting goes by the selected brush's).
+        let lazy = bs.lazy_mouse && (mask || !matches!(brush, Brush::Move | Brush::Pose));
+        rope.advance(sample.pos, 0.0, true, lazy, bs.lazy_radius, bs.lazy_strength);
         mesh.begin_stroke();
         let group = self.settings.symmetry_group();
         let ops = symmetry::copies(&group);
@@ -1660,8 +1671,9 @@ impl Sculptor {
     /// along it are `advance`'s to lay).
     fn work(&mut self, mesh: &mut Mesh, view: &View, sample: PointerSample) {
         let pressure = self.shape_pressure(&sample);
-        let lazy = (self.settings.lazy_mouse, self.settings.lazy_radius, self.settings.lazy_strength);
         let Some(stroke) = self.stroke.as_mut() else { return };
+        // The stroke's own brush's Lazy Mouse, as it was when the stroke began.
+        let lazy = (stroke.bs.lazy_mouse, stroke.bs.lazy_radius, stroke.bs.lazy_strength);
         let dt = (sample.time - stroke.time).max(0.0) as f32;
         stroke.time = sample.time;
         stroke.cam = view.pos;

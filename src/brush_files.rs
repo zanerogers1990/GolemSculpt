@@ -177,6 +177,10 @@ impl RecordKept {
             auto_smooth: t.auto_smooth,
             even_out: t.even_out,
             thickness: t.thickness,
+            // A brush file from before each brush had its own Lazy Mouse: the base brush's.
+            lazy_mouse: t.lazy_mouse.unwrap_or(base.settings.lazy_mouse),
+            lazy_radius: t.lazy_radius.unwrap_or(base.settings.lazy_radius),
+            lazy_strength: t.lazy_strength.unwrap_or(base.settings.lazy_strength),
         };
         // A curve needs two points that are numbers (`Record::in_range` then
         // puts them in order, as after any edit).

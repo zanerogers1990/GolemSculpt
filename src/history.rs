@@ -145,6 +145,10 @@ struct Step {
     /// Whether the step was made together with the one before it, so that
     /// Undo and Redo take the two as one (see `join_last`).
     joined: bool,
+    /// What the step is called in Undo's toast and the History list: what
+    /// made it ("Remesh", "Clay Strips", "Hide"), as the app said when it
+    /// was recorded (`name_next`), or else what kind of change it is.
+    name: String,
 }
 
 /// What the next undo or redo step will touch.
@@ -155,6 +159,23 @@ pub enum Next {
 }
 
 impl Edit {
+    /// What a step is called when nothing gave it a name of its own: what
+    /// kind of change it is.
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Edit::Stroke(StrokeDelta::Mask { .. }) => "Mask",
+            Edit::Stroke(StrokeDelta::Paint(_)) => "Paint",
+            Edit::Stroke(_) => "Stroke",
+            Edit::Visibility(_) => "Hide or Show Faces",
+            Edit::Replace(_) => "Rebuild",
+            Edit::Levels(_) => "Subdivision Levels",
+            Edit::Layers(_) => "Sculpt Layers",
+            Edit::Groups(_) => "Face Groups",
+            Edit::Paint(_) => "Paint Layers",
+            Edit::Scene(_) => "Objects",
+        }
+    }
+
     /// What the step itself holds.
     fn bytes(&self) -> usize {
         match self {
@@ -209,7 +230,14 @@ pub struct History {
     /// included, for the question before an object is deleted: undo keeps
     /// only so many steps, and this counts them all.
     strokes: HashMap<u64, usize>,
+    /// The name the steps recorded now are given (`name_next`).
+    naming: Option<String>,
 }
+
+/// The most steps undo keeps unless told otherwise. It was 100, which a
+/// session of short strokes used up in minutes; the memory cap (history/cap.rs)
+/// is what holds a heavy model's steps down, and lets go of the oldest first.
+pub const MAX_STEPS: usize = 500;
 
 impl Default for History {
     fn default() -> Self {
@@ -217,7 +245,7 @@ impl Default for History {
             undo: VecDeque::new(),
             redo: Vec::new(),
             target: 0,
-            max_steps: 100,
+            max_steps: MAX_STEPS,
             max_bytes: cap::default_bytes(),
             spare: HashMap::new(),
             owed: false,
@@ -225,6 +253,7 @@ impl Default for History {
             let_go_at: None,
             edits: 0,
             strokes: HashMap::new(),
+            naming: None,
         }
     }
 }
@@ -376,7 +405,8 @@ impl History {
         crate::timelapse::activity::edited();
         self.edits += 1;
         let ended = std::mem::take(&mut self.redo);
-        self.undo.push_back(Step { edit, mesh: self.target, file: None, seen: None, joined: false });
+        let name = self.naming.clone().unwrap_or_else(|| edit.kind_name().to_owned());
+        self.undo.push_back(Step { edit, mesh: self.target, file: None, seen: None, joined: false, name });
         self.gone(&ended);
         self.trim();
     }
@@ -410,6 +440,50 @@ impl History {
         Self::next(self.undo.back())
     }
 
+    /// Names the steps recorded from now until it is called again with
+    /// `None`: what the app is doing ("Remesh"). A step recorded with none
+    /// is called by what kind of change it is ("Stroke", "Objects").
+    pub fn name_next(&mut self, name: Option<String>) {
+        self.naming = name;
+    }
+
+    /// What one press of Undo, or of Redo, would take back or bring back
+    /// next, by name (see [`Self::names`]).
+    pub fn next_name(&self, undo: bool) -> Option<&str> {
+        let step = if undo { self.undo.back() } else { self.redo.last() };
+        step.map(|step| step.name.as_str())
+    }
+
+    /// The History list: what each press of Undo would take back, nearest
+    /// first, and what each press of Redo would bring back, nearest first.
+    /// Steps made together (`join_last`) are one press, and one name: the
+    /// first's.
+    pub fn names(&self) -> (Vec<String>, Vec<String>) {
+        let mut back = Vec::new();
+        let mut pending: Option<&str> = None;
+        // Newest first; a step joined to the one before it waits for it.
+        for step in self.undo.iter().rev() {
+            if step.joined {
+                pending.get_or_insert(step.name.as_str());
+                continue;
+            }
+            back.push(step.name.clone());
+            pending = None;
+        }
+        if let Some(name) = pending {
+            back.push(name.to_owned());
+        }
+        let mut forward: Vec<String> = Vec::new();
+        // Next first; one joined to the step redone before it goes with it.
+        for step in self.redo.iter().rev() {
+            if step.joined && !forward.is_empty() {
+                continue;
+            }
+            forward.push(step.name.clone());
+        }
+        (back, forward)
+    }
+
     pub fn next_redo(&self) -> Option<Next> {
         Self::next(self.redo.last())
     }
@@ -428,8 +502,8 @@ impl History {
             return false;
         }
         let step = if undo { self.undo.pop_back() } else { self.redo.pop() };
-        let Some(Step { edit: Edit::Scene(state), mesh, file, seen, joined }) = step else { return false };
-        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh, file, seen, joined };
+        let Some(Step { edit: Edit::Scene(state), mesh, file, seen, joined, name }) = step else { return false };
+        let step = Step { edit: Edit::Scene(Box::new(scene.restore(*state, slot))), mesh, file, seen, joined, name };
         if undo { self.redo.push(step) } else { self.undo.push_back(step) }
         true
     }
@@ -698,6 +772,38 @@ mod tests {
     /// A remesh as the app records one: the old mesh kept by the step.
     fn remesh(mesh: &mut Mesh, history: &mut History) {
         history.push_replace(std::mem::replace(mesh, ball()));
+    }
+
+    /// Steps are called what the app named them as they were recorded, or
+    /// by their kind; the History list counts steps made together as one
+    /// press, under the first one's name; and Undo and Redo move names from
+    /// one list to the other.
+    #[test]
+    fn steps_are_named_and_listed_as_presses_of_undo() {
+        let (mut mesh, mut history) = (ball(), History::default());
+        history.name_next(Some("Clay Strips".into()));
+        dab(&mut mesh, &mut history);
+        history.name_next(None);
+        dab(&mut mesh, &mut history);
+        history.name_next(Some("Remesh".into()));
+        remesh(&mut mesh, &mut history);
+        history.name_next(Some("Deform".into()));
+        dab(&mut mesh, &mut history);
+        dab(&mut mesh, &mut history);
+        history.join_last();
+        history.name_next(None);
+        let (back, forward) = history.names();
+        assert_eq!(back, ["Deform", "Remesh", "Mask", "Clay Strips"], "newest first; the two joined steps are one");
+        assert!(forward.is_empty());
+        assert_eq!(history.next_name(true), Some("Deform"));
+        // Undo the joined pair, as the app does: a step, then the one tied to it.
+        history.undo(&mut mesh).unwrap();
+        while history.joined(true) {
+            history.undo(&mut mesh).unwrap();
+        }
+        let (back, forward) = history.names();
+        assert_eq!((back.len(), forward), (3, vec!["Deform".to_owned()]));
+        assert_eq!(history.next_name(false), Some("Deform"));
     }
 
     /// A scene of the first ball and `count` more, the last of them in hand:

@@ -87,6 +87,11 @@ pub struct Camera {
     pub pivot: Vec3,
     pub fov_y: f32,
     pub ortho: bool,
+    /// Orthographic because an axis view turned it on, not the Ortho / Persp
+    /// button: the next turn made by hand goes back to perspective, as
+    /// Blender's does (see app/turn.rs). Not saved; a view from a file is
+    /// orthographic or not as it was saved, and stays so.
+    pub ortho_from_axis: bool,
     snap: Option<Snap>,
     glide: Option<Glide>,
 }
@@ -202,6 +207,7 @@ impl Default for Camera {
             pivot: Vec3::ZERO,
             fov_y: 60.0,
             ortho: false,
+            ortho_from_axis: false,
             snap: None,
             glide: None,
         }
@@ -505,6 +511,7 @@ impl Camera {
         self.distance = saved.distance.max(1e-5);
         self.pivot = pivot;
         self.ortho = saved.ortho;
+        self.ortho_from_axis = false;
         self.fov_y = saved.fov_y.clamp(10.0, 120.0);
         true
     }

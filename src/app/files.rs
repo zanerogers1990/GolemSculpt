@@ -237,6 +237,8 @@ impl Running {
         opts.quality = kept.render_quality.sanitized();
         self.doc.sculptor.dyntopo.enabled = kept.dynamic_topology;
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
+        self.doc.sculptor.pen_meter.known = kept.pen_seen;
+        self.ui.recent_brushes = kept.recent_brushes.clone();
         self.doc.tools.unit = kept.length_unit();
         self.brushes_restore(kept);
         self.materials_restore();
@@ -278,6 +280,8 @@ impl Running {
             dynamic_topology_detail: self.doc.sculptor.dyntopo.detail,
             recent: self.ui.recent.paths().to_vec(),
             render_quality: opts.quality,
+            pen_seen: self.doc.sculptor.pen_meter.known || self.doc.sculptor.pen_meter.seen,
+            recent_brushes: self.ui.recent_brushes.clone(),
         }
     }
 
@@ -843,12 +847,12 @@ impl Running {
         self.open_chosen(path);
     }
 
-    /// A `.sclp` has been chosen. In place of the scene or added to it are
-    /// both sensible, so that is asked, with a warning if replacing would put
-    /// unsaved work aside, or lose work that stands on the scene's objects
-    /// and is in no file (unmerged tubes, planned keys). Only the untouched
-    /// scene the app starts with, with nothing of that kind on it, is
-    /// replaced without a question: there is nothing in it to keep.
+    /// A `.sclp` has been chosen. It takes the scene's place at once when
+    /// nothing would be lost, as New Scene does: the scene is saved and no
+    /// work stands on it that is in no file, so it is one Undo away. Otherwise
+    /// the question says what replacing it would put aside (unsaved work) or
+    /// lose (unmerged tubes, planned keys), and offers to add the file's
+    /// objects to the scene instead.
     pub(super) fn open_chosen(&mut self, path: PathBuf) {
         if !path.is_file() {
             self.ui.recent.remove(&path);
@@ -856,7 +860,7 @@ impl Running {
             return;
         }
         let lost = self.scaffolds_at_risk(Loss::SceneReplaced);
-        match opening_question(path.clone(), self.untouched(), self.unsaved(), lost) {
+        match opening_question(path.clone(), self.unsaved(), lost) {
             Some(question) => self.ui.graph.ask(question),
             None => self.open_as(path, OpenHow::Replace),
         }

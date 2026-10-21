@@ -7,13 +7,14 @@ use egui::{
 use glam::Vec3;
 
 use super::brushes::{initials, shortened, wheel_tiles};
+use super::view_handles::{self, Handle};
 use super::{UiState, theme};
 use crate::doc::{Action, Doc, Tool};
 use crate::sculpt::Brush;
 use crate::sculpt::library::{Library, Origin};
 
 /// What the brush cursor should look like this frame, in egui points.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Cursor {
     pub visible: bool,
     pub center: Pos2,
@@ -33,6 +34,8 @@ pub struct Cursor {
     /// The picture the brush will print, to show inside the ring
     /// (`alpha_preview.rs`); `None` for a brush with no alpha.
     pub alpha: Option<super::alpha_preview::Preview>,
+    /// The number S, F or D is setting, while the key is held ("Size 120 px").
+    pub readout: Option<String>,
 }
 
 pub const ADD: Color32 = Color32::from_rgb(51, 255, 102);
@@ -87,6 +90,22 @@ pub fn cursor(ctx: &egui::Context, c: &Cursor) {
         p.line_segment([c.center, raw], Stroke::new(1.5, c.tint.gamma_multiply(0.5)));
         p.circle_filled(raw, 2.5, c.tint.gamma_multiply(0.5));
     }
+    if let Some(text) = &c.readout {
+        readout(&p, ctx.content_rect(), c.center, r, text);
+    }
+}
+
+/// The held key's number on a dark plate just above the ring, or inside its
+/// top where the ring runs off the top of the window.
+fn readout(p: &egui::Painter, screen: Rect, center: Pos2, r: f32, text: &str) {
+    let galley = p.layout_no_wrap(text.to_owned(), theme::bold(13.0), Color32::WHITE);
+    let size = galley.size();
+    let pad = vec2(7.0, 3.0);
+    let top = (center.y - r - 8.0 - size.y).max(screen.top() + pad.y + 4.0);
+    let left = (center.x - size.x * 0.5).clamp(screen.left() + pad.x + 4.0, (screen.right() - size.x - pad.x - 4.0).max(0.0));
+    let at = pos2(left, top);
+    p.rect_filled(Rect::from_min_size(at, size).expand2(pad), 5.0, Color32::from_black_alpha(185));
+    p.galley(at, galley, Color32::WHITE);
 }
 
 /// The transform gizmo, under the panels like the model it sits on.
@@ -115,6 +134,7 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
     egui::Area::new(Id::new("view_gizmo")).order(Order::Middle).fade_in(false).fixed_pos(origin).show(ctx, |ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(108.0), Sense::click_and_drag());
+        let tips = doc.opts.tooltips;
         let p = ui.painter();
         let center = rect.center();
         if response.hovered() || response.dragged() {
@@ -202,16 +222,22 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
             response.on_hover_text(name);
         }
 
+        // Each button has one of the pan, zoom and Home handles at its left
+        // (view_handles.rs), for a pen with no keyboard in reach.
         ui.horizontal(|ui| {
-            ui.add_space(16.0);
+            ui.add_space(2.0);
+            view_handles::handle(ui, Handle::Pan, tips, actions);
             let label = if doc.camera.ortho { "Ortho" } else { "Persp" };
             let r = theme::button(ui, 76.0, label, theme::ButtonStyle { height: 22.0, ..Default::default() });
-            if r.on_hover_text("Switch between perspective and orthographic.").clicked() {
-                doc.camera.ortho = !doc.camera.ortho;
+            let help = "Switch between perspective and orthographic (Numpad 5). An axis view goes orthographic by \
+                        itself, and back to perspective when you turn the view by hand.";
+            if r.on_hover_text(help).clicked() {
+                actions.push(Action::ToggleOrtho);
             }
         });
         ui.horizontal(|ui| {
-            ui.add_space(16.0);
+            ui.add_space(2.0);
+            view_handles::handle(ui, Handle::Zoom, tips, actions);
             let style = theme::ButtonStyle {
                 height: 22.0,
                 active: doc.opts.stroke_pivot.then_some(theme::ACCENT()),
@@ -223,7 +249,8 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
             }
         });
         ui.horizontal(|ui| {
-            ui.add_space(16.0);
+            ui.add_space(2.0);
+            view_handles::handle(ui, Handle::Home, tips, actions);
             let style = theme::ButtonStyle { height: 22.0, badge: "F F", ..Default::default() };
             let r = theme::button(ui, 76.0, "Frame", style);
             if r.on_hover_text("Fit the model in view (press F twice, or double-click the background).").clicked() {
@@ -314,7 +341,7 @@ fn brush_tile(library: &Library, tile: Option<usize>) -> (&str, &'static str, St
 /// open (a right-click on a brush in the panel puts it back).
 /// Under it is a bar for the one value worth setting from here: the brush's
 /// strength, or the next sphere's size.
-pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
+pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
     let Some(anchor) = state.radial else { return };
     let screen = ctx.content_rect();
     let open = ctx.animate_bool_with_time(Id::new("radial_open"), true, 0.11);
@@ -440,6 +467,10 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState) {
                 // Picking a brush leaves mask painting.
                 Some(brush) => library.select(brush, s),
                 None => s.mask_mode = true,
+            }
+            // A brush picked with the Transform tool up is picked to sculpt with.
+            if doc.tool != Tool::Sculpt {
+                actions.push(Action::Tool(Tool::Sculpt));
             }
         }
         state.radial = None;

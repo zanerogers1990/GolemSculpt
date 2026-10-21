@@ -17,6 +17,11 @@ fn plain(size: f32) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
+/// The size as the slider shows it: "120 px", or "0.125" on the model.
+pub fn shown(s: &Settings) -> String {
+    if s.screen_space_size { format!("{:.0} px", s.size()) } else { plain(s.size()) }
+}
+
 pub fn slider(ui: &mut Ui, s: &mut Settings, tips: bool) {
     let height = viewport_height(ui);
     let (min, max) = s.size_range(height);

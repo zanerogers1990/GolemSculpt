@@ -509,6 +509,13 @@ pub fn tile(
 
 /// Caption row with a right-aligned readout, then a thin slider. Returns true
 /// when the value changed.
+///
+/// A press on the track puts the value there, and a drag moves it; with
+/// Shift held a drag moves it a tenth as far, for the last fine step. A
+/// double tap opens a box over the readout to type the number into (see
+/// `typed.rs`): Enter, or a tap anywhere else, takes it, Esc leaves the
+/// value as it was. The first tap of the double tap moved the value; it is
+/// put back before the box opens.
 pub fn slider(
     ui: &mut Ui,
     label: &str,
@@ -518,7 +525,71 @@ pub fn slider(
 ) -> Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(vec2(width, SLIDER_HEIGHT), Sense::click_and_drag());
-    slider_in(ui, rect, response, label, value, range, readout)
+    let before = value_before_presses(ui, &response, *value);
+    // Shift + drag is fine here, in a panel; the wheels' bars, which come up
+    // while a key is held, drag as they always have.
+    let fine = ui.input(|i| i.modifiers.shift);
+    let mut response = slider_track(ui, rect, response, label, value, range.clone(), &readout, fine);
+    typing(ui, rect, &mut response, value, range, &readout, before);
+    response
+}
+
+/// Keeps, for a slider, what its value was before each of its last two
+/// presses, and gives back the older: what it was before the first tap of a
+/// double tap.
+fn value_before_presses(ui: &Ui, response: &Response, value: f32) -> Option<f32> {
+    let id = response.id.with("presses");
+    let (mut older, mut newer): (Option<f32>, Option<f32>) = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    if response.contains_pointer() && ui.input(|i| i.pointer.primary_pressed()) {
+        (older, newer) = (newer, Some(value));
+        ui.data_mut(|d| d.insert_temp(id, (older, newer)));
+    }
+    older
+}
+
+/// The box a double tap opens over a slider's readout, while it is open.
+fn typing(
+    ui: &mut Ui,
+    rect: Rect,
+    response: &mut Response,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    readout: &dyn Fn(f32) -> String,
+    before: Option<f32>,
+) {
+    let (min, max) = (*range.start(), *range.end());
+    let id = response.id.with("typing");
+    let mut text: Option<String> = ui.data(|d| d.get_temp(id));
+    let opening = response.double_clicked() && crate::typed::value_for(0.0, min, max, readout).is_some();
+    if opening {
+        if let Some(was) = before.filter(|was| *was != *value) {
+            *value = was;
+            response.mark_changed();
+        }
+        text = Some(String::new());
+    }
+    let Some(mut typed) = text else { return };
+    let field = Rect::from_min_max(pos2(rect.right() - 96.0, rect.top()), pos2(rect.right(), rect.top() + 19.0));
+    let shown = readout(*value);
+    let edit = egui::TextEdit::singleline(&mut typed).hint_text(shown).font(font(11.0)).horizontal_align(egui::Align::Max);
+    let edit = ui.put(field, edit);
+    if opening {
+        edit.request_focus();
+    }
+    let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let done = cancelled || (!opening && !edit.has_focus());
+    if done {
+        let wanted = crate::typed::number(&typed).and_then(|n| crate::typed::value_for(n, min, max, readout));
+        if let (false, Some(new)) = (cancelled, wanted) {
+            if new != *value {
+                *value = new;
+                response.mark_changed();
+            }
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    } else {
+        ui.data_mut(|d| d.insert_temp(id, typed));
+    }
 }
 
 /// The height of a [`slider`]: its caption row and its track.
@@ -527,6 +598,9 @@ pub const SLIDER_HEIGHT: f32 = 38.0;
 /// How far inside its rectangle a slider's track starts and ends, so the
 /// thumb never hangs over the edge.
 const SLIDER_INSET: f32 = 7.0;
+
+/// How far a Shift + drag moves a slider, for the distance the pen goes.
+const FINE_DRAG: f32 = 0.1;
 
 /// The value a slider takes for a pointer at `x`, on a track that runs from
 /// `left` to `right`: `min` at the left end and anywhere before it, `max` at
@@ -544,11 +618,27 @@ pub fn slider_value(x: f32, left: f32, right: f32, min: f32, max: f32) -> f32 {
 pub fn slider_in(
     ui: &Ui,
     rect: Rect,
+    response: Response,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    readout: impl Fn(f32) -> String,
+) -> Response {
+    slider_track(ui, rect, response, label, value, range, readout, false)
+}
+
+/// The slider's track, its thumb and its words; `fine` while a drag moves it
+/// a tenth as far as the pen (Shift, in [`slider`]).
+#[allow(clippy::too_many_arguments)]
+fn slider_track(
+    ui: &Ui,
+    rect: Rect,
     mut response: Response,
     label: &str,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
     readout: impl Fn(f32) -> String,
+    fine: bool,
 ) -> Response {
     let (min, max) = (*range.start(), *range.end());
     let track_y = rect.bottom() - 10.0;
@@ -556,7 +646,13 @@ pub fn slider_in(
     let right = rect.right() - SLIDER_INSET;
     if let Some(pos) = response.interact_pointer_pos() {
         if response.is_pointer_button_down_on() {
-            let new = slider_value(pos.x, left, right, min, max);
+            // Fine: a tenth as far as the pen goes, from where the value is.
+            let new = if fine {
+                let along = response.drag_delta().x / (right - left).max(1.0) * (max - min) * FINE_DRAG;
+                (*value + along).clamp(min.min(max), min.max(max))
+            } else {
+                slider_value(pos.x, left, right, min, max)
+            };
             if new != *value {
                 *value = new;
                 response.mark_changed();

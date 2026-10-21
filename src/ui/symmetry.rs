@@ -51,9 +51,8 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
             for (a, name) in ["X", "Y", "Z"].into_iter().enumerate() {
                 ui.allocate_ui(vec2(w, 22.0), |ui| {
                     let r = theme::checkbox(ui, &mut symmetry.mirror[a], name, theme::AXIS[a]);
-                    if a == 0 {
-                        tip(r, tips, "Mirror left and right (X).");
-                    }
+                    let help = ["Mirror left and right (X key).", "Mirror top and bottom.", "Mirror front and back."];
+                    tip(r, tips, help[a]);
                 });
             }
         });

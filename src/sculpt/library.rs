@@ -200,6 +200,8 @@ fn settings_in_range(mut b: BrushSettings) -> BrushSettings {
     b.auto_smooth = fit(b.auto_smooth, 0.0..=1.0, was.auto_smooth);
     b.even_out = fit(b.even_out, 0.0..=1.0, was.even_out);
     b.thickness = fit(b.thickness, -1.0..=1.0, was.thickness);
+    b.lazy_radius = fit(b.lazy_radius, BrushSettings::LAZY_RADIUS, was.lazy_radius);
+    b.lazy_strength = fit(b.lazy_strength, BrushSettings::LAZY_STRENGTH, was.lazy_strength);
     b
 }
 

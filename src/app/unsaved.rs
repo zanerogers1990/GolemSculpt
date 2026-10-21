@@ -17,8 +17,8 @@
 //!
 //! **Unsaved** is told by the scene's [`Mark`]. Most of what a file keeps
 //! changes as a step of the undo history, and the history's own count tells
-//! those. Some of it does not, on purpose: an object's symmetry, what the H
-//! keys and Local View show and hide, and what a tool keeps for an object
+//! those. Some of it does not, on purpose: an object's symmetry, what Local
+//! View shows and hides, and what a tool keeps for an object
 //! (a live array's count, sizes, ticks and path) are saved with the scene
 //! but are not undo steps. So the mark also carries a fingerprint of that
 //! part of the file, [`kept_print`], worked out from the scene as it stands.
@@ -134,11 +134,13 @@ pub(super) fn closing_question(unsaved: bool, lost: Vec<String>) -> Option<Quest
 }
 
 /// The question to ask before a chosen file comes in, or `None` when it can
-/// simply take the scene's place: the scene is the untouched one the app
-/// starts with, and nothing stands on it that would be lost. `lost` is what
-/// replacing the scene would cost (`Loss::SceneReplaced`).
-pub(super) fn opening_question(path: PathBuf, untouched: bool, unsaved: bool, lost: Vec<String>) -> Option<Question> {
-    (!untouched || !lost.is_empty()).then_some(Question::Open { path, unsaved, lost })
+/// simply take the scene's place: nothing is unsaved and nothing stands on
+/// the scene that would be lost, as for New Scene. The scene it replaces is
+/// then one Undo away, file name and all, and adding a file's objects to the
+/// scene instead is what Import is for. `lost` is what replacing the scene
+/// would cost (`Loss::SceneReplaced`).
+pub(super) fn opening_question(path: PathBuf, unsaved: bool, lost: Vec<String>) -> Option<Question> {
+    (unsaved || !lost.is_empty()).then_some(Question::Open { path, unsaved, lost })
 }
 
 /// The question to ask before a new scene takes this one's place, or `None`
@@ -189,10 +191,10 @@ impl Running {
         closing_question(self.unsaved(), self.scaffolds_at_risk(Loss::Closing))
     }
 
-    /// For scripted runs: makes one change of the kind a file keeps without
-    /// an undo step, through the routine the key or the card runs. `mirror`
-    /// is the X key (Mirror X of the selected object), `hide` is H, `show`
-    /// is Alt + H and `local` is the / key.
+    /// For scripted runs: makes one change of the kind a file keeps, through
+    /// the routine the key or the card runs. `mirror` is the X key (Mirror X
+    /// of the selected object) and `local` the / key, neither an undo step;
+    /// `hide` is H and `show` Alt + H, which are.
     pub(super) fn kept_change(&mut self, what: &str) {
         match what {
             "mirror" => self.doc.edit_symmetry(|symmetry| symmetry.mirror[0] = !symmetry.mirror[0]),

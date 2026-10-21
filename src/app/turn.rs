@@ -27,6 +27,14 @@
 //! 4. the middle of the scene's bounds, when the model is in view but too
 //!    small or thin for any of those lines to meet.
 //!
+//! An axis view goes orthographic, and the first turn made by hand after it
+//! goes back to perspective (`Camera::ortho_from_axis`), as Blender's Auto
+//! Perspective does: a side view is for looking straight at, and turning
+//! away from it in orthographic flattens the model in a way that reads as
+//! wrong. Orthographic chosen with the Ortho / Persp button stays on. The
+//! switch back is made with the pivot already seated on the model, so the
+//! model keeps its size on screen; so is the button's (`toggle_ortho`).
+//!
 //! With none of them (nothing in view at all) the turn is about the pivot,
 //! as it always was.
 //!
@@ -121,6 +129,7 @@ impl Running {
 
     /// The pointer moved by `delta` pixels during an orbit drag.
     pub(super) fn turn_by(&mut self, delta: Vec2) {
+        self.leave_axis_view(delta);
         self.doc.camera.orbit(delta, self.input.turn_about);
     }
 
@@ -130,7 +139,18 @@ impl Running {
         if begins {
             self.input.turn_about = self.turn_begin(None, false);
         }
+        self.leave_axis_view(by);
         self.doc.camera.orbit(by, self.input.turn_about);
+    }
+
+    /// A turn by hand out of an axis view goes back to perspective. The
+    /// pivot was seated when the turn began, so nothing changes size.
+    fn leave_axis_view(&mut self, by: Vec2) {
+        let camera = &mut self.doc.camera;
+        if camera.ortho_from_axis && by != Vec2::ZERO {
+            camera.ortho = false;
+            camera.ortho_from_axis = false;
+        }
     }
 
     /// Turns to an axis view, which is orthographic.
@@ -138,8 +158,22 @@ impl Running {
         // Seated while the view is still as it was: orthographic shows at
         // their true size the things level with the pivot.
         let about = self.turn_begin(None, false);
-        self.doc.camera.ortho = true;
-        self.doc.camera.snap_to(yaw, pitch, about);
+        let camera = &mut self.doc.camera;
+        // Already orthographic by choice: it stays a choice.
+        camera.ortho_from_axis = !camera.ortho || camera.ortho_from_axis;
+        camera.ortho = true;
+        camera.snap_to(yaw, pitch, about);
+    }
+
+    /// The Ortho / Persp button. The pivot is seated on the model first, as
+    /// for an axis view: orthographic shows the things level with the pivot
+    /// at the size they are, and a pivot left behind the model by a pan or a
+    /// zoom used to make the model jump in size at the press.
+    pub(super) fn toggle_ortho(&mut self) {
+        self.turn_begin(None, false);
+        let camera = &mut self.doc.camera;
+        camera.ortho = !camera.ortho;
+        camera.ortho_from_axis = false;
     }
 }
 
@@ -222,6 +256,27 @@ impl Running {
         println!("     the model was at {:.0?}, {:.0} px tall; it is at {:.0?}, {:.0} px", was.0, was.1, now.0, now.1);
         say("and the model is where it was, the size it was", stayed(was, now));
 
+        // A turn by hand out of the axis view goes back to perspective, at the same size.
+        leave_pivot_behind(self);
+        let was = place(self);
+        self.act(Action::Turn { by: [6.0, 0.0], begins: true });
+        say("turning out of the axis view goes back to perspective", !self.doc.camera.ortho);
+        say("and the model stays the size it was", stayed(was, place(self)));
+
+        // The Ortho / Persp button, with the pivot left behind the model: both ways, the same size.
+        for ortho in [true, false] {
+            leave_pivot_behind(self);
+            let was = place(self);
+            self.act(Action::ToggleOrtho);
+            say(&format!("the button turns orthographic {}", if ortho { "on" } else { "off" }), self.doc.camera.ortho == ortho);
+            say("and the model stays the size it was", stayed(was, place(self)));
+        }
+        // Orthographic by the button stays on through a turn.
+        self.act(Action::ToggleOrtho);
+        self.act(Action::Turn { by: [6.0, 0.0], begins: true });
+        say("orthographic chosen with the button stays on through a turn", self.doc.camera.ortho);
+        self.act(Action::ToggleOrtho);
+
         // A double-click on the background, with the model off to one side.
         self.sync_view();
         self.doc.camera.pivot += self.view.right * (radius * 0.9);
@@ -248,6 +303,24 @@ impl Running {
         while self.doc.camera.update(0.05) {}
         let now = place(self);
         say("the model is back in the middle of the view", now.0.distance(centre) < 0.02 * height);
+
+        // The gizmo's hand and magnifier, then Home.
+        let (was, distance) = (place(self), self.doc.camera.distance);
+        self.act(Action::PanView([40.0, 0.0]));
+        let now = place(self);
+        println!("     the model was at {:.1?}; after a 40 px pan it is at {:.1?}", was.0, now.0);
+        // As a middle drag: the surface in front follows the pen pixel for pixel, so the
+        // model's middle, further back, goes the same way a little less far.
+        let moved = now.0 - was.0;
+        say("the hand pans: the model follows it", moved.x > 20.0 && moved.x < 41.0 && moved.y.abs() < 2.0);
+        self.act(Action::ZoomView(-60.0));
+        say("dragging the magnifier up comes nearer", self.doc.camera.distance < distance);
+        self.act(Action::ToggleOrtho);
+        self.act(Action::HomeView);
+        while self.doc.camera.update(0.05) {}
+        let camera = &self.doc.camera;
+        say("Home turns to the starting angle, in perspective", (camera.yaw, camera.pitch) == (25.0, 15.0) && !camera.ortho);
+        say("with the scene in the middle of the view", place(self).0.distance(centre) < 0.02 * height);
 
         // The pointer is left out of the picture.
         self.input.inside = false;

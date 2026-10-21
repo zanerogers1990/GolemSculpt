@@ -24,6 +24,9 @@ pub enum Sculpt {
     Brush,
     /// What is done to the whole mesh: symmetry, remesh, masks, hidden parts.
     Mesh,
+    /// The tools that work on the model in their own way: Tube, Mask,
+    /// Measure and the rest.
+    Tools,
 }
 
 /// The Scene panel's tabs.
@@ -41,13 +44,14 @@ pub enum Scene {
 }
 
 impl Sculpt {
-    pub const ALL: [Sculpt; 2] = [Sculpt::Brush, Sculpt::Mesh];
+    pub const ALL: [Sculpt; 3] = [Sculpt::Brush, Sculpt::Mesh, Sculpt::Tools];
 
     /// What its tab says, and what the settings file calls it.
     pub fn name(self) -> &'static str {
         match self {
             Sculpt::Brush => "Brush",
             Sculpt::Mesh => "Mesh",
+            Sculpt::Tools => "Tools",
         }
     }
 
@@ -55,6 +59,7 @@ impl Sculpt {
         match self {
             Sculpt::Brush => "The brushes, the settings of the one in hand, and the stroke.",
             Sculpt::Mesh => "What is done to the whole mesh: symmetry, remesh, masks and hidden parts.",
+            Sculpt::Tools => "The tools that work on the model in their own way: Tube, Muscle, Array, Mask, Hide, Trim, Split, Measure, Keys and the rest.",
         }
     }
 }

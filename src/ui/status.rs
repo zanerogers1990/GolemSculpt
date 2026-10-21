@@ -383,7 +383,8 @@ mod tests {
                     let tab = panels::tab_reach(side, panels::tab_rect(side, folded[side.index()], s));
                     assert!(!plate.intersects(tab), "{what}: on the {side:?} tab");
                 }
-                let bar = Rect::from_min_size(panels::bottom_bar_origin(s, folded[0]), vec2(330.0, 22.0));
+                // The bar's switches and the status line above them.
+                let bar = Rect::from_min_size(panels::bottom_bar_origin(s, folded[0]) - vec2(0.0, 22.0), vec2(330.0, 44.0));
                 assert!(!plate.intersects(bar), "{what}: on the bottom bar");
                 let left_panel = Rect::from_min_max(s.min, pos2(panels::MARGIN + panels::LEFT_WIDTH, s.bottom()));
                 let right_panel = Rect::from_min_max(pos2(s.right() - panels::MARGIN - panels::RIGHT_WIDTH, s.top()), s.max);

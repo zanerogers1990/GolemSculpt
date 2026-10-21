@@ -107,44 +107,10 @@ fn interface(ui: &mut egui::Ui, o: &mut Options, tips: bool) {
     });
 }
 
+/// Drawn from the one table of shortcuts (shortcuts.rs), which a test holds
+/// to the README's.
 fn shortcuts(ui: &mut egui::Ui) {
-    theme::category(ui, "Keyboard Shortcuts", Color32::from_rgb(230, 204, 102), "", false, |ui| {
-        theme::shortcuts(ui, &[
-            ("1 - 0", "Pick a brush"),
-            ("Shift (hold)", "Smooth"),
-            ("Ctrl / Right button", "Invert the brush"),
-            ("Ctrl + drag (Move)", "Push in / pull out"),
-            ("S + drag", "Brush size"),
-            ("F + drag", "Brush strength"),
-            ("D + drag", "Focal shift"),
-            ("Scroll on model", "Brush size"),
-            ("Space (hold)", "Brush menu"),
-            ("M", "Mask painting"),
-            ("X", "Mirror X"),
-            ("R", "Remesh"),
-            ("G", "Transform gizmo"),
-            ("L", "Measure"),
-            ("Z / Shift+Z", "Undo / redo"),
-            ("Alt + drag", "Orbit"),
-            ("Drag on background", "Orbit"),
-            ("Middle drag", "Pan"),
-            ("Alt + Shift + drag", "Pan"),
-            ("Ctrl + Alt + drag", "Zoom"),
-            ("Scroll off model", "Zoom"),
-            ("F F", "Frame the selection"),
-            ("Double-click object", "Select it"),
-            ("Ctrl + click a row", "Add to the selection"),
-            ("H / Shift + H", "Hide selected / the rest"),
-            ("Alt + H", "Show everything"),
-            ("/", "Local View: solo selected"),
-            ("Delete", "Delete the object (asks)"),
-            ("Tab", "Hide panels (clean view)"),
-            ("O", "Spin the view"),
-            ("F11", "Fullscreen"),
-            ("Ctrl + S", "Save"),
-            ("Ctrl + N", "New scene"),
-        ]);
-    });
+    theme::category(ui, "Keyboard Shortcuts", super::shortcuts::COLOR, "", false, super::shortcuts::list);
 }
 
 fn performance(ui: &mut egui::Ui, doc: &Doc) {

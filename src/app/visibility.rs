@@ -4,11 +4,16 @@
 //! again, and / toggles Local View, the selection soloed and framed with the
 //! view put back on the way out.
 //!
-//! The keys are not undo steps, here as there; a toast and the status line
-//! say what happened instead. Whatever hides the object the brushes were on
-//! moves them to one that can still be seen. What they hide is saved with the
-//! scene all the same, so a scene they have changed counts as unsaved until
-//! it is saved or put back as it was (app/unsaved.rs).
+//! One rule for all of them: **hiding or showing an object is an undo step**,
+//! whether by an eye button or by H, Shift + H or Alt + H, so Z brings back
+//! what a stray key hid. (The Unity app's keys were not undo steps, and the
+//! eye buttons here were: the two did not agree.) Local View is the one
+//! exception, as it is a way of looking rather than a change: / takes it back,
+//! and it is no undo step. A toast and the status line say what happened.
+//! Whatever hides the object the brushes were on moves them to one that can
+//! still be seen. What Local View hides is saved with the scene all the same,
+//! so a scene it has changed counts as unsaved until it is saved or put back
+//! as it was (app/unsaved.rs).
 
 use super::Running;
 use crate::camera::Camera;
@@ -76,7 +81,9 @@ impl Running {
         let scene = &self.doc.scene;
         let Some(object) = scene.get(id) else { return };
         let (hiding, name, was) = (object.visible, object.name.clone(), scene.active_id());
+        self.doc.history.name_next(Some(format!("{} {name}", if hiding { "Hide" } else { "Show" })));
         self.edit_scene(|scene, slot| scene.toggle_visible(id, slot));
+        self.doc.history.name_next(None);
         // Worth a word only when the selection had to move with it.
         if hiding && id == was {
             self.after_hiding(format!("\"{name}\""), was);
@@ -90,7 +97,13 @@ impl Running {
             self.show_everything();
         } else if mods.shift_key() {
             let was = self.doc.scene.active_id();
-            let hidden = self.doc.scene.hide_unselected();
+            let mut hidden = 0;
+            self.doc.history.name_next(Some("Hide Others".to_owned()));
+            self.edit_scene(|scene, _| {
+                hidden = scene.hide_unselected();
+                hidden > 0
+            });
+            self.doc.history.name_next(None);
             if hidden > 0 {
                 self.toast("Hide Unselected");
                 let what = if hidden == 1 { "the 1 object".to_owned() } else { format!("the {hidden} objects") };
@@ -101,11 +114,16 @@ impl Running {
         }
     }
 
-    /// Alt + H: every hidden object shows again.
+    /// Alt + H: every hidden object shows again. One undo step.
     pub(super) fn show_everything(&mut self) {
-        let shown = self.doc.scene.unhide_all();
+        let mut shown = 0;
+        self.doc.history.name_next(Some("Show All".to_owned()));
+        self.edit_scene(|scene, _| {
+            shown = scene.unhide_all();
+            shown > 0
+        });
+        self.doc.history.name_next(None);
         let aside = self.doc.scene.in_local_view();
-        self.scene_changed();
         self.toast(if shown > 0 { "Unhide All" } else { "Nothing Hidden" });
         let what = if shown == 1 { "1 object".to_owned() } else { format!("{shown} objects") };
         match (shown, aside) {
@@ -119,10 +137,9 @@ impl Running {
         }
     }
 
-    /// H: hides the selected objects.
+    /// H: hides the selected objects. One undo step.
     pub(super) fn hide_selection(&mut self) {
-        let doc = &mut self.doc;
-        let (scene, was) = (&doc.scene, doc.scene.active_id());
+        let (scene, was) = (&self.doc.scene, self.doc.scene.active_id());
         let names: Vec<String> = scene
             .selected()
             .iter()
@@ -130,7 +147,14 @@ impl Running {
             .filter(|o| o.visible)
             .map(|o| o.name.clone())
             .collect();
-        if doc.scene.hide_selected(&mut doc.mesh) > 0 {
+        let mut hidden = 0;
+        self.doc.history.name_next(Some(format!("Hide {}", named(&names))));
+        self.edit_scene(|scene, slot| {
+            hidden = scene.hide_selected(slot);
+            hidden > 0
+        });
+        self.doc.history.name_next(None);
+        if hidden > 0 {
             self.toast("Hide Selected");
             self.after_hiding(named(&names), was);
         }

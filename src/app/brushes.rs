@@ -76,6 +76,8 @@ impl Running {
             Ask::Select(i) => {
                 name(library, i)?;
                 library.select(i, s);
+                // A brush is picked to sculpt with: whatever tool was up is put away.
+                self.back_to_sculpting();
                 Ok(String::new())
             }
             Ask::Duplicate(i) => {

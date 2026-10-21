@@ -197,11 +197,17 @@ impl Running {
                 self.doc.spheres.delete_selected();
             }
             // Mid-drag: put the rig back. Otherwise: let go of the selection,
-            // and failing that leave Esc to the app.
+            // and failing that put the tool away, as Esc does with every
+            // other tool (the rig stays where it is). The brush wheel and the
+            // clean view are the app's to close first.
             KeyCode::Escape => {
                 let taken = self.doc.spheres.escape();
                 // A drag of the gizmo's arrow is cancelled with the rest.
                 self.transform_cancelled();
+                if !taken && idle && self.ui.radial.is_none() && !self.doc.opts.clean_view {
+                    self.set_tool(crate::doc::Tool::Sculpt);
+                    return true;
+                }
                 return taken;
             }
             // The brush keys have nothing to act on while the tool is up.

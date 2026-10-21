@@ -496,13 +496,18 @@ impl Running {
             }
             4 => {
                 self.ui_demo_button(here, false);
+                // Where the card's rows are drawn, for the tap below.
+                crate::ui::library_card::watch(&ctx, true);
             }
             5 => {
                 let over_model = window.is_some_and(|rect| near(rect.min, screen.center() - vec2(60.0, 120.0)));
                 expect("dragged by its title it goes where the pen goes", over_model);
-                // A tile of the card, with the model right behind it.
-                if let Some(rect) = window {
-                    self.ui_demo_button(rect.min + vec2(40.0, 70.0), true);
+                // A tile of the card, with the model right behind it: plain Clay's row,
+                // found by its name (the card has a find box and Recent above its groups).
+                let clay = crate::ui::library_card::place(&ctx, "row:Clay");
+                crate::ui::library_card::watch(&ctx, false);
+                if let Some(at) = clay.map(|row| row.center()) {
+                    self.ui_demo_button(at, true);
                 }
             }
             6 => {

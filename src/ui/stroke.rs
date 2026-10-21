@@ -5,11 +5,13 @@
 //! rest of what is its own: [`brush_section`]. What holds whichever brush
 //! is in hand, the hand's side of things, is the Stroke card: [`card`], with
 //! the readout that shows whether the pen's pressure is arriving at all.
+//! Lazy Mouse is in the Stroke card too, though each brush has its own: it
+//! is how the hand is steadied, and is looked for there.
 
 use egui::{Align2, Sense, Ui, vec2};
 
 use super::theme::{self, ACCENT};
-use crate::sculpt::{Brush, BrushSettings, PenMeter, Sculptor, Settings};
+use crate::sculpt::{Brush, BrushSettings, PenMeter, Settings};
 
 fn percent(v: f32) -> String {
     format!("{:.0}%", v * 100.0)
@@ -75,23 +77,45 @@ pub fn brush_section(ui: &mut Ui, s: &mut Settings, tips: bool) {
     pressure_strength(ui, bs, tips);
 }
 
-/// The Stroke card: what holds for every brush.
-pub fn card(ui: &mut Ui, sculptor: &mut Sculptor, tips: bool) {
-    let s = &mut sculptor.settings;
+/// What the Stroke card's header says while it is closed, so the settings
+/// that change how every stroke feels can be seen at a glance: the brush in
+/// hand's Lazy Mouse, if it is on, and the pen's curve.
+pub fn summary(s: &Settings) -> String {
+    let own = s.current();
+    let curve = format!("Curve {:.2}", s.pressure_curve);
+    if own.lazy_mouse { format!("Lazy {:.0} px \u{b7} {curve}", own.lazy_radius) } else { curve }
+}
+
+/// The Stroke card, under Size and Strength: the brush in hand's Lazy Mouse,
+/// then what holds for every brush (Build Up on Hold, the pen's curve) and
+/// the pen readout.
+pub fn card(ui: &mut Ui, s: &mut Settings, pen: &PenMeter, tips: bool) {
+    let own = s.current_mut();
+    theme::tip(
+        theme::checkbox(ui, &mut own.lazy_mouse, "Lazy Mouse (this brush)", ACCENT()),
+        tips,
+        "The brush trails the pointer on a short rope, steadying long curves. Each brush keeps its own: on for a \
+         line brush such as Dam Standard, off for Move, say. Move and Pose never trail.",
+    );
+    if own.lazy_mouse {
+        theme::tip(
+            theme::slider(ui, "Lazy Radius", &mut own.lazy_radius, BrushSettings::LAZY_RADIUS, |v| format!("{v:.0} px")),
+            tips,
+            "How long the rope is, in screen pixels: how far the pointer moves before the brush starts to follow. \
+             Longer steadies more, and the brush lags further behind.",
+        );
+        theme::tip(
+            theme::slider(ui, "Lazy Smoothing", &mut own.lazy_strength, BrushSettings::LAZY_STRENGTH, |v| format!("{v:.2}")),
+            tips,
+            "How readily the brush follows once the rope is taut: at 1 it keeps up at the rope's length; lower \
+             lets it drift further behind and eases it round bends.",
+        );
+    }
     theme::tip(
         theme::checkbox(ui, &mut s.build_up_on_hold, "Build Up on Hold", ACCENT()),
         tips,
-        "Keep adding while the pointer rests in one place.",
+        "Keep adding while the pointer rests in one place. For every brush.",
     );
-    theme::tip(
-        theme::checkbox(ui, &mut s.lazy_mouse, "Lazy Mouse", ACCENT()),
-        tips,
-        "The brush trails the pointer on a short rope, steadying long curves.",
-    );
-    if s.lazy_mouse {
-        theme::slider(ui, "Lazy Radius", &mut s.lazy_radius, 1.0..=150.0, |v| format!("{v:.0} px"));
-        theme::slider(ui, "Lazy Smoothing", &mut s.lazy_strength, 0.05..=1.0, |v| format!("{v:.2}"));
-    }
     theme::heading(ui, "Pen");
     theme::tip(
         theme::slider(ui, "Pressure Curve", &mut s.pressure_curve, 0.5..=3.0, |v| format!("{v:.2}")),
@@ -100,7 +124,7 @@ pub fn card(ui: &mut Ui, sculptor: &mut Sculptor, tips: bool) {
          which steadies light strokes; lower answers to the lightest touch. What pressure then changes (size, \
          strength, and by how much) is set for each brush, in its own settings.",
     );
-    pen_readout(ui, &sculptor.pen_meter);
+    pen_readout(ui, pen);
 }
 
 /// Whether the pen's pressure is reaching the app, and what it is now.

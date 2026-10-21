@@ -75,7 +75,9 @@ fn lazy_mouse_eases_pressure_as_it_eases_the_brush() {
         let view = view_of(&mesh);
         let mut sculptor = sculptor_with(Brush::Standard, 0.1, 0.5);
         let s = &mut sculptor.settings;
-        (s.pressure_curve, s.lazy_mouse, s.lazy_strength, s.lazy_radius) = (1.0, lazy, 0.3, 5.0);
+        s.pressure_curve = 1.0;
+        let own = &mut s.per_brush[Brush::Standard.index()];
+        (own.lazy_mouse, own.lazy_strength, own.lazy_radius) = (lazy, 0.3, 5.0);
         let path = across(&view, -0.3, 0.3, 80);
         let sample = |i: usize, raw: f32| PointerSample { pos: path[i], pressure: Some(raw), time: i as f64 / 240.0 };
         assert!(sculptor.begin(&mut mesh, &view, sample(0, 1.0), false, false));

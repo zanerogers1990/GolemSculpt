@@ -841,9 +841,9 @@ enum Step {
     File,
     /// Prints the status line.
     Status,
-    /// A change that a file keeps and no undo step records, by the key that
-    /// makes it (`Running::kept_change`): `mirror` (X), `hide` (H), `show`
-    /// (Alt + H) or `local` (/).
+    /// A change that a file keeps, by the key that makes it
+    /// (`Running::kept_change`): `mirror` (X) or `local` (/), which no undo
+    /// step records, or `hide` (H) or `show` (Alt + H), which are undo steps.
     Kept(&'static str),
     /// Prints a fingerprint of what the file would keep that is not an undo
     /// step (symmetry, visibility, arrays): the same in a scene restored from

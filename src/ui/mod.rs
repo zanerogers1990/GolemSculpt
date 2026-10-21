@@ -29,6 +29,7 @@ mod pose;
 pub mod question;
 mod scene_graph;
 mod settings;
+mod shortcuts;
 mod spheres;
 pub mod status;
 mod stroke;
@@ -36,6 +37,10 @@ mod symmetry;
 pub mod tabs;
 pub mod theme;
 mod tools;
+mod rebuild_notes;
+mod history_list;
+mod status_row;
+mod view_handles;
 
 use egui::{Align2, Color32, Id, Order, Pos2, Sense, Vec2, pos2, vec2};
 
@@ -43,6 +48,8 @@ use crate::doc::{Action, Doc, MaskOp, Tool};
 use crate::sculpt::Brush;
 use assets::Assets;
 pub use overlay::{Cursor, brush_wheel_ring, brush_wheel_tile};
+/// The brush's size as the Size slider shows it, for the S key's readout.
+pub use brush_size::shown as brush_size_shown;
 /// The Brushes card's controls, for the interface's self-check.
 pub mod library_card {
     pub use super::brushes::{place, watch};
@@ -80,6 +87,15 @@ pub struct UiState {
     pub materials: materials::Thumbs,
     /// The Older Versions window, while it is up (see older.rs).
     pub older: older::State,
+    /// Whether the scene has changes that are not saved: the File card's
+    /// header stars its name, as the window's title does (app/title.rs).
+    pub unsaved: bool,
+    /// The brushes taken up lately, newest first, by name: the Brushes
+    /// card's Recent row (brushes.rs). Kept in the settings file.
+    pub recent_brushes: Vec<String>,
+    /// Whether the size and strength plate is pinned at the top of the
+    /// Sculpt panel this frame (`sculpt_head`), so the Brush tab leaves it out.
+    pub plate_pinned: bool,
 }
 
 impl UiState {
@@ -96,6 +112,9 @@ impl UiState {
             recent: Default::default(),
             pose: Vec::new(),
             materials: Default::default(),
+            unsaved: false,
+            recent_brushes: Vec::new(),
+            plate_pinned: false,
             older: Default::default(),
         }
     }
@@ -126,6 +145,8 @@ pub fn build(
     let mut actions = Vec::new();
     let screen = ctx.content_rect();
     settings::apply_theme(&ctx, &mut doc.opts);
+    // However the brush was taken up (the list, the wheel, a number key), it is the most recent.
+    brushes::note_in_hand(&mut state.recent_brushes, &doc.sculptor.library, &doc.sculptor.settings);
 
     overlay::transform_gizmo(&ctx, &state.gizmo);
     overlay::cursor(&ctx, cursor);
@@ -136,10 +157,11 @@ pub fn build(
         // Each panel, unless it is folded away, and the tab that folds it.
         let (tips, mut folded) = (doc.opts.tooltips, doc.opts.folded);
         sculpt_toolkit::floating::set_room(&ctx, panels::room_for_cards(screen, folded));
-        panels::panel(ui, Side::Left, folded[0], "", &mut |ui, part| {
-            if part == Part::Body {
-                sculpt_panel(ui, doc, state, &mut actions);
-            }
+        // Each tab of the Sculpt panel keeps its own place in its scroll too.
+        let page = doc.opts.tabs.sculpt.name();
+        panels::panel(ui, Side::Left, folded[0], page, &mut |ui, part| match part {
+            Part::Head => sculpt_head(ui, doc, state, &mut actions),
+            Part::Body => sculpt_panel(ui, doc, state, &mut actions),
         });
         // Each tab of the Scene panel keeps its own place in its scroll.
         let page = doc.opts.tabs.scene.name();
@@ -165,12 +187,23 @@ pub fn build(
             .fixed_pos(origin + vec2(0.0, 22.0))
             .show(&ctx, |ui| {
                 ui.set_max_width(panels::bottom_bar_width(screen, folded));
+                // What every stroke works under, above the switches (status_row.rs).
+                status_row::show(ui, doc);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 14.0;
-                    theme::checkbox(ui, &mut doc.opts.flat_shading, "Flat Shading", ACCENT());
-                    theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT());
-                    theme::checkbox(ui, &mut doc.opts.show_backfaces, "Show Backfaces", ACCENT());
-                    theme::checkbox(ui, &mut doc.opts.groups.colours, "Group Colours", ACCENT());
+                    let flat = theme::checkbox(ui, &mut doc.opts.flat_shading, "Flat Shading", ACCENT());
+                    tip(flat, tips, "Shade every triangle flat, so the facets of the mesh show.");
+                    let wire = theme::checkbox(ui, &mut doc.opts.wireframe, "Wireframe", ACCENT());
+                    tip(wire, tips, "Draw the edges of the triangles over the model.");
+                    let backs = theme::checkbox(ui, &mut doc.opts.show_backfaces, "Show Backfaces", ACCENT());
+                    tip(
+                        backs,
+                        tips,
+                        "Draw the inside of the surface too, tinted blue-grey. Off, where the model is open (a hole, a cut, \
+                         hidden faces) you look straight through it to what is behind.",
+                    );
+                    let groups = theme::checkbox(ui, &mut doc.opts.groups.colours, "Group Colours", ACCENT());
+                    tip(groups, tips, "Colour each face group of the model differently (Mesh tab, Face Groups card).");
                 });
             });
         doc.opts.folded = folded;
@@ -178,7 +211,7 @@ pub fn build(
         status::overlay(&ctx, doc, state, folded, time);
     }
 
-    overlay::radial_menu(&ctx, doc, state);
+    overlay::radial_menu(&ctx, doc, state, &mut actions);
     tools::radial(&ctx, doc, state);
     tools::jobs(&ctx, doc);
     scene_graph::confirm(&ctx, doc, state, &mut actions);
@@ -193,49 +226,18 @@ pub fn build(
     actions
 }
 
+/// The Sculpt panel's cards, under what is pinned at its top (`sculpt_head`).
 fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
-    let tips = doc.opts.tooltips;
-    let icon = |name: &str| state.assets.icon(name);
-
-    // Title and mesh size.
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "GolemSculpt", theme::bold(19.0), theme::TEXT());
-    ui.painter().text(
-        rect.right_center(),
-        Align2::RIGHT_CENTER,
-        format!(
-            "{} tris   {} verts",
-            fmt_count(doc.mesh.triangle_count()),
-            fmt_count(doc.mesh.vertex_count())
-        ),
-        theme::font(11.0),
-        theme::HINT(),
-    );
-
-    ui.horizontal(|ui| {
-        let w = theme::row_width(ui, 2, 6.0);
-        ui.add_enabled_ui(doc.can_undo(), |ui| {
-            let style = ButtonStyle { icon: icon("undo"), badge: "Z", ..Default::default() };
-            if tip(theme::button(ui, w, "Undo", style), tips, "Step back (Z or Ctrl+Z)").clicked() {
-                actions.push(Action::Undo);
-            }
-        });
-        ui.add_enabled_ui(doc.can_redo(), |ui| {
-            let style = ButtonStyle { icon: icon("redo"), badge: "Shift+Z", ..Default::default() };
-            if tip(theme::button(ui, w, "Redo", style), tips, "Step forward (Shift+Z or Ctrl+Y)").clicked() {
-                actions.push(Action::Redo);
-            }
-        });
-    });
-
-    spheres::tool_row(ui, doc, state, actions);
-    // The hosted tools: a button each, and the panel of the one that is up.
-    tools::buttons(ui, doc, state);
-    if tools::panel(ui, doc, state) {
+    // A hosted tool or SSpheres up: the tools to change to, then its panel.
+    if !tabbed(doc) {
+        tools::buttons(ui, doc, state);
+        if tools::panel(ui, doc, state) {
+            return;
+        }
+        if doc.tool == Tool::SSpheres {
+            spheres::panel(ui, doc, state, actions);
+        }
         return;
-    }
-    if doc.tool == Tool::SSpheres {
-        return spheres::panel(ui, doc, state, actions);
     }
     if doc.tool == Tool::Transform {
         let count = doc.scene.selected().len();
@@ -269,30 +271,105 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         deform::card(ui, doc, &state.assets, actions);
     }
 
+    // The tab strip is in the head; the tab's cards, here.
     let mut showing = doc.opts.tabs.sculpt;
-    tabs::sculpt_strip(ui, &mut showing, tips);
     if tabs::page(ui, showing == tabs::Sculpt::Brush, "brush", |ui| brush_page(ui, doc, state, actions)) {
         showing = tabs::Sculpt::Brush;
     }
     if tabs::page(ui, showing == tabs::Sculpt::Mesh, "mesh", |ui| mesh_page(ui, doc, state, actions)) {
         showing = tabs::Sculpt::Mesh;
     }
+    if tabs::page(ui, showing == tabs::Sculpt::Tools, "tools", |ui| tools_page(ui, doc, state)) {
+        showing = tabs::Sculpt::Tools;
+    }
     doc.opts.tabs.sculpt = showing;
 }
 
-/// The Sculpt panel's Brush tab: the brushes, the settings of the one in
-/// hand, and the stroke.
-fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
+/// Whether the Sculpt panel shows its tabs: while sculpting or with the
+/// Transform tool up. A hosted tool or SSpheres has the panel to itself.
+fn tabbed(doc: &Doc) -> bool {
+    matches!(doc.tool, Tool::Sculpt | Tool::Transform)
+}
+
+/// How much room the Sculpt panel keeps for its cards under what is pinned
+/// at its top, in the interface's points. With less, the size and strength
+/// plate goes back to the top of the Brush tab and scrolls with the rest.
+const ROOM_FOR_CARDS: f32 = 220.0;
+
+/// What stays at the top of the Sculpt panel however far its cards are
+/// scrolled: the title, Undo and Redo, the Sculpt / Transform / SSpheres
+/// row, the Brush / Mesh / Tools tabs, and on the Brush tab the size and
+/// strength plate, when the panel is tall enough to keep that and still
+/// show cards under it.
+fn sculpt_head(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
     let tips = doc.opts.tooltips;
     let icon = |name: &str| state.assets.icon(name);
-    let (library, s) = (&mut doc.sculptor.library, &mut doc.sculptor.settings);
-    let brush = s.brush;
-    // The brush in hand is one of the library's, over that kernel.
-    let in_hand = library.selected(s);
-    let name = library.entries()[in_hand].name.clone();
 
-    // What every brush has, always in view above the list: which way it
-    // works, its size and strength.
+    // Title, mesh size, and the History list's button at the end of the line.
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "GolemSculpt", theme::bold(19.0), theme::TEXT());
+    let list = egui::Rect::from_min_size(pos2(rect.right() - history_list::WIDTH, rect.top() + 1.0), vec2(history_list::WIDTH, 24.0));
+    history_list::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(list)), doc, tips, actions);
+    ui.painter().text(
+        rect.right_center() - vec2(history_list::WIDTH + 8.0, 0.0),
+        Align2::RIGHT_CENTER,
+        // Triangles only: the line has the History button at its end now.
+        format!("{} tris", fmt_count(doc.mesh.triangle_count())),
+        theme::font(11.0),
+        theme::HINT(),
+    );
+
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 2, 6.0);
+        ui.add_enabled_ui(doc.can_undo(), |ui| {
+            let style = ButtonStyle { icon: icon("undo"), badge: "Z", ..Default::default() };
+            if tip(theme::button(ui, w, "Undo", style), tips, "Step back (Z or Ctrl+Z)").clicked() {
+                actions.push(Action::Undo);
+            }
+        });
+        ui.add_enabled_ui(doc.can_redo(), |ui| {
+            let style = ButtonStyle { icon: icon("redo"), badge: "Shift+Z", ..Default::default() };
+            if tip(theme::button(ui, w, "Redo", style), tips, "Step forward (Shift+Z or Ctrl+Y)").clicked() {
+                actions.push(Action::Redo);
+            }
+        });
+    });
+
+    spheres::tool_row(ui, doc, state, actions);
+
+    let mut pinned = false;
+    if tabbed(doc) {
+        let mut showing = doc.opts.tabs.sculpt;
+        tabs::sculpt_strip(ui, &mut showing, tips);
+        doc.opts.tabs.sculpt = showing;
+        if showing == tabs::Sculpt::Brush {
+            // As tall as it was last time it was drawn here.
+            let id = Id::new("pinned_plate_height");
+            let plate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(330.0);
+            if ui.available_height() - plate >= ROOM_FOR_CARDS {
+                let top = ui.cursor().top();
+                brush_plate(ui, &mut doc.sculptor.settings, &icon, tips);
+                let height = ui.cursor().top() - top;
+                ui.data_mut(|d| d.insert_temp(id, height));
+                pinned = true;
+            }
+        }
+    }
+    state.plate_pinned = pinned;
+}
+
+/// The Sculpt panel's Tools tab: the tools that work on the model in their
+/// own way, each a button that brings it up (and its key, where it has one).
+fn tools_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
+    tools::buttons(ui, doc, state);
+    theme::hint(ui, "A tool takes the panel while it is up; Esc, its key again or picking a brush puts it away.");
+}
+
+/// What every brush has: which way it works, its size, strength and focal
+/// shift. Pinned at the top of the Sculpt panel on the Brush tab when the
+/// panel has room for it (`sculpt_head`), else at the top of the tab.
+fn brush_plate(ui: &mut egui::Ui, s: &mut crate::sculpt::Settings, icon: &dyn Fn(&str) -> Option<egui::TextureId>, tips: bool) {
+    let brush = s.brush;
     theme::plate(ui, |ui| {
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 3, 4.0);
@@ -359,15 +436,43 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
         }
         brush_size::toggle(ui, s, tips);
     });
+}
 
-    brushes::card(ui, library, s, &icon, tips, actions);
+/// The Sculpt panel's Brush tab: the brushes, the settings of the one in
+/// hand, and the stroke.
+fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
+    let tips = doc.opts.tooltips;
+    let icon = |name: &str| state.assets.icon(name);
+    let (library, s) = (&mut doc.sculptor.library, &mut doc.sculptor.settings);
+    let brush = s.brush;
+    // The brush in hand is one of the library's, over that kernel.
+    let in_hand = library.selected(s);
+    let name = library.entries()[in_hand].name.clone();
+
+    // Size, strength and focal shift: pinned at the top of the panel when it
+    // has room (`sculpt_head`), else here at the top of the tab.
+    if !state.plate_pinned {
+        brush_plate(ui, s, &icon, tips);
+    }
+
+    // Lazy Mouse and the pen's curve, right under Size and Strength: they change how every stroke feels.
+    let summary = stroke::summary(s);
+    let pen = &doc.sculptor.pen_meter;
+    theme::category(ui, "Stroke", Color32::from_rgb(168, 133, 255), &summary, false, |ui| stroke::card(ui, s, pen, tips));
+
+    brushes::card(ui, (library, s), &state.recent_brushes, &icon, tips, actions);
 
     // A name of the user's own can be longer than the header has room for beside its buttons.
     let title = if s.mask_mode { "Mask Settings".to_owned() } else { format!("{} Settings", brushes::shortened(&name, 16)) };
     // One card whatever brush is in hand: it floats under one name.
     theme::category_as(ui, "Brush Settings", &title, Color32::from_rgb(89, 209, 230), "", true, |ui| {
         if s.mask_mode {
-            theme::slider(ui, "Mask Hardness", &mut s.mask_hardness, 0.0..=1.0, |v| format!("{v:.2}"));
+            tip(
+                theme::slider(ui, "Mask Hardness", &mut s.mask_hardness, 0.0..=1.0, |v| format!("{v:.2}")),
+                tips,
+                "How crisp the painted mask's edge is: low fades it out softly toward the rim of the ring, high masks \
+                 the ring more evenly and faster.",
+            );
             stroke::pressure_strength(ui, s.current_mut(), tips);
             theme::hint(ui, "Paint to protect. Ctrl or the right button erases.");
             return;
@@ -379,12 +484,19 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
             tip(
                 theme::checkbox(ui, &mut bs.accumulate, label, ACCENT()),
                 tips,
-                "On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height                  and no further, however often you go over the same place in it; lift the pen and stroke again                  to build on top.",
+                "On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height \
+                 and no further, however often you go over the same place in it; lift the pen and stroke again \
+                 to build on top.",
             );
         }
         // Layer has no Accumulate, but this still sets how fast it rises.
         if accumulates || brush == Brush::Layer {
-            theme::slider(ui, "Build-Up Strength", &mut bs.build_up, 0.1..=3.0, |v| format!("{v:.2}"));
+            tip(
+                theme::slider(ui, "Build-Up Strength", &mut bs.build_up, 0.1..=3.0, |v| format!("{v:.2}")),
+                tips,
+                "How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On \
+                 Layer, how fast the step rises to its height.",
+            );
         }
         // Not for Pose: a limb is posed whole, far side and all.
         if brush != Brush::Pose {
@@ -399,18 +511,45 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
         groups::stay_in_group(ui, bs, tips);
         match brush {
             Brush::Clay => {
-                theme::slider(ui, "Clay Depth", &mut s.clay_depth, 0.1..=1.5, |v| format!("{v:.2}"));
-                theme::slider(ui, "Tip Softness (Flat - Domed)", &mut s.clay_softness, 0.05..=1.0, |v| format!("{v:.2}"));
-                theme::slider(ui, "Surface Relax", &mut s.clay_relax, 0.0..=1.0, |v| format!("{v:.2}"));
+                tip(
+                    theme::slider(ui, "Clay Depth", &mut s.clay_depth, 0.1..=1.5, |v| format!("{v:.2}")),
+                    tips,
+                    "How much clay a stroke lays on: with Accumulate off, the height it builds up to, as a share of \
+                     the brush's size.",
+                );
+                tip(
+                    theme::slider(ui, "Tip Softness (Flat - Domed)", &mut s.clay_softness, 0.05..=1.0, |v| format!("{v:.2}")),
+                    tips,
+                    "The shape of the clay under the ring: low lays a flat-topped strip, high a rounded one.",
+                );
+                tip(
+                    theme::slider(ui, "Surface Relax", &mut s.clay_relax, 0.0..=1.0, |v| format!("{v:.2}")),
+                    tips,
+                    "Smooths away the small ridges the dabs leave at the edge of the stroke, where the surface bends \
+                     sharply, without wiping out what the stroke built. 0 leaves them.",
+                );
                 modes::steady_plane(ui, s.current_mut(), tips);
             }
             Brush::Inflate => modes::relax_normals(ui, s.current_mut(), tips),
             Brush::Crease => {
-                theme::slider(ui, "Pinch", &mut s.crease_pinch, 0.0..=1.0, |v| format!("{v:.2}"));
-                theme::slider(ui, "Depth", &mut s.crease_depth, 0.05..=1.0, |v| format!("{v:.2}"));
+                tip(
+                    theme::slider(ui, "Pinch", &mut s.crease_pinch, 0.0..=1.0, |v| format!("{v:.2}")),
+                    tips,
+                    "How hard the sides of the cut are drawn in toward its line: higher is a tighter, sharper crease.",
+                );
+                tip(
+                    theme::slider(ui, "Depth", &mut s.crease_depth, 0.05..=1.0, |v| format!("{v:.2}")),
+                    tips,
+                    "How deep the crease cuts, for the brush's size.",
+                );
             }
             Brush::Flatten => {
-                theme::slider(ui, "Plane Offset (Lower - Higher)", &mut s.flatten_offset, -0.5..=0.5, |v| format!("{v:.2}"));
+                tip(
+                    theme::slider(ui, "Plane Offset (Lower - Higher)", &mut s.flatten_offset, -0.5..=0.5, |v| format!("{v:.2}")),
+                    tips,
+                    "Moves the plane Flatten works to below or above the surface under the ring: lower cuts in, \
+                     higher leaves a raised plateau.",
+                );
                 modes::flatten(ui, s.current_mut(), tips);
             }
             Brush::Smooth => modes::smooth(ui, s.current_mut(), tips),
@@ -419,7 +558,11 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
             Brush::EraseLayer => brushes::erase_layer_note(ui, &doc.mesh),
             Brush::Paint => paint::brush_settings(ui, &mut s.paint, &doc.opts.paint, &doc.mesh, &mut doc.opts.tabs, tips, actions),
             Brush::Layer => {
-                theme::slider(ui, "Layer Height", &mut s.layer_height, 0.02..=1.0, |v| format!("{v:.2}"));
+                tip(
+                    theme::slider(ui, "Layer Height", &mut s.layer_height, 0.02..=1.0, |v| format!("{v:.2}")),
+                    tips,
+                    "How high the step Layer raises, as a share of the brush's size. A stroke never goes past it.",
+                );
             }
             Brush::Move => {
                 tip(
@@ -438,10 +581,17 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
         stroke::brush_section(ui, s, tips);
         falloff::section(ui, s, tips);
         alpha::section(ui, s, tips, actions);
+        // Every setting above back as the brush came, in one press (the same as Reset in its menu).
+        ui.add_space(4.0);
+        let back = if library.entries()[in_hand].origin == crate::sculpt::library::Origin::User {
+            "Put every setting of this brush back as it was when you made it: strength, falloff, alpha,              dabs, pen pressure, Lazy Mouse and the rest. The brush's size is shared and stays as it is."
+        } else {
+            "Put every setting of this brush back as it came with the app: strength, falloff, alpha, dabs,              pen pressure, Lazy Mouse and the rest. The brush's size is shared and stays as it is."
+        };
+        if tip(theme::button(ui, ui.available_width(), "Reset Brush", ButtonStyle::default()), tips, back).clicked() {
+            actions.push(Action::Brush(crate::sculpt::library::Ask::Reset(in_hand)));
+        }
     });
-
-    // What holds for every brush; the brush's own spacing and pen settings are in its card above.
-    theme::category(ui, "Stroke", Color32::from_rgb(168, 133, 255), "", false, |ui| stroke::card(ui, &mut doc.sculptor, tips));
 }
 
 /// The Sculpt panel's Mesh tab: what is done to the whole mesh.
@@ -456,6 +606,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         if theme::slider(ui, "Resolution", &mut log, 4f32.log2()..=1024f32.log2(), |v| format!("{:.0}", v.exp2())).changed() {
             doc.opts.remesh_resolution = log.exp2().round();
         }
+        rebuild_notes::remesh_estimate(ui, doc, doc.opts.remesh_resolution);
         let style = ButtonStyle { badge: "R", active: Some(ACCENT()), ..Default::default() };
         if tip(
             theme::button(ui, ui.available_width(), "Remesh", style),
@@ -466,6 +617,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         {
             actions.push(Action::Remesh);
         }
+        rebuild_notes::hint(ui, doc, rebuild_notes::Rebuild::Surface, false);
         dyntopo::section(ui, &mut doc.sculptor.dyntopo, tips);
         levels::dyntopo_note(ui, &doc.mesh);
 
@@ -487,6 +639,8 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         {
             actions.push(Action::QuadRemesh);
         }
+        rebuild_notes::hint(ui, doc, rebuild_notes::Rebuild::Surface, false);
+        rebuild_notes::quad_symmetry_hint(ui, doc);
 
         ui.add_space(6.0);
         decimate(ui, doc, tips, actions);
@@ -499,15 +653,24 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     theme::category(ui, "Masking", theme::MASK, "", false, |ui| {
         theme::hint(ui, "Masked areas are protected from every brush.");
         let ops = [
-            [("Invert", MaskOp::Invert), ("Clear", MaskOp::Clear)],
-            [("Blur", MaskOp::Blur), ("Sharpen", MaskOp::Sharpen)],
-            [("Grow", MaskOp::Grow), ("Shrink", MaskOp::Shrink)],
+            [
+                ("Invert", MaskOp::Invert, "What is masked becomes free and what is free becomes masked. One undo step."),
+                ("Clear", MaskOp::Clear, "Takes the whole mask away. One undo step."),
+            ],
+            [
+                ("Blur", MaskOp::Blur, "Softens the mask's edge; press again for softer. One undo step."),
+                ("Sharpen", MaskOp::Sharpen, "Makes a soft mask edge crisper; press again for crisper. One undo step."),
+            ],
+            [
+                ("Grow", MaskOp::Grow, "Spreads the mask out by one ring of points. One undo step."),
+                ("Shrink", MaskOp::Shrink, "Draws the mask in by one ring of points. One undo step."),
+            ],
         ];
         for row in ops {
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, 2, 6.0);
-                for (label, op) in row {
-                    if theme::button(ui, w, label, ButtonStyle::default()).clicked() {
+                for (label, op, help) in row {
+                    if tip(theme::button(ui, w, label, ButtonStyle::default()), tips, help).clicked() {
                         actions.push(Action::Mask(op));
                     }
                 }
@@ -586,6 +749,8 @@ fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Acti
     });
     if now > 0 && now <= target {
         theme::hint(ui, "The selected object is at or under the target already.");
+    } else {
+        rebuild_notes::hint(ui, doc, rebuild_notes::Rebuild::Decimate, false);
     }
 }
 
@@ -634,7 +799,9 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         .as_ref()
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Unsaved".into());
+        .unwrap_or_else(|| "Untitled".into());
+    // Starred while there are changes that are not saved, as in the window's title.
+    let file = if state.unsaved { format!("{file} *") } else { file };
     theme::category(ui, "File", Color32::from_rgb(153, 184, 230), &file, true, |ui| {
         let row = |ui: &mut egui::Ui, actions: &mut Vec<Action>, items: &[(&str, Action, &str)]| {
             ui.horizontal(|ui| {
@@ -652,7 +819,7 @@ fn file_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             "Start again with a fresh sphere, in place of this scene (Ctrl+N). It asks first if anything would be lost; Undo brings this scene back.",
         )]);
         row(ui, actions, &[
-            ("Open...", Action::Open, "Open a saved sculpt (.sclp, or a .sculpt from the Unity app), in place of the scene or added to it (Ctrl+O)."),
+            ("Open...", Action::Open, "Open a saved sculpt (.sclp, or a .sculpt from the Unity app) in place of the scene (Ctrl+O). It asks first only if that would put unsaved work aside; Undo brings this scene back. To add a sculpt's objects to this scene instead, use Import."),
             ("Save", Action::Save, "Save this sculpt (Ctrl+S)."),
             ("Save As...", Action::SaveAs, "Save under a new name (Ctrl+Shift+S)."),
         ]);

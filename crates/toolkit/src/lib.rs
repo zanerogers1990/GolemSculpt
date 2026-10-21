@@ -20,6 +20,7 @@ pub mod scene;
 pub mod testing;
 pub mod theme;
 pub mod tool;
+pub mod typed;
 pub mod view;
 
 pub use ctx::{Ctx, Env, Outbox, RadialChange};

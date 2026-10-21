@@ -33,12 +33,15 @@ use crate::{io, remesh};
 mod alpha;
 mod blender;
 mod bridge;
+mod brush_keys;
 mod brushes;
 mod cut_mirror;
 mod decimate;
 mod deform;
+mod drop;
 mod dyntopo;
 mod echo;
+mod escape;
 mod export_fbx;
 mod exports;
 mod recording;
@@ -72,17 +75,25 @@ mod spheres;
 mod still;
 mod symmetry;
 pub(crate) mod symmetry_repair;
+mod title;
 pub(crate) mod tools;
 mod transform;
 mod turn;
 mod undo;
+mod undo_names;
 mod ui_demo;
 mod unity;
 mod unsaved;
+mod view_moves;
 mod visibility;
 
-const DOUBLE_CLICK: Duration = Duration::from_millis(350);
-const DOUBLE_CLICK_PX: f32 = 12.0;
+/// Two clicks (or F twice) this close together are a double: Windows' own
+/// starting double-click time, and room for a pen tip, which lands a little
+/// apart each time. A drag between them breaks the pair (`pointer_released`,
+/// `key_released`), so quick orbits and F + drags one after another do not
+/// frame the view.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
+const DOUBLE_CLICK_PX: f32 = 20.0;
 
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct Args {
@@ -825,6 +836,9 @@ impl Running {
             }
             // Alt-tab or a click elsewhere: no release will come for what is held.
             WindowEvent::Focused(false) => self.focus_lost(),
+            // A file from Explorer: opened or imported by its kind (app/drop.rs).
+            WindowEvent::HoveredFile(path) => self.file_hovered(&path),
+            WindowEvent::DroppedFile(path) => self.act(Action::DropFile(path)),
             WindowEvent::CursorEntered { .. } => self.input.inside = true,
             WindowEvent::CursorLeft { .. } => {
                 self.input.inside = self.args.keep_pointer;
@@ -857,6 +871,10 @@ impl Running {
                         ElementState::Released => self.key_released(code),
                         ElementState::Pressed if !typing && !event.repeat => {
                             self.key_pressed(event_loop, code)
+                        }
+                        // [ and ] held down keep stepping the brush (app/brush_keys.rs).
+                        ElementState::Pressed if !typing => {
+                            self.brush_step_key(code);
                         }
                         _ => {}
                     }
@@ -1015,12 +1033,21 @@ impl Running {
         self.spheres_released();
         self.transform_released();
         self.tools_released();
+        // An orbit that went somewhere is not the first click of a double-click.
+        let pointer = self.input.pointer;
+        if self.input.drag == Drag::Orbit && self.input.last_click.is_some_and(|(_, at)| at.distance(pointer) > DOUBLE_CLICK_PX) {
+            self.input.last_click = None;
+        }
         self.input.drag = Drag::None;
         self.redraw = true;
     }
 
     fn finish_stroke(&mut self) {
+        // The stroke's undo step is called by its brush ("Undo Clay Strips").
+        let name = self.stroke_name();
+        self.doc.history.name_next(Some(name));
         focus::end_stroke(&mut self.input, &mut self.doc, &self.local);
+        self.doc.history.name_next(None);
         self.stroke_ended = Some(Instant::now());
         self.stroke_check();
     }
@@ -1057,7 +1084,14 @@ impl Running {
         if self.recording_key(code) {
             return;
         }
+        // Esc takes back a stroke or a gizmo drag under way (app/escape.rs).
+        if code == KeyCode::Escape && self.escape_drag() {
+            return;
+        }
         if self.spheres_key_pressed(code) || self.tools_key_pressed(code) || self.deform_key(code) {
+            return;
+        }
+        if self.brush_step_key(code) {
             return;
         }
         if let Some(&b) = Brush::ALL.iter().find(|&&b| brush_key(b) == Some(code)) {
@@ -1065,6 +1099,8 @@ impl Running {
                 // The number keys are the base brushes' (the first ten of them: `Brush::hotkey`).
                 let sculptor = &mut self.doc.sculptor;
                 sculptor.library.select(crate::sculpt::library::Library::base(b), &mut sculptor.settings);
+                // With the Transform tool up, the brush is picked to sculpt with.
+                self.back_to_sculpting();
                 self.toast(b.name());
             }
             return;
@@ -1142,9 +1178,15 @@ impl Running {
                 self.ui.radial = Some(egui::pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp));
             }
             KeyCode::Escape => {
+                // The wheel and the clean view first; then the Transform tool is put away.
+                if self.ui.radial.is_none() && !self.doc.opts.clean_view {
+                    self.escape_tool();
+                }
                 self.ui.radial = None;
                 self.doc.opts.clean_view = false;
             }
+            // Orthographic or perspective, as Blender's Numpad 5 (app/turn.rs).
+            KeyCode::Numpad5 if idle => self.act(Action::ToggleOrtho),
             KeyCode::F11 => {
                 let full = self.window.fullscreen().is_some();
                 self.window.set_fullscreen((!full).then_some(Fullscreen::Borderless(None)));
@@ -1161,7 +1203,14 @@ impl Running {
         self.spheres_key_released(code);
         self.tools_key_released(code);
         match code {
-            KeyCode::KeyS | KeyCode::KeyF | KeyCode::KeyD => self.input.gauge = None,
+            KeyCode::KeyS | KeyCode::KeyF | KeyCode::KeyD => {
+                // F held and dragged set the strength: it is not the first F of F F.
+                let moved = self.input.gauge.is_some_and(|g| g.anchor.distance(self.input.pointer) > DOUBLE_CLICK_PX);
+                if code == KeyCode::KeyF && moved {
+                    self.input.last_f = None;
+                }
+                self.input.gauge = None;
+            }
             KeyCode::Space => self.ui.radial = None,
             _ => {}
         }
@@ -1246,7 +1295,16 @@ impl Running {
         self.doc.sculptor.last_hit = None;
     }
 
+    /// Carries out a command. The undo steps it records are called by what
+    /// it is (app/undo_names.rs).
     fn act(&mut self, action: Action) {
+        let name = undo_names::of(&action);
+        self.doc.history.name_next(name);
+        self.act_now(action);
+        self.doc.history.name_next(None);
+    }
+
+    fn act_now(&mut self, action: Action) {
         // A gizmo drag, like a stroke, holds what its undo step goes back to.
         if self.doc.sculptor.is_active() || self.transform_dragging() {
             return;
@@ -1265,8 +1323,17 @@ impl Running {
             return;
         }
         match action {
+            // The History list: so many presses of Undo or Redo at once.
+            Action::UndoSteps(n) | Action::RedoSteps(n) => {
+                let one = if matches!(action, Action::UndoSteps(_)) { Action::Undo } else { Action::Redo };
+                for _ in 0..n {
+                    self.act(one.clone());
+                }
+            }
             Action::Undo | Action::Redo => {
                 let undo = action == Action::Undo;
+                // What the step is called, for the toast: asked before it is taken.
+                let name = self.doc.history.next_name(undo).map(str::to_owned);
                 // Asked before the step: the step moves what the answer goes by.
                 let was_saved = !self.unsaved();
                 let doc = &mut self.doc;
@@ -1308,7 +1375,8 @@ impl Running {
                     self.scene_changed();
                     // Across an Open, the file comes with the scene.
                     self.file_stepped(undo, was_saved);
-                    self.toast(if undo { "Undo" } else { "Redo" });
+                    let verb = if undo { "Undo" } else { "Redo" };
+                    self.toast(name.map_or(verb.to_owned(), |name| format!("{verb} {name}")));
                     // A mesh step has made its object the active one.
                     self.flash.start(self.doc.scene.active_id(), flash::Kind::Undo);
                 }
@@ -1515,6 +1583,12 @@ impl Running {
             }
             Action::Frame => self.frame_view(),
             Action::Snap(yaw, pitch) => self.snap_view(yaw, pitch),
+            Action::ToggleOrtho => self.toggle_ortho(),
+            // The view gizmo's hand, magnifier and Home (app/view_moves.rs).
+            Action::PanView(by) => self.pan_from_gizmo(Vec2::from_array(by)),
+            Action::ZoomView(dy) => self.zoom_from_gizmo(dy),
+            Action::HomeView => self.home_view(),
+            Action::DropFile(path) => self.file_dropped(path),
             Action::Turn { by, begins } => self.turn_from_gizmo(Vec2::from_array(by), begins),
             Action::Tool(tool) => self.set_tool(tool),
             Action::ResetTransform => self.reset_transform(),
@@ -1765,6 +1839,16 @@ impl Running {
             s.half_weight_radius_in_use(brush, shift)
         };
         let gauge = self.input.gauge.map(|g| g.kind);
+        // The number the held key is setting, beside the ring.
+        let held = s.current();
+        let readout = gauge.map(|kind| match kind {
+            GaugeKind::Size => format!("Size {}", ui::brush_size_shown(s)),
+            GaugeKind::Strength => {
+                let name = if brush == Brush::Paint && !s.mask_mode { "Flow" } else { "Strength" };
+                format!("{name} {:.0}%", held.strength * 100.0)
+            }
+            GaugeKind::Focal => format!("Focal Shift {:.0}", held.focal_shift * 100.0),
+        });
         Cursor {
             visible,
             center: to_points(center),
@@ -1777,6 +1861,7 @@ impl Running {
             tether,
             pivot,
             alpha: self.alpha_under_cursor(brush),
+            readout,
         }
     }
 
@@ -1918,6 +2003,8 @@ impl Running {
 
         // Interface.
         self.ui_demo_frame(event_loop);
+        // The file's name in the title, starred while there is unsaved work (app/title.rs).
+        self.title_frame();
         self.egui_ctx.set_zoom_factor(self.doc.opts.ui_scale);
         let cursor = self.cursor();
         self.pose_frame();

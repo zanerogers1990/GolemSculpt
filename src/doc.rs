@@ -440,6 +440,22 @@ pub enum Action {
     Frame,
     /// Turn to an axis view (yaw, pitch in degrees) and switch to orthographic.
     Snap(f32, f32),
+    /// The Ortho / Persp button: switch between the two, keeping the model
+    /// the size it is on screen (see app/turn.rs).
+    ToggleOrtho,
+    /// A drag on the view gizmo's hand, in pixels: pan the view.
+    PanView([f32; 2]),
+    /// A drag on the view gizmo's magnifier, pixels down: zoom the view.
+    ZoomView(f32),
+    /// The view gizmo's Home: back to the view a scene starts with.
+    HomeView,
+    /// The History list (beside Undo and Redo): this many presses of Undo,
+    /// or of Redo, at once.
+    UndoSteps(usize),
+    RedoSteps(usize),
+    /// A file dragged onto the window and let go: a sculpt is opened, a
+    /// model imported (see app/drop.rs).
+    DropFile(PathBuf),
     /// Turn the view by a drag of this many pixels on the view gizmo;
     /// `begins` on the first of each drag (see app/turn.rs).
     Turn { by: [f32; 2], begins: bool },

@@ -564,6 +564,9 @@ impl Running {
             "auto_smooth": round(b.auto_smooth),
             "even_out": round(b.even_out),
             "thickness": round(b.thickness),
+            "lazy_mouse": b.lazy_mouse,
+            "lazy_radius": round(b.lazy_radius),
+            "lazy_strength": round(b.lazy_strength),
             "alpha": s.alpha[s.brush.index()].image.map(|image| image.name.as_str()),
             "alpha_random_rotation": round(s.alpha[s.brush.index()].random_rotation),
             "mask_mode": s.mask_mode,
@@ -703,6 +706,9 @@ impl Running {
         b.auto_smooth = within("auto_smooth", 0.0..=1.0).unwrap_or(b.auto_smooth);
         b.even_out = within("even_out", 0.0..=1.0).unwrap_or(b.even_out);
         b.thickness = within("thickness", -1.0..=1.0).unwrap_or(b.thickness);
+        b.lazy_mouse = flag(args, "lazy_mouse").unwrap_or(b.lazy_mouse);
+        b.lazy_radius = within("lazy_radius", BrushSettings::LAZY_RADIUS).unwrap_or(b.lazy_radius);
+        b.lazy_strength = within("lazy_strength", BrushSettings::LAZY_STRENGTH).unwrap_or(b.lazy_strength);
         if let Some(name) = text(args, "smooth_mode") {
             b.smooth_mode = SmoothMode::named(name)
                 .ok_or("smooth_mode is \"all\", \"surface\", \"peaks\", \"valleys\" or \"relax\".")?;
@@ -911,6 +917,7 @@ impl Running {
         }
         if let Some(ortho) = flag(args, "orthographic") {
             self.doc.camera.ortho = ortho;
+            self.doc.camera.ortho_from_axis = false;
         }
         if let Some(what) = text(args, "frame") {
             let scene = &self.doc.scene;

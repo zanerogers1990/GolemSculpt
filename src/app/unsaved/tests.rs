@@ -306,7 +306,7 @@ fn a_scene_with_nothing_on_it_closes_and_opens_without_a_question() {
     }
     assert_eq!(closing_question(false, Vec::new()), None, "nothing unsaved, nothing to lose: the app just closes");
     let file = PathBuf::from("dragon head.sclp");
-    assert_eq!(opening_question(file, true, false, Vec::new()), None, "an untouched scene is simply replaced");
+    assert_eq!(opening_question(file, false, Vec::new()), None, "a saved scene is simply replaced");
 }
 
 #[test]
@@ -347,17 +347,19 @@ fn once_make_skin_has_used_the_spheres_they_are_not_named_until_the_skin_is_gone
 }
 
 #[test]
-fn a_file_chosen_over_work_that_stands_on_the_scene_asks_even_of_an_untouched_scene() {
+fn a_file_chosen_over_work_that_stands_on_the_scene_asks_even_of_a_saved_scene() {
     let file = PathBuf::from("dragon head.sclp");
     let tubes = vec!["2 unmerged tubes (Merge or Keep Separate first)".to_owned()];
-    // Tubes drawn on the ball the app starts with: nothing is unsaved, and replacing it loses them.
-    let asked = opening_question(file.clone(), true, false, tubes.clone());
+    // Tubes drawn on a saved scene: nothing is unsaved, and replacing it loses them.
+    let asked = opening_question(file.clone(), false, tubes.clone());
     assert_eq!(asked, Some(Question::Open { path: file.clone(), unsaved: false, lost: tubes.clone() }));
-    // A scene that has been worked on asks as it always did, and names them too.
-    let asked = opening_question(file.clone(), false, true, tubes.clone());
+    // A scene with unsaved work asks as it always did, and names them too.
+    let asked = opening_question(file.clone(), true, tubes.clone());
     assert_eq!(asked, Some(Question::Open { path: file.clone(), unsaved: true, lost: tubes }));
-    let asked = opening_question(file.clone(), false, false, Vec::new());
-    assert_eq!(asked, Some(Question::Open { path: file, unsaved: false, lost: Vec::new() }));
+    let asked = opening_question(file.clone(), true, Vec::new());
+    assert_eq!(asked, Some(Question::Open { path: file.clone(), unsaved: true, lost: Vec::new() }));
+    // Saved, with nothing on it: no question, as for New Scene. Undo brings it back.
+    assert_eq!(opening_question(file, false, Vec::new()), None);
 }
 
 /// New Scene asks exactly when something would be lost: unsaved changes, or

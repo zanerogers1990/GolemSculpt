@@ -92,7 +92,9 @@ pub fn steady_plane(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
     theme::tip(
         theme::slider(ui, "Steady Plane", &mut bs.steady_plane, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0)),
         tips,
-        "Keeps the level the brush works to steady along the stroke, so it does not tip and bob over every bump          the brush passes: a smoother, more even strip. At 0% each dab finds its own level; at 100% the stroke          keeps the one it started with.",
+        "Keeps the level the brush works to steady along the stroke, so it does not tip and bob over every bump \
+         the brush passes: a smoother, more even strip. At 0% each dab finds its own level; at 100% the stroke \
+         keeps the one it started with.",
     );
 }
 
@@ -101,7 +103,8 @@ pub fn relax_normals(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
     theme::tip(
         theme::slider(ui, "Relax Normals", &mut bs.relax_normals, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0)),
         tips,
-        "Evens out the directions Inflate pushes the surface in, so neighbouring bits swell together. Higher          keeps a swelling smooth over sharp or rough forms; at 0% every point pushes straight out its own way.",
+        "Evens out the directions Inflate pushes the surface in, so neighbouring bits swell together. Higher \
+         keeps a swelling smooth over sharp or rough forms; at 0% every point pushes straight out its own way.",
     );
 }
 

@@ -60,6 +60,9 @@ fn every_brush_goes_to_a_file_and_comes_back_the_same() {
             auto_smooth: 0.35,
             even_out: 0.45,
             thickness: -0.3,
+            lazy_mouse: true,
+            lazy_radius: 70.0,
+            lazy_strength: 0.4,
         };
         s.falloff[slot] = Some(FalloffCurve::preset(FalloffPreset::Plateau));
         s.alpha[slot] = alpha::AlphaSettings {

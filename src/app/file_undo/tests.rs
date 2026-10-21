@@ -118,7 +118,9 @@ impl Desk {
         (ball.visible, self.scene.symmetry(ball.id).mirror[0])
     }
 
-    /// The H key, or Alt + H if the ball is hidden: not an undo step.
+    /// A change of what shows that is no undo step, as Local View (/) is: the
+    /// ball hidden, or shown again if it is hidden. (H and Alt + H were such
+    /// a change, and are undo steps now; the checks below stand for /.)
     fn hide_key(&mut self) {
         if self.scene.objects[0].visible {
             self.scene.hide_selected(&mut self.mesh);

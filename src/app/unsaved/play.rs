@@ -72,12 +72,13 @@ impl Running {
         say("a sculpt opened in place of the scene leaves the spheres as they were", stand);
     }
 
-    /// The keys that change what a save writes without an undo step.
+    /// The keys that change what a save writes without an undo step, and H,
+    /// which is one.
     fn lost_kept_changes(&mut self, file: &Path) {
         self.act(Action::New(Primitive::Cube));
         say("a scene with a cube added saves clean", self.lost_save(file) && self.closing().is_none());
         let steps = self.doc.history.steps();
-        for (key, what, back) in [("mirror", "X (Mirror X)", "mirror"), ("hide", "H", "show"), ("local", "/", "local")] {
+        for (key, what, back) in [("mirror", "X (Mirror X)", "mirror"), ("local", "/", "local")] {
             self.kept_change(key);
             let asked = self.closing();
             let ordinary = asked == Some((true, Vec::new()));
@@ -91,6 +92,13 @@ impl Running {
             self.kept_change(back);
             self.lost_save(file);
         }
+        // H hides as the eye buttons do: one undo step, which Z takes back.
+        self.kept_change("hide");
+        say("H makes the scene unsaved", self.unsaved() && self.closing().is_some());
+        say("and is an undo step", self.doc.history.steps().0 == steps.0 + 1);
+        self.act(Action::Undo);
+        say("which Z takes back", self.doc.scene.objects.iter().all(|o| o.visible));
+        self.lost_save(file);
     }
 
     /// An array is saved with its object and is the Array tool's own: its

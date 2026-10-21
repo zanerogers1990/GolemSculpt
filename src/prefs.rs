@@ -203,14 +203,22 @@ pub struct BrushTuning {
     pub even_out: f32,
     /// Snake Hook: how a pull keeps its thickness.
     pub thickness: f32,
+    /// Lazy Mouse, its rope and its smoothing. `None` in a file from before
+    /// each brush had its own: the brush then takes the one setting every
+    /// brush shared (`BrushPrefs::lazy_mouse`), or, in a brush file, the
+    /// base brush's.
+    pub lazy_mouse: Option<bool>,
+    pub lazy_radius: Option<f32>,
+    pub lazy_strength: Option<f32>,
 }
 
 impl Default for BrushTuning {
     fn default() -> Self {
         // A brush with nothing of its own about it (Move, the first, has
-        // a Strength of its own).
+        // a Strength of its own). A file that does not say what its Lazy
+        // Mouse is must be seen not to (above).
         let base = Settings::default().per_brush[Brush::Smooth.index()];
-        Self::of(&base)
+        Self { lazy_mouse: None, lazy_radius: None, lazy_strength: None, ..Self::of(&base) }
     }
 }
 
@@ -238,6 +246,9 @@ impl BrushTuning {
             auto_smooth: b.auto_smooth,
             even_out: b.even_out,
             thickness: b.thickness,
+            lazy_mouse: Some(b.lazy_mouse),
+            lazy_radius: Some(b.lazy_radius),
+            lazy_strength: Some(b.lazy_strength),
         }
     }
 }
@@ -355,9 +366,13 @@ pub struct BrushPrefs {
     /// carried over into every brush (see `apply`).
     pub pressure_floor: Option<f32>,
     pub pressure_curve: f32,
-    pub lazy_mouse: bool,
-    pub lazy_radius: f32,
-    pub lazy_strength: f32,
+    /// The one Lazy Mouse every brush shared before each had its own. This
+    /// version never writes it. A file that has it is one of theirs, and its
+    /// brushes say nothing of their own Lazy Mouse, so each takes this (see
+    /// `apply`).
+    pub lazy_mouse: Option<bool>,
+    pub lazy_radius: Option<f32>,
+    pub lazy_strength: Option<f32>,
     pub build_up_on_hold: bool,
     /// The Paint brush's colour, swatches, mode and channels. A file from
     /// before there was one gives the brush as it starts.
@@ -431,9 +446,9 @@ impl BrushPrefs {
             layer_height: s.layer_height,
             pressure_floor: None,
             pressure_curve: s.pressure_curve,
-            lazy_mouse: s.lazy_mouse,
-            lazy_radius: s.lazy_radius,
-            lazy_strength: s.lazy_strength,
+            lazy_mouse: None,
+            lazy_radius: None,
+            lazy_strength: None,
             build_up_on_hold: s.build_up_on_hold,
             paint: crate::sculpt::paint::PaintKept::of(&s.paint),
             feel_version: FEEL_VERSION,
@@ -501,6 +516,15 @@ impl BrushPrefs {
             slot.auto_smooth = fit(kept.auto_smooth, 0.0, 1.0, was.auto_smooth);
             slot.even_out = fit(kept.even_out, 0.0, 1.0, was.even_out);
             slot.thickness = fit(kept.thickness, -1.0, 1.0, was.thickness);
+            // The brush's own Lazy Mouse. Only a file from before brushes had
+            // their own has the one they shared, and then it is every brush's
+            // (what the file's brushes seem to say of their own is only the
+            // starting values the file was read over).
+            slot.lazy_mouse = self.lazy_mouse.or(kept.lazy_mouse).unwrap_or(was.lazy_mouse);
+            let radius = self.lazy_radius.or(kept.lazy_radius).unwrap_or(was.lazy_radius);
+            slot.lazy_radius = within(radius, BrushSettings::LAZY_RADIUS, was.lazy_radius);
+            let strength = self.lazy_strength.or(kept.lazy_strength).unwrap_or(was.lazy_strength);
+            slot.lazy_strength = within(strength, BrushSettings::LAZY_STRENGTH, was.lazy_strength);
         }
         // A file from before brushes had their own: its one floor, in the
         // range its slider had, becomes every brush's Pressure -> Strength.
@@ -520,9 +544,6 @@ impl BrushPrefs {
         s.flatten_offset = fit(self.flatten_offset, -0.5, 0.5, d.flatten_offset);
         s.layer_height = fit(self.layer_height, 0.02, 1.0, d.layer_height);
         s.pressure_curve = fit(self.pressure_curve, 0.5, 3.0, d.pressure_curve);
-        s.lazy_mouse = self.lazy_mouse;
-        s.lazy_radius = fit(self.lazy_radius, 1.0, 150.0, d.lazy_radius);
-        s.lazy_strength = fit(self.lazy_strength, 0.05, 1.0, d.lazy_strength);
         s.build_up_on_hold = self.build_up_on_hold;
         self.paint.apply(&mut s.paint);
     }
@@ -702,6 +723,13 @@ pub struct Prefs {
     /// How hard the renderer works: shadow map size and the like (see
     /// `render/quality.rs`).
     pub render_quality: crate::render::quality::Quality,
+    /// A pen has reported pressure on this machine, in some session: the
+    /// first touch of the next one is then the pen's, not a mouse's
+    /// (`PenMeter::known`).
+    pub pen_seen: bool,
+    /// The brushes taken up lately, newest first, by name: the Brushes
+    /// card's Recent row.
+    pub recent_brushes: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -731,6 +759,8 @@ impl Default for Prefs {
             dynamic_topology_detail: dyntopo.detail,
             recent: Vec::new(),
             render_quality: opts.quality,
+            pen_seen: false,
+            recent_brushes: Vec::new(),
         }
     }
 }
@@ -1264,12 +1294,41 @@ mod tests {
         assert_eq!((settings.pose.offset, settings.pose.rigidity), (2.0, 0.6));
     }
 
+    /// A file from before each brush had its own Lazy Mouse: the one setting
+    /// all brushes shared goes to every one of them.
+    #[test]
+    fn a_shared_lazy_mouse_from_an_older_file_goes_to_every_brush() {
+        let mut file = serde_json::to_value(Prefs { brush: BrushPrefs::of(&Settings::default()), ..Prefs::default() }).unwrap();
+        let brush = file.get_mut("brush").unwrap();
+        for (_, tuning) in brush.get_mut("brushes").unwrap().as_object_mut().unwrap() {
+            let tuning = tuning.as_object_mut().unwrap();
+            for key in ["lazy_mouse", "lazy_radius", "lazy_strength"] {
+                tuning.remove(key);
+            }
+        }
+        let brush = brush.as_object_mut().unwrap();
+        brush.insert("lazy_mouse".into(), serde_json::json!(true));
+        brush.insert("lazy_radius".into(), serde_json::json!(40.0));
+        brush.insert("lazy_strength".into(), serde_json::json!(0.5));
+        let mut s = Settings::default();
+        Prefs::parse(&file.to_string()).brush.apply(&mut s);
+        for b in Brush::ALL {
+            let own = s.per_brush[b.index()];
+            assert_eq!((own.lazy_mouse, own.lazy_radius, own.lazy_strength), (true, 40.0, 0.5), "{}", b.name());
+        }
+        // And this version writes each brush's own, and not the shared one.
+        let written = serde_json::to_value(BrushPrefs::of(&s)).unwrap();
+        assert!(written.get("lazy_mouse").is_none_or(serde_json::Value::is_null));
+        assert_eq!(written["brushes"]["Clay"]["lazy_radius"], serde_json::json!(40.0));
+    }
+
     #[test]
     fn brush_settings_survive_a_capture_and_apply() {
         let mut settings = Settings::default();
         settings.brush = Brush::SnakeHook;
         settings.radius_px = 33.0;
-        settings.lazy_mouse = true;
+        settings.per_brush[Brush::SnakeHook.index()].lazy_mouse = true;
+        settings.per_brush[Brush::Clay.index()].lazy_radius = 60.0;
         settings.screen_space_size = false;
         settings.radius_world = 0.125;
         settings.move_connected = true;

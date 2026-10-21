@@ -113,9 +113,16 @@ pub fn shortened(name: &str, letters: usize) -> String {
 /// can be done with it besides picking it. A tile on the wheel itself comes
 /// off it with a right-click (`overlay.rs`).
 fn brush_menu(response: &egui::Response, library: &Library, i: usize, actions: &mut Vec<Action>) {
+    response.context_menu(|ui| menu_items(ui, library, i, actions));
+}
+
+/// The menu's lines, for the right-click on a row and for the card's
+/// visible \u{2026} button, which opens the same menu for the brush in hand:
+/// a pen's right-click is its barrel button, which is easy to miss.
+fn menu_items(ui: &mut Ui, library: &Library, i: usize, actions: &mut Vec<Action>) {
     let Some(entry) = library.entries().get(i) else { return };
     let ask = |actions: &mut Vec<Action>, ask: Ask| actions.push(Action::Brush(ask));
-    response.context_menu(|ui| {
+    {
         ui.label(egui::RichText::new(&entry.name).font(theme::bold(12.0)));
         let label = if entry.pinned { "Take Off the Space Wheel" } else { "Put On the Space Wheel" };
         if noted(ui.button(label), "menu:Wheel").clicked() {
@@ -158,7 +165,65 @@ fn brush_menu(response: &egui::Response, library: &Library, i: usize, actions: &
             ask(actions, Ask::ResetWheel);
             ui.close();
         }
+    }
+}
+
+/// How many brushes the Recent row keeps: the one in hand, and one line of
+/// the list's columns besides.
+const RECENT: usize = 1 + COLUMNS;
+
+/// Once a frame: the brush in hand goes to the front of the brushes taken
+/// up lately (by name, as the settings file keeps them).
+pub fn note_in_hand(recent: &mut Vec<String>, library: &Library, s: &Settings) {
+    if s.mask_mode {
+        return;
+    }
+    let name = &library.entries()[library.selected(s)].name;
+    if recent.first() == Some(name) {
+        return;
+    }
+    recent.retain(|kept| kept != name);
+    recent.insert(0, name.clone());
+    recent.truncate(RECENT);
+}
+
+/// The brushes of the Recent row, by their places in the library: the ones
+/// taken up lately, newest first, but not the one in hand, and not any that
+/// has since been renamed or deleted.
+fn recent_rows(library: &Library, s: &Settings, recent: &[String]) -> Vec<usize> {
+    let in_hand = (!s.mask_mode).then(|| library.selected(s));
+    recent.iter().filter_map(|name| library.named(name)).filter(|&i| Some(i) != in_hand).collect()
+}
+
+/// The brushes whose names hold `find`, whatever the case, in the library's
+/// order.
+fn found(library: &Library, find: &str) -> Vec<usize> {
+    let find = find.trim().to_lowercase();
+    let entries = library.entries();
+    (0..entries.len()).filter(|&i| entries[i].name.to_lowercase().contains(&find)).collect()
+}
+
+/// The top of the card: a box to find a brush by name, and the \u{2026} button
+/// with the brush in hand's menu. Gives back what is typed in the box.
+fn find_row(ui: &mut Ui, library: &Library, in_hand: usize, tips: bool, actions: &mut Vec<Action>) -> String {
+    let id = Id::new("brush_find");
+    let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        let menu = 30.0;
+        let width = (ui.available_width() - menu - GAP).max(40.0);
+        let field = egui::TextEdit::singleline(&mut text).hint_text("Find a brush").font(theme::font(12.0)).desired_width(width);
+        let field = ui.add(field);
+        // Esc in the box empties it.
+        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            text.clear();
+        }
+        theme::tip(field, tips, "Type part of a brush's name to list only the brushes that have it.");
+        let style = ButtonStyle { height: 24.0, ..Default::default() };
+        let button = theme::tip(theme::button(ui, menu, "\u{2026}", style), tips, "The brush in hand: put it on the Space wheel, duplicate it, reset it, export it and more. The same as a right-click on its row.");
+        egui::Popup::menu(&button).show(|ui| menu_items(ui, library, in_hand, actions));
     });
+    ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    text
 }
 
 /// What a row of the list, or a tile of the wheel, says when pointed at.
@@ -317,8 +382,8 @@ fn group(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
 /// in hand; its right-click menu does the rest.
 pub fn card(
     ui: &mut Ui,
-    library: &Library,
-    s: &Settings,
+    (library, s): (&Library, &Settings),
+    recent: &[String],
     icon: &dyn Fn(&str) -> Option<TextureId>,
     tips: bool,
     actions: &mut Vec<Action>,
@@ -330,11 +395,33 @@ pub fn card(
     let summary = if s.mask_mode { "Mask" } else { entries[in_hand].name.as_str() };
     theme::category(ui, "Brushes", theme::lit(ACCENT()), summary, true, |ui| {
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        for (title, kernels) in GROUPS {
-            group(ui, title, |ui| rows(ui, (library, s), &of_group(library, kernels), icon, tips, actions));
-        }
-        if !yours.is_empty() {
-            group(ui, "Yours", |ui| rows(ui, (library, s), &yours, icon, tips, actions));
+        let find = find_row(ui, library, in_hand, tips, actions);
+        if !find.trim().is_empty() {
+            // Only the brushes with that in their names, in one list.
+            let matches = found(library, &find);
+            if matches.is_empty() {
+                theme::hint(ui, "No brush has that in its name.");
+            }
+            rows(ui, (library, s), &matches, icon, tips, actions);
+        } else {
+            // One line, always: brushes appearing in it must never push the
+            // list down under a pen that is about to tap it.
+            let lately = recent_rows(library, s, recent);
+            group(ui, "Recent", |ui| {
+                if lately.is_empty() {
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+                    let words = "The brushes you take up show here.";
+                    ui.painter().text(rect.left_center() + vec2(4.0, 0.0), Align2::LEFT_CENTER, words, theme::font(11.0), theme::HINT());
+                } else {
+                    rows(ui, (library, s), &lately[..lately.len().min(COLUMNS)], icon, tips, actions);
+                }
+            });
+            for (title, kernels) in GROUPS {
+                group(ui, title, |ui| rows(ui, (library, s), &of_group(library, kernels), icon, tips, actions));
+            }
+            if !yours.is_empty() {
+                group(ui, "Yours", |ui| rows(ui, (library, s), &yours, icon, tips, actions));
+            }
         }
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
         ui.add_space(2.0);
@@ -362,8 +449,10 @@ pub fn card(
             ui,
             "Tap a brush to take it up; the number keys pick the ones with a number. Every brush keeps its own \
              settings, and changes stick as you make them.\n\n\
-             Right-click a brush to put it on the Space wheel or take it off, duplicate it as a brush of your own, \
-             reset it, delete it or export it. A dot marks a brush on the wheel, an S the one Shift smooths with.",
+             Right-click a brush (or press \u{2026} at the top for the brush in hand) to put it on the Space wheel or \
+             take it off, duplicate it as a brush of your own, reset it, delete it or export it. A dot marks a brush \
+             on the wheel, an S the one Shift smooths with. Recent holds the brushes you took up last; the box at \
+             the top finds a brush by name.",
         );
     });
 }
@@ -393,6 +482,32 @@ fn rename(ui: &mut Ui, i: usize, name: &str, tips: bool, actions: &mut Vec<Actio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_recent_row_holds_the_brushes_taken_up_lately_but_not_the_one_in_hand() {
+        let (mut library, mut s) = (Library::default(), Settings::default());
+        let mut recent = Vec::new();
+        for name in ["Clay", "Move", "Standard", "Clay", "Inflate", "Smooth", "Layer"] {
+            assert!(library.select_named(name, &mut s), "{name} ships");
+            note_in_hand(&mut recent, &library, &s);
+        }
+        assert_eq!(recent, ["Layer", "Smooth", "Inflate"], "newest first, each once, one line's worth and the one in hand");
+        let names: Vec<&str> = recent_rows(&library, &s, &recent).into_iter().map(|i| library.entries()[i].name.as_str()).collect();
+        assert_eq!(names, ["Smooth", "Inflate"], "the one in hand is not offered again");
+        // A name no brush has any more (renamed, deleted) is left out.
+        let gone = vec!["No Such Brush".to_owned(), "Move".to_owned()];
+        assert_eq!(recent_rows(&library, &s, &gone).len(), 1);
+    }
+
+    #[test]
+    fn the_find_box_matches_any_part_of_a_name_whatever_the_case() {
+        let library = Library::default();
+        let names = |find: &str| found(&library, find).into_iter().map(|i| library.entries()[i].name.clone()).collect::<Vec<_>>();
+        let clay = names("  cLaY ");
+        assert!(clay.contains(&"Clay".to_owned()) && clay.contains(&"Clay Strips".to_owned()), "{clay:?}");
+        assert!(clay.iter().all(|name| name.to_lowercase().contains("clay")), "{clay:?}");
+        assert!(names("no such brush").is_empty());
+    }
 
     #[test]
     fn the_wheel_starts_as_it_was_and_takes_pins_beside_their_kin() {

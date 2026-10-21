@@ -107,6 +107,11 @@ pub(super) fn pen_size(amount: f32, pen: f32) -> f32 {
 pub struct PenMeter {
     /// A pen has reported pressure at some time in this session.
     pub seen: bool,
+    /// A pen reported pressure in an earlier session on this machine: the
+    /// settings file remembers it (`Prefs::pen_seen`), so the first touch
+    /// after the app opens is taken for the pen it is. The panel's readout
+    /// goes by `seen` alone, which says whether pressure arrives now.
+    pub known: bool,
     /// The pressure it reports now, 0 to 1, while its tip is down.
     pub now: Option<f32>,
 }
@@ -119,10 +124,10 @@ impl PenMeter {
     /// nothing arrives with no pressure at all, which is also how a mouse
     /// arrives, and a stroke that opens that way is a mouse's: at full
     /// strength and full size, a blob at the head of a light stroke. So once
-    /// a pen has shown pressure in this session, a touch without any opens at
-    /// no pressure instead.
+    /// a pen has shown pressure, in this session or an earlier one, a touch
+    /// without any opens at no pressure instead.
     pub fn down(&mut self, force: Option<f32>) -> Option<f32> {
-        let pressure = force.or(self.seen.then_some(0.0));
+        let pressure = force.or((self.seen || self.known).then_some(0.0));
         self.moved(pressure);
         pressure
     }

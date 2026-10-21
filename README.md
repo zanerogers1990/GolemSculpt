@@ -28,19 +28,23 @@ sculpts at full strength and full size).
 | Alt + drag | Orbit |
 | Middle drag, or Alt + Shift + drag | Pan |
 | Ctrl + Alt + drag | Zoom |
+| Numpad 5 | Orthographic / perspective, as in Blender (also the Ortho / Persp button) |
+| (Hand, magnifier and house beside the view gizmo's buttons) | Drag the hand to pan, the magnifier up or down to zoom; tap the house for Home, the view a scene starts with |
 | Scroll over the model | Brush size |
+| [ / ] | Brush size a step smaller / bigger (a tenth each step; hold the key to keep going) |
+| Shift + [ / ] | Strength a step down / up, to the next 5% |
 | Scroll off the model | Zoom |
 | Double-click background, or F F | Frame the selection |
 | Double-click another object | Select it |
 | Ctrl + click a row of the object list | Add that object to the selection |
-| H / Shift + H / Alt + H | Hide the selection / hide everything else / show everything |
+| H / Shift + H / Alt + H | Hide the selection / hide everything else / show everything (each an undo step, as the eye buttons are) |
 | / | Local View: only the selection, framed; again to bring the rest and the view back |
 | Delete | Delete the selected object (asks first) |
 | 1 2 3 4 5 6 7 8 9 0 | The base brushes Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook (Pinch, Nudge and Erase Layer have no key, nor has any other brush of the library: pick them in the panel or on the wheel) |
 | P | The Paint brush; again, the brush you had before it (see Polypaint) |
 | I | Eyedropper: pick up the colour and material of the paint under the pointer |
 | Ctrl + drag / Shift + drag with the Paint brush | Erase the paint / blur the paint (it never smooths the clay) |
-| S / F / D + drag | Brush size / strength / focal shift |
+| S / F / D + drag | Brush size / strength / focal shift; the number shows above the ring while the key is held |
 | Space (hold) | Brush wheel: the brushes pinned to it, with the Strength of the brush in hand on a bar under it |
 | M | Mask painting |
 | X | Mirror X |
@@ -59,7 +63,11 @@ sculpts at full strength and full size).
 | J | Keys tool on / off |
 | Z, Shift + Z (also Ctrl + Z, Ctrl + Y) | Undo, redo |
 | Ctrl + S, Ctrl + Shift + S, Ctrl + O | Save, save as, open |
+| (Drag a file onto the window) | A sculpt (.sclp, .sculpt) opens as Open opens one; a model (.obj, .stl) is imported |
 | Ctrl + N | New scene (asks first if anything would be lost) |
+| Ctrl + Q | Quit (asks first if anything would be lost) |
+| Enter | Finish what the tool that is up is doing: fuse the tubes or muscles, accept an Extract, create a lathe's mesh, build the keys |
+| Esc | Close the brush wheel, leave the clean view; during a stroke, cancel it (the surface goes back, no undo step); during a gizmo drag, put the objects back; otherwise put the tool that is up away |
 | Tab | Clean view: nothing on screen but the model (Tab or Esc brings the panels back) |
 | (Arrow tab on a panel's inner edge) | Fold that panel away to the edge of the screen, or bring it back; sculpting carries on |
 | (Small window button in a card's header) | Float that card over the view; drag it by its title; the same button puts it back |
@@ -69,7 +77,15 @@ sculpts at full strength and full size).
 | (Tabs at the top of the Scene panel, and under the tools in the Sculpt panel) | Show that tab's cards: Brush or Mesh; Scene, Look, File or Settings |
 
 Dragging on the background to orbit is the one addition to the Unity app's
-controls; everything else matches it.
+controls; everything else matches it. The **Keyboard Shortcuts** card (Scene
+panel, Settings tab) lists the same keys, from one table in the code that a
+test holds to this one.
+
+A double-click is two clicks within half a second and 20 pixels of each
+other, which leaves room for a pen tip, which never lands twice on the same
+pixel. A press that drags (an orbit) is not the first half of one, so two
+quick orbits one after the other do not frame the view; nor is an F held
+and dragged to set the strength the first F of F F.
 
 If the window loses focus (Alt-Tab, a click on another program) while a button
 or key is held, the drag ends there as if you had let go (a stroke is kept as
@@ -261,12 +277,21 @@ Jitter, the two pen pressure settings, Smooth's and Flatten's modes, and the
 numbers of its kind: Clay Depth, Crease's Pinch and Depth, Layer Height and so
 on). Picking one brush never changes another, even another of the same kind:
 set Clay Strips up one way and Clay another and each is as you left it when
-you come back. What is NOT a brush's own: the size of the ring (one size for
-every brush, so changing brush never resizes it), Lazy Mouse, Build Up on
-Hold, the pen's Pressure Curve, symmetry and dynamic topology.
+you come back. Lazy Mouse is a brush's own too: on for Dam Standard, say, and
+off for Move. What is NOT a brush's own: the size of the ring (one size for
+every brush, so changing brush never resizes it), Build Up on Hold, the pen's
+Pressure Curve, symmetry and dynamic topology.
 
-**Right-click a brush** (or press the pen's barrel button on it) for
-everything else that can be done with it:
+At the top of the card, **Find a brush** lists only the brushes with what
+you type in their names (any part, any case; Esc empties it), and the
+**…** button beside it opens the menu below for the brush in hand, for a pen
+whose barrel button is easy to miss. Under them, **Recent** holds the four
+brushes you took up last before the one in hand, however you took them up
+(the list, the Space wheel, a number key); it is remembered between runs.
+
+**Right-click a brush** (or press the pen's barrel button on it, or the
+**…** button for the brush in hand) for everything else that can be done
+with it:
 
 - **Duplicate** makes a brush of your own that starts as this one is now, and
   puts it in hand. This is how to make a brush: duplicate the nearest one,
@@ -331,8 +356,8 @@ the status bar and left exactly as it is.
 
 A stroke is a run of dabs laid along the pen's path. How a brush lays them is
 that brush's own, under **Dabs** and **Pen Pressure** in its settings card
-(Clay Settings, Crease Settings and so on); what holds for every brush is in
-the **Stroke** card below it. Move, Pose and Snake Hook lay no dabs and have
+(Clay Settings, Crease Settings and so on); how the hand is steadied is in
+the **Stroke** card, just under Size and Strength. Move, Pose and Snake Hook lay no dabs and have
 none of the per-brush ones, but for Snake Hook's Pressure -> Strength.
 
 - **Spacing** is how far apart the dabs are, as a share of the brush's size:
@@ -369,10 +394,16 @@ none of the per-brush ones, but for Snake Hook's Pressure -> Strength.
   surface always comes out the same, and mirrored and radial copies of a
   scattered stroke are still exact copies of each other.
 
-In the **Stroke** card, for every brush: **Build Up on Hold**, **Lazy Mouse**
-(the brush trails the pointer on a short rope), the pen's **Pressure Curve**
-(how the pen answers your hand: higher needs a firmer press before pressure
-counts) and the pen readout.
+The **Stroke** card sits right under Size, Strength and Focal Shift, and its
+header shows what is set while it is closed ("Lazy 25 px · Curve 1.60"). In
+it: **Lazy Mouse** for the brush in hand (the brush trails the pointer on a
+short rope; **Lazy Radius** is how long the rope is, **Lazy Smoothing** how
+readily the brush follows once it is taut). Each brush keeps its own Lazy
+Mouse, as in ZBrush; it is off on every brush to start with, and a settings
+file from before, which had one Lazy Mouse for all brushes, gives that one to
+every brush. Move and Pose never trail. Then, for every brush: **Build Up on
+Hold**, the pen's **Pressure Curve** (how the pen answers your hand: higher
+needs a firmer press before pressure counts) and the pen readout.
 
 **Checking the pen** (once, with the tablet; it takes a minute):
 
@@ -388,11 +419,17 @@ counts) and the pen readout.
    shrink and swell as you go.
 4. Draw two strokes side by side with **Standard**, one as lightly as you can
    and one pressing hard: the light one should be much the fainter, with no
-   blob where it began. (Only the very first touch after the app opens may
-   begin heavy: until a pen has been seen, a touch that reports no pressure
-   is taken for a mouse.)
+   blob where it began. (Until a pen has been seen on this computer, a touch
+   that reports no pressure is taken for a mouse, at full strength. Once one
+   has, the settings remember it, so even the first touch after the app opens
+   is the pen's.)
 5. With the pen down and drawing, rest your other hand on the display: the
    stroke should carry on under the pen and not jump to the hand or stop.
+
+**Esc in the middle of a stroke** cancels it: the surface goes back exactly as
+it was when the stroke began (sculpt layers, paint and what dynamic topology
+added included), nothing goes on the undo history, and the rest of that drag
+does nothing until the pen is lifted.
 
 A fast stroke with a big brush on a dense model can be more than the machine
 can lay as fast as the pen moves. The stroke then falls behind the pen and
@@ -737,7 +774,10 @@ one level is kept on the others.
 
 - **Subdivide** (Ctrl + D) adds a level above the finest one, with four times
   the triangles, and moves the object to it. The line under the button says
-  what it will make ("77k to 307k triangles"). The model is rounded a little
+  what it will make and about how much more memory that takes ("77k to 307k
+  triangles: about 34 MB more memory": about 35 MB a million triangles for
+  the levels and 80 for the model, the coarser model being kept for Undo).
+  The model is rounded a little
   as it is divided, as clay is when it is smoothed. Tick **Flat** to cut each
   face into four and move nothing, for hard-edged shapes that must keep flat
   faces and sharp corners (the app remembers the tick). The most a level can
@@ -1116,8 +1156,12 @@ object as a whole. Drag an arrow to move along it, a ring to turn about it, the
 small cube on an arm to stretch that way, or the white cube in the middle to
 resize evenly (up grows, down shrinks). Click another object to select it
 (Shift or Ctrl + click adds it to the selection, or takes it out again);
-dragging anywhere else orbits. Each drag is one undo step. **Reset Rotation
-and Scale** in the Scene panel puts an object back square.
+dragging anywhere else orbits. Each drag is one undo step. **Esc** during a
+drag puts the objects (or, with a mask, the reshaped surface) back where they
+were when the drag began, and leaves no undo step; Esc with nothing being
+dragged puts the tool away, back to sculpting, as picking a brush does (from
+the panel, the Space wheel or a number key). **Reset Rotation and Scale** in
+the Scene panel puts an object back square.
 
 With several objects selected the gizmo sits at their shared centre, and they
 move, turn and resize together about it. That too is one undo step.
@@ -1140,7 +1184,26 @@ copy): see `crates/toolkit/README.md`.
 
 The view gizmo in the top-right corner turns the camera to the front, back,
 left, right, top or bottom when a bubble is clicked (click the same one again
-for the opposite side). Top and bottom always come up straight.
+for the opposite side). Top and bottom always come up straight. An axis view
+is orthographic, and the first turn you make by hand after it (a drag on the
+view or on the gizmo) goes back to perspective, as Blender's Auto Perspective
+does; orthographic picked with the **Ortho / Persp** button stays on through
+turns. Either switch keeps the model the size it is on screen: the button
+used to make it jump when a pan or zoom had left the camera's pivot in front
+of the model or behind it.
+
+Down the left of the gizmo's three buttons are three round handles, so the
+view can be moved every way with the pen alone, no keyboard or middle
+button in reach: drag the **hand** (beside Persp) to pan, the model following
+the pen as with a middle drag; drag the **magnifier** (beside Stroke Pivot)
+up to come nearer and down to go further, as with Ctrl + Alt + drag; tap the
+**house** (beside Frame) for **Home**, which glides back to the view a scene
+starts with: the whole scene from a little to one side and above, in
+perspective. **Numpad 5** switches between orthographic and perspective, as
+in Blender, like the Ortho / Persp button. The handles sit beside the
+buttons rather than in a row of their own so that the gizmo does not grow:
+the panels' fold tabs hang under it, and a small window has no room to
+spare.
 
 ### Deform
 
@@ -1230,7 +1293,7 @@ shape before sculpting detail.
 | S + drag | Size of the next sphere |
 | Right-click, or Ctrl + click, a sphere | Delete it and everything below it |
 | Delete | Delete the selected sphere |
-| Esc | Cancel a drag, else deselect |
+| Esc | Cancel a drag, else deselect, else put the tool away (the spheres stay) |
 | A | Solid preview of the skin |
 | X | Symmetry across the red plane |
 | Space (hold) | SSphere wheel, with the size of the next sphere under it |
@@ -1791,28 +1854,35 @@ pair; after that they can be moved apart and the joints stay on them.
 - A file the app is started with (named on its command line) that is missing
   or cannot be read says so in the status line, with the file's name, and the
   app starts with a new sphere.
-- **Open** asks how the file should come in: in place of the scene, or with
-  its objects added to it. Either is one undo step (undoing an Open brings back
-  the scene as it was, live arrays included, lit, coloured and framed as it
-  was; see Array). If the scene has changes
-  that are not saved it says so, and offers to save first. So does closing the
-  app (the File card's Exit, the window's close button, Alt + F4 or Ctrl + Q);
-  with nothing to lose it just closes. "Unsaved" means the scene is not what
-  its file holds:
-  something was sculpted, added, moved or undone since the last save or open,
-  or something was changed that is saved without being an undo step: an
-  object's symmetry (the Symmetry card, the X key), what the hide keys and
-  Local View show (H, Shift + H, Alt + H, /), or a live array (its count,
-  sizes, ticks, path). Those last are unsaved only while they differ from the
-  file: hide an object and show it again, or leave Local View, and there is
-  nothing to save. Changing only the look, the view or which object is
-  selected does not count.
+- **Open** (and a click on a Recent tile) puts the file in place of the
+  scene at once when nothing would be lost: the scene is saved, and no work
+  that is in no file stands on it. That is one undo step (undoing an Open
+  brings back the scene as it was, live arrays included, lit, coloured and
+  framed as it was; see Array), as New Scene is. If the scene has changes
+  that are not saved, it asks first, says so, and offers to save first or
+  to add the file's objects to the scene instead. (It used to ask "Open or
+  add?" every time; to add a sculpt's objects to a saved scene, use Import.)
+  So does closing the app (the File card's Exit, the window's close button,
+  Alt + F4 or Ctrl + Q); with nothing to lose it just closes.
+- **The window's title says whether there is anything to save**: the
+  sculpt's name, with a star while it has unsaved changes ("dragon head * -
+  GolemSculpt"); "Untitled" for a scene with no file yet; just "GolemSculpt"
+  for the untouched scene the app starts with. The File card's header shows
+  the same name and star. "Unsaved" means the scene is not what its file
+  holds:
+  something was sculpted, added, moved, hidden or undone since the last save
+  or open, or something was changed that is saved without being an undo
+  step: an object's symmetry (the Symmetry card, the X key), what Local View
+  shows (/), or a live array (its count, sizes, ticks, path). Those last are
+  unsaved only while they differ from the file: leave Local View, or turn
+  Mirror X off again, and there is nothing to save. Changing only the look,
+  the view or which object is selected does not count.
 - **New Scene** (the File card, or Ctrl + N) starts again without restarting
   the app: one fresh sphere at the Starting Detail, selected, with no
   symmetry set, seen from the view the app starts with. It is one undo step,
   like an Open: Undo brings the scene you had back, with its file name and
   whether it was saved, and Redo gives the new scene back. The new scene has
-  no file (the File card says "Unsaved"), so Save asks where it should go:
+  no file (the File card says "Untitled"), so Save asks where it should go:
   it cannot be saved over the sculpt it replaced. Until something is done to
   it there is nothing in it to save, so closing straight after asks nothing.
   If the scene you have has changes that are not saved, New Scene asks first
@@ -1878,7 +1948,7 @@ pair; after that they can be moved apart and the joints stay on them.
   step: Undo of either puts the view back where it was.
 - **Undo of an Open brings the file name back too.** The scene from before
   returns with the file it had (the File card shows its name again, or
-  "Unsaved" if it never had one), so Save writes it where it always went, or
+  "Untitled" if it never had one), so Save writes it where it always went, or
   asks where; it is never written over the file that was just opened. Whether
   it had unsaved changes comes back with it: a scene that was saved before
   the Open has nothing to save after the Undo, and one opened over without
@@ -1895,6 +1965,12 @@ pair; after that they can be moved apart and the joints stay on them.
 - **Recent**: the File card shows the last six sculpts saved or opened, each
   with a picture of the model taken when it was saved. Click one to open it.
   A file that has been moved or deleted drops out of the tiles.
+- **Drag a file onto the window** from Explorer: a sculpt (`.sclp`, or a
+  `.sculpt` from the Unity app) opens as Open opens one, asking first only
+  if unsaved work would be put aside; a model (`.obj`, `.stl`) is added to
+  the scene as Import adds it. While the file is over the window a toast says
+  which ("Drop to Open", "Drop to Import"). Anything else is turned away with
+  a line saying what can be dropped. Either is one undo step.
 - **Import** adds an `.obj` or `.stl` model to the scene, centred, or the
   objects of another `.sclp` where they were saved, with their live arrays. An STL comes
   in at its real size (millimetres, Z up; one unit is 10 mm, so a 10 mm ball is
@@ -2479,6 +2555,23 @@ mirrored across, with Validate and Remove.
   **Delete the others instead of hiding** is ticked. The result is
   rebuilt at **Voxel Resolution**, counted along the kept object's longest
   side, and starts with a clear mask.
+- **Each rebuild says beforehand what it will throw away.** Under the
+  Remesh, Quad Remesh, Decimate, Join and boolean buttons a line names what
+  the object (for Join and the booleans, any selected object) has that the
+  rebuild would lose, when it has any: "Drops the subdivision levels, merges
+  the sculpt layers into the model, clears the mask and shows the hidden
+  parts again. Undo (Z) brings it all back." Each names only what it loses:
+  Decimate keeps the mask and what is hidden, a plain Join keeps each mask.
+  Under Quad Remesh another line says it ignores symmetry, while the object
+  has a mirror axis or radial symmetry on.
+- **How many triangles a resolution makes.** Under the Remesh card's
+  Resolution, Join's Remesh Resolution and the booleans' Voxel Resolution, a
+  line says about how many triangles a rebuild at that number would make
+  ("About 1.20M triangles"), by the same reckoning the kernel uses to keep
+  within its limit, from the surface's area; for Join and the booleans it is
+  the most the result could have ("Up to about"). Past the limit it says so,
+  and the highest resolution that would do. The area is worked out again
+  after each edit, not every frame.
 - **How big a rebuild may be.** Remesh, Join with remesh, the booleans and a
   tube merge answer to one set of limits (`crates/volume/src/budget.rs`): 80
   million triangles (the booleans used to stop at 40 million; they now go
@@ -2592,12 +2685,25 @@ mirrored across, with Validate and Remove.
 - Copies start on top of the original; **Position** and **Scale** place the
   selected one by numbers, and the Transform gizmo by hand.
 - Every one of these is an undo step, a Join or a boolean included (one
-  step brings the separate objects back, shown again if they were hidden). The hide keys and Local View are not, as in the
-  Unity app: undo steps past them and leaves what they hid hidden. What they hide
-  is saved with the scene all the same (a sculpt saved in Local View opens with
-  the rest hidden), so while it differs from the file the scene counts as
-  unsaved (see Files).
-- Undo keeps the last 100 steps, and no more memory than a quarter of the
+  step brings the separate objects back, shown again if they were hidden).
+  So is every hide and show: an eye button, H, Shift + H and Alt + H alike,
+  so Z brings back what a stray key hid. (The Unity app's keys were not undo
+  steps, and the eye buttons here were; now the one rule holds for both.)
+  Local View (/) is not: it is a way of looking, and / takes it back. What it
+  hides is saved with the scene all the same (a sculpt saved in Local View
+  opens with the rest hidden), so while it differs from the file the scene
+  counts as unsaved (see Files).
+- **Each undo step has a name**, and Undo says what it took back: "Undo
+  Remesh", "Undo Clay Strips" (a stroke is named by its brush), "Redo Hide
+  Cube". The **History** button (… at the end of the Sculpt panel's
+  title line) lists every step Undo would take back, the latest at the top,
+  and under them what Redo would bring back: tap one to go straight back to
+  just before it, however many presses of Undo that is. Steps made together
+  count as one, as Undo takes them. A step recorded by work that finished in
+  the background, or inside a tool, is called by what kind of change it is
+  ("Rebuild", "Objects"). While SSpheres or another tool with an undo of its
+  own is up, Z steps through that first, so the list is not offered.
+- Undo keeps the last 500 steps (it was 100), and no more memory than a quarter of the
   computer's (16 GB on a 64 GB machine; never less than 2 GB). An object that
   was deleted, joined into another or opened over stays in memory, whole, for
   as long as a step can bring it back, and counts towards that; so does the
@@ -2749,14 +2855,24 @@ size; on one smaller than the wheel, part of it is off the edge.
 **Each panel shows a tab's worth of its cards at a time**, so no card is a
 long scroll away.
 
-- The **Sculpt** panel keeps Undo, Redo and the tools at its top: Sculpt,
-  Transform and SSpheres, and the rest under three headings that fold away
-  (**Make**: Tube, Muscle, Lathe, Array, Extract; **Mask, Hide & Cut**: Mask,
-  Hide, Trim, Split; **Print & Measure**: Measure, Keys). The heading of the
-  tool that is up stays open. Under them are two tabs: **Brush** (the brushes, the settings of the one in hand, the
-  stroke) and **Mesh** (Symmetry, Remesh with Dynamic Topology, Quad Remesh
-  and Decimate, Subdivision, Masking, Hidden Parts). A tool with a panel of its own
-  (SSpheres, Tube, Lathe...) shows that in place of the tabs while it is up.
+- The **Sculpt** panel keeps its top in place however far its cards are
+  scrolled: the title with the triangle count and the History button (…),
+  Undo and Redo, Sculpt / Transform / SSpheres, and three tabs: **Brush**,
+  **Mesh** and **Tools**. On the Brush tab the size and strength plate (Add,
+  Sub, Mask, Size, Strength, Focal Shift) is held there too, so it never
+  scrolls away, as long as the panel is tall enough to keep it and still show
+  cards under it (about 220 points of them); on a short window or at a large
+  interface size it goes back to the top of the tab and scrolls with the
+  rest. **Brush** has the Stroke card, the brushes and the settings of the
+  one in hand; **Mesh** has Symmetry, Remesh with Dynamic Topology, Quad
+  Remesh and Decimate, Subdivision, Masking, Hidden Parts; **Tools** has the
+  tools that work on the model in their own way, under three headings that
+  fold away (**Make**: Tube, Muscle, Lathe, Array, Extract; **Mask, Hide &
+  Cut**: Mask, Hide, Trim, Split; **Print & Measure**: Measure, Keys). They
+  used to sit above the tabs, which is what pushed Size and Strength out of
+  sight; their keys work from any tab. A tool with a panel of its own
+  (SSpheres, Tube, Lathe...) shows the tool buttons and its panel in place
+  of the tabs while it is up. Each tab keeps its own place in its scroll.
 - The **Scene** panel has four tabs along its top, which stay put however far
   the cards under them are scrolled: **Scene** (the objects, and Measure &
   Size), **Look** (Material, Lighting, Backdrop & Effects), **File** (the
@@ -2765,6 +2881,17 @@ long scroll away.
   under the tabs whichever is showing (and takes no room until there is
   something to say), and each tab keeps its own place in
   its scroll.
+- **Every slider can be typed into, and moved finely.** Double-tap a slider
+  and a box opens over its number: type the number as the slider shows it
+  (45 for 45%, 256 for a resolution, 1.2k for 1,200) and press Enter, or tap
+  anywhere else; Esc leaves it as it was. The first tap of the double tap
+  would have moved the slider, and that is undone before the box opens.
+  Shift + drag moves a slider a tenth as far as the pen goes, from where it
+  is, for the last small step. (The bars under the Space wheels drag only.)
+- **Reset Brush**, at the foot of the brush's settings card, puts every
+  setting of the brush in hand back as it came with the app (or as you made
+  it, for one of your own): the same as Reset in its menu. The size of the
+  ring is shared by all brushes and stays as it is.
 - A card that floats over the view stays up whichever tab is showing. Put it
   back while its tab is not the one showing and the panel turns to that tab,
   so the card does not simply vanish.
@@ -2836,6 +2963,12 @@ and beside the view gizmo; a long message wraps onto several lines.
   that worked: the red line comes up at the top as it does over a folded
   panel, and stays until it is tapped away or the panels come back. What
   went well is not said there.
+
+**A line over the bottom bar** says what every stroke works under, so it
+can be seen from any tab: the brush in hand (or "Mask painting"), the
+selected object's mirror axes and radial symmetry, "Masked" when it has a
+mask, and how many of its faces and how many objects are hidden. Only what is
+on is named; a plain scene shows the brush alone. It is for reading only.
 
 Background work (a merge, a cut, Make Real) shows its progress and its Cancel
 at the bottom of the view whatever is folded, and the question a Delete or an
@@ -2970,7 +3103,7 @@ sculpt.exe --screenshot out.png --demo-tool hide:array    # a shape drawn over o
 sculpt.exe --screenshot out.png --demo-tool array:point   # the gizmo's arrows on the end point of the path; array:arrows drags them sideways, array:start puts them on the square start point and drags that; array:arrow drags an arrow with the pointer and Z, printing a line per check
 sculpt.exe --demo-tool array:stroke                       # brush strokes begun on an array's copies by way of the pointer routines; prints a line per check (ok / FAIL), add --screenshot out.png to see the result
 sculpt.exe --demo-tool measure:focus                    # a stroke, a camera drag and a tool's drag cut off by the window losing focus; prints a line per check (ok / FAIL), add --screenshot out.png to see the result
-sculpt.exe --demo-tool measure:turn                     # the view turned by a drag, the view gizmo and an axis view with the camera's pivot left far behind the model, then a double-click on the background: the model stays where it is on screen; prints a line per check (ok / FAIL)
+sculpt.exe --demo-tool measure:turn                     # the view turned by a drag, the view gizmo and an axis view with the camera's pivot left far behind the model, a turn out of the axis view (back to perspective) and the Ortho / Persp button both ways, then a double-click on the background, the gizmo's pan and zoom handles and Home: the model stays where it is on screen; prints a line per check (ok / FAIL)
 sculpt.exe --screenshot out.png --demo-tool array:several --demo-files array   # three arrays (a ring, a curve, a mirrored column) saved, opened, undone, redone, added and exported; prints a line per check; the picture is the reopened scene
 sculpt.exe --screenshot out.png --demo-tool array:as-is some.sculpt            # the Array tool up on the arrays a file brought with it (a Unity sculpt that has one): the first object with an array is selected, its path and handles show
 sculpt.exe --screenshot out.png --demo-tool tube:radial   # a horn repeated six times round Y; also tube:mirror, tube:radial-mirror (three repeats and a mirror), tube:surface, tube:object (kept separate), tube:merged, tube:radial-merged
@@ -2985,7 +3118,7 @@ sculpt.exe --screenshot out.png --demo --demo-files recent  # the File card's re
 sculpt.exe --screenshot out.png --demo-blender play   # the Blender link worked without Blender: this run writes what Blender's side would; prints the status lines and a line per check (round and live put a real Blender at the other end: tests/blender_link/README.md)
 sculpt.exe --screenshot out.png --demo --demo-tool tube --demo-files ask-exit   # the question the close button would ask of the scene the other options left: here unsaved strokes and a live tube; ask-open is the one choosing a file would ask
 sculpt.exe --screenshot out.png --demo-spheres attached --demo-tool tube --demo-files ask-exit:saved   # the same with the scene taken for saved: only what is in no file is left to ask about
-sculpt.exe --screenshot out.png --demo-files ask-exit:mirror   # a change that is saved without an undo step, made first: mirror (the X key) | hide (H) | local (/)
+sculpt.exe --screenshot out.png --demo-files ask-exit:mirror   # a change made first: mirror (the X key) | local (/), saved without an undo step | hide (H), which is one
 sculpt.exe --screenshot out.png --demo-files lost   # what closing and opening would lose, worked through the keys and every tool; prints a line per check
 sculpt.exe --screenshot out.png --demo --demo-files open-undo   # Open, Undo, Redo and Save in every order, looking at what is in the files after each, and at the look and the view the scene is seen with; prints a line per check (name a .sclp or .sculpt to start from that file; open-undo:opened and open-undo:undone stop after an Open, and after its Undo, for a picture of the File card)
 sculpt.exe --screenshot out.png --demo --demo-files new         # New Scene and Exit through the routines the buttons run: unsaved work, a saved sculpt, Save and Undo in every order (looking at what is in the files), an array, a tube, spheres, a job at work, a stroke in progress; prints a line per check (new:fresh and new:undone stop after New Scene on a saved sculpt, and after its Undo, for a picture of the File card)
@@ -3034,7 +3167,7 @@ fingerprint of the scene),
 (New Scene, answered "New Scene Without Saving"), `undo@47`,
 `redo@48`, `file@49` (prints the name of the scene's file and whether
 anything is unsaved), `status@49` (prints the status line), `mirror@50`, `hide@50`, `show@50` and `local@50` (the
-X, H, Alt + H and / keys: changes that are saved without an undo step),
+X, H, Alt + H and / keys: changes the file keeps; X and / are no undo step, H and Alt + H are),
 `kept@50` (prints a fingerprint of what the file would keep of the objects
 besides their meshes: the same after a restore as before the crash),
 `close@50` (prints what the close button would ask), `quit@50` (a clean exit), `kill@50` (ends the program on the

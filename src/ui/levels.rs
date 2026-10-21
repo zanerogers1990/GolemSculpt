@@ -25,6 +25,18 @@ use crate::mesh::levels;
 /// The card's colour on the panel.
 const TINT: Color32 = Color32::from_rgb(170, 150, 235);
 
+/// About what a Subdivide to `after` triangles adds to the memory the app
+/// takes, as the README gives it: the levels hold about 35 bytes for each
+/// triangle of the finest level and the model itself about 80, less what the
+/// levels the object has already hold. The model from before is kept for
+/// Undo, so its memory is not given back.
+fn subdivide_bytes(mesh: &Mesh, after: usize) -> usize {
+    const LEVELS_PER_TRIANGLE: usize = 35;
+    const MODEL_PER_TRIANGLE: usize = 80;
+    let held = mesh.levels.as_ref().map_or(0, |l| l.whole_bytes());
+    (after * (LEVELS_PER_TRIANGLE + MODEL_PER_TRIANGLE)).saturating_sub(held)
+}
+
 /// "184 MB", or "1.2 GB" from a thousand megabytes up.
 pub(super) fn megabytes(bytes: usize) -> String {
     let mb = bytes as f64 / (1 << 20) as f64;
@@ -74,7 +86,8 @@ fn subdivide(ui: &mut egui::Ui, mesh: &Mesh, flat: &mut bool, tips: bool, action
         Some(why) => theme::hint(ui, &why),
         None => {
             let (now, after) = (mesh.triangle_count(), levels::triangles_after(mesh));
-            theme::hint(ui, &format!("{} to {} triangles.", fmt_count(now), fmt_count(after)));
+            let more = megabytes(subdivide_bytes(mesh, after));
+            theme::hint(ui, &format!("{} to {} triangles: about {more} more memory.", fmt_count(now), fmt_count(after)));
         }
     }
     let help = "Subdivide only cuts each face into four and moves nothing: for hard-edged shapes that must keep their \

@@ -496,7 +496,9 @@ panels use the same module (`src/ui/theme.rs` re-exports it), so they match.
 `category(ui, title, accent, summary, default_open, |ui| ..)` is the card
 everything sits in. Inside: `heading`, `hint`, `line(ui, text, OK | ERROR |
 HINT())`, `button(ui, width, text, ButtonStyle { icon, active, badge, height })`,
-`tile`, `slider(ui, label, &mut f32, range, |v| text)`, `checkbox`,
+`tile`, `slider(ui, label, &mut f32, range, |v| text)` (a double tap types a
+number into it, read back through `|v| text`, so give it a readout that is a
+number at both ends of the range; Shift + drag is fine: `src/typed.rs`), `checkbox`,
 `text_field` / `labelled_field`, `shortcuts(ui, &[(key, what)])`,
 `row_width(ui, n, gap)` for a row of equal buttons, `tip(response, cx.tips,
 text)`, `count(n)`, and the colours. Those the user's theme sets are read by

@@ -469,6 +469,18 @@ fn brush_library_properties() -> Value {
 }
 
 /// One set of properties made of two.
+/// Each brush's Lazy Mouse, for `set_brush`: apart from its other settings,
+/// which fill one `json!` to the macro's depth.
+fn lazy_properties() -> Value {
+    let number = |description: &str| json!({ "type": "number", "description": description });
+    let boolean = |description: &str| json!({ "type": "boolean", "description": description });
+    json!({
+        "lazy_mouse": boolean("This brush's Lazy Mouse: the brush trails the pointer on a rope, steadying long curves. Each brush has its own; off to start with. Move and Pose never trail."),
+        "lazy_radius": number("This brush's Lazy Mouse rope, 1 to 150 screen pixels. Starts at 25."),
+        "lazy_strength": number("This brush's Lazy Mouse smoothing, 0.05 to 1: how readily the brush follows once the rope is taut. Starts at 1."),
+    })
+}
+
 fn with_properties(mut properties: Value, more: Value) -> Value {
     if let (Some(all), Value::Object(more)) = (properties.as_object_mut(), more) {
         all.extend(more);
@@ -594,7 +606,7 @@ fn tools() -> Value {
              a deleted brush's file was kept). The symmetry settings (mirror_x, mirror_y, mirror_z, radial, radial_axis, radial_custom_axis, \
              symmetry_space) are not the brush's: each object has its own, and these set the active object's. \
              Select another object and its own symmetry is what strokes are made under.",
-            with_properties(brush_library_properties(), json!({
+            with_properties(with_properties(brush_library_properties(), lazy_properties()), json!({
                 "brush": string(
                     "The brush, by its name in the library: a base brush (Move, Clay, Smooth, Crease, Inflate, \
                      Flatten, Pose, Standard, Layer, Snake Hook, Pinch, Nudge, Erase Layer, Paint), a shipped one or \

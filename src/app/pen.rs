@@ -128,7 +128,7 @@ mod tests {
         let steps = feed(&mut input, &mut meter, &[touch(TouchPhase::Started, PEN, (400.0, 300.0), None)]);
         assert_eq!(steps, [Step::Press(None)], "it opens as a mouse would: full strength, full size");
         assert_eq!((input.pointer, input.pen_down, input.pen_touch), (Vec2::new(400.0, 300.0), true, Some(PEN)));
-        assert_eq!(meter, PenMeter { seen: false, now: None });
+        assert_eq!(meter, PenMeter { seen: false, known: false, now: None });
 
         // Pressure arrives mid-stroke: it is a pen, and is from here on.
         let steps = feed(&mut input, &mut meter, &[touch(TouchPhase::Moved, PEN, (410.0, 300.0), Some(0.4))]);

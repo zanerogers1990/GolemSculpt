@@ -19,8 +19,10 @@ pub const LEFT_WIDTH: f32 = 270.0;
 pub const RIGHT_WIDTH: f32 = 260.0;
 pub const MARGIN: f32 = 8.0;
 
-/// The view gizmo's column: its bubbles, then Persp, Stroke Pivot and Frame.
-pub(super) const GIZMO_SIZE: Vec2 = vec2(108.0, 108.0 + 3.0 * (4.0 + 22.0));
+/// The view gizmo's column: its bubbles, then Persp, Stroke Pivot and Frame,
+/// each with a pan, zoom or Home handle at its left (view_handles.rs), which
+/// makes the rows a little taller than the buttons.
+pub(super) const GIZMO_SIZE: Vec2 = vec2(108.0, 108.0 + 3.0 * (4.0 + super::view_handles::SIZE));
 const GIZMO_TOP: f32 = 14.0;
 /// The gap between the gizmo and the panel, or the folded tab, beside it.
 const GIZMO_GAP: f32 = 14.0;
@@ -287,8 +289,9 @@ mod tests {
                 assert!(!right.intersects(gizmo(s, folded[1])), "{what}: the right tab is on the gizmo");
                 assert!(!left.intersects(gizmo(s, folded[1])), "{what}: the left tab is on the gizmo");
                 assert!(!left.intersects(right), "{what}: the tabs meet");
-                // The bar's three checkboxes: about 330 points of it are used.
-                let bar = Rect::from_min_size(bottom_bar_origin(s, folded[0]), vec2(330.0, 22.0));
+                // The bar's checkboxes: about 330 points of it are used; and
+                // the status line above them (status_row.rs), about as wide.
+                let bar = Rect::from_min_size(bottom_bar_origin(s, folded[0]) - vec2(0.0, 22.0), vec2(330.0, 44.0));
                 assert!(!left.intersects(bar) && !right.intersects(bar), "{what}: a tab is on the bottom bar");
                 assert!(s.contains_rect(left) && s.contains_rect(right), "{what}: a tab is off the screen");
             }

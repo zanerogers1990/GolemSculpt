@@ -692,7 +692,7 @@ fn key_of(code: KeyCode) -> Option<kit::Key> {
 /// want them: undo and redo, the transform gizmo, hide the panels,
 /// fullscreen.
 fn stays_with_app(code: KeyCode) -> bool {
-    matches!(code, KeyCode::KeyZ | KeyCode::KeyG | KeyCode::Tab | KeyCode::F11)
+    matches!(code, KeyCode::KeyZ | KeyCode::KeyG | KeyCode::Tab | KeyCode::F11 | KeyCode::Numpad5)
 }
 
 impl Running {

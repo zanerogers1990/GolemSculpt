@@ -635,6 +635,8 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
     if tip(slider, tips, help).changed() {
         st.bool_resolution = Some(log.exp2().round());
     }
+    super::rebuild_notes::boolean_estimate(ui, doc, st.bool_resolution.unwrap_or(doc.opts.remesh_resolution));
+    super::rebuild_notes::hint(ui, doc, super::rebuild_notes::Rebuild::Surface, true);
     let help = "Deletes the other selected objects instead of just hiding them (hidden ones can be shown again from the list). Undo (Z) brings them back either way.";
     // Unity's label is "Delete the other objects instead of hiding", which
     // is wider than this panel.
@@ -653,12 +655,15 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
         if tip(slider, tips, help).changed() {
             doc.opts.remesh_resolution = log.exp2().round();
         }
+        super::rebuild_notes::join_estimate(ui, doc, doc.opts.remesh_resolution);
     }
     let style = ButtonStyle { icon: assets.icon("join"), ..Default::default() };
     let help = "Merges every selected object into the bright one, as one mesh. Each shell is kept as it is, masks included. Undo (Z) brings the separate objects back.";
     if tip(theme::button(ui, ui.available_width(), "Join", style), tips, help).clicked() {
         actions.push(Action::Join { remesh: st.join_remesh });
     }
+    let kept = if st.join_remesh { super::rebuild_notes::Rebuild::Surface } else { super::rebuild_notes::Rebuild::Join };
+    super::rebuild_notes::hint(ui, doc, kept, true);
 
     // Not a way of combining, but it takes the same selection, and this is where that is made.
     ui.add_space(6.0);

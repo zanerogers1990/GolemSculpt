@@ -330,6 +330,8 @@ impl Running {
         self.transform_apply();
         let Some(d) = self.transform.dragging.take() else { return };
         let name = d.drag.handle.name();
+        // The drag's undo step is called by its handle, as its toast is.
+        self.doc.history.name_next(Some(name.to_owned()));
         match d.what {
             Dragged::Objects { before, .. } => {
                 if record(&self.doc.scene, &mut self.doc.history, before) {
@@ -362,7 +364,42 @@ impl Running {
             // The spheres keep their own history: the drag is one step there.
             Dragged::Spheres => self.doc.spheres.end_gizmo_drag(),
         }
+        self.doc.history.name_next(None);
         self.redraw = true;
+    }
+
+    /// Esc during a drag of the handles: the objects, or the reshaped surface,
+    /// go back to where they were at the press, and no undo step is left.
+    /// False for a drag that is not the app's own to take back (a hosted
+    /// tool's target, the spheres: they see Esc first and cancel their own).
+    /// The button stays down until it is released, but moves nothing.
+    pub(super) fn transform_escape(&mut self) -> bool {
+        let ours = matches!(
+            &self.transform.dragging,
+            Some(Dragging { what: Dragged::Objects { .. } | Dragged::Surface { .. }, .. })
+        );
+        if !ours {
+            return false;
+        }
+        let Some(d) = self.transform.dragging.take() else { return false };
+        match d.what {
+            Dragged::Objects { before, .. } => {
+                let doc = &mut self.doc;
+                doc.scene.restore(before, &mut doc.mesh);
+                self.scene_changed();
+            }
+            Dragged::Surface { deform, .. } => {
+                let doc = &mut self.doc;
+                if let Some(delta) = deform.end(&mut doc.mesh) {
+                    doc.mesh.apply_delta(&delta, true);
+                }
+                doc.sculptor.last_hit = None;
+            }
+            Dragged::Tool { .. } | Dragged::Spheres => {}
+        }
+        self.toast("Move Cancelled");
+        self.redraw = true;
+        true
     }
 
     /// Lets go of a sphere drag the spheres have already cancelled (Esc put
