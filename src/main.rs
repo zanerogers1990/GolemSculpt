@@ -7,6 +7,7 @@ mod bench;
 mod bench_levels;
 mod bench_matched;
 mod bench_render;
+mod brush_feel;
 mod brush_hash;
 mod bridge_guard;
 mod brush_files;
@@ -94,6 +95,8 @@ enum Errand {
     /// strokes and a hash of the mesh after each, to show a speed change
     /// left every result as it was (see brush_hash.rs).
     BrushHash(Vec<usize>),
+    /// `--brush-feel`: scripted strokes of every brush, measured (see brush_feel.rs).
+    BrushFeel,
     /// `--bench-levels`, with what follows it: the finest level's triangles, e.g. `--bench-levels 1000000`.
     BenchLevels(Vec<usize>),
     /// `--bench-deform`, with what follows it: triangle counts. One preview frame of each gizmo deformer.
@@ -123,6 +126,8 @@ fn errand(args: &[String]) -> Option<Errand> {
         Some(Errand::RenderShots(rest.first().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("shots"))))
     } else if let Some([a, b, ..]) = after("--compare-shots") {
         Some(Errand::CompareShots(PathBuf::from(a), PathBuf::from(b)))
+    } else if after("--brush-feel").is_some() {
+        Some(Errand::BrushFeel)
     } else if let Some(rest) = after("--brush-hash") {
         Some(Errand::BrushHash(numbers(rest)))
     } else if let Some(rest) = after("--bench-levels") {
@@ -170,6 +175,7 @@ fn main() {
         Some(Errand::RenderShots(folder)) => return bench_render::run_shots(&folder),
         Some(Errand::CompareShots(a, b)) => return bench_render::compare(&a, &b),
         Some(Errand::BrushHash(tris)) => return brush_hash::run(&tris),
+        Some(Errand::BrushFeel) => return brush_feel::run(),
         Some(Errand::BenchLevels(sizes)) => return bench_levels::run(&or(sizes, &[1_000_000, 5_000_000, 10_000_000])),
         Some(Errand::BenchDeform(sizes)) => return deform::bench::run(&or(sizes, &[1_000_000, 5_000_000, 10_000_000])),
         _ => {}

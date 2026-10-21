@@ -232,6 +232,17 @@ fn every_brush(run: &mut Run) {
     for name in ["Trim", "Planar", "Polish"] {
         run.stroke(&format!("{name} along mirror"), &mut preset(name, 90.0, true), Path::Along, 30, false);
     }
+    // Dam Standard, the Crease preset: beside and along the plane, and both
+    // sizes across the front with and without the mirror.
+    for (path, label) in [(Path::Along, "along"), (Path::Aside, "aside")] {
+        run.stroke(&format!("Dam Standard {label} mirror"), &mut preset("Dam Standard", 90.0, true), path, 30, false);
+    }
+    for radius in [40.0, 150.0] {
+        for mirror in [false, true] {
+            let name = format!("Dam Standard r{radius} {}", if mirror { "mirror" } else { "plain" });
+            run.stroke(&name, &mut preset("Dam Standard", radius, mirror), Path::Wave, 30, false);
+        }
+    }
     for brush in [Brush::Clay, Brush::Smooth, Brush::Standard, Brush::Layer, Brush::Move, Brush::SnakeHook, Brush::Inflate] {
         run.stroke(&format!("{} along mirror", brush.name()), &mut holding(brush, 90.0, true), Path::Along, 30, false);
     }
@@ -318,6 +329,22 @@ fn refined(run: &mut Run) {
     for name in ["Relax", "Keep Volume", "Smooth Peaks", "Smooth Valleys", "Clay Strips"] {
         run.stroke(&format!("{name} refined mirror"), &mut preset(name, 90.0, true), Path::Along, 24, true);
     }
+    run.stroke("Dam Standard refined mirror", &mut preset("Dam Standard", 90.0, true), Path::Wave, 24, true);
+}
+
+/// Clay Strips and Dam Standard on a coarse ball of their own, refined by
+/// dynamic topology and then stroked again: the strokes in [`refined`] ride
+/// on whatever the brushes before them left, so these show the two brushes
+/// themselves are unchanged when another brush has changed.
+fn refined_presets(run: &mut Run) {
+    let mut strips = preset("Clay Strips", 90.0, true);
+    strips.dyntopo.enabled = true;
+    run.stroke("Clay Strips dyntopo mirror (own ball)", &mut strips, Path::Along, 24, true);
+    let mut dam = preset("Dam Standard", 90.0, true);
+    dam.dyntopo.enabled = true;
+    run.stroke("Dam Standard dyntopo mirror (own ball)", &mut dam, Path::Wave, 24, true);
+    run.stroke("Clay Strips refined mirror (own ball)", &mut preset("Clay Strips", 90.0, true), Path::Wave, 24, true);
+    run.stroke("Dam Standard refined mirror (own ball)", &mut preset("Dam Standard", 90.0, true), Path::Along, 24, true);
 }
 
 /// `tris` is the size of the main ball (300,000 triangles unless told).
@@ -338,6 +365,8 @@ pub fn run(tris: &[usize]) {
         coarse.mesh.triangle_count(),
         coarse.mesh.vertex_count()
     );
-    let (all, failed) = (run.all.0 ^ coarse.all.0.rotate_left(17), run.failed + coarse.failed);
+    let mut own = Run::new(primitives::build(Primitive::Sphere, 20_000, 0.5));
+    refined_presets(&mut own);
+    let (all, failed) = (run.all.0 ^ coarse.all.0.rotate_left(17) ^ own.all.0.rotate_left(29), run.failed + coarse.failed + own.failed);
     println!("ALL {all:016x}  undo mismatches {failed}");
 }
