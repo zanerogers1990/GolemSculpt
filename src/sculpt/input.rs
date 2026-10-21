@@ -3,8 +3,12 @@
 
 use glam::Vec2;
 
-/// How fast the smoothed pressure chases the pen's, per second.
-const PRESSURE_SMOOTHING: f32 = 20.0;
+/// How fast the smoothed pressure chases the pen's, per second: it closes
+/// all but a third of the gap in about 17 milliseconds. Enough to take the
+/// grain out of a pen's sensor; at 20 a second (50 milliseconds) a stroke's
+/// width and strength trailed the hand visibly, most of all where a stroke
+/// tapers at its ends.
+const PRESSURE_SMOOTHING: f32 = 57.0;
 
 /// The longest step one pressure sample may take. Pen samples arrive every
 /// few milliseconds while the tip is down, so this binds mainly on the first
@@ -17,10 +21,12 @@ const MAX_PRESSURE_DT: f32 = 1.0 / 60.0;
 /// pressure gives a jittery, stair-stepped stroke, so the value the brushes
 /// use chases it instead of tracking it 1:1.
 ///
-/// It is kept between strokes rather than reset: resetting to full strength
-/// made every touch ease down from a spike. It starts at 1 for the same
-/// reason turned round: starting at 0 made the first stroke of a session
-/// open weak.
+/// A stroke drawn with the pen starts from the pen's own first reading
+/// ([`Self::touch`]), not from where the last stroke left the filter: eased
+/// in from there, a light touch after a firm stroke opened with a blob, and
+/// a firm one after a light stroke with a gap. Between strokes it holds its
+/// value, which only matters to a stroke whose first sample carries no
+/// pressure; it starts at 1, as a mouse is.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PenPressure {
     pub smoothed: f32,
@@ -35,6 +41,12 @@ impl Default for PenPressure {
 }
 
 impl PenPressure {
+    /// A stroke begins with the pen reading `raw`: the filter starts there.
+    pub fn touch(&mut self, raw: f32, time: f64) {
+        self.smoothed = raw.clamp(0.0, 1.0);
+        self.last_time = time;
+    }
+
     /// One pointer sample's step: the smoothed value eases toward the pen's
     /// pressure over the time since the last sample. A sample with no
     /// pressure (a mouse) leaves the held value alone and only moves the
@@ -69,7 +81,8 @@ pub(super) fn pen_curve(smoothed: f32, curve: f32) -> f32 {
 /// The share of its Strength a brush works at under pen pressure `pen` (0 to
 /// 1, from [`pen_curve`]; a mouse is always 1). `amount` is the brush's
 /// Pressure -> Strength: how much of the strength the lightest touch takes
-/// away. Written so that full pressure, and a mouse, give exactly 1.
+/// away, all of it at 100% (where the brushes start). Written so that full
+/// pressure, and a mouse, give exactly 1.
 pub(super) fn pen_strength(amount: f32, pen: f32) -> f32 {
     1.0 - amount * (1.0 - pen)
 }

@@ -107,10 +107,12 @@ fn view_from(mesh: &Mesh, from: Vec3) -> View {
     camera.view(Vec2::ZERO, SIZE, camera.distance, 1.0)
 }
 
+/// Layer rising each dab as `strength` did when these tests were written
+/// (see `layer_as_before`).
 fn layer(radius: f32, strength: f32, mirror: [bool; 3]) -> Sculptor {
     let mut sculptor = sculptor_with(Brush::Layer);
     sculptor.settings.radius_world = radius;
-    sculptor.settings.current_mut().strength = strength;
+    layer_as_before(&mut sculptor.settings, strength);
     sculptor.settings.symmetry = mirror;
     sculptor
 }

@@ -1526,8 +1526,9 @@ fn a_refining_stroke_begun_on_a_mirror_copy_lands_under_the_pointer() {
     let local = view.local_to(scene.brush_matrix());
     let before = mesh.vertex_count();
     let mut sculptor = refining_sculptor(Brush::Inflate, 0.08);
-    // Raising the surface only a little, so what is added stays by the path.
-    sculptor.settings.per_brush[Brush::Inflate.index()].strength = 0.1;
+    // Raising the surface only a little, so what is added stays by the path
+    // (as little as 10% raised it before the Strength slider was mapped).
+    sculptor.settings.per_brush[Brush::Inflate.index()].strength = crate::sculpt::strength::from_old(Brush::Inflate, 0.1);
     let sample = |i: usize| PointerSample { pos: pixel(i), pressure: None, time: i as f64 / 240.0 };
     assert!(sculptor.begin(&mut mesh, &local, sample(0), false, false), "the press missed the copy");
     for i in 1..on_mesh.len() {

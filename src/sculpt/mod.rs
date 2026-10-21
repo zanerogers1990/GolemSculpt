@@ -28,6 +28,9 @@ pub mod paint;
 mod pose;
 mod radial;
 mod share;
+pub mod strength;
+#[cfg(test)]
+mod feel_tests;
 #[cfg(test)]
 mod kernel_tests;
 #[cfg(test)]
@@ -297,10 +300,26 @@ impl BrushSettings {
     pub const PRESSURE: RangeInclusive<f32> = 0.0..=1.0;
 }
 
-/// Where Pressure -> Strength starts: the lightest touch works at 12% of the
-/// brush's Strength, as it did when that floor was one setting for every
-/// brush.
-pub const DEFAULT_PRESSURE_STRENGTH: f32 = 0.88;
+/// Where Pressure -> Strength starts: all of it, so the lightest touch of
+/// the pen does next to nothing, as in every other sculpting app.
+pub const DEFAULT_PRESSURE_STRENGTH: f32 = 1.0;
+
+/// Where it started before 2026-10-21: the lightest touch worked at 12% of
+/// the brush's Strength (the old Light-Touch Floor). Clay Strips keeps it;
+/// a settings file from then is read by it (`prefs.rs`).
+pub const OLD_PRESSURE_STRENGTH: f32 = 0.88;
+
+/// The base brushes that start with Front Facing on (`Settings::default`).
+pub const FRONT_FACING: [Brush; 8] = [
+    Brush::Standard,
+    Brush::Clay,
+    Brush::Inflate,
+    Brush::Layer,
+    Brush::Flatten,
+    Brush::Smooth,
+    Brush::Pinch,
+    Brush::Nudge,
+];
 
 /// The spacing, in radii, at which one dab alone stands as tall as the
 /// stroke its brush draws: past it the dabs are separate prints, and a print
@@ -425,13 +444,32 @@ impl Default for Settings {
             per_brush[b.index()].accumulate = true;
         }
         per_brush[Brush::Crease.index()].positive = false;
+        // Front Facing on, as in Blender's and ZBrush's brushes: a stroke on
+        // a thin form leaves its far side alone. Not Move or Snake Hook,
+        // which take hold of a form whole, and not Crease, which Dam
+        // Standard is made of (it stays exactly as it was).
+        for b in FRONT_FACING {
+            per_brush[b.index()].front_facing = true;
+        }
+        // Strength on the kernels it is mapped for (`strength.rs`): a clear
+        // stroke at half, a tenth of the radius in one pass, for the ones
+        // that build; for the others the Strength that does what their old
+        // default did.
+        per_brush[Brush::Standard.index()].strength = 0.5;
+        per_brush[Brush::Inflate.index()].strength = 0.5;
+        per_brush[Brush::Layer.index()].strength = 0.5;
+        per_brush[Brush::Smooth.index()].strength = 0.22;
+        per_brush[Brush::Flatten.index()].strength = 0.22;
         // Move's Strength is how much of the pen's travel the surface
-        // follows. Half of it: a pull that is easy to place, not a yank.
-        // Nudge's is the same thing, dab by dab.
-        per_brush[Brush::Move.index()].strength = 0.5;
-        per_brush[Brush::Nudge.index()].strength = 0.5;
+        // follows: all of it, so the point taken hold of stays under the pen
+        // (as in Blender and Nomad). Nudge's is the same thing, dab by dab.
+        per_brush[Brush::Move.index()].strength = 1.0;
+        per_brush[Brush::Nudge.index()].strength = 0.63;
         // A stroke of Pinch at this draws the surface a third of the way in.
-        per_brush[Brush::Pinch.index()].strength = 0.3;
+        per_brush[Brush::Pinch.index()].strength = 0.45;
+        // Snake Hook's is how much of the pen's travel the pulled surface
+        // follows, step by step: all of it.
+        per_brush[Brush::SnakeHook.index()].strength = 1.0;
         // An eraser pressed hard rubs right out; the pen's pressure is what
         // makes it gentle (a light touch works at an eighth of this).
         per_brush[Brush::EraseLayer.index()].strength = 1.0;
@@ -758,6 +796,11 @@ struct Stroke {
     /// The pen's pressure as of the last sample worked through, as the
     /// brushes read it: 0 to 1, and 1 for a mouse.
     pressure: f32,
+    /// With Lazy Mouse on, the pressure trails the pen as the brush trails
+    /// the pointer, by the same share each step (as Blender's stabiliser
+    /// does), so a stroke's width does not run ahead of its place. This is
+    /// it; `pressure` is it while Lazy Mouse is on.
+    lazy_pressure: f32,
     time: f64,
     /// For a brush that works across its travel (`Brush::follows_travel`):
     /// the way the surface under the stroke faces and the way the stroke is
@@ -984,8 +1027,8 @@ pub struct Sculptor {
     /// What the pen is reporting, for the panel (`input::PenMeter`).
     pub pen_meter: PenMeter,
     stroke: Option<Stroke>,
-    /// Held between strokes: resetting it makes every stroke open with a
-    /// spike of strength.
+    /// The pen-pressure filter. A pen's stroke starts it from the pen's
+    /// first reading; between strokes it holds its value.
     pen: PenPressure,
     /// Whether the stroke in progress began with a pressure reading, which only
     /// a pen gives. Its later samples without one (the lift) are the pen still.
@@ -1164,7 +1207,7 @@ impl Sculptor {
         Some(Params {
             brush: kernel,
             sign,
-            strength: own.strength,
+            strength: strength::effective(kernel, own.strength),
             accumulate: own.accumulate,
             build_up: own.build_up,
             smooth_mode: own.smooth_mode,
@@ -1229,7 +1272,7 @@ impl Sculptor {
             sign = -sign;
         }
         let s = &self.settings;
-        let params = Params {
+        let mut params = Params {
             brush,
             mask,
             sign,
@@ -1256,8 +1299,19 @@ impl Sculptor {
             erase: if !mask && brush == Brush::EraseLayer { erase::Erased::of(mesh) } else { None },
             paint: painting.flatten(),
         };
+        // What the kernel makes of the Strength slider (`strength.rs`). A
+        // mask is painted at the slider's own number, and a dragged print's
+        // Strength is its height.
+        if !mask && !params.prints() {
+            params.strength = strength::effective(brush, bs.strength);
+        }
         let zadd = self.zadd_params(&params, invert);
         self.pen_stroke = sample.pressure.is_some();
+        // A pen's stroke starts from its own first reading, not from where
+        // the last stroke left the filter (`input::PenPressure`).
+        if let Some(raw) = sample.pressure {
+            self.pen.touch(raw, sample.time);
+        }
         let pressure = self.shape_pressure(&sample);
         let bounds = mesh.bounds();
         // Scattered dabs land up to that far off the path: the surface is
@@ -1305,6 +1359,7 @@ impl Sculptor {
             rope,
             pointer: sample.pos,
             pressure,
+            lazy_pressure: pressure,
             time: sample.time,
             crease_n: None,
             crease_d: Vec3::ZERO,
@@ -1480,19 +1535,25 @@ impl Sculptor {
         let Some(stroke) = self.stroke.as_mut() else { return };
         let dt = (sample.time - stroke.time).max(0.0) as f32;
         stroke.time = sample.time;
-        stroke.pressure = pressure;
         stroke.cam = view.pos;
 
         let p = stroke.params;
+        let is_move = !p.mask && matches!(p.brush, Brush::Move | Brush::Pose);
+        // Lazy mouse: the brush trails the pointer on a rope of fixed length.
+        // Not for Move or Pose, which follow the pointer 1:1 by design.
+        let lazy_on = lazy.0 && !is_move;
+        // The pressure trails by the share the rope takes up over the same
+        // time; it still falls to the pen's own as the pen lifts, so a
+        // stroke still tapers off at its end.
+        stroke.lazy_pressure += (pressure - stroke.lazy_pressure) * LazyRope::follow(lazy.2, dt);
+        stroke.pressure = if lazy_on { stroke.lazy_pressure } else { pressure };
+        let pressure = stroke.pressure;
         stroke.aim.look(view);
         if let Some(print) = stroke.print.as_mut() {
             // Sized once a frame in `frame`; only the latest position matters.
             return print.drag_to(view, sample.pos);
         }
-        let is_move = !p.mask && matches!(p.brush, Brush::Move | Brush::Pose);
-        // Lazy mouse: the brush trails the pointer on a rope of fixed length.
-        // Not for Move or Pose, which follow the pointer 1:1 by design.
-        let px = stroke.rope.advance(sample.pos, dt, true, lazy.0 && !is_move, lazy.1, lazy.2);
+        let px = stroke.rope.advance(sample.pos, dt, true, lazy_on, lazy.1, lazy.2);
         stroke.pointer = sample.pos;
         let (origin, dir) = view.ray(px);
 

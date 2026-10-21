@@ -611,19 +611,44 @@ impl Tip {
         if self == Tip::Inflate {
             sculptor.settings.current_mut().strength = Settings::default().current().strength;
         }
+        // Front Facing as these tests were written with: off. It has a test
+        // of its own (`a_radial_stroke_with_front_facing_only_stays_symmetric`).
+        sculptor.settings.current_mut().front_facing = false;
         sculptor
     }
 }
 
 /// A sculptor holding `brush` at the tests' size on the model.
+///
+/// At the Strength these tests were written at, 0.5 as it was before the
+/// slider was mapped (`strength.rs`), as near as the slider reaches; Layer
+/// as it rose at it ([`layer_as_before`]).
 fn sculptor_with(brush: Brush) -> Sculptor {
     let mut sculptor = Sculptor::default();
     let s = &mut sculptor.settings;
     s.brush = brush;
     s.screen_space_size = false;
     s.radius_world = BRUSH_RADIUS;
-    s.per_brush[brush.index()].strength = 0.5;
+    s.per_brush[brush.index()].strength = strength::from_old(brush, 0.5);
+    if brush == Brush::Layer {
+        layer_as_before(s, 0.5);
+    }
     sculptor
+}
+
+/// Sets Layer up to rise each dab by the share of the way that Strength
+/// `old` rose before Layer eased up to its height (2026-10-21): four times
+/// `old`, and all the way from a quarter up, under the middle of the brush.
+/// Now it closes that share of what is left to its height (`kernels::layer`),
+/// at full Build-Up and the Strength that gives it. These tests are of where
+/// Layer stops and of its copies under symmetry, which that keeps as they
+/// were written.
+pub(super) fn layer_as_before(s: &mut Settings, old: f32) {
+    let per_dab = (4.0 * old).min(1.0);
+    let bs = &mut s.per_brush[Brush::Layer.index()];
+    bs.build_up = 3.0;
+    let gain = strength::gain(Brush::Layer).unwrap() * bs.build_up;
+    bs.strength = (per_dab / gain).powf(1.0 / strength::POWER).clamp(0.01, 1.0);
 }
 
 /// Mirror axes, and repeats about Y.
@@ -736,8 +761,15 @@ fn coincident_copies_at_the_pole_act_as_one_dab() {
             let mut sculptor = tip.sculptor();
             // Inflate at the others' strength here: how far the stroke
             // moves the pole is the question, not what is left between
-            // sectors (see `Tip::sculptor`).
-            sculptor.settings.current_mut().strength = 0.5;
+            // sectors (see `Tip::sculptor`). 0.5 as it was before the slider
+            // was mapped, as near as it reaches (`strength.rs`).
+            sculptor.settings.current_mut().strength = strength::from_old(tip.brush(), 0.5);
+            if tip == Tip::Inflate {
+                // Nearer that 0.5 (full Strength now works as 0.1 did): at
+                // 0.1 a stroke through the pole comes out 1.5 times as far
+                // with twelve repeats, before 2026-10-21 as now.
+                sculptor.settings.current_mut().build_up = 3.0;
+            }
             if let Some(symmetry) = symmetry {
                 symmetry.set(&mut sculptor.settings);
             }
@@ -874,7 +906,7 @@ fn layer_keeps_to_its_height_near_the_axis() {
             for radii_from_axis in [0.0, 0.3, 0.6, 1.0, 1.5, 2.5] {
                 let layer = || {
                     let mut sculptor = sculptor_with(Brush::Layer);
-                    sculptor.settings.current_mut().strength = strength;
+                    layer_as_before(&mut sculptor.settings, strength);
                     sculptor
                 };
                 let from_axis = radii_from_axis * BRUSH_RADIUS;
@@ -1023,6 +1055,10 @@ fn a_stroke_through_the_axis_neither_piles_up_nor_tears() {
             let mut made = |symmetry: Option<Symmetry>| {
                 let mut sculptor = sculptor_with(brush);
                 sculptor.settings.current_mut().accumulate = accumulate;
+                if brush == Brush::Inflate {
+                    // As in `coincident_copies_at_the_pole_act_as_one_dab`.
+                    sculptor.settings.current_mut().build_up = 3.0;
+                }
                 if let Some(symmetry) = symmetry {
                     symmetry.set(&mut sculptor.settings);
                 }
@@ -1176,8 +1212,17 @@ fn one_repeat_is_no_symmetry_and_two_is_a_half_turn() {
         let delta = stroke_through(&mut ball.mesh, &mut sculptor, &view, &points);
         assert_symmetric(&format!("{tip:?} x2 at {from_axis}r"), &ball, &partners, Tolerance::of(tip.brush()));
         // A sign flip is exact, as a mirror is: the two halves stay equal
-        // to the bit, not just to rounding.
-        assert_eq!(pair_error(&ball.mesh, &partners), floor, "{tip:?} x2 at {from_axis}r");
+        // to the bit, not just to rounding. Smooth is let off by a millionth
+        // of what it moved: since a pass moves a vertex all the way to the
+        // middle of its neighbours (`kernels::smooth_passes`), the ball's
+        // own layout, whose two halves differ by 1e-17 at the axis (the
+        // floor), shows in the last bit of the vertices it averages there.
+        let pair = pair_error(&ball.mesh, &partners);
+        if tip == Tip::Smooth {
+            assert!(pair <= floor.max(1e-6 * ball.displacement()), "{tip:?} x2 at {from_axis}r: {pair:.2e}");
+        } else {
+            assert_eq!(pair, floor, "{tip:?} x2 at {from_axis}r");
+        }
         ball.undo(delta);
     }
 }

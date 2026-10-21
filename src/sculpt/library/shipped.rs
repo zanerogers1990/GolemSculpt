@@ -10,7 +10,8 @@
 
 use super::Record;
 use crate::sculpt::alpha::{self, AlphaSettings};
-use crate::sculpt::{Brush, FalloffCurve, FalloffPreset, FlattenMode, SmoothMode};
+use crate::sculpt::strength::from_old;
+use crate::sculpt::{Brush, FalloffCurve, FalloffPreset, FlattenMode, OLD_PRESSURE_STRENGTH, SmoothMode};
 
 /// The shipped brushes that start on the hold-Space wheel: Clay Strips, in
 /// the plain Clay's place, as the brush a sculptor blocks in with.
@@ -60,6 +61,11 @@ const SHIPPED: [Shipped; 16] = [
             r.settings.focal_shift = -0.5;
             r.settings.spacing = 0.3;
             (r.numbers.clay_depth, r.numbers.clay_softness, r.numbers.clay_relax) = (0.2, 0.1, 0.1);
+            // Exactly as it was before the 2026-10-21 changes to the base
+            // brushes it is made from: the pen's lightest touch at 12% of
+            // its strength, and Front Facing off.
+            r.settings.pressure_strength = OLD_PRESSURE_STRENGTH;
+            r.settings.front_facing = false;
         },
     },
     Shipped {
@@ -90,6 +96,8 @@ const SHIPPED: [Shipped; 16] = [
             // Crease's own falloff at this depth they came out ragged.
             r.falloff = Some(FalloffCurve::preset(FalloffPreset::Sharp));
             (r.numbers.crease_pinch, r.numbers.crease_depth) = (0.25, 0.7);
+            // As it was, whatever the base Crease starts with.
+            r.settings.front_facing = false;
         },
     },
     Shipped {
@@ -98,7 +106,9 @@ const SHIPPED: [Shipped; 16] = [
         about: "Shaves off what stands above the surface, with a hard edge, and leaves hollows alone.",
         tune: |r| {
             r.settings.flatten_mode = FlattenMode::Scrape;
-            r.settings.strength = 0.6;
+            // The Strength that does what 60% did before the slider was
+            // mapped (`strength.rs`); so for every shipped brush below.
+            r.settings.strength = from_old(Brush::Flatten, 0.6);
             r.settings.focal_shift = -0.7;
         },
     },
@@ -108,7 +118,7 @@ const SHIPPED: [Shipped; 16] = [
         about: "Fills hollows up to the surface around them and leaves what stands proud alone.",
         tune: |r| {
             r.settings.flatten_mode = FlattenMode::Fill;
-            r.settings.strength = 0.6;
+            r.settings.strength = from_old(Brush::Flatten, 0.6);
         },
     },
     Shipped {
@@ -117,7 +127,7 @@ const SHIPPED: [Shipped; 16] = [
         about: "Levels the whole stroke to the plane it started on: one flat facet.",
         tune: |r| {
             r.settings.lock_plane = true;
-            r.settings.strength = 0.8;
+            r.settings.strength = from_old(Brush::Flatten, 0.8);
             r.settings.focal_shift = -0.6;
         },
     },
@@ -128,7 +138,7 @@ const SHIPPED: [Shipped; 16] = [
         tune: |r| {
             // Half of Trim's strength and a soft edge: a few passes even a
             // surface out, and no pass leaves a mark of its own.
-            r.settings.strength = 0.25;
+            r.settings.strength = from_old(Brush::Flatten, 0.25);
             r.settings.focal_shift = 0.3;
         },
     },
@@ -138,7 +148,7 @@ const SHIPPED: [Shipped; 16] = [
         about: "Smooths only what sticks out; hollows and cuts keep their depth.",
         tune: |r| {
             r.settings.smooth_mode = SmoothMode::Peaks;
-            r.settings.strength = 0.3;
+            r.settings.strength = from_old(Brush::Smooth, 0.3);
         },
     },
     Shipped {
@@ -147,7 +157,7 @@ const SHIPPED: [Shipped; 16] = [
         about: "Smooths only the hollows; what sticks out keeps its height.",
         tune: |r| {
             r.settings.smooth_mode = SmoothMode::Valleys;
-            r.settings.strength = 0.3;
+            r.settings.strength = from_old(Brush::Smooth, 0.3);
         },
     },
     Shipped {
@@ -156,7 +166,7 @@ const SHIPPED: [Shipped; 16] = [
         about: "Evens out the triangles without changing the shape.",
         tune: |r| {
             r.settings.smooth_mode = SmoothMode::Relax;
-            r.settings.strength = 0.5;
+            r.settings.strength = from_old(Brush::Smooth, 0.5);
         },
     },
     Shipped {
@@ -168,7 +178,7 @@ const SHIPPED: [Shipped; 16] = [
         about: "Smooths without thinning: fingers and horns keep their thickness.",
         tune: |r| {
             r.settings.keep_volume = 1.0;
-            r.settings.strength = 0.3;
+            r.settings.strength = from_old(Brush::Smooth, 0.3);
         },
     },
     Shipped {
@@ -181,7 +191,7 @@ const SHIPPED: [Shipped; 16] = [
             // depth, and strokes crossed over each other build up stroke by
             // stroke. With it on, where two strokes met they ploughed.
             r.settings.accumulate = false;
-            r.settings.strength = 0.06;
+            r.settings.strength = from_old(Brush::Standard, 0.06);
             r.settings.focal_shift = -0.5;
             // Close dabs: the picture turns a little with each on a curve,
             // and further apart every turn showed as a tick on the lines.
@@ -198,7 +208,7 @@ const SHIPPED: [Shipped; 16] = [
             r.alpha = alpha("Noise", AlphaSettings { random_rotation: 180.0, scale: 1.6, ..PLAIN });
             // Light and close: at twice the spacing the prints stood apart
             // as clumps with bare surface between them.
-            r.settings.strength = 0.045;
+            r.settings.strength = from_old(Brush::Standard, 0.045);
             r.settings.spacing = 0.3;
             r.settings.scatter = 0.8;
             r.settings.size_jitter = 0.3;
@@ -210,6 +220,7 @@ const SHIPPED: [Shipped; 16] = [
         about: "Press and drag out one print of scales, sized and turned by the drag.",
         tune: |r| {
             r.alpha = alpha("Scales", AlphaSettings { drag: true, ..PLAIN });
+            // A dragged print's Strength is its height, not mapped.
             r.settings.strength = 0.5;
             r.settings.focal_shift = -0.6;
         },

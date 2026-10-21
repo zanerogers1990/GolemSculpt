@@ -100,7 +100,11 @@ fn keep_volume_holds_a_thin_forms_thickness_while_its_bumps_still_go() {
         let view = view_of(&mesh);
         let path: Vec<Vec2> = (0..=40).map(|i| view.project(Vec3::new(-0.25 + 0.5 * i as f32 / 40.0, 0.0, radius)).unwrap()).collect();
         let mut sculptor = smoother(0.2, keep, SmoothMode::All);
-        sculptor.settings.current_mut().strength = 0.2;
+        // As strong as 20% was before the slider was mapped (`strength.rs`),
+        // and all round the rod: Front Facing (on by default) would leave
+        // its far side alone.
+        sculptor.settings.current_mut().strength = strength::from_old(Brush::Smooth, 0.2);
+        sculptor.settings.current_mut().front_facing = false;
         for _ in 0..strokes {
             draw(&mut mesh, &mut sculptor, &view, &path, 4, None);
         }
@@ -655,7 +659,8 @@ fn nearest(positions: &[Vec3], at: Vec3) -> usize {
 
 /// Nudge slides the surface along the stroke: at full Strength what was
 /// under the middle of the ring when the stroke began goes with the pen, at
-/// half Strength half as far; it stays on the surface (the ball stays a
+/// the Strength that was half before the slider was mapped (`strength.rs`)
+/// half as far; it stays on the surface (the ball stays a
 /// ball); and how far it goes does not depend on Spacing.
 #[test]
 fn nudge_carries_the_surface_with_the_pen_by_its_strength_within_the_surface() {
@@ -677,7 +682,7 @@ fn nudge_carries_the_surface_with_the_pen_by_its_strength_within_the_surface() {
     assert!(whole < along * 1.02, "it went {whole} in all, {along} along the stroke");
     assert!(off < 0.5 * 4e-4, "a vertex is {off} off the ball: Nudge is meant to slide the surface, not raise or sink it");
     assert!(stray < travel * 0.05, "the surface went {stray} sideways");
-    let (half, ..) = push(0.5, 0.05);
+    let (half, ..) = push(strength::from_old(Brush::Nudge, 0.5), 0.05);
     assert!((0.4..=0.56).contains(&(half / along)), "at 50% it went {half}, at 100% {along}");
     // A longer push leaves a trail: the surface the brush has passed over
     // has been carried forward and left there. How far does not depend on

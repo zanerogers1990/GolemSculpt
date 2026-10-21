@@ -178,10 +178,13 @@ impl Params {
         self.strength * pressure * self.build_up
     }
 
-    /// Accumulating brushes compound pressure jitter, so pressure only gets
-    /// half its influence there.
+    /// What an accumulating dab builds by. Pressure counts in full: it once
+    /// counted for half here (pressure jitter compounds where every dab
+    /// adds), which left the lightest touch of the pen building at more
+    /// than half strength. The pen's pressure is smoothed before it gets
+    /// here (`input::PenPressure`), which is the cure for jitter.
     fn e_acc(&self, pressure: f32) -> f32 {
-        self.strength * (1.0 + (pressure - 1.0) * 0.5) * self.build_up
+        self.strength * pressure * self.build_up
     }
 
     /// Whether the stroke is one print of the brush's alpha, placed by
@@ -604,7 +607,7 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
     match p.brush {
         Brush::Inflate => inflate(mesh, p, d, leaves),
         Brush::Standard => standard(mesh, p, d, leaves),
-        Brush::Layer => layer(mesh, p, d, leaves),
+        Brush::Layer => layer(mesh, p, d, leaves, scratch),
         Brush::Flatten => flatten(mesh, p, d, leaves, fit),
         Brush::Clay => clay(mesh, p, d, leaves, fit),
         Brush::Crease => crease(mesh, p, d, leaves),
@@ -697,30 +700,70 @@ fn print(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     });
 }
 
-fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
+/// How much past the full height a Layer vertex's share of it aims each dab
+/// (Blender's 1.05): aiming at exactly the height, the last of the way
+/// would take for ever.
+const LAYER_OVERSHOOT: f32 = 1.05;
+
+/// Layer: raises an even step of the Layer Height above the surface the
+/// stroke began on, easing up to it (Blender's Layer brush).
+///
+/// Each vertex has its share of the height, 0 where the stroke found it and
+/// 1 at the full height, measured along its own normal as the stroke found
+/// it. Every dab adds to that share by the dab's weight there times the
+/// brush's strength, less the nearer it already is to the full height, and
+/// sets the vertex at that much of the height. (Blender also moves it only
+/// the weight's share of the way there, keeping the share apart; read back
+/// off the vertex, that would count the weight twice.) So a
+/// light pass raises a low step and a firm one or a second pass raises it
+/// to the full height and no further, however often the stroke crosses
+/// itself. A mask holds the share down as well as the weight: a vertex
+/// masked half way rises half way.
+///
+/// The share is read back off where the vertex is, not kept apart: what
+/// the mirror copies of a dab do to a vertex is then shared out as for any
+/// brush that seeks a height (`share.rs`), and a vertex dynamic topology
+/// has just made starts from where it was made.
+fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let r2 = r * r;
-    let dir = footprint_normal(mesh, d.center, r, false).unwrap_or(d.normal);
-    let height = p.sign * r * p.layer_height;
-    let ease = p.share((p.e_off(d.pressure) * 40.0 * 0.1).clamp(0.0, 1.0));
-    mesh.move_within(leaves, d.center, r2, |_, vt| {
-        let pos = vt.pos;
-        let d2 = pos.distance_squared(d.center);
+    let height = r * p.layer_height;
+    let sign = p.sign;
+    let grow = p.e_off(d.pressure).max(0.0);
+    // Each vertex's normal as the stroke found the surface, laid out as the
+    // moves below count vertices.
+    {
+        let mesh = &*mesh;
+        fill(mesh, leaves, &mut scratch.starts, &mut scratch.targets, |_, v| mesh.stroke_start_normal(v));
+    }
+    let normals = &scratch.targets;
+    mesh.move_vertices(leaves, |at, vt| {
+        let start = vt.start;
+        // Weighed where the stroke found the surface: the footprint stays
+        // where it was laid as the surface rises.
+        let d2 = start.distance_squared(d.center);
         if d2 >= r2 {
             return None;
         }
         // Flat plateau in the middle so overlapping dabs build one even step.
+        let free = 1.0 - vt.mask;
         let w = p.falloff.at(d2.sqrt() / r, layer_built_in)
-            * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam)
-            * p.printed(d, vt.start - d.center);
+            * free
+            * facing(p.front_facing, vt.normal, vt.pos, d.cam)
+            * p.printed(d, start - d.center);
         if w <= 0.0 {
             return None;
         }
-        // Height is measured from the stroke-start surface, so crossing your
-        // own stroke does not stack a second layer.
-        let remaining = height * w - (pos - vt.start).dot(dir);
-        (remaining * height > 0.0).then(|| pos + dir * (remaining * ease))
+        let n = normals[at];
+        let share = (vt.pos - start).dot(n) * sign / height;
+        if share >= free {
+            return None;
+        }
+        let share = share.max(-free);
+        // A dab at another spacing closes the gap as the dabs it stands in
+        // for would have between them (`Params::share`).
+        let next = (share + p.share((w * grow).clamp(0.0, 1.0)) * (LAYER_OVERSHOOT - share.abs())).min(free);
+        Some(start + n * (sign * height * next))
     });
 }
 
@@ -1066,6 +1109,24 @@ fn stepped_passes(
     }
 }
 
+/// The most passes one Smooth dab makes (Blender's `iteration_strengths`).
+pub(super) const SMOOTH_MOST_PASSES: f32 = 4.0;
+
+/// How many passes a Smooth dab makes at strength `e` (in the old units,
+/// times pressure and dose), each moving a vertex all the way to the middle
+/// of its neighbours by its weight, the last a fraction of a pass. Four at
+/// full strength and no more: a dab of ten passes, as full strength once
+/// made, cost ten walks over the footprint and smoothed little more than
+/// four, and the brush's weight on its edge then reached far past where it
+/// seemed to. The old passes went 40% of the way; four of these do what
+/// ten of those did, and so does each of the slider's other values once it
+/// is mapped (`strength.rs`), for the form if not for the finest noise,
+/// which these take out faster.
+#[inline]
+pub(super) fn smooth_passes(e: f32) -> f32 {
+    (e * SMOOTH_MOST_PASSES).clamp(0.0, SMOOTH_MOST_PASSES)
+}
+
 fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let r2 = r * r;
@@ -1081,10 +1142,10 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mu
             let w = p.falloff.at(d2.sqrt() / r, smooth)
                 * (1.0 - mesh.mask[i])
                 * facing(p.front_facing, mesh.normals[i], pos, d.cam);
-            if w > 0.0 { w * 4.0 * 0.1 } else { 0.0 }
+            w.max(0.0)
         });
     }
-    let amount = p.e(d.pressure) * 10.0 * p.dose;
+    let amount = smooth_passes(p.e(d.pressure) * p.dose);
     match p.smooth_mode {
         SmoothMode::All if p.keep_volume > 0.0 => {
             fill(mesh, leaves, &mut scratch.starts, &mut scratch.before, |_, v| mesh.positions[v as usize]);
@@ -1421,9 +1482,12 @@ fn nudge(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
     });
 }
 
+/// Snake Hook: carries the surface under the tip the step the tip took, by
+/// the falloff's weight times Strength (all of it at 100%, where it starts).
 fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
     let r2 = r * r;
+    let follow = p.strength.clamp(0.0, 1.0);
     mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
@@ -1433,7 +1497,7 @@ fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         let w = p.falloff.at(d2.sqrt() / r, smooth)
             * (1.0 - vt.mask)
             * facing(p.front_facing, vt.normal, pos, d.cam);
-        (w > 0.0).then(|| pos + d.step * w)
+        (w > 0.0).then(|| pos + d.step * (w * follow))
     });
 }
 

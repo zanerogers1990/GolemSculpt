@@ -345,7 +345,18 @@ pub struct BrushPrefs {
     /// The Paint brush's colour, swatches, mode and channels. A file from
     /// before there was one gives the brush as it starts.
     pub paint: crate::sculpt::paint::PaintKept,
+    /// What the numbers above mean: [`FEEL_VERSION`] in a file this version
+    /// writes. A file without it is from before 2026-10-21, when Strength
+    /// went straight through to every kernel, Pressure -> Strength started
+    /// at 88%, Front Facing started off and Move followed half the pen's
+    /// travel. [`Prefs::parse`] brings such a file's numbers over once: see
+    /// [`old_feel`].
+    pub feel_version: u32,
 }
+
+/// The version of what the brush numbers in the settings file mean (see
+/// `BrushPrefs::feel_version`).
+pub const FEEL_VERSION: u32 = 1;
 
 impl Default for BrushPrefs {
     fn default() -> Self {
@@ -400,6 +411,7 @@ impl BrushPrefs {
             lazy_strength: s.lazy_strength,
             build_up_on_hold: s.build_up_on_hold,
             paint: crate::sculpt::paint::PaintKept::of(&s.paint),
+            feel_version: FEEL_VERSION,
         }
     }
 
@@ -484,6 +496,64 @@ impl BrushPrefs {
         s.build_up_on_hold = self.build_up_on_hold;
         self.paint.apply(&mut s.paint);
     }
+}
+
+/// What a base brush started with before 2026-10-21: its Strength. (Every
+/// one started with Pressure -> Strength at 88% and Front Facing off.)
+fn old_default_strength(brush: Brush) -> f32 {
+    match brush {
+        Brush::Move | Brush::Nudge => 0.5,
+        Brush::Pinch => 0.3,
+        Brush::EraseLayer | Brush::Paint => 1.0,
+        _ => 0.1,
+    }
+}
+
+/// Brings the brush numbers of a settings file from before 2026-10-21 over
+/// to what they mean now, once: `raw` is the file's own `brush`, which says
+/// which numbers the file really has (the rest are already today's).
+///
+/// A number the file has that is what the brush started with then was
+/// never chosen, so it becomes what the brush starts with now: that is how
+/// the new starting points reach a settings file that has the old ones in
+/// it. A number that was chosen is kept for what it did: a Strength on a
+/// kernel whose slider is now mapped (`sculpt::strength`) becomes the one
+/// that does the same, as near as the slider reaches; Pressure -> Strength
+/// and Front Facing are kept as they were set. Snake Hook's Strength did
+/// nothing then, so whatever it was left at goes, as Move's once did.
+fn old_feel(brush: &mut BrushPrefs, raw: &serde_json::Value) {
+    let now = Settings::default();
+    let same = |a: f32, b: f32| (a - b).abs() < 1e-6;
+    if let Some(kept) = raw.get("brushes").and_then(serde_json::Value::as_object) {
+        for (name, was) in kept {
+            let Some(&b) = Brush::ALL.iter().find(|b| b.name() == name) else { continue };
+            let Some(tuning) = brush.brushes.get_mut(name) else { continue };
+            let fresh = now.per_brush[b.index()];
+            if was.get("strength").is_some_and(serde_json::Value::is_number) {
+                tuning.strength = if b == Brush::SnakeHook || same(tuning.strength, old_default_strength(b)) {
+                    fresh.strength
+                } else {
+                    crate::sculpt::strength::from_old(b, tuning.strength)
+                };
+            }
+            if was.get("pressure_strength").is_some_and(serde_json::Value::is_number) && same(tuning.pressure_strength, crate::sculpt::OLD_PRESSURE_STRENGTH) {
+                tuning.pressure_strength = fresh.pressure_strength;
+            }
+            if was.get("front_facing").is_some_and(serde_json::Value::is_boolean) && !tuning.front_facing {
+                tuning.front_facing = fresh.front_facing;
+            }
+        }
+    }
+    // Move: the half it started with becomes the whole.
+    if raw.get("move_strength").is_some_and(serde_json::Value::is_number) && same(brush.move_strength, old_default_strength(Brush::Move)) {
+        brush.move_strength = now.per_brush[Brush::Move.index()].strength;
+    }
+    // An older file's one Light-Touch Floor at its starting value was never
+    // chosen either: each brush keeps today's Pressure -> Strength.
+    if brush.pressure_floor.is_some_and(|floor| floor.is_finite() && same(1.0 - floor.clamp(0.0, 0.5), crate::sculpt::OLD_PRESSURE_STRENGTH)) {
+        brush.pressure_floor = None;
+    }
+    brush.feel_version = FEEL_VERSION;
 }
 
 /// Everything in the settings file.
@@ -590,7 +660,11 @@ impl Prefs {
             log::warn!("the settings file is not readable; starting from the built-in settings");
             return defaults;
         };
-        crate::io::read_over(&defaults, &file).unwrap_or(defaults)
+        let mut prefs = crate::io::read_over(&defaults, &file).unwrap_or(defaults);
+        if let Some(brush) = file.get("brush").filter(|brush| brush.is_object() && brush.get("feel_version").is_none()) {
+            old_feel(&mut prefs.brush, brush);
+        }
+        prefs
     }
 
     pub fn length_unit(&self) -> LengthUnit {
@@ -704,6 +778,9 @@ pub mod cards {
         });
     }
 }
+
+#[cfg(test)]
+mod feel_tests;
 
 #[cfg(test)]
 mod tests {
@@ -832,7 +909,8 @@ mod tests {
         assert_eq!(prefs.brush.radius_px, 90.0);
         assert_eq!(prefs.brush.clay_depth, Prefs::default().brush.clay_depth);
         assert_eq!(prefs.brush.falloff, BTreeMap::from([("Crease".to_owned(), vec![[0.0, 1.0], [1.0, 0.0]])]));
-        assert_eq!(prefs.brush.brushes["Layer"].strength, 0.33);
+        // A file with no feel_version is from before 2026-10-21: Layer's Strength comes over.
+        assert_eq!(prefs.brush.brushes["Layer"].strength, crate::sculpt::strength::from_old(Brush::Layer, 0.33));
         assert!(!prefs.brush.brushes.contains_key("Retired Brush"));
         assert_eq!(prefs.length_unit(), LengthUnit::Millimetres, "an unknown unit is millimetres");
     }
@@ -1032,8 +1110,8 @@ mod tests {
             let (now, first_run) = (settings.per_brush[later.index()], Settings::default().per_brush[later.index()]);
             assert_eq!(BrushTuning::of(&now), BrushTuning::of(&first_run), "{later:?}");
         }
-        // Nudge starts following half the pen's travel, as Move does: not at the 10% of a brush with none of its own.
-        assert_eq!(settings.per_brush[Brush::Nudge.index()].strength, 0.5);
+        // Nudge starts at its own Strength, not at that of a brush with none of its own.
+        assert_eq!(settings.per_brush[Brush::Nudge.index()].strength, 0.63);
         // And Erase Layer as a whole eraser, which the pen's pressure makes gentle.
         assert_eq!(settings.per_brush[Brush::EraseLayer.index()].strength, 1.0);
 
@@ -1068,7 +1146,7 @@ mod tests {
         serde_json::from_str::<BrushPrefs>(&kept).unwrap().apply(&mut back);
         assert_eq!(back.per_brush[Brush::Move.index()].strength, 0.3);
         // A brush the file says nothing of starts as any brush does, not as Move.
-        assert_eq!(BrushTuning::default().strength, Settings::default().per_brush[Brush::Clay.index()].strength);
+        assert_eq!(BrushTuning::default().strength, Settings::default().per_brush[Brush::Smooth.index()].strength);
     }
 
     /// The number of joints has a lowest value as well as a highest (house
@@ -1146,7 +1224,7 @@ mod tests {
         serde_json::from_str::<BrushPrefs>(&written).unwrap().apply(&mut back);
         assert_eq!(stroke(&back.per_brush[Brush::Clay.index()]), (1.5, 0.4, 0.3, 0.7, 0.25));
         for brush in Brush::ALL.into_iter().filter(|&b| b != Brush::Clay) {
-            assert_eq!(stroke(&back.per_brush[brush.index()]), (brush.default_spacing(), 0.0, 0.0, 0.0, 0.88), "{brush:?}");
+            assert_eq!(stroke(&back.per_brush[brush.index()]), (brush.default_spacing(), 0.0, 0.0, 0.0, crate::sculpt::DEFAULT_PRESSURE_STRENGTH), "{brush:?}");
         }
 
         // A file from before any of this: every brush as it starts, Crease
@@ -1163,7 +1241,7 @@ mod tests {
         old.per_brush[Brush::Crease.index()].spacing = 2.0;
         Prefs::parse(&older.to_string()).brush.apply(&mut old);
         for brush in Brush::ALL {
-            assert_eq!(stroke(&old.per_brush[brush.index()]), (brush.default_spacing(), 0.0, 0.0, 0.0, 0.88), "{brush:?}");
+            assert_eq!(stroke(&old.per_brush[brush.index()]), (brush.default_spacing(), 0.0, 0.0, 0.0, crate::sculpt::DEFAULT_PRESSURE_STRENGTH), "{brush:?}");
         }
         assert_eq!(old.per_brush[Brush::Clay.index()].strength, 0.2, "what the file does say is kept");
 
@@ -1176,7 +1254,7 @@ mod tests {
         (tuning.spacing, tuning.scatter, tuning.size_jitter) = (f32::INFINITY, -3.0, f32::NAN);
         (tuning.pressure_size, tuning.pressure_strength) = (4.0, 4.0);
         prefs.brush.apply(&mut back);
-        assert_eq!(stroke(&back.per_brush[Brush::Layer.index()]), (0.02, 2.0, 0.9, 0.0, 0.88), "never no spacing: dabs are laid by it");
+        assert_eq!(stroke(&back.per_brush[Brush::Layer.index()]), (0.02, 2.0, 0.9, 0.0, crate::sculpt::DEFAULT_PRESSURE_STRENGTH), "never no spacing: dabs are laid by it");
         assert_eq!(stroke(&back.per_brush[Brush::Crease.index()]), (0.1, 0.0, 0.0, 1.0, 1.0));
     }
 
@@ -1199,7 +1277,9 @@ mod tests {
             let kept = settings.per_brush[brush.index()].pressure_strength;
             assert!((kept - 0.7).abs() < 1e-6, "{brush:?}: {kept}");
         }
-        // The floor every such file had unless it was changed is today's feel.
+        // The floor every such file had unless it was changed: 88% for every brush, as it
+        // felt then. (A file from then has no feel_version either, and is brought over to
+        // today's starting value: see feel_tests.rs. This one has one.)
         older["brush"]["pressure_floor"] = 0.12.into();
         Prefs::parse(&older.to_string()).brush.apply(&mut settings);
         assert!(settings.per_brush.iter().all(|b| (b.pressure_strength - 0.88).abs() < 1e-6));
@@ -1214,7 +1294,7 @@ mod tests {
         older["brush"]["radius_px"] = 77.0.into();
         let mut odd = Settings::default();
         Prefs::parse(&older.to_string()).brush.apply(&mut odd);
-        assert_eq!((odd.radius_px, odd.per_brush[0].pressure_strength), (77.0, 0.88));
+        assert_eq!((odd.radius_px, odd.per_brush[0].pressure_strength), (77.0, crate::sculpt::DEFAULT_PRESSURE_STRENGTH));
 
         // Saved from here on, the floor is gone and each brush has its own.
         settings.per_brush[Brush::Clay.index()].pressure_strength = 0.4;
@@ -1278,7 +1358,7 @@ mod tests {
         assert_eq!(back.per_brush[Brush::Smooth.index()].strength, 0.4);
 
         // A mode from some later version, and numbers no slider could set.
-        let odd = serde_json::json!({ "brush": { "brushes": {
+        let odd = serde_json::json!({ "brush": { "feel_version": FEEL_VERSION, "brushes": {
             "Smooth": { "smooth_mode": "polish", "keep_volume": 7.0, "strength": 0.6 },
             "Flatten": { "flatten_mode": 3, "lock_plane": "yes", "keep_volume": -1.0, "strength": 0.7 },
             "Layer": { "smooth_mode": "RELAX", "keep_volume": "lots" },

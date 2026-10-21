@@ -392,18 +392,18 @@ fn samples_without_pressure_leave_pen_pressure_alone() {
 #[test]
 fn tip_down_samples_ease_toward_their_pressure() {
     let mut pen = PenPressure { smoothed: 0.2, last_time: 1.0 };
-    // 1/60 s at 20/s eases a third of the way: 0.2 + (0.8 - 0.2) / 3.
+    // 1/60 s at 57/s eases 95% of the way: 0.2 + (0.8 - 0.2) * 0.95.
     pen.step(Some(0.8), 1.0 + 1.0 / 60.0);
-    assert!((pen.smoothed - 0.4).abs() < 1e-5);
+    assert!((pen.smoothed - 0.77).abs() < 1e-5);
 
     // A mouse sample moves only the clock.
     pen.step(None, 2.0);
-    assert!((pen.smoothed - 0.4).abs() < 1e-5);
+    assert!((pen.smoothed - 0.77).abs() < 1e-5);
     assert_eq!(pen.last_time, 2.0);
 
-    // However long the pen was lifted, a touch eases on by one frame's worth.
+    // However long the pen was lifted, a sample eases on by one frame's worth.
     pen.step(Some(1.0), 60.0);
-    assert!((pen.smoothed - 0.6).abs() < 1e-5);
+    assert!((pen.smoothed - (0.77 + 0.23 * 0.95)).abs() < 1e-5);
 }
 
 /// The filter used to start at 0, so the first pen stroke after the app

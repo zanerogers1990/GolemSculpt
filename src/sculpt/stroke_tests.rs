@@ -140,14 +140,16 @@ pub(super) fn spread(values: &[f64]) -> f64 {
 
 // ----------------------------------------------------------------- pressure
 
-/// Pressure -> Strength at its default is the old Light-Touch Floor of 0.12
-/// to rounding, and both maps give a mouse (and full pressure) exactly 1.
+/// Pressure -> Strength at its old default (Clay Strips keeps it) is the old
+/// Light-Touch Floor of 0.12 to rounding, and both maps give a mouse (and
+/// full pressure) exactly 1.
 #[test]
 fn the_pressure_maps_keep_todays_feel_and_leave_a_mouse_alone() {
     for i in 0..=100 {
         let pen = i as f32 / 100.0;
         let old = 0.12 + (1.0 - 0.12) * pen;
-        assert!((input::pen_strength(DEFAULT_PRESSURE_STRENGTH, pen) - old).abs() < 1e-6, "at {pen}");
+        assert!((input::pen_strength(OLD_PRESSURE_STRENGTH, pen) - old).abs() < 1e-6, "at {pen}");
+        assert!((input::pen_strength(DEFAULT_PRESSURE_STRENGTH, pen) - pen).abs() < 1e-6, "at {pen}");
         // Off, neither changes anything, to the bit.
         assert_eq!(input::pen_strength(0.0, pen), 1.0);
         assert_eq!(input::pen_size(0.0, pen), 1.0);
@@ -165,8 +167,8 @@ fn the_pressure_maps_keep_todays_feel_and_leave_a_mouse_alone() {
     assert_eq!(input::pen_strength(1.0, 0.0), 0.0, "at 100% a feather touch does nothing");
     assert_eq!(input::pen_size(1.0, 0.0), input::MIN_PEN_SIZE);
     assert_eq!(input::pen_size(0.5, 0.0), 0.5, "at 50% the lightest touch is half the ring");
-    // Every brush starts with pressure changing its strength as before and
-    // its size not at all.
+    // Every brush starts with pressure taking all of its strength away at
+    // the lightest touch, and changing its size not at all.
     for b in Settings::default().per_brush {
         assert_eq!((b.pressure_strength, b.pressure_size), (DEFAULT_PRESSURE_STRENGTH, 0.0));
     }
@@ -306,8 +308,7 @@ fn pressure_to_strength_is_the_brushs_own() {
         let mut mesh = sphere(40_000);
         let view = view_of(&mesh);
         // Without Accumulate, and gently: a stroke that builds in proportion
-        // to its strength. (With Accumulate on, pressure counts for half as
-        // much: see `Params::e_acc`.)
+        // to its strength.
         let mut sculptor = sculptor_with(brush, 0.1, 0.05);
         sculptor.settings.per_brush[brush.index()].accumulate = false;
         sculptor.settings.per_brush[set_on.index()].pressure_strength = amount;
@@ -321,12 +322,12 @@ fn pressure_to_strength_is_the_brushs_own() {
     let (mouse, mouse_print) = stroke(Brush::Inflate, Brush::Inflate, DEFAULT_PRESSURE_STRENGTH, None);
     let (off, off_print) = stroke(Brush::Inflate, Brush::Inflate, 0.0, Some(0.2));
     assert_eq!(off_print, mouse_print, "at 0% a light pen is a mouse: {off} against {mouse}");
-    let (usual, _) = stroke(Brush::Inflate, Brush::Inflate, DEFAULT_PRESSURE_STRENGTH, Some(0.2));
+    let (usual, _) = stroke(Brush::Inflate, Brush::Inflate, OLD_PRESSURE_STRENGTH, Some(0.2));
     let (all, _) = stroke(Brush::Inflate, Brush::Inflate, 1.0, Some(0.2));
     assert!(usual < mouse * 0.6 && all < usual * 0.6, "a light touch built {usual} at 88% and {all} at 100%, of {mouse}");
-    // Set on Clay, Inflate does not hear of it.
-    let (other, _) = stroke(Brush::Inflate, Brush::Clay, 1.0, Some(0.2));
-    assert_eq!(other, usual);
+    // Set on Clay, Inflate does not hear of it: it keeps its own 100%.
+    let (other, _) = stroke(Brush::Inflate, Brush::Clay, 0.0, Some(0.2));
+    assert_eq!(other, all);
 }
 
 /// A stroke whose first sample has no pressure and whose later ones do is a
@@ -479,7 +480,8 @@ fn widely_spaced_dabs_are_prints_as_tall_as_the_stroke() {
     let profile = |spacing: f32| {
         let mut mesh = sphere(200_000);
         let view = view_of(&mesh);
-        let mut sculptor = sculptor_with(Brush::Inflate, 0.06, 0.03);
+        // As strong as 3% was before the slider was mapped (`strength.rs`).
+        let mut sculptor = sculptor_with(Brush::Inflate, 0.06, strength::from_old(Brush::Inflate, 0.03));
         sculptor.settings.current_mut().spacing = spacing;
         let dabs = draw(&mut mesh, &mut sculptor, &view, &across(&view, -0.5, 0.5, 200), 4, None);
         (ridge(&mesh, -0.5, 0.5, 50), dabs)
@@ -909,7 +911,7 @@ fn a_frame_always_has_room_for_one_dab() {
 fn a_fast_stroke_leaves_no_gaps_and_the_release_finishes_it() {
     let mut mesh = sphere(200_000);
     let view = view_of(&mesh);
-    let mut sculptor = sculptor_with(Brush::Inflate, 0.05, 0.1);
+    let mut sculptor = sculptor_with(Brush::Inflate, 0.05, strength::from_old(Brush::Inflate, 0.1));
     sculptor.pace = Pace::Dabs(2);
     let path = across(&view, -0.6, 0.6, 14);
     let sample = |i: usize| PointerSample { pos: path[i], pressure: None, time: i as f64 / 240.0 };

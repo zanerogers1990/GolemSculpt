@@ -210,6 +210,9 @@ struct BrushFile<'a> {
     kernel: &'a str,
     brush: RecordKept,
     made: RecordKept,
+    /// What its numbers mean (`prefs::FEEL_VERSION`). A file without it is
+    /// from before 2026-10-21, and its Strength is brought over (`parse`).
+    feel_version: u32,
 }
 
 /// A brush as a file gave it.
@@ -238,6 +241,7 @@ pub fn text(name: &str, kernel: Brush, record: &Record, made: &Record) -> String
         kernel: kernel.name(),
         brush: RecordKept::of(record, kernel),
         made: RecordKept::of(made, kernel),
+        feel_version: crate::prefs::FEEL_VERSION,
     };
     // Plain values and string keys: there is nothing in it that cannot be written.
     serde_json::to_string_pretty(&file).unwrap_or_default()
@@ -256,10 +260,21 @@ pub fn parse(text: &str, fallback_name: &str) -> Result<Read, String> {
     let name = file.get("name").and_then(Value::as_str).map(|name| name.replace(char::is_control, " "));
     let name = name.as_deref().map(str::trim).filter(|name| !name.is_empty());
     let base = Record::base(kernel);
+    // A file from before the Strength slider was mapped for some kernels
+    // (`sculpt::strength`): the Strength it gives is the one that does what
+    // its number did then. A dragged print's Strength is its height, which
+    // was not mapped. The rest of what it says is the user's and stays.
+    let old = file.get("feel_version").is_none();
     let read = |key: &str, over: &Record| {
         let start = RecordKept::of(over, kernel);
-        let kept = file.get(key).and_then(|value| crate::io::read_over(&start, value)).unwrap_or(start);
-        kept.restored(kernel, &base)
+        let given = file.get(key);
+        let kept = given.and_then(|value| crate::io::read_over(&start, value)).unwrap_or(start);
+        let (mut record, missing) = kept.restored(kernel, &base);
+        let prints = record.alpha.image.is_some() && record.alpha.drag;
+        if old && !prints && given.is_some_and(|value| value.get("strength").is_some_and(Value::is_number)) {
+            record.settings.strength = crate::sculpt::strength::from_old(kernel, record.settings.strength);
+        }
+        (record, missing)
     };
     let (record, missing_alpha) = read("brush", &base);
     // A file with no `made` was written by hand: Reset goes back to the

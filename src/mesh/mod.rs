@@ -622,6 +622,26 @@ impl Mesh {
         }
     }
 
+    /// The normal of vertex `v` as the surface was when the stroke began,
+    /// worked out from the stroke-start places of its triangles' corners
+    /// (in double, as every normal is, so mirror twins agree to the bit).
+    ///
+    /// [`Self::start_nrm`] is the normal a vertex had when the stroke first
+    /// moved it, which for a vertex the stroke reaches late is the surface
+    /// after the dabs round it rose: two twins first reached a dab apart then
+    /// rise different ways. This one does not depend on when the stroke got
+    /// there: a vertex nothing has moved is still where the stroke found it.
+    pub fn stroke_start_normal(&self, v: u32) -> Vec3 {
+        let mut sum = DVec3::ZERO;
+        for &t in self.vt.row(v as usize) {
+            let i = t as usize * 3;
+            let [p0, p1, p2] = [0, 1, 2].map(|k| self.start_pos(self.indices[i + k]).as_dvec3());
+            sum += (p1 - p0).cross(p2 - p0);
+        }
+        let len = sum.length();
+        if len > 1e-30 { (sum / len).as_vec3() } else { self.start_nrm(v) }
+    }
+
     #[inline]
     pub fn start_nrm(&self, v: u32) -> Vec3 {
         let i = v as usize;

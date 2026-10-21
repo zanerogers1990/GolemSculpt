@@ -142,7 +142,7 @@ fn a_file_that_is_no_brush_is_refused_with_the_reason() {
 
 #[test]
 fn a_brush_naming_an_alpha_that_is_not_here_has_none_and_says_so() {
-    let text = r#"{ "name": "Lizard", "kernel": "Standard",
+    let text = r#"{ "name": "Lizard", "kernel": "Standard", "feel_version": 1,
         "brush": { "strength": 0.4, "alpha": { "name": "Somebody Else's Scales", "scale": 2.0, "follow": true } } }"#;
     let read = parse(text, "x").unwrap();
     assert!(read.record.alpha.image.is_none());
@@ -328,7 +328,9 @@ fn a_bad_file_in_the_folder_is_skipped_said_and_left_alone() {
     assert!(notes[0].contains("Half Edited.json") && notes[0].contains("Skipped"), "{}", notes[0]);
     assert!(library.named("Fine Liner").is_some());
     let hand = at(&library, "hand made");
-    assert_eq!((library.entries()[hand].kernel, library.record(hand, &s).settings.strength), (Brush::Inflate, 0.8));
+    // With no feel_version it is from before 2026-10-21: its Strength comes over (`sculpt::strength`).
+    let brought = crate::sculpt::strength::from_old(Brush::Inflate, 0.8);
+    assert_eq!((library.entries()[hand].kernel, library.record(hand, &s).settings.strength), (Brush::Inflate, brought));
 
     // Keeping the folder up to date touches neither the bad file nor the
     // hand-made one, whose unknown field is still there afterwards.
@@ -415,14 +417,16 @@ fn settings_files_from_before_the_library_carry_into_the_base_brushes() {
     assert_eq!((clay.settings.pressure_size, clay.settings.pressure_strength, clay.numbers.clay_depth), (0.5, 0.4, 0.8));
     assert_eq!(clay.falloff.as_ref().map(|curve| curve.points.len()), Some(3));
     let smooth = record(Brush::Smooth).settings;
-    assert_eq!((smooth.strength, smooth.smooth_mode, smooth.keep_volume), (0.6, SmoothMode::Peaks, 0.7));
+    // Strengths on the kernels whose slider is now mapped come over as what does the same (`sculpt::strength`).
+    let brought = |kernel: Brush, old: f32| crate::sculpt::strength::from_old(kernel, old);
+    assert_eq!((smooth.strength, smooth.smooth_mode, smooth.keep_volume), (brought(Brush::Smooth, 0.6), SmoothMode::Peaks, 0.7));
     let flatten = record(Brush::Flatten);
     assert_eq!((flatten.settings.flatten_mode, flatten.settings.lock_plane, flatten.numbers.flatten_offset), (FlattenMode::Scrape, true, 0.1));
     assert!(record(Brush::Standard).alpha.image.is_some() && record(Brush::Standard).alpha.follow);
     assert_eq!((record(Brush::Crease).numbers.crease_pinch, record(Brush::Layer).numbers.layer_height), (0.2, 0.3));
     assert_eq!((record(Brush::Move).settings.strength, record(Brush::Move).numbers.move_connected), (0.7, true));
     assert_eq!(record(Brush::Pose).numbers.pose.mode, PoseMode::Stretch);
-    assert_eq!((record(Brush::Pinch).settings.strength, s.radius_px, s.pressure_curve), (0.2, 84.0, 2.0));
+    assert_eq!((record(Brush::Pinch).settings.strength, s.radius_px, s.pressure_curve), (brought(Brush::Pinch, 0.2), 84.0, 2.0));
     // The shipped brushes are as they shipped, whatever the old file held:
     // its values were the base brushes'.
     let fresh = Library::default();
@@ -472,4 +476,34 @@ fn the_settings_file_keeps_its_old_shape() {
     assert_eq!(written["library"]["shift"], "Smooth");
     // Every base brush but Erase Layer and Paint, which start off the wheel.
     assert_eq!(written["library"]["pinned"].as_array().map(Vec::len), Some(Brush::COUNT - 2));
+}
+
+/// A brush file from before 2026-10-21 (no `feel_version`): its Strength on
+/// a kernel whose slider is now mapped becomes the one that does what its
+/// number did, for the brush and for what Reset goes back to; the rest of
+/// it is the user's and stays. A dragged print's Strength is its height and
+/// is not touched, nor is a file this version wrote.
+#[test]
+fn an_old_brush_files_strength_does_what_it_did() {
+    use crate::sculpt::strength::{effective, from_old};
+    let old = r#"{ "name": "My Trim", "kernel": "Flatten",
+        "brush": { "strength": 0.755, "pressure_strength": 0.88, "front_facing": false, "flatten_mode": "scrape" },
+        "made": { "strength": 0.6 } }"#;
+    let read = parse(old, "x").unwrap();
+    let (now, made) = (read.record.settings, read.made.settings);
+    assert!((effective(Brush::Flatten, now.strength) - 0.755).abs() < 1e-5, "{}", now.strength);
+    assert_eq!(made.strength, from_old(Brush::Flatten, 0.6));
+    assert_eq!((now.pressure_strength, now.front_facing, now.flatten_mode), (0.88, false, FlattenMode::Scrape));
+    // Clay is not mapped.
+    let clay = parse(r#"{ "kernel": "Clay", "brush": { "strength": 0.21 } }"#, "c").unwrap();
+    assert_eq!(clay.record.settings.strength, 0.21);
+    // A print dragged out keeps its height.
+    let print = r#"{ "kernel": "Layer", "brush": { "strength": 0.5, "alpha": { "name": "Scales", "drag": true } } }"#;
+    assert_eq!(parse(print, "p").unwrap().record.settings.strength, 0.5);
+    // Written by this version, read back as it is.
+    let written = text("My Trim", Brush::Flatten, &read.record, &read.made);
+    assert!(written.contains("\"feel_version\""), "{written}");
+    let again = parse(&written, "x").unwrap();
+    assert_eq!(again.record.settings.strength, now.strength);
+    assert_eq!(again.made.settings.strength, made.strength);
 }

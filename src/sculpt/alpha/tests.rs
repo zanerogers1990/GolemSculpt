@@ -435,6 +435,9 @@ fn a_rake_that_turns_with_the_stroke_rules_lines_along_it() {
         let view = view_of(&mesh);
         let mut sculptor = sculptor_with(Brush::Layer, RADIUS, alpha);
         sculptor.settings.layer_height = 0.3;
+        // Up to the full step in a dab or two, as Layer rose before it eased
+        // up to its height (`kernels::layer`).
+        sculptor.settings.current_mut().build_up = 3.0;
         let (c, right) = (front(&view), view.right);
         run_stroke(&mut mesh, &mut sculptor, &view, &path(&view, c - right * 0.2, c + right * 0.2, 80));
         profile_across(&mesh, &view, RADIUS)
@@ -454,9 +457,11 @@ fn a_rake_that_turns_with_the_stroke_rules_lines_along_it() {
     let rises = along.windows(2).filter(|w| w[0] < 0.5 * step && w[1] >= 0.5 * step).count();
     assert!((2..=4).contains(&rises), "three teeth cross the middle half of the brush: {rises} in {along:?}");
     // Turned a quarter, the teeth lie across the stroke and every point is
-    // passed over by one: the lines smear into the plain step.
+    // passed over by one: the lines smear into the plain step. (Most of the
+    // way: Layer eases up to its step, `kernels::layer`, and a point passed
+    // over only by a tooth's soft edge rises a share of it.)
     let athwart = stroke(AlphaSettings { follow: true, rotation: 90.0, ..settings_with(the("Rake")) });
-    assert!(range(&athwart) < 0.25 * range(&along), "{athwart:?}");
+    assert!(range(&athwart) < 0.4 * range(&along), "{athwart:?} against {along:?}");
     // Not turning with the stroke, a stroke along the screen's right has the
     // teeth across it just the same.
     let fixed = stroke(settings_with(the("Rake")));
