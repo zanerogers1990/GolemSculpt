@@ -356,14 +356,15 @@ pub const DEFAULT_STEADY_PLANE: f32 = 0.5;
 /// over where two mirror planes cross.
 pub const DEFAULT_AUTO_SMOOTH: [(Brush, f32); 2] = [(Brush::Inflate, 0.15), (Brush::Standard, 0.05)];
 
-/// Where Even Out starts: on Move, once at the release. Not on Snake Hook:
-/// slid even once at the release, the clay that had been under the pen
-/// slipped a sixth of the pull back down it. Nor on Inflate: building a stroke to a height, it stretches the
-/// triangles so little that a fifth evened them out by next to nothing (the
-/// worst angle after three passes at full Strength 39.7 to 40.5 degrees)
-/// and cost a dab half as much again (`--brush-feel`, `--bench`). Both have
-/// it to turn up.
-pub const DEFAULT_EVEN_OUT: [(Brush, f32); 1] = [(Brush::Move, 0.2)];
+// Even Out starts at nought on every brush; it is there to turn up. Not on
+// Move: Move follows the pen and nothing else, and evened out as the drag was
+// let go, a far drag's form shifted under the hand (a bulge a seventh lower,
+// a pulled point blunted). Not on Snake Hook: slid even once at the release,
+// the clay that had been under the pen slipped a sixth of the pull back down
+// it. Not on Inflate: building a stroke to a height, it stretches the
+// triangles so little that a fifth evened them out by next to nothing (the
+// worst angle after three passes at full Strength 39.7 to 40.5 degrees) and
+// cost a dab half as much again (`--brush-feel`, `--bench`).
 
 /// Where Snake Hook's Thickness starts.
 pub const DEFAULT_THICKNESS: f32 = 0.5;
@@ -506,14 +507,11 @@ impl Default for Settings {
             thickness: 0.0,
         };
         let mut per_brush = [base; Brush::COUNT];
-        // A brush that swells or pulls the surface keeps it clean as it
-        // goes: a little smoothing that keeps the volume after every dab,
-        // and the triangles slid back toward even (`kernels::tidy`).
+        // A brush that swells or raises the surface keeps it clean as it
+        // goes: a little smoothing that keeps the volume after every dab
+        // (`kernels::tidy`).
         for (b, amount) in DEFAULT_AUTO_SMOOTH {
             per_brush[b.index()].auto_smooth = amount;
-        }
-        for (b, amount) in DEFAULT_EVEN_OUT {
-            per_brush[b.index()].even_out = amount;
         }
         per_brush[Brush::SnakeHook.index()].thickness = DEFAULT_THICKNESS;
         // Smooth stays All, not Surface: Surface keeps a form's size, but it

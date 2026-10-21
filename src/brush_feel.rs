@@ -766,7 +766,7 @@ pub fn run() {
         // What the plan's starting values for Snake Hook did to a pull.
         Held::Tuned("Snake Hook smooth.2", Brush::SnakeHook, |b| b.auto_smooth = 0.2),
         Held::Tuned("Snake Hook even.2", Brush::SnakeHook, |b| b.even_out = 0.2),
-        Held::Tuned("Move even0", Brush::Move, |b| b.even_out = 0.0),
+        Held::Tuned("Move even.2", Brush::Move, |b| b.even_out = 0.2),
     ];
     for held in clean {
         row(&mut bench, held, None, 1.0);

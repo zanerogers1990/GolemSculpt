@@ -83,6 +83,8 @@ fn a_version_2_file_takes_the_new_starting_values_once() {
         assert_eq!((got.auto_smooth, got.even_out, got.thickness), (want.auto_smooth, want.even_out, want.thickness), "{}", b.name());
     }
     assert_eq!(s.per_brush[Brush::Inflate.index()].auto_smooth, 0.15);
+    // Move follows the pen and nothing else: no Even Out as the drag is let go.
+    assert_eq!(s.per_brush[Brush::Move.index()].even_out, 0.0);
     let mut chosen = Settings::default();
     chosen.per_brush[Brush::Smooth.index()].smooth_mode = SmoothMode::Peaks;
     chosen.clay_depth = 0.8;

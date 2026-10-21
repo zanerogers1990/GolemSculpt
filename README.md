@@ -137,11 +137,12 @@ shared by them all.
   would ripple the step's edge).
 - **Even Out** slides the mesh within the surface so the triangles a brush
   stretched come back even, without the shape changing much: cleaner for
-  the next stroke. Move does it once, as you let go of the drag (starts at
-  20%), and the evening out is part of the same undo step; what is right
-  under the pen stays there. Inflate and Snake Hook have it too, at 0%:
-  turned up, Inflate evens out behind every dab, and Snake Hook as you let
-  go (the clay under the pen slips back down the pull a little for it).
+  the next stroke. It starts at 0% on every brush, so nothing moves that you
+  did not move. Turned up, Inflate evens out behind every dab; Move evens
+  out once, as you let go of the drag (part of the same undo step, and what
+  is right under the pen stays there, though a far drag's shape shifts a
+  little); Snake Hook as you let go (the clay under the pen slips back down
+  the pull a little for it).
 - **Clay Depth** on the plain Clay starts at 0.50 (it was 0.30): with
   Accumulate off, one pass at 50% Strength builds about a third of the
   brush's size. Settings from an earlier version that had 0.30, where it
