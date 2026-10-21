@@ -8,7 +8,9 @@
 //! name (a base brush, or one that ships, like Clay Strips). `:rough` lays a
 //! fine ripple over the ball first, for the brushes that smooth; `:fin` is
 //! a slab thinner than the brush instead of the ball, and `:back` the same
-//! slab seen from behind once the strokes are made on its front.
+//! slab seen from behind once the strokes are made on its front. `:thrice`
+//! makes each stroke three passes (there, back and there again) in one go:
+//! what a stroke gone over again builds, a rounded bead or a peaked ridge.
 
 use glam::{Vec2, Vec3};
 
@@ -54,11 +56,12 @@ impl Running {
         let middle = self.doc.scene.active().matrix().transform_point3(Vec3::Z * if slab { 0.0075 } else { 0.5 });
         let Some(middle) = self.view.project(middle) else { return };
         let rows: [(f32, bool); 4] = [(0.1, false), (0.5, false), (1.0, false), (own, true)];
+        let passes = if what == "thrice" { 3 } else { 1 };
         for (row, (strength, taper)) in rows.into_iter().enumerate() {
             self.doc.sculptor.settings.current_mut().strength = strength;
             let y = middle.y + (row as f32 - 1.5) * 3.0 * radius;
             let (from, to) = (Vec2::new(middle.x - 4.0 * radius, y), Vec2::new(middle.x + 4.0 * radius, y));
-            if !self.feel_stroke(from, to, taper) {
+            if !self.feel_stroke(from, to, taper, passes) {
                 eprintln!("demo-feel: the stroke at {strength} missed the model");
             }
         }
@@ -72,13 +75,18 @@ impl Running {
     }
 
     /// One stroke from `a` to `b` on the screen, with the pen: at full
-    /// pressure, or with `taper` rising from none to full and back.
-    fn feel_stroke(&mut self, a: Vec2, b: Vec2, taper: bool) -> bool {
-        let steps = 96;
+    /// pressure, or with `taper` rising from none to full and back. With
+    /// `passes` more than one it goes back and forth that many times.
+    fn feel_stroke(&mut self, a: Vec2, b: Vec2, taper: bool, passes: usize) -> bool {
+        let leg = 96;
+        let steps = leg * passes;
         let sample = |i: usize| {
             let t = i as f32 / steps as f32;
             let pressure = if taper { (t * std::f32::consts::PI).sin() } else { 1.0 };
-            PointerSample { pos: a.lerp(b, t), pressure: Some(pressure), time: i as f64 / 240.0 }
+            let along = (i % leg) as f32 / leg as f32;
+            let (along, pass) = if i == steps { (1.0, passes - 1) } else { (along, i / leg) };
+            let pos = if pass % 2 == 0 { a.lerp(b, along) } else { b.lerp(a, along) };
+            PointerSample { pos, pressure: Some(pressure), time: i as f64 / 240.0 }
         };
         let doc = &mut self.doc;
         if !doc.begin_stroke(&self.local, sample(0), false, false) {
