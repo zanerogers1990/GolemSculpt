@@ -2031,7 +2031,7 @@ fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scra
     let passes = (p.auto_smooth * d.pressure * p.dose * SMOOTH_MOST_PASSES).clamp(0.0, SMOOTH_MOST_PASSES);
     // Snake Hook evens out once, at the release ([`even_out_moved`]):
     // slid at every step, the surface it was pulling slipped back out of
-    // its grip and a long pull came out half as long.
+    // its grip and a long pull came out a third shorter.
     let even = if p.brush == Brush::SnakeHook { 0.0 } else { p.even_out * EVEN_RATE * d.pressure };
     if passes <= 0.0 && even <= 0.0 {
         return;
@@ -2092,7 +2092,7 @@ const RELEASE_EVEN_PASSES: f32 = 30.0;
 ///
 /// Not at every step: what a drag or a pull holds on to is the surface under
 /// the pen, and slid from under it at every step a Snake Hook pull lost its
-/// grip and came out half as long.
+/// grip and came out a third shorter.
 pub fn even_out_moved(mesh: &mut Mesh, verts: &[u32], weights: &[f32], leaves: &[u32], amount: f32) {
     let passes = (amount * RELEASE_EVEN_PASSES).max(0.0);
     let full = passes.floor() as usize;

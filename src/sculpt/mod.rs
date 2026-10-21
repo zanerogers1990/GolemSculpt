@@ -348,16 +348,17 @@ pub const DEFAULT_STEADY_PLANE: f32 = 0.5;
 /// Inflate, which stretches the surface most, more than Standard, which
 /// only raises it. Every other brush, Clay Strips, Dam Standard and the
 /// smoothing brushes start at nought. So does Snake Hook, whose pull it
-/// fights: a fifth (Blender's choice) smoothed the tip back at every step,
-/// and a pull of four radii came out under two (`--brush-feel`). And so
+/// fights: at a fifth (Blender's choice) it smoothed the tip back at every
+/// step, and a pull of four radii came out 7% shorter (`--brush-feel`),
+/// for triangles a little more even; it is there to turn up. And so
 /// does Layer: the smoothing that keeps volume rings at the edge of a step,
 /// and a Layer stroke stood a hundredth over its height alone and a tenth
 /// over where two mirror planes cross.
 pub const DEFAULT_AUTO_SMOOTH: [(Brush, f32); 2] = [(Brush::Inflate, 0.15), (Brush::Standard, 0.05)];
 
 /// Where Even Out starts: on Move, once at the release. Not on Snake Hook:
-/// slid even once at the release, a long thin pull lost a third of its
-/// length. Nor on Inflate: building a stroke to a height, it stretches the
+/// slid even once at the release, the clay that had been under the pen
+/// slipped a sixth of the pull back down it. Nor on Inflate: building a stroke to a height, it stretches the
 /// triangles so little that a fifth evened them out by next to nothing (the
 /// worst angle after three passes at full Strength 39.7 to 40.5 degrees)
 /// and cost a dab half as much again (`--brush-feel`, `--bench`). Both have
