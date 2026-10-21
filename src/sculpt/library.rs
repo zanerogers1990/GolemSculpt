@@ -197,6 +197,9 @@ fn settings_in_range(mut b: BrushSettings) -> BrushSettings {
     b.keep_volume = fit(b.keep_volume, 0.0..=1.0, was.keep_volume);
     b.relax_normals = fit(b.relax_normals, 0.0..=1.0, was.relax_normals);
     b.steady_plane = fit(b.steady_plane, 0.0..=1.0, was.steady_plane);
+    b.auto_smooth = fit(b.auto_smooth, 0.0..=1.0, was.auto_smooth);
+    b.even_out = fit(b.even_out, 0.0..=1.0, was.even_out);
+    b.thickness = fit(b.thickness, -1.0..=1.0, was.thickness);
     b
 }
 

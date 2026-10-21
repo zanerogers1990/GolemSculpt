@@ -633,10 +633,11 @@ fn tools() -> Value {
                      default is 1 (Clay Strips 0.88). 0: pressure does not change the strength.",
                 ),
                 "smooth_mode": choice(
-                    &["all", "peaks", "valleys", "relax"],
-                    "Smooth (and smooth: true strokes with any brush): all evens everything out; peaks only lowers \
-                     what stands above its neighbours; valleys only fills what lies below them; relax slides the \
-                     mesh within the surface to even out its triangles without changing the shape.",
+                    &["all", "surface", "peaks", "valleys", "relax"],
+                    "Smooth (and smooth: true strokes with any brush): all evens everything out; surface takes fine \
+                     roughness off and keeps every form's size (lumps as big as the brush mostly stay); peaks only \
+                     lowers what stands above its neighbours; valleys only fills what lies below them; relax slides \
+                     the mesh within the surface to even out its triangles without changing the shape.",
                 ),
                 "keep_volume": number("Smooth, mode all: 0 to 1, how much of the shrinkage smoothing causes is given back. 0, the default, shrinks as plain smoothing does."),
                 "flatten_mode": choice(
@@ -648,6 +649,9 @@ fn tools() -> Value {
                 "lock_plane": boolean("Flatten: the whole stroke levels to the plane its first dab found, for a true flat facet. It works on what lies within half a brush radius of that plane."),
                 "relax_normals": number("Inflate: 0 to 1, how far the directions it pushes the surface in are evened out with their neighbours', so the swelling stays smooth. The base Inflate starts at 0.3."),
                 "steady_plane": number("Clay and Flatten: 0 to 1, how steadily the plane the brush works to follows the surface along a stroke, so it does not tip over every bump. 0: each dab finds its own; 1: the stroke keeps its first. Clay and Flatten start at 0.5, Clay Strips at 0."),
+                "auto_smooth": number("0 to 1: how much each dab smooths what it has just worked, keeping the volume. Inflate starts at 0.15, Snake Hook 0.2, Standard and Layer 0.05, the rest 0."),
+                "even_out": number("0 to 1: how much each dab slides the triangles it stretched back to even within the surface (Move: once, at the release). Inflate, Snake Hook and Move start at 0.2, the rest 0."),
+                "thickness": number("Snake Hook: -1 to 1, how a pull keeps its thickness. Above 0 it stays thick out to the tip; below 0 it tapers to a point."),
                 "alpha": string(
                     "The picture this brush prints, by its name in the app's alpha list, or \"none\" for the plain \
                      round tip. Standard, Clay, Inflate and Layer take one.",

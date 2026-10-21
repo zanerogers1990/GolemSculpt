@@ -561,6 +561,9 @@ impl Running {
             "lock_plane": b.lock_plane,
             "relax_normals": round(b.relax_normals),
             "steady_plane": round(b.steady_plane),
+            "auto_smooth": round(b.auto_smooth),
+            "even_out": round(b.even_out),
+            "thickness": round(b.thickness),
             "alpha": s.alpha[s.brush.index()].image.map(|image| image.name.as_str()),
             "alpha_random_rotation": round(s.alpha[s.brush.index()].random_rotation),
             "mask_mode": s.mask_mode,
@@ -697,8 +700,12 @@ impl Running {
         b.lock_plane = flag(args, "lock_plane").unwrap_or(b.lock_plane);
         b.relax_normals = within("relax_normals", 0.0..=1.0).unwrap_or(b.relax_normals);
         b.steady_plane = within("steady_plane", 0.0..=1.0).unwrap_or(b.steady_plane);
+        b.auto_smooth = within("auto_smooth", 0.0..=1.0).unwrap_or(b.auto_smooth);
+        b.even_out = within("even_out", 0.0..=1.0).unwrap_or(b.even_out);
+        b.thickness = within("thickness", -1.0..=1.0).unwrap_or(b.thickness);
         if let Some(name) = text(args, "smooth_mode") {
-            b.smooth_mode = SmoothMode::named(name).ok_or("smooth_mode is \"all\", \"peaks\", \"valleys\" or \"relax\".")?;
+            b.smooth_mode = SmoothMode::named(name)
+                .ok_or("smooth_mode is \"all\", \"surface\", \"peaks\", \"valleys\" or \"relax\".")?;
         }
         if let Some(name) = text(args, "flatten_mode") {
             b.flatten_mode = FlattenMode::named(name).ok_or("flatten_mode is \"both\", \"scrape\" or \"fill\".")?;

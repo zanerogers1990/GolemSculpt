@@ -367,7 +367,7 @@ impl Mesh {
     }
 
     /// Triangles incident to a vertex.
-    #[cfg(test)]
+    #[inline]
     pub fn vert_tris(&self, v: u32) -> &[u32] {
         self.vt.row(v as usize)
     }
@@ -642,6 +642,12 @@ impl Mesh {
         }
         let len = sum.length();
         if len > 1e-30 { (sum / len).as_vec3() } else { self.start_nrm(v) }
+    }
+
+    /// Every vertex the stroke now open has moved (or masked) so far, in the
+    /// order it first did.
+    pub fn stroke_vertices(&self) -> &[u32] {
+        if self.in_stroke { &self.touched } else { &[] }
     }
 
     #[inline]

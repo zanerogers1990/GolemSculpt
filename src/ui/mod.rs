@@ -429,8 +429,11 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
                 theme::about(ui, "Ctrl or the right button pushes the surface in or pulls it out, the way it faces: drag up for out, down for in. At the outline, drag the way it faces.");
             }
             Brush::Pose => pose::settings(ui, s, tips),
-            _ => theme::hint(ui, "No extra settings for this brush."),
+            // Auto Smooth and the rest, below, are theirs.
+            Brush::Standard | Brush::SnakeHook => {}
         }
+        // What the brush does to leave the surface clean behind it.
+        modes::tidy(ui, s.current_mut(), brush, tips);
         stroke::brush_section(ui, s, tips);
         falloff::section(ui, s, tips);
         alpha::section(ui, s, tips, actions);

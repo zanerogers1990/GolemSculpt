@@ -115,6 +115,17 @@ pub struct Params {
     /// Clay and Flatten: how steadily the plane they work to follows the
     /// surface from dab to dab (Steady Plane, 0 to 1; see [`Steady`]).
     pub steady_plane: f32,
+    /// How much the surface under each dab is smoothed after the dab, the
+    /// way that keeps its volume (Auto Smooth, 0 to 1; see [`tidy`]).
+    pub auto_smooth: f32,
+    /// How much the triangles under each dab are slid within the surface to
+    /// even them out after it (Even Out, 0 to 1; see [`tidy`]). Move evens
+    /// out once, at the release ([`even_out_grab`]).
+    pub even_out: f32,
+    /// Snake Hook: how the pulled clay keeps its thickness, -1 to 1: above
+    /// nought it is pushed out from the line of the pull as it goes, below
+    /// it is drawn in to a point (see [`snake`]).
+    pub thickness: f32,
     pub mask_hardness: f32,
     /// Smooth: what it evens out, and how much of the shrinkage it gives
     /// back (Keep Volume, 0 to 1).
@@ -160,6 +171,11 @@ pub struct Dab {
     /// Which copy of the stroke's dab this is under symmetry: what a copy
     /// keeps of its own from dab to dab goes by it (Steady Plane).
     pub copy: SymOp,
+    /// The way the stroke is going here, as a unit vector (zero for a dab
+    /// that has come no way yet): what Even Out lines the triangles up with.
+    /// Snake Hook's tip is turned from `dir` to this, so that it turns with
+    /// the stroke.
+    pub heading: Vec3,
 }
 
 impl Dab {
@@ -175,6 +191,7 @@ impl Dab {
             pressure: self.pressure,
             frame: self.frame.mirrored(op),
             plane: self.plane.map(|(origin, normal)| (op.apply_point(origin), op.apply_dir(normal))),
+            heading: op.apply_dir(self.heading),
         }
     }
 }
@@ -545,6 +562,13 @@ pub struct Scratch {
     relaxed_prepared: Vec<(u32, u32)>,
     /// Steady Plane: each copy of the brush's planes so far (see [`Steady`]).
     steady: Vec<(SymOp, Steady)>,
+    /// What a pass of the smoothing that keeps volume, or of Even Out, has
+    /// worked out for each vertex of the dab's leaves (see [`relax_step`]).
+    tidy: Vec<Tidy>,
+    /// That smoothing's first half, by vertex: how far each vertex's
+    /// neighbours' middle is from where it is held to (Vollmer's `b`). Zero
+    /// outside the pass in hand; each pass clears what it wrote.
+    held_off: Vec<[f32; 3]>,
 }
 
 impl Scratch {
@@ -712,7 +736,12 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
         Brush::Nudge => nudge(mesh, p, d, leaves, fit),
         // Move and Pose take hold once at the press and are dragged, not
         // dabbed. Erase Layer and Paint were seen to above.
-        Brush::Move | Brush::Pose | Brush::EraseLayer | Brush::Paint => {}
+        Brush::Move | Brush::Pose | Brush::EraseLayer | Brush::Paint => return,
+    }
+    // Smooth is smoothing already. A brush with neither at nought is left
+    // exactly as it was: nothing more is read or written.
+    if p.brush != Brush::Smooth && (p.auto_smooth > 0.0 || p.even_out > 0.0) {
+        tidy(mesh, p, d, leaves, scratch);
     }
 }
 
@@ -1465,18 +1494,75 @@ fn crease(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     });
 }
 
-/// Mean of a vertex's edge neighbours, summed in double (see module docs).
+/// Which of a vertex's neighbours smoothing averages it with (every mode
+/// of Smooth, Auto Smooth and Clay's finishing pass, as in Blender).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Ring {
+    /// None: the vertex stays where it is. One with two neighbours or fewer
+    /// is the tip of a spike or a stray corner, which averaging only drags
+    /// about; and so is a rim vertex with no rim on either side of it.
+    Held,
+    /// All of them: a vertex inside the surface.
+    All,
+    /// Only the two along the open edge it is on: a vertex on the rim of an
+    /// open surface. Averaged with the rest, it was drawn in off the rim and
+    /// every opening shrank as it was smoothed; with these it smooths along
+    /// the rim, and the rim keeps its place.
+    Rim,
+}
+
+impl Ring {
+    #[inline]
+    pub(super) fn of(mesh: &Mesh, v: u32) -> Ring {
+        let ring = mesh.neighbours(v);
+        if ring.len() <= 2 {
+            return Ring::Held;
+        }
+        // Round a vertex inside a surface there are as many triangles as
+        // neighbours; round one on a rim, fewer.
+        if mesh.vert_tris(v).len() >= ring.len() {
+            return Ring::All;
+        }
+        if ring.iter().filter(|&&o| on_rim(mesh, v, o)).count() >= 2 { Ring::Rim } else { Ring::Held }
+    }
+
+    /// Whether neighbour `o` of `v` is one this vertex is averaged with.
+    #[inline]
+    fn counts(self, mesh: &Mesh, v: u32, o: u32) -> bool {
+        match self {
+            Ring::All => true,
+            Ring::Rim => on_rim(mesh, v, o),
+            Ring::Held => false,
+        }
+    }
+}
+
+/// Whether the edge from `v` to `o` is on an open rim: one triangle has it.
+fn on_rim(mesh: &Mesh, v: u32, o: u32) -> bool {
+    let tris = mesh.vert_tris(v).iter();
+    tris.filter(|&&t| mesh.indices[t as usize * 3..t as usize * 3 + 3].contains(&o)).count() == 1
+}
+
+/// The mean of `value` over the neighbours of `v` that `ring` counts,
+/// summed in double (see module docs); `None` if it counts none.
+#[inline]
+fn ring_mean(mesh: &Mesh, v: u32, ring: Ring, value: impl Fn(u32) -> Vec3) -> Option<Vec3> {
+    let (mut sum, mut count) = (DVec3::ZERO, 0u32);
+    for &o in mesh.neighbours(v) {
+        if ring.counts(mesh, v, o) {
+            sum += value(o).as_dvec3();
+            count += 1;
+        }
+    }
+    (count > 0).then(|| (sum / count as f64).as_vec3())
+}
+
+/// The middle of the neighbours a vertex is smoothed toward ([`Ring`]), or
+/// `None` for a vertex smoothing leaves where it is. Inside a surface it is
+/// the plain mean of every neighbour, to the bit as it always was.
 #[inline]
 fn neighbour_mean(mesh: &Mesh, v: u32) -> Option<Vec3> {
-    let ring = mesh.neighbours(v);
-    if ring.is_empty() {
-        return None;
-    }
-    let mut sum = DVec3::ZERO;
-    for &o in ring {
-        sum += mesh.positions[o as usize].as_dvec3();
-    }
-    Some((sum / ring.len() as f64).as_vec3())
+    ring_mean(mesh, v, Ring::of(mesh, v), |o| mesh.positions[o as usize])
 }
 
 /// Jacobi relaxation passes over the vertices of `leaves` that
@@ -1549,6 +1635,16 @@ pub(super) fn smooth_passes(e: f32) -> f32 {
     (e * SMOOTH_MOST_PASSES).clamp(0.0, SMOOTH_MOST_PASSES)
 }
 
+/// How many times as many passes Smooth makes in Surface mode as in
+/// Classic at the same Strength (up to its four). A pass that keeps volume
+/// takes out less of a fine roughness than a plain one, since it holds
+/// every vertex half way to where it was: with twice as many, a stroke at
+/// the Strength Smooth starts with takes as much roughness off a rough ball
+/// as the old way did (`--brush-feel`: 0.647 of it left against 0.649) and
+/// none of its volume. Past about half Strength it takes off less than the
+/// old way could: it holds the surface.
+const SURFACE_GAIN: f32 = 2.0;
+
 fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let r2 = r * r;
@@ -1569,6 +1665,19 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mu
     }
     let amount = smooth_passes(p.e(d.pressure) * p.dose);
     match p.smooth_mode {
+        // Smoothing that keeps the form's volume, holding each vertex to
+        // where the stroke found it.
+        SmoothMode::Surface => {
+            let amount = smooth_passes(p.e(d.pressure) * p.dose * SURFACE_GAIN);
+            let weights = std::mem::take(&mut scratch.weights);
+            let full = amount.floor() as usize;
+            let frac = amount - full as f32;
+            for pass in 0..full + usize::from(frac > 0.001) {
+                let factor = if pass < full { 1.0 } else { frac };
+                relax_step(mesh, leaves, scratch, Anchor::Start, Vec3::ZERO, true, |_, at, _| (weights[at] * factor, 0.0));
+            }
+            scratch.weights = weights;
+        }
         SmoothMode::All if p.keep_volume > 0.0 => {
             fill(mesh, leaves, &mut scratch.starts, &mut scratch.before, |_, v| mesh.positions[v as usize]);
             relax_passes(mesh, leaves, scratch, amount, 0.0);
@@ -1689,6 +1798,300 @@ fn give_back(mesh: &mut Mesh, leaves: &[u32], scratch: &Scratch, keep: f32) {
         let w = weights[at];
         (w > 0.0).then(|| vt.pos + vt.normal * (w * back))
     });
+}
+
+/// The smoothing that keeps volume: Vollmer, Kreylos and Hamann's "HC"
+/// Laplacian, which Blender's Surface Smooth is. Each pass moves a vertex to
+/// the middle of its neighbours, as plain smoothing does, and then back by
+/// how far that middle is from where the vertex is held to (`HC_ALPHA` of
+/// the way to its anchor, the rest where it was): partly by its own such
+/// distance, `HC_BETA`, and partly by its neighbours'. On a ball every
+/// vertex goes in and comes straight back out, so the form keeps its size,
+/// while a bump, which its neighbours do not share, still goes down. Both at
+/// a half, where Blender starts them.
+const HC_ALPHA: f32 = 0.5;
+const HC_BETA: f32 = 0.5;
+
+/// What one pass of [`relax_step`] has worked out for a vertex.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(super) struct Tidy {
+    /// How far the vertex goes, but for the smoothing's second half.
+    moved: Vec3,
+    /// Its weight in the smoothing (nought: it is not smoothed).
+    smooth: f32,
+}
+
+/// Where the smoothing that keeps volume holds a vertex to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Anchor {
+    /// Where it is: Auto Smooth after a dab, which keeps what the dab did.
+    Here,
+    /// Where it was before the dab's first pass (`Scratch::before`), for an
+    /// Auto Smooth of more than one pass.
+    Saved,
+    /// Where the stroke found it: the Smooth brush in Surface mode.
+    Start,
+}
+
+/// One pass of the smoothing that keeps volume and of Even Out, over the
+/// vertices `leaves` own. `weigh` gives each (the mesh, its place in the
+/// leaves' order, the vertex) its weight in the smoothing and its share of
+/// Even Out, 0 to 1 each; `smoothing` is false when every weight in the
+/// smoothing is nought, which saves its second half.
+///
+/// Jacobi, as every smoothing here is: the pass reads the surface as it
+/// found it and moves every vertex at once, so the order the work is shared
+/// out in cannot show and mirror twins stay twins. In three walks over the
+/// leaves, each on all threads: the first works out each vertex's move and
+/// the smoothing's first half (written by vertex, for its neighbours to
+/// read), the second the second half, and the last moves the vertices.
+fn relax_step(
+    mesh: &mut Mesh,
+    leaves: &[u32],
+    scratch: &mut Scratch,
+    anchor: Anchor,
+    heading: Vec3,
+    smoothing: bool,
+    weigh: impl Fn(&Mesh, usize, u32) -> (f32, f32) + Sync,
+) {
+    let Scratch { starts, tidy, held_off, targets, before, .. } = scratch;
+    {
+        let mesh = &*mesh;
+        if smoothing {
+            per_vertex(held_off, mesh);
+        }
+        let off = SharedMut::new(held_off);
+        let before = &*before;
+        fill(mesh, leaves, starts, tidy, |at, v| {
+            let (smooth, even) = weigh(mesh, at, v);
+            if smooth <= 0.0 && even <= 0.0 {
+                return Tidy::default();
+            }
+            let ring = Ring::of(mesh, v);
+            if ring == Ring::Held {
+                return Tidy::default();
+            }
+            let q = mesh.positions[v as usize];
+            let mut tidied = Tidy::default();
+            if smooth > 0.0 {
+                if let Some(mean) = ring_mean(mesh, v, ring, |o| mesh.positions[o as usize]) {
+                    let o = match anchor {
+                        Anchor::Here => q,
+                        Anchor::Saved => before[at],
+                        Anchor::Start => mesh.start_pos(v),
+                    };
+                    let held = mean - (o * HC_ALPHA + q * (1.0 - HC_ALPHA));
+                    // SAFETY: `fill` gives each leaf's vertices to one task.
+                    unsafe { off.write(v as usize, held.to_array()) };
+                    let smooth = smooth.min(1.0);
+                    tidied = Tidy { moved: (mean - q) * smooth - held * (smooth * HC_BETA), smooth };
+                }
+            }
+            // Not on a rim: slid within the surface it would leave it.
+            if even > 0.0 && ring == Ring::All {
+                tidied.moved += evened(mesh, v, q, heading, even.min(1.0)) - q;
+            }
+            tidied
+        });
+    }
+    let tidy = &*tidy;
+    if !smoothing {
+        return mesh.move_vertices(leaves, |at, vt| {
+            let moved = tidy[at].moved;
+            (moved != Vec3::ZERO).then(|| vt.pos + moved)
+        });
+    }
+    {
+        let mesh = &*mesh;
+        let off = &*held_off;
+        fill(mesh, leaves, starts, targets, |at, v| {
+            let t = tidy[at];
+            let pos = mesh.positions[v as usize] + t.moved;
+            if t.smooth <= 0.0 {
+                return pos;
+            }
+            let ring = Ring::of(mesh, v);
+            let theirs = ring_mean(mesh, v, ring, |o| Vec3::from_array(off[o as usize])).unwrap_or(Vec3::ZERO);
+            pos - theirs * (t.smooth * (1.0 - HC_BETA))
+        });
+    }
+    let targets = &*targets;
+    mesh.move_vertices(leaves, |at, vt| (tidy[at] != Tidy::default()).then(|| targets[at]).filter(|&to| to != vt.pos));
+    // Nought again for the next pass: every vertex written is one of these
+    // leaves', and a leaf's vertices are one run.
+    let off = SharedMut::new(held_off);
+    each_leaf(mesh, leaves, |leaf| {
+        // SAFETY: each leaf is cleared by one task, and owns its run.
+        unsafe { off.slice(owned(leaf)) }.fill([0.0; 3]);
+    });
+}
+
+/// Even Out at full setting does this many times as much a dab, at the
+/// tuned spacing and full pressure, as its slider says (to nineteen
+/// twentieths of the way at most): a fifth evens a vertex under the middle
+/// of the ring four fifths of the way, and five dabs cover each point of a
+/// stroke.
+const EVEN_RATE: f32 = 4.0;
+
+/// Where Even Out takes vertex `v`, at `q`: `k` of the way to the middle of
+/// its neighbours within the surface, and back on to it ([`slid`]). It does
+/// not change the form, only how the triangles lie on it.
+///
+/// With a `heading`, the neighbours that lie along it or straight across it
+/// count for most and those at a slant for least (Blender's topology rake,
+/// `bmesh_four_neighbor_average`, whose weights are 1/4 along or across and
+/// nought at a slant): what a swelling has stretched out of line is drawn
+/// back into rows along and across the stroke. Every neighbour also counts
+/// for a little whatever way it lies ([`RAKE_FLOOR`]), so that the weights
+/// can never all but vanish, and the place a vertex goes changes smoothly
+/// with the way the stroke goes. Without a heading every neighbour counts
+/// the same.
+fn evened(mesh: &Mesh, v: u32, q: Vec3, heading: Vec3, k: f32) -> Vec3 {
+    let n = mesh.normals[v as usize];
+    let along = (heading - n * heading.dot(n)).normalize_or_zero();
+    let (mut sum, mut weight) = (DVec3::ZERO, 0.0f64);
+    for &o in mesh.neighbours(v) {
+        let p = mesh.positions[o as usize];
+        let w = if along == Vec3::ZERO {
+            1.0
+        } else {
+            let to = p - q;
+            let flat = to - n * to.dot(n);
+            let len2 = flat.length_squared();
+            let cos2 = if len2 > 1e-24 { flat.dot(along).powi(2) / len2 } else { 0.5 };
+            ((cos2 - 0.5) * (cos2 - 0.5) + RAKE_FLOOR) as f64
+        };
+        sum += p.as_dvec3() * w;
+        weight += w;
+    }
+    if weight <= 0.0 {
+        return q;
+    }
+    let toward = (sum / weight).as_vec3() - q;
+    slid(mesh, v, q, n, (toward - n * toward.dot(n)) * k)
+}
+
+/// What every neighbour counts for in Even Out along a heading, besides how
+/// nearly it lies along or across it (at most a quarter): a fifth of that.
+const RAKE_FLOOR: f32 = 0.05;
+
+/// Whether a brush weighs a vertex by where the stroke found it (the
+/// footprint stays where it was laid as the surface rises), rather than by
+/// where it is: what its Auto Smooth and Even Out are weighed by too.
+fn weighs_by_start(brush: Brush) -> bool {
+    matches!(brush, Brush::Standard | Brush::Inflate | Brush::Layer | Brush::Pinch | Brush::Clay)
+}
+
+/// Auto Smooth and Even Out: what a brush does to the surface under a dab
+/// after the dab, by the same falloff over the same footprint, a vertex at
+/// a time for what pressure gave the dab (as Blender's Auto Smooth and
+/// Topology Rake).
+///
+/// Auto Smooth smooths the way that keeps volume ([`relax_step`]), each
+/// vertex held to where the dab left it: a brush that swells or pulls the
+/// surface leaves it as round as it found it, and no thinner. At full it is
+/// as many passes a dab as Smooth makes at full Strength. Even Out slides
+/// the triangles within the surface so they stay even ([`evened`]), lined
+/// up with the way the stroke is going.
+///
+/// Measured where the brush measures its own weights, from the dab's centre.
+fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
+    let passes = (p.auto_smooth * d.pressure * p.dose * SMOOTH_MOST_PASSES).clamp(0.0, SMOOTH_MOST_PASSES);
+    // Snake Hook evens out once, at the release ([`even_out_moved`]):
+    // slid at every step, the surface it was pulling slipped back out of
+    // its grip and a long pull came out half as long.
+    let even = if p.brush == Brush::SnakeHook { 0.0 } else { p.even_out * EVEN_RATE * d.pressure };
+    if passes <= 0.0 && even <= 0.0 {
+        return;
+    }
+    // About the dab's own centre, even for Snake Hook, whose tip has moved
+    // on by its step: the leaves a copy of a dab is given are the ones it
+    // reaches from there, and only those are shared out between the copies
+    // that overlap at a mirror plane (`share::bank`).
+    let (r, centre) = (p.radius, d.center);
+    let r2 = r * r;
+    let by_start = weighs_by_start(p.brush);
+    let weight = |mesh: &Mesh, v: u32| {
+        let i = v as usize;
+        let pos = mesh.positions[i];
+        let d2 = if by_start { mesh.start_pos(v) } else { pos }.distance_squared(centre);
+        if d2 >= r2 {
+            return 0.0;
+        }
+        p.falloff.at(d2.sqrt() / r, smooth) * (1.0 - mesh.mask[i]) * facing(p.front_facing, mesh.normals[i], pos, d.cam)
+    };
+    let full = passes.floor() as usize;
+    let frac = passes - full as f32;
+    let count = (full + usize::from(frac > 0.001)).max(1);
+    // More than one pass holds each vertex to where the dab left it, not
+    // where the pass before did.
+    let anchor = if count > 1 {
+        let shown = &*mesh;
+        fill(shown, leaves, &mut scratch.starts, &mut scratch.before, |_, v| shown.positions[v as usize]);
+        Anchor::Saved
+    } else {
+        Anchor::Here
+    };
+    for pass in 0..count {
+        let smooth = if pass < full { 1.0 } else if frac > 0.001 { frac } else { 0.0 };
+        let even = if pass == 0 { even } else { 0.0 };
+        relax_step(mesh, leaves, scratch, anchor, d.heading, smooth > 0.0, |mesh, _, v| {
+            let w = weight(mesh, v);
+            // Even Out takes a vertex a share of the way, which a dab at
+            // another spacing closes as the dabs it stands in for would have
+            // between them (`Params::share`).
+            (w * smooth, if even > 0.0 { p.share((w * even).clamp(0.0, 0.95)) } else { 0.0 })
+        });
+    }
+}
+
+/// How many passes of Even Out Move and Snake Hook make at full setting,
+/// once, as the stroke is let go: at the fifth they start with, six.
+const RELEASE_EVEN_PASSES: f32 = 30.0;
+
+/// Even Out for Move and Snake Hook: once the stroke is let go, slides the
+/// triangles it stretched back toward even within the surface ([`evened`]),
+/// each vertex `verts` lists (ascending) by its share in `weights`, every
+/// neighbour counting the same. (Lined up with the way each vertex was
+/// moved, it evened out no better, `--brush-feel`'s Move drag, and where a
+/// vertex had hardly moved that way was rounding.) It changes the dragged
+/// form little: the triangles on it are evened out. Part of the stroke, so
+/// one undo takes back both. `leaves` are the leaves that hold `verts` and
+/// their neighbours (`Mesh::leaves_of`).
+///
+/// Not at every step: what a drag or a pull holds on to is the surface under
+/// the pen, and slid from under it at every step a Snake Hook pull lost its
+/// grip and came out half as long.
+pub fn even_out_moved(mesh: &mut Mesh, verts: &[u32], weights: &[f32], leaves: &[u32], amount: f32) {
+    let passes = (amount * RELEASE_EVEN_PASSES).max(0.0);
+    let full = passes.floor() as usize;
+    let frac = passes - full as f32;
+    let count = full + usize::from(frac > 0.001);
+    let mut targets = vec![Vec3::ZERO; verts.len()];
+    for pass in 0..count {
+        let factor = if pass < full { 1.0 } else { frac };
+        // Slid within the surface as it is now.
+        mesh.flush_normals();
+        {
+            let mesh = &*mesh;
+            let place = |(target, (&v, &w)): (&mut Vec3, (&u32, &f32))| {
+                let q = mesh.positions[v as usize];
+                let k = (w * factor).clamp(0.0, 1.0);
+                *target = if k > 0.0 && Ring::of(mesh, v) == Ring::All {
+                    evened(mesh, v, q, Vec3::ZERO, k)
+                } else {
+                    q
+                };
+            };
+            if verts.len() < PAR_MIN {
+                targets.iter_mut().zip(verts.iter().zip(weights)).for_each(place);
+            } else {
+                targets.par_iter_mut().zip(verts.par_iter().zip(weights)).with_min_len(1024).for_each(place);
+            }
+        }
+        mesh.move_listed(verts, |slot, vt| (targets[slot] != vt.pos).then_some(targets[slot]));
+        mesh.positions_changed(leaves);
+    }
 }
 
 /// How much of the way to the stroke's line one Pinch dab at full strength
@@ -1909,11 +2312,29 @@ fn nudge(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
 }
 
 /// Snake Hook: carries the surface under the tip the step the tip took, by
-/// the falloff's weight times Strength (all of it at 100%, where it starts).
+/// the falloff's weight times Strength (all of it at 100%, where it starts)
+/// times the pen's pressure, as Blender's does (not squared: its Strength
+/// is how much of the way the surface follows).
+///
+/// Two more things, after Blender's. Thickness: the surface being carried
+/// is pushed out from the line of the pull, or drawn in to it, by the step's
+/// length over the radius (Blender's pinch, `2 (0.5 - pinch) |step| / r`
+/// with the sign turned: Thickness 1 is pinch 0). Drawn after the tip by the
+/// falloff alone, a pull thins with every step, the middle of the ring going
+/// further than its edge; pushed out a little at each step, a long pull
+/// keeps its thickness. Drawn in (below nought), it tapers to a point, more
+/// gently the nearer the axis. And it turns with the stroke: the surface
+/// under the tip is turned about it by the turn of the way the stroke is
+/// going since the step before (from `dir` to `heading`), by its weight, so
+/// a pull that curves keeps its cross-section square to its path.
 fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
     let r2 = r * r;
-    let follow = p.strength.clamp(0.0, 1.0);
+    let follow = (p.strength * d.pressure).clamp(0.0, 1.0);
+    let along = d.step.normalize_or_zero();
+    let pinch = -p.thickness.clamp(-1.0, 1.0) * d.step.length() / r.max(1e-12);
+    let turn = (d.dir != Vec3::ZERO && d.heading != Vec3::ZERO && d.dir != d.heading)
+        .then(|| glam::Quat::from_rotation_arc(d.dir, d.heading));
     mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
@@ -1922,8 +2343,28 @@ fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         }
         let w = p.falloff.at(d2.sqrt() / r, smooth)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam);
-        (w > 0.0).then(|| pos + d.step * (w * follow))
+            * facing(p.front_facing, vt.normal, pos, d.cam)
+            * follow;
+        if w <= 0.0 {
+            return None;
+        }
+        let mut moved = d.step * w;
+        if pinch != 0.0 && along != Vec3::ZERO {
+            // Measured from the line the pull is going along, through
+            // where the tip has got to (Blender's, which leaves out the
+            // falloff here).
+            let off = pos - d.center - d.step;
+            let off = off - along * off.dot(along);
+            // Drawn in, it eases off toward the axis, or it would pinch
+            // the middle of the pull into nothing.
+            let ease = if pinch > 0.0 { (off.length() / r).min(1.0).powi(2) } else { 1.0 };
+            moved -= off * (pinch * w * ease);
+        }
+        if let Some(turn) = turn {
+            let from = pos - d.center;
+            moved += glam::Quat::IDENTITY.slerp(turn, w) * from - from;
+        }
+        Some(pos + moved)
     });
 }
 

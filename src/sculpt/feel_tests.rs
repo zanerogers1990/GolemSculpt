@@ -168,8 +168,9 @@ fn shipped_brushes_keep_what_their_strength_did() {
         let e = &library.entries()[i];
         strength::effective(e.kernel, library.record(i, &s).settings.strength)
     };
+    // Trim is left out: it was made lighter and steadied less so that it
+    // cuts as deep as it did with Flatten's Steady Plane (shipped.rs).
     for (name, old) in [
-        ("Trim", 0.6),
         ("Fill", 0.6),
         ("Planar", 0.8),
         ("Polish", 0.25),

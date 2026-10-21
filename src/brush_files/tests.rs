@@ -57,6 +57,9 @@ fn every_brush_goes_to_a_file_and_comes_back_the_same() {
             lock_plane: true,
             relax_normals: 0.6,
             steady_plane: 0.8,
+            auto_smooth: 0.35,
+            even_out: 0.45,
+            thickness: -0.3,
         };
         s.falloff[slot] = Some(FalloffCurve::preset(FalloffPreset::Plateau));
         s.alpha[slot] = alpha::AlphaSettings {
@@ -540,4 +543,21 @@ fn a_brush_file_from_before_steady_plane_does_without_it() {
     // And what this version writes reads back as it was.
     let written = text("x", Brush::Clay, &read.record, &read.made);
     assert_eq!(parse(&written, "x").unwrap().record.settings, read.record.settings);
+}
+
+/// A brush file from before Auto Smooth, Even Out and Snake Hook's Thickness
+/// (feel version 3) does without them, as it did; one of this version that
+/// leaves them out gets the base brush's.
+#[test]
+fn a_brush_file_from_before_auto_smooth_does_without_it() {
+    for (kernel, version) in [("Inflate", ""), ("Snake Hook", r#""feel_version": 2,"#), ("Move", r#""feel_version": 1,"#)] {
+        let text = format!(r#"{{ "kernel": "{kernel}", {version} "brush": {{ "strength": 0.4 }} }}"#);
+        let s = parse(&text, "x").unwrap().record.settings;
+        assert_eq!((s.auto_smooth, s.even_out, s.thickness), (0.0, 0.0, 0.0), "{kernel}");
+    }
+    // This version's, without them: the base brush's.
+    let now = format!(r#"{{ "kernel": "Inflate", "feel_version": {}, "brush": {{ "strength": 0.4 }} }}"#, crate::prefs::FEEL_VERSION);
+    let s = parse(&now, "x").unwrap().record.settings;
+    let base = crate::sculpt::Settings::default().per_brush[Brush::Inflate.index()];
+    assert_eq!((s.auto_smooth, s.even_out), (base.auto_smooth, base.even_out));
 }

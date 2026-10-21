@@ -196,6 +196,13 @@ pub struct BrushTuning {
     /// For a brush that works to a plane: how steadily the plane follows the
     /// surface.
     pub steady_plane: f32,
+    /// How much each dab smooths what it worked, keeping the volume.
+    pub auto_smooth: f32,
+    /// How much each dab (or Move, once at the release) evens out the
+    /// triangles it stretched.
+    pub even_out: f32,
+    /// Snake Hook: how a pull keeps its thickness.
+    pub thickness: f32,
 }
 
 impl Default for BrushTuning {
@@ -228,6 +235,9 @@ impl BrushTuning {
             lock_plane: b.lock_plane,
             relax_normals: b.relax_normals,
             steady_plane: b.steady_plane,
+            auto_smooth: b.auto_smooth,
+            even_out: b.even_out,
+            thickness: b.thickness,
         }
     }
 }
@@ -357,15 +367,18 @@ pub struct BrushPrefs {
     /// went straight through to every kernel, Pressure -> Strength started
     /// at 88%, Front Facing started off and Move followed half the pen's
     /// travel. One with 1 is from before Accumulate started off on
-    /// Standard, Inflate and Clay (later the same day). [`Prefs::parse`]
-    /// brings such a file's numbers over once: see [`old_feel`].
+    /// Standard, Inflate and Clay (later the same day), and one with 2 from
+    /// before Clay Depth started deeper (later still).
+    /// [`Prefs::parse`] brings such a file's numbers over once: see
+    /// [`old_feel`].
     pub feel_version: u32,
 }
 
 /// The version of what the brush numbers in the settings file mean (see
 /// `BrushPrefs::feel_version`): 1 from the pen-feel changes of 2026-10-21,
-/// 2 from Accumulate starting off later that day.
-pub const FEEL_VERSION: u32 = 2;
+/// 2 from Accumulate starting off later that day, 3 from Auto Smooth, Even
+/// Out and plain Clay's deeper start, later still.
+pub const FEEL_VERSION: u32 = 3;
 
 /// The brushes whose Accumulate started on until version 2.
 const ACCUMULATED: [Brush; 3] = [Brush::Standard, Brush::Inflate, Brush::Clay];
@@ -485,6 +498,9 @@ impl BrushPrefs {
             slot.keep_volume = fit(kept.keep_volume, 0.0, 1.0, was.keep_volume);
             slot.relax_normals = fit(kept.relax_normals, 0.0, 1.0, was.relax_normals);
             slot.steady_plane = fit(kept.steady_plane, 0.0, 1.0, was.steady_plane);
+            slot.auto_smooth = fit(kept.auto_smooth, 0.0, 1.0, was.auto_smooth);
+            slot.even_out = fit(kept.even_out, 0.0, 1.0, was.even_out);
+            slot.thickness = fit(kept.thickness, -1.0, 1.0, was.thickness);
         }
         // A file from before brushes had their own: its one floor, in the
         // range its slider had, becomes every brush's Pressure -> Strength.
@@ -535,7 +551,22 @@ fn old_feel(brush: &mut BrushPrefs, raw: &serde_json::Value, version: u32) {
     if version < 2 {
         feel_2(brush, raw, version);
     }
+    if version < 3 {
+        feel_3(brush, raw);
+    }
     brush.feel_version = FEEL_VERSION;
+}
+
+/// Version 3: plain Clay starts deeper. Clay Depth at its old starting 0.3
+/// was never chosen and becomes the new start (with Accumulate off since
+/// version 2, a pass at 0.3 built about half what it had); one that was set
+/// is kept. (Auto Smooth, Even Out and Snake Hook's Thickness are new: a
+/// file without them gets their starting values, as for any missing key.)
+fn feel_3(brush: &mut BrushPrefs, raw: &serde_json::Value) {
+    let depth = raw.get("clay_depth").and_then(serde_json::Value::as_f64);
+    if depth.is_some_and(|depth| (depth as f32 - crate::sculpt::OLD_CLAY_DEPTH).abs() < 1e-6) {
+        brush.clay_depth = crate::sculpt::DEFAULT_CLAY_DEPTH;
+    }
 }
 
 /// The file's own `accumulate` for `b`, if it has one.

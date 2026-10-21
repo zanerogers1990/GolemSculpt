@@ -238,6 +238,9 @@ fn strokes_follow_the_custom_curve() {
         let before = mesh.positions.clone();
         let mut sculptor = sculptor_with(Brush::Inflate, 0.1);
         sculptor.settings.falloff[Brush::Inflate.index()] = curve;
+        // The falloff alone: Auto Smooth and Even Out move vertices by
+        // their neighbours too.
+        (sculptor.settings.current_mut().auto_smooth, sculptor.settings.current_mut().even_out) = (0.0, 0.0);
         press(&mut mesh, &mut sculptor, &view, Vec3::new(0.0, 0.0, 0.5));
         sculptor.end(&mut mesh, &view);
         let moves: Vec<f32> =
@@ -638,7 +641,8 @@ fn move_drag(at: Vec3, to: Vec3, ctrl: bool, mirror: bool) -> (Vec<Vec3>, Vec<Ve
     let view = view_of(&mesh);
     let before = mesh.positions.clone();
     let mut sculptor = sculptor_with(Brush::Move, 0.15);
-    sculptor.settings.current_mut().strength = 1.0;
+    // The grab itself, without Even Out at the release (clean_tests.rs).
+    (sculptor.settings.current_mut().strength, sculptor.settings.current_mut().even_out) = (1.0, 0.0);
     sculptor.settings.symmetry = [mirror, false, false];
     let path = line(view.project(at).unwrap(), view.project(to).unwrap(), 16);
     let sample = |i: usize| PointerSample { pos: path[i], pressure: None, time: i as f64 / 240.0 };

@@ -8,7 +8,7 @@
 use egui::Ui;
 
 use super::theme::{self, ACCENT, ButtonStyle};
-use crate::sculpt::{BrushSettings, FlattenMode, SmoothMode};
+use crate::sculpt::{Brush, BrushSettings, FlattenMode, SmoothMode};
 
 /// A row of buttons, one lit: the mode to pick from `all`.
 fn mode_row<M: Copy + PartialEq>(
@@ -44,6 +44,47 @@ pub fn smooth(ui: &mut Ui, bs: &mut BrushSettings, tips: bool) {
         );
     }
     theme::hint(ui, "These are also what Shift + drag does with any other brush.");
+}
+
+/// Auto Smooth and Even Out: what a brush does to tidy the surface behind
+/// it. Auto Smooth for every brush that lays dabs of clay (and Snake Hook);
+/// Even Out for the ones that stretch the surface (Inflate, Snake Hook and
+/// Move), though any brush can have it in a brush file.
+pub fn tidy(ui: &mut Ui, bs: &mut BrushSettings, brush: Brush, tips: bool) {
+    let smooths = !matches!(brush, Brush::Smooth | Brush::Move | Brush::Pose | Brush::Paint | Brush::EraseLayer);
+    if smooths {
+        theme::tip(
+            theme::slider(ui, "Auto Smooth", &mut bs.auto_smooth, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0)),
+            tips,
+            "Smooths the surface a little behind every dab, the way that keeps its volume, so the stroke leaves it \
+             clean: no lumps or spikes, and a swelling or a pull keeps its thickness. Leans on the pen like the \
+             brush does. At 0% nothing is smoothed.",
+        );
+    }
+    if matches!(brush, Brush::Inflate | Brush::SnakeHook | Brush::Move) || bs.even_out > 0.0 && smooths {
+        let when = if matches!(brush, Brush::Move | Brush::SnakeHook) { "once you let go of the pen" } else { "behind every dab" };
+        theme::tip(
+            theme::slider(ui, "Even Out", &mut bs.even_out, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0)),
+            tips,
+            &format!(
+                "Slides the mesh within the surface {when}, so the triangles the brush stretched come back even \
+                 without the shape changing: cleaner for the next stroke. At 0% they stay stretched."
+            ),
+        );
+    }
+    if brush == Brush::SnakeHook {
+        let mut thick = bs.thickness * 100.0;
+        if theme::tip(
+            theme::slider(ui, "Thickness (Thin - Full)", &mut thick, -100.0..=100.0, |v| format!("{v:.0}")),
+            tips,
+            "How a pull keeps its thickness. Higher keeps a long pull as thick at its tip as where it started; \
+             0 lets it thin out as it goes; below 0 draws it in to a point, for horns and spikes.",
+        )
+        .changed()
+        {
+            bs.thickness = thick / 100.0;
+        }
+    }
 }
 
 /// Steady Plane, for the brushes that work to a plane (Clay, Flatten).

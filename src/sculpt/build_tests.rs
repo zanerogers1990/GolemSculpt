@@ -133,7 +133,9 @@ fn inflate_raises_each_vertex_along_its_own_normal() {
     let (before, normals) = (mesh.positions.clone(), mesh.normals.clone());
     let view = view_of(&mesh);
     let line = passes(&across(&view, -0.3, 0.3, 60), 3);
-    draw(&mut mesh, &mut holding(Brush::Inflate, |b| (b.strength, b.relax_normals) = (1.0, 0.0)), &view, &line, 4, None);
+    // The kernel alone: Auto Smooth and Even Out move vertices sideways.
+    let tune = |b: &mut BrushSettings| (b.strength, b.relax_normals, b.auto_smooth, b.even_out) = (1.0, 0.0, 0.0, 0.0);
+    draw(&mut mesh, &mut holding(Brush::Inflate, tune), &view, &line, 4, None);
     let mut moved = 0;
     for ((p, p0), n0) in mesh.positions.iter().zip(&before).zip(&normals) {
         let d = *p - *p0;
@@ -158,7 +160,10 @@ fn relax_normals_keeps_inflate_smooth_on_rough_clay() {
             let before = mesh.positions.clone();
             let view = view_of(&mesh);
             let line = passes(&across(&view, -0.3, 0.3, 60), 3);
-            let mut sculptor = holding(Brush::Inflate, |b| (b.strength, b.relax_normals, b.accumulate) = (1.0, relax, accumulate));
+            // Relax Normals alone, without Auto Smooth and Even Out.
+            let mut sculptor = holding(Brush::Inflate, |b| {
+                (b.strength, b.relax_normals, b.accumulate, b.auto_smooth, b.even_out) = (1.0, relax, accumulate, 0.0, 0.0)
+            });
             draw(&mut mesh, &mut sculptor, &view, &line, 4, None);
             // How far each vertex's move near the line is from the mean of
             // its neighbours' (root mean square), against how far it moved.
@@ -330,7 +335,8 @@ fn the_brushes_start_as_they_should() {
     }
     let library = library::Library::default();
     let record = |name: &str| library.record(library.named(name).unwrap(), &s).settings;
-    for (name, steady) in [("Clay Strips", 0.0), ("Clay Tubes", 0.0), ("Trim", 0.5), ("Fill", 0.5), ("Polish", 0.5)] {
+    // Trim is steadied less, so that it cuts as deep as it did (shipped.rs).
+    for (name, steady) in [("Clay Strips", 0.0), ("Clay Tubes", 0.0), ("Trim", 0.3), ("Fill", 0.5), ("Polish", 0.5)] {
         assert_eq!(record(name).steady_plane, steady, "{name}");
     }
     assert!(record("Surface Noise").accumulate && !record("Rake").accumulate);

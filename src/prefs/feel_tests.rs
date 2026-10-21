@@ -13,23 +13,31 @@ fn old_file() -> serde_json::Value {
     let brush = file["brush"].as_object_mut().unwrap();
     assert!(brush.remove("feel_version").is_some(), "feel_version is in the file");
     brush.insert("move_strength".into(), 0.5.into());
+    brush.insert("clay_depth".into(), crate::sculpt::OLD_CLAY_DEPTH.into());
     for (name, tuning) in brush["brushes"].as_object_mut().unwrap() {
         let b = Brush::ALL.into_iter().find(|b| b.name() == name).unwrap();
         tuning["strength"] = old_default_strength(b).into();
         tuning["pressure_strength"] = 0.88.into();
         tuning["front_facing"] = false.into();
         tuning["accumulate"] = ACCUMULATED.contains(&b).into();
+        tuning["smooth_mode"] = "all".into();
         let tuning = tuning.as_object_mut().unwrap();
         assert!(tuning.remove("relax_normals").is_some() && tuning.remove("steady_plane").is_some());
+        for key in VERSION_3_KEYS {
+            assert!(tuning.remove(key).is_some(), "{key} is in the file");
+        }
     }
     file
 }
+
+/// The keys a brush's tuning has had since version 3.
+const VERSION_3_KEYS: [&str; 3] = ["auto_smooth", "even_out", "thickness"];
 
 /// A settings file as the first pen-feel version wrote it (version 1): the
 /// numbers it would have written for `settings`, with Accumulate on where it
 /// then started on, and no Relax Normals or Steady Plane.
 fn version_1_file(settings: &Settings) -> serde_json::Value {
-    let mut file = serde_json::to_value(Prefs { brush: BrushPrefs::of(settings), ..Prefs::default() }).unwrap();
+    let mut file = version_2_file(settings);
     file["brush"]["feel_version"] = 1.into();
     for (name, tuning) in file["brush"]["brushes"].as_object_mut().unwrap() {
         let b = Brush::ALL.into_iter().find(|b| b.name() == name).unwrap();
@@ -41,6 +49,53 @@ fn version_1_file(settings: &Settings) -> serde_json::Value {
         tuning.remove("steady_plane");
     }
     file
+}
+
+/// A settings file as the second version wrote it: the numbers it would
+/// have written for `settings`, with no Auto Smooth, Even Out or Thickness,
+/// and Clay Depth as `settings` has it unless it is today's starting one,
+/// which it wrote as its own (0.3).
+fn version_2_file(settings: &Settings) -> serde_json::Value {
+    let mut file = serde_json::to_value(Prefs { brush: BrushPrefs::of(settings), ..Prefs::default() }).unwrap();
+    file["brush"]["feel_version"] = 2.into();
+    if settings.clay_depth == crate::sculpt::DEFAULT_CLAY_DEPTH {
+        file["brush"]["clay_depth"] = crate::sculpt::OLD_CLAY_DEPTH.into();
+    }
+    for (_, tuning) in file["brush"]["brushes"].as_object_mut().unwrap() {
+        let tuning = tuning.as_object_mut().unwrap();
+        for key in VERSION_3_KEYS {
+            tuning.remove(key);
+        }
+    }
+    file
+}
+
+/// A version 2 file: Clay Depth's 0.3 was where it started and becomes
+/// today's (0.5); a depth that was chosen is kept; Auto Smooth, Even Out and
+/// Thickness take their starting values.
+#[test]
+fn a_version_2_file_takes_the_new_starting_values_once() {
+    let s = read(&version_2_file(&Settings::default()));
+    let today = Settings::default();
+    assert_eq!(s.clay_depth, crate::sculpt::DEFAULT_CLAY_DEPTH);
+    for b in Brush::ALL {
+        let (got, want) = (s.per_brush[b.index()], today.per_brush[b.index()]);
+        assert_eq!((got.auto_smooth, got.even_out, got.thickness), (want.auto_smooth, want.even_out, want.thickness), "{}", b.name());
+    }
+    assert_eq!(s.per_brush[Brush::Inflate.index()].auto_smooth, 0.15);
+    let mut chosen = Settings::default();
+    chosen.per_brush[Brush::Smooth.index()].smooth_mode = SmoothMode::Peaks;
+    chosen.clay_depth = 0.8;
+    chosen.per_brush[Brush::Inflate.index()].strength = 0.7;
+    let s = read(&version_2_file(&chosen));
+    assert_eq!((s.per_brush[Brush::Smooth.index()].smooth_mode, s.clay_depth), (SmoothMode::Peaks, 0.8));
+    assert_eq!(s.per_brush[Brush::Inflate.index()].strength, 0.7);
+    // Read once, written back, read again: as it was.
+    let written = serde_json::to_value(Prefs { brush: BrushPrefs::of(&s), ..Prefs::default() }).unwrap();
+    assert_eq!(written["brush"]["feel_version"], FEEL_VERSION);
+    assert_eq!(written["brush"]["brushes"]["Smooth"]["smooth_mode"], "peaks");
+    let back = read(&written);
+    assert_eq!((back.per_brush, back.clay_depth), (s.per_brush, s.clay_depth));
 }
 
 fn read(file: &serde_json::Value) -> Settings {
@@ -73,7 +128,14 @@ fn an_old_files_starting_values_become_todays() {
             "{}: Accumulate starts off, Relax Normals and Steady Plane where they start",
             b.name()
         );
+        assert_eq!(
+            (got.auto_smooth, got.even_out, got.thickness, got.smooth_mode),
+            (want.auto_smooth, want.even_out, want.thickness, want.smooth_mode),
+            "{}",
+            b.name()
+        );
     }
+    assert_eq!(settings.clay_depth, crate::sculpt::DEFAULT_CLAY_DEPTH);
 }
 
 /// A version 1 file (Accumulate starting on): its Accumulate on Standard,

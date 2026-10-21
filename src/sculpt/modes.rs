@@ -16,6 +16,11 @@ pub enum SmoothMode {
     /// down, pits come up, and the triangles even out.
     #[default]
     All,
+    /// Every vertex moves toward the middle of its neighbours and is held to
+    /// where the stroke found it (the HC smoothing Blender's Surface Smooth
+    /// is): fine roughness goes, but a form keeps its size where plain
+    /// smoothing would thin it, and so does a lump the size of the brush.
+    Surface,
     /// Only what stands above its neighbours is lowered: bumps are knocked
     /// off and the creases beside them are left as deep as they were.
     Peaks,
@@ -29,11 +34,13 @@ pub enum SmoothMode {
 }
 
 impl SmoothMode {
-    pub const ALL: [SmoothMode; 4] = [SmoothMode::All, SmoothMode::Peaks, SmoothMode::Valleys, SmoothMode::Relax];
+    pub const ALL: [SmoothMode; 5] =
+        [SmoothMode::All, SmoothMode::Surface, SmoothMode::Peaks, SmoothMode::Valleys, SmoothMode::Relax];
 
     pub fn name(self) -> &'static str {
         match self {
             SmoothMode::All => "All",
+            SmoothMode::Surface => "Surface",
             SmoothMode::Peaks => "Peaks",
             SmoothMode::Valleys => "Valleys",
             SmoothMode::Relax => "Relax",
@@ -43,6 +50,10 @@ impl SmoothMode {
     pub fn tip(self) -> &'static str {
         match self {
             SmoothMode::All => "Smooths everything under the ring: bumps go down and pits come up.",
+            SmoothMode::Surface => {
+                "Takes fine roughness off and keeps every form its size: fingers, horns and thin edges do not get \
+                 thinner. It leaves lumps as big as the brush mostly alone; All takes those off."
+            }
             SmoothMode::Peaks => "Only lowers what stands up: knocks bumps off and leaves the creases beside them as deep as they were.",
             SmoothMode::Valleys => "Only fills what lies low: pits and creases come up and the peaks are left standing.",
             SmoothMode::Relax => "Slides the mesh within the surface to even out stretched triangles, without changing the shape. For after Move or Snake Hook.",

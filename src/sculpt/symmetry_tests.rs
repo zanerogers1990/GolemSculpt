@@ -1153,6 +1153,9 @@ fn connected_only_holds_for_every_copy_of_a_radial_grab() {
         let mut sculptor = Sculptor::default();
         let s = &mut sculptor.settings;
         (s.brush, s.screen_space_size, s.radius_world, s.move_connected) = (Brush::Move, false, 0.15, connected);
+        // The grab itself: Even Out at the release slides vertices every way
+        // within the surface, which this does not tell from a pull.
+        s.per_brush[Brush::Move.index()].even_out = 0.0;
         s.radial = Radial { on: true, count: 2, ..Radial::default() };
         // Up the screen and to the right; the half turn about Y sends the
         // copy's pull up and to the left.
@@ -1220,8 +1223,9 @@ fn one_repeat_is_no_symmetry_and_two_is_a_half_turn() {
         // middle of its neighbours (`kernels::smooth_passes`), the ball's
         // own layout, whose two halves differ by 1e-17 at the axis (the
         // floor), shows in the last bit of the vertices it averages there.
+        // So does Inflate's Auto Smooth, which is a smoothing pass too.
         let pair = pair_error(&ball.mesh, &partners);
-        if tip == Tip::Smooth {
+        if matches!(tip, Tip::Smooth | Tip::Inflate) {
             assert!(pair <= floor.max(1e-6 * ball.displacement()), "{tip:?} x2 at {from_axis}r: {pair:.2e}");
         } else {
             assert_eq!(pair, floor, "{tip:?} x2 at {from_axis}r");
@@ -1443,6 +1447,12 @@ fn a_radial_stroke_that_adds_detail_adds_it_under_every_copy_and_undoes_exactly(
             let label = format!("{brush:?} (accumulate {accumulate}) with dynamic topology at {from_axis}r");
             let mut sculptor = sculptor_with(brush);
             sculptor.settings.current_mut().accumulate = accumulate;
+            // The kernels' own shape. Auto Smooth averages each vertex with
+            // the vertices round it, which dynamic topology has made a little
+            // differently in each sector: with Standard's 5% one vertex came
+            // out 3.6% of the stroke off its partners (the mean stays a
+            // thousandth).
+            sculptor.settings.current_mut().auto_smooth = 0.0;
             RADIAL_6.set(&mut sculptor.settings);
             sculptor.dyntopo.enabled = true;
             // Edges of 0.0048 under the brush, on a ball whose own are 0.006 to 0.008.

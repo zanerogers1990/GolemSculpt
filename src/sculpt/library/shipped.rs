@@ -45,7 +45,7 @@ const PLAIN: AlphaSettings = AlphaSettings {
     random_rotation: 0.0,
 };
 
-const SHIPPED: [Shipped; 16] = [
+const SHIPPED: [Shipped; 17] = [
     Shipped {
         name: "Clay Strips",
         kernel: Brush::Clay,
@@ -68,6 +68,8 @@ const SHIPPED: [Shipped; 16] = [
             r.settings.front_facing = false;
             // Each dab finds its own plane, as it always has.
             r.settings.steady_plane = 0.0;
+            // Nothing smoothed or slid after each dab.
+            (r.settings.auto_smooth, r.settings.even_out) = (0.0, 0.0);
         },
     },
     Shipped {
@@ -103,6 +105,7 @@ const SHIPPED: [Shipped; 16] = [
             (r.numbers.crease_pinch, r.numbers.crease_depth) = (0.25, 0.7);
             // As it was, whatever the base Crease starts with.
             r.settings.front_facing = false;
+            (r.settings.auto_smooth, r.settings.even_out) = (0.0, 0.0);
         },
     },
     Shipped {
@@ -111,9 +114,15 @@ const SHIPPED: [Shipped; 16] = [
         about: "Shaves off what stands above the surface, with a hard edge, and leaves hollows alone.",
         tune: |r| {
             r.settings.flatten_mode = FlattenMode::Scrape;
-            // The Strength that does what 60% did before the slider was
-            // mapped (`strength.rs`); so for every shipped brush below.
-            r.settings.strength = from_old(Brush::Flatten, 0.6);
+            // Steady Plane follows the surface with a lag, which tilts the
+            // plane into a rounded form: at Flatten's half, with the
+            // Strength that did what 60% did before the slider was mapped
+            // (`strength.rs`), Trim cut a seventh deeper than it always had.
+            // Steadied less, and a touch lighter, it cuts as deep as it did
+            // (within a fiftieth on `--brush-feel`'s ball) and still levels
+            // a ribbed surface as well.
+            r.settings.strength = 0.69;
+            r.settings.steady_plane = 0.3;
             r.settings.focal_shift = -0.7;
         },
     },
@@ -123,6 +132,8 @@ const SHIPPED: [Shipped; 16] = [
         about: "Fills hollows up to the surface around them and leaves what stands proud alone.",
         tune: |r| {
             r.settings.flatten_mode = FlattenMode::Fill;
+            // The Strength that does what 60% did before the slider was
+            // mapped (`strength.rs`); so for the shipped brushes below.
             r.settings.strength = from_old(Brush::Flatten, 0.6);
         },
     },
@@ -187,6 +198,18 @@ const SHIPPED: [Shipped; 16] = [
         },
     },
     Shipped {
+        name: "Surface Smooth",
+        kernel: Brush::Smooth,
+        about: "Polishes fine roughness away and keeps every form its size: for a finished surface, not for lumps.",
+        tune: |r| {
+            // Blender's Surface Smooth. Half way, a pass takes as much fine
+            // roughness off as the plain Smooth at the same Strength takes,
+            // and none of the volume (`--brush-feel`).
+            r.settings.smooth_mode = SmoothMode::Surface;
+            r.settings.strength = 0.5;
+        },
+    },
+    Shipped {
         name: "Rake",
         kernel: Brush::Standard,
         about: "Scratches fine parallel lines that follow the stroke, like a rake tool across clay.",
@@ -204,6 +227,8 @@ const SHIPPED: [Shipped; 16] = [
             // Close dabs: the picture turns a little with each on a curve,
             // and further apart every turn showed as a tick on the lines.
             r.settings.spacing = 0.06;
+            // Fine lines are what it is for: nothing smoothed after a dab.
+            r.settings.auto_smooth = 0.0;
         },
     },
     Shipped {
@@ -223,6 +248,8 @@ const SHIPPED: [Shipped; 16] = [
             r.settings.spacing = 0.3;
             r.settings.scatter = 0.8;
             r.settings.size_jitter = 0.3;
+            // The noise is the point: nothing smoothed after a print.
+            r.settings.auto_smooth = 0.0;
         },
     },
     Shipped {
@@ -234,6 +261,8 @@ const SHIPPED: [Shipped; 16] = [
             // A dragged print's Strength is its height, not mapped.
             r.settings.strength = 0.5;
             r.settings.focal_shift = -0.6;
+            // (A dragged print is not smoothed after anyway.)
+            r.settings.auto_smooth = 0.0;
         },
     },
     Shipped {

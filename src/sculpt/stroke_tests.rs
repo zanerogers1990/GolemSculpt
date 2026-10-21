@@ -425,7 +425,10 @@ fn at_spacings(brush: Brush, accumulate: bool, spacings: [f32; 3]) -> ([f64; 3],
         // nor moved the surface so far that the pen's path over it changes.
         let mut sculptor = sculptor_with(brush, 0.08, if accumulate || brush == Brush::Smooth { 0.03 } else { 0.1 });
         let bs = sculptor.settings.current_mut();
-        (bs.spacing, bs.accumulate) = (spacing, accumulate);
+        // The kernels' own build. Auto Smooth and Even Out slide vertices
+        // sideways as well, by more or less with the spacing, which this
+        // adds up; what they build is held to the spacing in clean_tests.rs.
+        (bs.spacing, bs.accumulate, bs.auto_smooth, bs.even_out) = (spacing, accumulate, 0.0, 0.0);
         out.1[k] = draw(&mut mesh, &mut sculptor, &view, &across(&view, -0.45, 0.45, 150), 4, None);
         let in_the_middle = |p: &Vec3| p.z > 0.0 && (-0.15..0.15).contains(&round(*p));
         let moved = before.iter().zip(&mesh.positions).filter(|(was, _)| in_the_middle(was));
@@ -1058,3 +1061,4 @@ fn a_press_with_a_swept_alpha_that_never_sets_off_prints_once() {
     assert_eq!((while_held, long), (1, 1), "held a moment, it prints without lifting, and once");
     assert_eq!(held, tapped, "the same print either way");
 }
+

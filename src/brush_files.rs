@@ -174,6 +174,9 @@ impl RecordKept {
             lock_plane: t.lock_plane,
             relax_normals: t.relax_normals,
             steady_plane: t.steady_plane,
+            auto_smooth: t.auto_smooth,
+            even_out: t.even_out,
+            thickness: t.thickness,
         };
         // A curve needs two points that are numbers (`Record::in_range` then
         // puts them in order, as after any edit).
@@ -214,7 +217,8 @@ struct BrushFile<'a> {
     made: RecordKept,
     /// What its numbers mean (`prefs::FEEL_VERSION`). A file without it is
     /// from before 2026-10-21, and its Strength is brought over; one older
-    /// than 2 has no Relax Normals or Steady Plane, and keeps both at nought
+    /// than 2 has no Relax Normals or Steady Plane, and keeps both at nought,
+    /// and one older than 3 none of Auto Smooth, Even Out or Thickness
     /// (`parse`).
     feel_version: u32,
 }
@@ -305,6 +309,19 @@ pub fn parse(text: &str, fallback_name: &str) -> Result<Read, String> {
                 };
                 if let Some(old) = old.filter(|old| old.is_finite()) {
                     record.settings.strength = crate::sculpt::strength::from_old_seeking(old);
+                }
+            }
+        }
+        if version < 3 {
+            // Older than Auto Smooth, Even Out and Snake Hook's Thickness:
+            // the brush did without them, and still does.
+            for (field, slot) in [
+                ("auto_smooth", &mut record.settings.auto_smooth),
+                ("even_out", &mut record.settings.even_out),
+                ("thickness", &mut record.settings.thickness),
+            ] {
+                if !has(field) {
+                    *slot = 0.0;
                 }
             }
         }

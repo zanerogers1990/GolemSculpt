@@ -533,9 +533,17 @@ fn a_copy_of_the_mesh_takes_the_layers_under_its_own_numbering() {
 /// surface it would have left several times as much of itself behind.
 #[test]
 fn a_push_underneath_leaves_the_layers_standing_as_they_stood() {
+    // The pull alone: Even Out at the release slides the triangles over the
+    // surface it finds, which with the layer's creases in it is not the
+    // bare ball's.
+    let pull = || {
+        let mut sculptor = sculptor(Brush::Move, 120.0, false);
+        sculptor.settings.current_mut().even_out = 0.0;
+        sculptor
+    };
     // The same pull on the bare ball: what the model underneath should come to.
     let mut bare = ball();
-    brushed(&mut bare, &mut sculptor(Brush::Move, 120.0, false), 90.0);
+    brushed(&mut bare, &mut pull(), 90.0);
     let left_behind = |ride: Ride| {
         let mut mesh = ball();
         let (layer, _) = mesh.add_layer(None);
@@ -544,7 +552,7 @@ fn a_push_underneath_leaves_the_layers_standing_as_they_stood() {
         let deepest = held.iter().map(|o| o.length()).fold(0.0, f32::max);
         mesh.record_on_layer(None);
         mesh.layer_ride = ride;
-        brushed(&mut mesh, &mut sculptor(Brush::Move, 120.0, false), 90.0);
+        brushed(&mut mesh, &mut pull(), 90.0);
         let untouched = bits(&offsets(&mesh, layer)) == bits(&held);
         mesh.set_layer(layer, false, 100);
         // How far the model is off the bare stroke's surface, with the layer hidden.

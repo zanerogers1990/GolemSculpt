@@ -137,7 +137,7 @@ fn an_edit_sticks_to_its_brush_through_any_number_of_picks() {
     s.current_mut().strength = 0.21;
     library.select(Library::base(Brush::Smooth), &mut s);
     library.select(Library::base(Brush::Clay), &mut s);
-    assert_eq!((s.current().strength, s.clay_depth), (0.1, 0.3), "the base Clay is untouched");
+    assert_eq!((s.current().strength, s.clay_depth), (0.1, crate::sculpt::DEFAULT_CLAY_DEPTH), "the base Clay is untouched");
     library.select(strips, &mut s);
     assert_eq!((s.current().strength, s.clay_depth), (0.77, 1.1));
     library.select(tubes, &mut s);

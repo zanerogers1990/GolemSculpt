@@ -32,6 +32,8 @@ pub mod strength;
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
+mod clean_tests;
+#[cfg(test)]
 mod feel_tests;
 #[cfg(test)]
 mod kernel_tests;
@@ -241,7 +243,8 @@ impl Brush {
     /// path, each of which Spacing, Scatter, Size Jitter and the pen's
     /// pressure shape. Move and Pose take hold once at the press and are
     /// dragged, and Snake Hook pulls the surface after the pen step by step:
-    /// none of them has dabs to space, and none reads pressure.
+    /// none of them has dabs to space. (Snake Hook's strength does follow
+    /// the pen's pressure.)
     pub fn lays_dabs(self) -> bool {
         !matches!(self, Brush::Move | Brush::Pose | Brush::SnakeHook)
     }
@@ -303,6 +306,17 @@ pub struct BrushSettings {
     /// nought each dab finds its own; higher, the plane holds its height and
     /// tilt over bumps the ring passes across.
     pub steady_plane: f32,
+    /// Auto Smooth: how much each dab smooths the surface it has just
+    /// worked, in the way that keeps volume (0 to 1), so a brush leaves it
+    /// clean as it goes.
+    pub auto_smooth: f32,
+    /// Even Out: how much the triangles under each dab are slid within the
+    /// surface to keep them even (0 to 1). Move evens out once, as the drag
+    /// is let go.
+    pub even_out: f32,
+    /// Snake Hook's Thickness (-1 to 1): above nought a pull keeps its
+    /// thickness out to the tip, below it tapers to a point.
+    pub thickness: f32,
 }
 
 impl BrushSettings {
@@ -329,6 +343,31 @@ pub const DEFAULT_RELAX_NORMALS: f32 = 0.3;
 
 /// Where Steady Plane starts on Clay and Flatten.
 pub const DEFAULT_STEADY_PLANE: f32 = 0.5;
+
+/// Where Auto Smooth starts on the brushes that have it on (`Settings::default`):
+/// Inflate, which stretches the surface most, more than Standard, which
+/// only raises it. Every other brush, Clay Strips, Dam Standard and the
+/// smoothing brushes start at nought. So does Snake Hook, whose pull it
+/// fights: a fifth (Blender's choice) smoothed the tip back at every step,
+/// and a pull of four radii came out under two (`--brush-feel`). And so
+/// does Layer: the smoothing that keeps volume rings at the edge of a step,
+/// and a Layer stroke stood a hundredth over its height alone and a tenth
+/// over where two mirror planes cross.
+pub const DEFAULT_AUTO_SMOOTH: [(Brush, f32); 2] = [(Brush::Inflate, 0.15), (Brush::Standard, 0.05)];
+
+/// Where Even Out starts on the brushes that stretch the surface: Inflate
+/// behind every dab, Move once at the release. Not Snake Hook: slid along
+/// even once at the release, a long thin pull lost a third of its length
+/// (`--brush-feel`), so it is there to turn up, not on.
+pub const DEFAULT_EVEN_OUT: [(Brush, f32); 2] = [(Brush::Inflate, 0.2), (Brush::Move, 0.2)];
+
+/// Where Snake Hook's Thickness starts.
+pub const DEFAULT_THICKNESS: f32 = 0.5;
+
+/// Where Clay Depth starts, and where it started until 2026-10-21 (a
+/// settings file from then is read by it, `prefs.rs`).
+pub const DEFAULT_CLAY_DEPTH: f32 = 0.5;
+pub const OLD_CLAY_DEPTH: f32 = 0.3;
 
 /// The base brushes that start with Front Facing on (`Settings::default`).
 pub const FRONT_FACING: [Brush; 8] = [
@@ -458,8 +497,26 @@ impl Default for Settings {
             lock_plane: false,
             relax_normals: 0.0,
             steady_plane: 0.0,
+            auto_smooth: 0.0,
+            even_out: 0.0,
+            thickness: 0.0,
         };
         let mut per_brush = [base; Brush::COUNT];
+        // A brush that swells or pulls the surface keeps it clean as it
+        // goes: a little smoothing that keeps the volume after every dab,
+        // and the triangles slid back toward even (`kernels::tidy`).
+        for (b, amount) in DEFAULT_AUTO_SMOOTH {
+            per_brush[b.index()].auto_smooth = amount;
+        }
+        for (b, amount) in DEFAULT_EVEN_OUT {
+            per_brush[b.index()].even_out = amount;
+        }
+        per_brush[Brush::SnakeHook.index()].thickness = DEFAULT_THICKNESS;
+        // Smooth stays All, not Surface: Surface keeps a form's size, but it
+        // keeps a lump the size of the brush too (a stroke took 3% off one,
+        // where All takes a quarter: `--brush-feel`'s lumps), and taking
+        // lumps off is what Smooth is mostly for. Surface is a mode and a
+        // brush of its own (Surface Smooth).
         for b in Brush::ALL {
             per_brush[b.index()].spacing = b.default_spacing();
         }
@@ -524,7 +581,7 @@ impl Default for Settings {
             symmetry: [false; 3],
             radial: Radial::default(),
             symmetry_world: None,
-            clay_depth: 0.3,
+            clay_depth: DEFAULT_CLAY_DEPTH,
             clay_softness: 0.6,
             clay_relax: 0.35,
             crease_pinch: 0.6,
@@ -847,8 +904,10 @@ struct Stroke {
     /// This frame's dabs, every copy of each, for Clay relax.
     frame_centres: Vec<kernels::Centre>,
     grab: Option<Grab>,
-    /// Snake hook: point being dragged.
+    /// Snake hook: point being dragged, and the way it has been going
+    /// (eased, zero until it has gone anywhere).
     tip: Vec3,
+    tip_heading: Vec3,
     object_size: f32,
     relax: f32,
     /// What Clay's finishing pass measures curvature against.
@@ -1040,6 +1099,11 @@ const OPENING_HOLD: f64 = 0.25;
 
 /// How far Snake Hook pulls the surface in one step, in radii.
 const SNAKE_STEP: f32 = 0.15;
+
+/// How much of the way to the pen's latest heading Snake Hook's tip turns
+/// with each sample: enough to follow a curve, little enough that the
+/// tremor of a hand does not twist the pull.
+const SNAKE_TURN: f32 = 0.5;
 
 /// The most a stroke that is behind is spaced wider. Past any sense, but a
 /// number that keeps the arithmetic finite.
@@ -1245,6 +1309,9 @@ impl Sculptor {
             flatten_mode: own.flatten_mode,
             relax_normals: own.relax_normals,
             steady_plane: own.steady_plane,
+            auto_smooth: own.auto_smooth,
+            even_out: own.even_out,
+            thickness: own.thickness,
             erase: None,
             paint: None,
             ..*params
@@ -1324,6 +1391,9 @@ impl Sculptor {
             layer_height: s.layer_height,
             relax_normals: bs.relax_normals,
             steady_plane: bs.steady_plane,
+            auto_smooth: bs.auto_smooth,
+            even_out: bs.even_out,
+            thickness: bs.thickness,
             mask_hardness: s.mask_hardness,
             smooth_mode: bs.smooth_mode,
             keep_volume: bs.keep_volume,
@@ -1403,6 +1473,7 @@ impl Sculptor {
             frame_centres: Vec::new(),
             grab: None,
             tip: hit.pos,
+            tip_heading: Vec3::ZERO,
             object_size: bounds.size().max_element().max(1e-6),
             relax,
             curvature,
@@ -1615,11 +1686,22 @@ impl Sculptor {
             // Longer steps, and so fewer, while the stroke is too far behind.
             let steps = ((len / (SNAKE_STEP * p.radius * stroke.widen)).ceil() as usize).clamp(1, 64);
             let step = delta / steps as f32;
-            for _ in 0..steps {
+            // What the pen's pressure does to Snake Hook's strength, as for a
+            // brush that lays dabs (`emit`).
+            let pressure = input::pen_strength(stroke.bs.pressure_strength, pressure);
+            // The way the tip is going, eased so that the tremor of a hand
+            // does not twist the pull; the tip turns from the way it was
+            // going to this over the steps (`kernels::snake`).
+            let was = stroke.tip_heading;
+            let now = delta / len;
+            let heading = if was == Vec3::ZERO { now } else { slerp_dir(was, now, SNAKE_TURN) };
+            stroke.tip_heading = heading;
+            for s in 0..steps {
+                let turned = |t: f32| if was == Vec3::ZERO { Vec3::ZERO } else { slerp_dir(was, heading, t) };
                 let dab = Dab {
                     center: stroke.tip,
                     normal: -view.forward,
-                    dir: Vec3::ZERO,
+                    dir: turned(s as f32 / steps as f32),
                     step,
                     prev: None,
                     cam: view.pos,
@@ -1627,6 +1709,7 @@ impl Sculptor {
                     frame: alpha::Frame::NONE,
                     plane: None,
                     copy: SymOp::IDENTITY,
+                    heading: if was == Vec3::ZERO { heading } else { turned((s + 1) as f32 / steps as f32) },
                 };
                 let began = Instant::now();
                 Self::apply_symmetric(mesh, stroke, &p, dab);
@@ -1874,8 +1957,21 @@ impl Sculptor {
             Some(travel) if !p.mask && p.brush == Brush::Nudge => travel,
             _ => Vec3::ZERO,
         };
-        let mut dab =
-            Dab { center, normal, dir, step, prev, cam: stroke.cam, pressure, frame, plane: stroke.plane, copy: SymOp::IDENTITY };
+        // The way the stroke is going here, for Even Out.
+        let heading = travel.map_or(Vec3::ZERO, Vec3::normalize_or_zero);
+        let mut dab = Dab {
+            center,
+            normal,
+            dir,
+            step,
+            prev,
+            cam: stroke.cam,
+            pressure,
+            frame,
+            plane: stroke.plane,
+            copy: SymOp::IDENTITY,
+            heading,
+        };
         if bs.lock_plane && stroke.plane.is_none() && !p.mask && p.brush == Brush::Flatten {
             // Lock Plane: the plane this first dab finds is the stroke's.
             let mut leaves = Vec::new();
@@ -2213,7 +2309,48 @@ impl Sculptor {
             mesh.flush_normals();
         }
         let stroke = self.stroke.take()?;
+        let p = &stroke.params;
+        if !p.mask && p.even_out > 0.0 {
+            if let Some(grab) = &stroke.grab {
+                Self::even_out_grab(mesh, grab, p.even_out);
+            } else if p.brush == Brush::SnakeHook {
+                Self::even_out_pull(mesh, p.radius, p.even_out);
+            }
+        }
         self.pose.end(mesh.end_stroke(stroke.params.mask))
+    }
+
+    /// Move's Even Out, as the drag is let go and inside its stroke
+    /// (`kernels::even_out_moved`). A vertex goes by the firmest any copy of
+    /// the grab held it (which a vertex and its mirror twin share), most of
+    /// all half way out, where the falloff stretched the triangles most, and
+    /// not at all at the middle: what is right under the pen stays there.
+    fn even_out_grab(mesh: &mut Mesh, grab: &Grab, amount: f32) {
+        if grab.verts.is_empty() {
+            return;
+        }
+        let stretched = |weights: &[f32]| {
+            let w = weights.iter().copied().fold(0.0f32, f32::max);
+            4.0 * w * (1.0 - w)
+        };
+        let weights: Vec<f32> = match &grab.held {
+            Some(held) => held.weights().map(stretched).collect(),
+            None => grab.weights.chunks((grab.weights.len() / grab.verts.len()).max(1)).map(stretched).collect(),
+        };
+        if weights.len() == grab.verts.len() {
+            kernels::even_out_moved(mesh, &grab.verts, &weights, &grab.leaves, amount);
+        }
+    }
+
+    /// Snake Hook's Even Out, as the pull is let go: over every vertex the
+    /// stroke moved, each by how far it went, all of it from a radius on.
+    fn even_out_pull(mesh: &mut Mesh, radius: f32, amount: f32) {
+        let mut verts = mesh.stroke_vertices().to_vec();
+        verts.sort_unstable();
+        let weights: Vec<f32> =
+            verts.iter().map(|&v| (mesh.positions[v as usize].distance(mesh.start_pos(v)) / radius.max(1e-12)).min(1.0)).collect();
+        let leaves = mesh.leaves_of(&verts);
+        kernels::even_out_moved(mesh, &verts, &weights, &leaves, amount);
     }
 }
 
