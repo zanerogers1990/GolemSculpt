@@ -141,7 +141,7 @@ shared by them all.
   20%), and the evening out is part of the same undo step; what is right
   under the pen stays there. Inflate and Snake Hook have it too, at 0%:
   turned up, Inflate evens out behind every dab, and Snake Hook as you let
-  go (a long thin pull comes out shorter for it).
+  go (the clay under the pen slips back down the pull a little for it).
 - **Clay Depth** on the plain Clay starts at 0.50 (it was 0.30): with
   Accumulate off, one pass at 50% Strength builds about a third of the
   brush's size. Settings from an earlier version that had 0.30, where it
