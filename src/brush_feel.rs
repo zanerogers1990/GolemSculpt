@@ -31,7 +31,23 @@
 //!  - `fin`: the most any vertex on the back of a thin slab (0.4 radii
 //!    thick) moved when its front was stroked once;
 //!  - `rough`: for the brushes that smooth, how much of a fine noise laid
-//!    over the ball is left under the stroke after one pass (1 is all of it).
+//!    over the ball is left under the stroke after one pass (1 is all of it);
+//!  - `out3s`: the most any vertex rose after three strokes along the line,
+//!    one after another (against `out3`, three passes in one stroke: what a
+//!    brush that builds to a height per stroke does);
+//!  - `ridge3`, `angle3`: `ridge` and `angle` after the three passes in one
+//!    stroke (a stroke gone over again should stay a rounded bead, and its
+//!    triangles whole);
+//!  - `ribs`: for the brushes that work to a plane (Clay, Flatten and the
+//!    brushes made of them), how much of a row of ribs across the stroke's
+//!    path (a ripple half a radius high from crest to trough, a radius and a
+//!    half from one crest to the next) still shows along the middle of the
+//!    stroke after one pass: 1 is all of it. A plane that rocks over every
+//!    rib leaves more of them;
+//!  - `crest`, `crest3`: how sharply the top of what one pass and the three
+//!    passes raised curves, as curvature times radius over the vertices that
+//!    rose nine tenths as far as the most (low on a rounded bead, high on a
+//!    peaked ridge; the ball's own is 0.2).
 //!
 //! Move and Snake Hook are a drag of two radii to the side instead of a
 //! line, and `move1` is then how far the point under the pen went, as a
@@ -42,7 +58,7 @@ use glam::{DVec3, Vec2, Vec3};
 use crate::camera::{Camera, View};
 use crate::mesh::primitives::{self, Primitive};
 use crate::mesh::{Mesh, StrokeDelta};
-use crate::sculpt::{Brush, PointerSample, Sculptor};
+use crate::sculpt::{Brush, BrushSettings, PointerSample, Sculptor};
 
 const SIZE: Vec2 = Vec2::new(1920.0, 1080.0);
 
@@ -104,6 +120,44 @@ fn ball(rough: bool) -> Mesh {
         })
         .collect();
     Mesh::new(positions, mesh.indices.clone(), None)
+}
+
+/// How far apart the ribs of the ribbed ball are, from crest to crest.
+const RIB: f32 = 1.5 * RADIUS;
+
+/// A ball with a row of ribs across the stroke's path: its surface rippled
+/// in and out along x, a quarter of a radius each way.
+fn ribbed() -> Mesh {
+    let mesh = primitives::build(Primitive::Sphere, 200_000, BALL);
+    let positions = mesh
+        .positions
+        .iter()
+        .map(|&p| p * (1.0 + 0.025 * RADIUS / BALL * (std::f32::consts::TAU * p.x / RIB).sin()))
+        .collect();
+    Mesh::new(positions, mesh.indices.clone(), None)
+}
+
+/// How tall the ribs stand along the middle of the stroke: the ripple at
+/// the ribs' own spacing in how far the surface is from the ball's centre,
+/// over the vertices within a fifth of a radius of the path and away from
+/// its ends.
+fn rib_height(mesh: &Mesh, path: &[Vec3]) -> f64 {
+    let k = std::f64::consts::TAU / RIB as f64;
+    let (mut s, mut c, mut n) = (0.0f64, 0.0f64, 0.0f64);
+    let mut heights = Vec::new();
+    for &p in &mesh.positions {
+        // Measured on the ball, so that what a stroke raised is still under it.
+        if p.z > 0.0 && p.x.abs() < 0.8 * HALF_LENGTH * RADIUS && off_path(path, p.normalize() * BALL) < 0.2 * RADIUS {
+            heights.push((p.x as f64, p.length() as f64));
+        }
+    }
+    let mean = heights.iter().map(|h| h.1).sum::<f64>() / heights.len().max(1) as f64;
+    for &(x, h) in &heights {
+        s += (h - mean) * (k * x).sin();
+        c += (h - mean) * (k * x).cos();
+        n += 1.0;
+    }
+    2.0 * (s * s + c * c).sqrt() / n.max(1.0)
 }
 
 /// A slab 0.4 radii thick, seen face on.
@@ -258,6 +312,7 @@ fn roughness(mesh: &Mesh, under: &[bool]) -> f64 {
 /// What one pass did, measured against the mesh as it was.
 struct Pass {
     out: f32,
+    crest: f32,
     sank: f32,
     moved: f32,
     ridge: (f32, f32),
@@ -275,6 +330,20 @@ fn measure(target: &Target, before: &Before) -> Pass {
         sank = sank.max(-d.dot(n0));
         moved = moved.max(d.length());
     }
+    // The top of what rose: the vertices under the stroke that rose nine
+    // tenths as far as the most, and how sharply the surface curves there.
+    let (mut top, mut tops) = (0.0f64, 0usize);
+    if out > 1e-6 {
+        for v in 0..mesh.vertex_count() {
+            let rise = (mesh.positions[v] - before.positions[v]).dot(before.normals[v]);
+            if before.under[v] && rise >= 0.9 * out {
+                if let Some(k) = curvature(mesh, v as u32) {
+                    (top, tops) = (top + k as f64, tops + 1);
+                }
+            }
+        }
+    }
+    let crest = if tops > 0 { (top / tops as f64) as f32 } else { 0.0 };
     let mut ks: Vec<f32> = (0..mesh.vertex_count() as u32)
         .filter(|&v| before.under[v as usize])
         .filter_map(|v| curvature(mesh, v))
@@ -285,6 +354,7 @@ fn measure(target: &Target, before: &Before) -> Pass {
     let r3 = (RADIUS as f64).powi(3);
     Pass {
         out: out / RADIUS,
+        crest,
         sank: sank / RADIUS,
         moved: moved / RADIUS,
         ridge,
@@ -299,13 +369,15 @@ fn measure(target: &Target, before: &Before) -> Pass {
 enum Held {
     Base(Brush),
     Preset(&'static str),
+    /// A base brush with something of its settings changed, under a name of its own.
+    Tuned(&'static str, Brush, fn(&mut BrushSettings)),
 }
 
 impl Held {
     fn name(self) -> &'static str {
         match self {
             Held::Base(brush) => brush.name(),
-            Held::Preset(name) => name,
+            Held::Preset(name) | Held::Tuned(name, ..) => name,
         }
     }
 
@@ -314,6 +386,10 @@ impl Held {
         match self {
             Held::Base(brush) => sculptor.settings.brush = brush,
             Held::Preset(name) => assert!(sculptor.library.select_named(name, &mut sculptor.settings), "no brush {name}"),
+            Held::Tuned(_, brush, tune) => {
+                sculptor.settings.brush = brush;
+                tune(sculptor.settings.current_mut());
+            }
         }
         sculptor.settings.screen_space_size = false;
         sculptor.settings.radius_world = RADIUS;
@@ -326,6 +402,14 @@ impl Held {
     /// Whether the brush is dragged (Move, Snake Hook) rather than laid along a line.
     fn drags(self) -> bool {
         matches!(self, Held::Base(Brush::Move | Brush::SnakeHook))
+    }
+
+    /// Whether the brush works to a plane: Clay, Flatten and what is made of them.
+    fn levels(self) -> bool {
+        match self {
+            Held::Base(brush) | Held::Tuned(_, brush, _) => matches!(brush, Brush::Clay | Brush::Flatten),
+            Held::Preset(name) => matches!(name, "Clay Strips" | "Clay Tubes" | "Trim" | "Fill" | "Planar" | "Polish"),
+        }
     }
 
     fn smooths(self) -> bool {
@@ -351,6 +435,8 @@ struct Bench {
     rough: Target,
     rough_before: Before,
     rough_start: f64,
+    ribs: Target,
+    ribs_start: f64,
     fin: Target,
     fin_before: Before,
 }
@@ -358,7 +444,7 @@ struct Bench {
 fn row(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) {
     let shown = held.sculptor(strength).settings.current().strength;
     let setting = if pressure < 1.0 { format!("{shown:.3} light") } else { format!("{shown:.3}") };
-    let mut line = format!("{:<15} {:<11}", held.name(), setting);
+    let mut line = format!("{:<18} {:<11}", held.name(), setting);
     if held.drags() {
         let points = drag_points(&bench.ball);
         let grabbed = (0..bench.ball.mesh.vertex_count())
@@ -389,6 +475,12 @@ fn row(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) {
     let delta = draw(&mut bench.ball, &mut held.sculptor(strength), &thrice, pressure);
     let three = measure(&bench.ball, &bench.ball_before);
     undo(&mut bench.ball, delta);
+    let strokes: Vec<Option<StrokeDelta>> =
+        (0..3).map(|_| draw(&mut bench.ball, &mut held.sculptor(strength), &there, pressure)).collect();
+    let separate = measure(&bench.ball, &bench.ball_before);
+    for delta in strokes.into_iter().rev() {
+        undo(&mut bench.ball, delta);
+    }
     let fin_line = bench.fin.line.clone();
     let delta = draw(&mut bench.fin, &mut held.sculptor(strength), &fin_line, pressure);
     let back = bench
@@ -414,6 +506,17 @@ fn row(bench: &mut Bench, held: Held, strength: Option<f32>, pressure: f32) {
         undo(&mut bench.rough, delta);
         line += &format!("  rough {left:>5.3}");
     }
+    if held.levels() {
+        let rib_line = bench.ribs.line.clone();
+        let delta = draw(&mut bench.ribs, &mut held.sculptor(strength), &rib_line, pressure);
+        let left = rib_height(&bench.ribs.mesh, &bench.ribs.path) / bench.ribs_start;
+        undo(&mut bench.ribs, delta);
+        line += &format!("  ribs {left:>5.3}");
+    }
+    line += &format!(
+        "  out3s {:>6.3}  ridge3 {:>6.2}/{:>5.2}  angle3 {:>5.1}/{:>5.1}  crest {:>5.2}  crest3 {:>5.2}",
+        separate.out, three.ridge.0, three.ridge.1, three.angle.0, three.angle.1, one.crest, three.crest
+    );
     println!("{line}");
 }
 
@@ -424,6 +527,8 @@ pub fn run() {
     let rough_t = Target::ball(ball(true));
     let rough_before = Before::of(&rough_t);
     let rough_start = roughness(&rough_t.mesh, &rough_before.under);
+    let ribs_t = Target::ball(ribbed());
+    let ribs_start = rib_height(&ribs_t.mesh, &ribs_t.path);
     let fin_t = fin();
     let fin_before = Before::of(&fin_t);
     let (mean, worst, edges) = quality(&ball_before.positions, &ball_before.tris);
@@ -440,6 +545,8 @@ pub fn run() {
         rough: rough_t,
         rough_before,
         rough_start,
+        ribs: ribs_t,
+        ribs_start,
         fin: fin_t,
         fin_before,
     };
@@ -469,5 +576,27 @@ pub fn run() {
     }
     for name in ["Smooth Peaks", "Smooth Valleys", "Relax", "Keep Volume", "Spread"] {
         row(&mut bench, Held::Preset(name), None, 1.0);
+    }
+    // The brushes that build, with Accumulate each way, at their own Strength.
+    let tuned: [Held; 6] = [
+        Held::Tuned("Standard acc", Brush::Standard, |b| b.accumulate = true),
+        Held::Tuned("Standard noacc", Brush::Standard, |b| b.accumulate = false),
+        Held::Tuned("Inflate acc", Brush::Inflate, |b| b.accumulate = true),
+        Held::Tuned("Inflate noacc", Brush::Inflate, |b| b.accumulate = false),
+        Held::Tuned("Clay acc", Brush::Clay, |b| b.accumulate = true),
+        Held::Tuned("Clay noacc", Brush::Clay, |b| b.accumulate = false),
+    ];
+    for held in tuned {
+        row(&mut bench, held, None, 1.0);
+    }
+    // What Steady Plane and Relax Normals do: the brushes with them at nought.
+    let without: [Held; 4] = [
+        Held::Tuned("Clay steady0", Brush::Clay, |b| b.steady_plane = 0.0),
+        Held::Tuned("Flatten steady0", Brush::Flatten, |b| b.steady_plane = 0.0),
+        Held::Tuned("Inflate relax0", Brush::Inflate, |b| b.relax_normals = 0.0),
+        Held::Tuned("Inflate acc relax0", Brush::Inflate, |b| (b.accumulate, b.relax_normals) = (true, 0.0)),
+    ];
+    for held in without {
+        row(&mut bench, held, None, 1.0);
     }
 }
