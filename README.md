@@ -734,22 +734,49 @@ symmetric, use **Cut & Mirror** or **Make Symmetric**, which say so.
 
 **Dynamic Topology**, in the Remesh card on the Sculpt panel's Mesh tab, adds triangles
 under the brush as you sculpt, so detail appears where you work and nowhere
-else. It starts off, and the app remembers how you left it.
+else, and merges them where a bigger brush asks for less. It starts off, and
+the app remembers how you left it.
 
 - **Detail (Fine - Coarse)** is the longest edge left under the brush, as a
   percentage of the brush's radius: 3% to 50%, starting at 15%. Detail goes
-  with the brush, so a small brush adds fine triangles and a big one leaves
-  the surface as it is. Zoom in and shrink the brush to ask for more.
+  with the brush, so a small brush adds fine triangles and a big one makes
+  the surface as coarse as itself. Zoom in and shrink the brush to ask for
+  more.
+- **Both, Add, Remove** say what it does to the triangles under the brush.
+  **Both** (the default) splits the ones too big for the detail and merges
+  the edges shorter than 40% of it, so the surface comes out about the
+  detail size whatever was there: run a big brush over a finely worked area
+  and it is coarse again. This is what Blender (Subdivide Collapse) and
+  Nomad (Uniformisation) do by default. **Add** only splits, as dynamic
+  topology did here until October 2026: an area stays as fine as the finest
+  brush that has worked on it. **Remove** only merges: a brush that takes
+  detail away and leaves the shape.
 - Standard, Clay, Crease, Inflate, Flatten and Layer refine. Move, Pose,
   Snake Hook, Smooth and mask painting do not. Pull a shape out with Snake Hook,
   then run one of the refining brushes along it, and the triangles the pull
   stretched are split into even ones.
-- It only ever adds. Triangles are never merged back, so a region stays as
-  fine as the finest brush that has worked on it; **Remesh** evens the whole
-  model out again. It stops adding at 4 million triangles, and a line under
-  the slider says when it has.
-- A stroke that added detail is one undo step like any other: undo takes the
-  added triangles away again and redo puts them back.
+- **How a merge works.** One end of a short edge is folded onto the other,
+  which stays where it is, and the two triangles on the edge go. It is not
+  made where it would harm the surface: where it would turn or flatten a
+  triangle, pinch two parts of the surface together, or leave an edge longer
+  than the detail (which the next split would undo). Points frozen by the
+  mask stay, a point much more masked than the other end stays, and so do
+  the borders of face groups, hidden faces and open edges. A mirrored stroke
+  merges on both sides; the two sides' triangles need not match exactly, the
+  surface does: in the tests, to a millionth of the model's size on average
+  and under a thousandth at the worst point.
+- **Remesh** evens the whole model out at once. Dynamic topology stops adding
+  at 4 million triangles, and a line under the slider says when it has;
+  merging goes on there, so Both or Remove brings the count back down.
+- What a merge took away stays behind in the mesh's lists, as triangles with
+  no area and points in no triangle, until the mesh is next built afresh:
+  saved and opened again, remeshed, decimated. They are never drawn, never
+  hit and never counted (the counts shown are of the surface). Export, Send
+  to Blender, Decimate, Subdivide and Check Symmetry work on a copy without
+  them; Make Symmetric, Symmetry Cleanup and Groups by Angle first build the
+  mesh again without them, as an undo step of its own.
+- A stroke that added or merged is one undo step like any other: undo puts
+  the triangles back as they were and redo does the stroke again.
 - Masked surface is left alone, and a new vertex takes its mask from the two
   it was made between. Hidden parts are not refined. Instances and live
   mirror copies show the refined mesh, and a stroke drawn on one of them

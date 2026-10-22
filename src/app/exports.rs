@@ -45,7 +45,9 @@ impl Running {
         let name = self.doc.scene.active().name.clone();
         let places = self.export_places();
         let places: Vec<(&str, glam::Mat4)> = places.iter().map(|(n, m)| (n.as_str(), *m)).collect();
-        let written = io::export_obj_painted(&self.doc.mesh, &places, &self.export_paint(), path);
+        // Without the points and loose vertices dynamic topology's merges leave.
+        let tidy = crate::scene::tidied(&self.doc.mesh);
+        let written = io::export_obj_painted(tidy.as_ref().unwrap_or(&self.doc.mesh), &places, &self.export_paint(), path);
         let (result, mended) = Self::split_mended(written);
         result?;
         Ok(format!("Exported \"{name}\"{}{} to {}{mended}", self.export_note(), self.with_paint(), path.display()))
@@ -69,7 +71,8 @@ impl Running {
     pub(super) fn export_ply_to(&mut self, path: &Path) -> Result<String, String> {
         let name = self.doc.scene.active().name.clone();
         let models: Vec<glam::Mat4> = self.export_places().into_iter().map(|(_, m)| m).collect();
-        let written = io::export_ply_placed(&self.doc.mesh, &models, &self.export_paint(), path);
+        let tidy = crate::scene::tidied(&self.doc.mesh);
+        let written = io::export_ply_placed(tidy.as_ref().unwrap_or(&self.doc.mesh), &models, &self.export_paint(), path);
         let (result, mended) = Self::split_mended(written);
         result?;
         Ok(format!("Exported \"{name}\"{}{} to {}{mended}", self.export_note(), self.with_paint(), path.display()))

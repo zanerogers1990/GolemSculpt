@@ -114,6 +114,11 @@ impl Lists {
         }
     }
 
+    /// Empties list `i`, keeping its place for whatever it holds next.
+    pub fn clear(&mut self, i: usize) {
+        self.span[i][1] = 0;
+    }
+
     /// Drops every list from number `rows` on.
     #[cfg(test)]
     pub fn truncate(&mut self, rows: usize) {

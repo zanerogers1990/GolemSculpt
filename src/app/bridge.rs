@@ -621,7 +621,7 @@ impl Running {
                     "visible": o.visible,
                     "position": point(o.position),
                     "size": point(size),
-                    "triangles": mesh.map_or(0, |m| m.triangle_count()),
+                    "triangles": mesh.map_or(0, |m| m.live_triangle_count()),
                     "vertices": mesh.map_or(0, |m| m.vertex_count()),
                     "instances": doc.scene.users(o.mesh),
                     "mirror": o.mirror.map(|m| sculpt_symmetry::MirrorRepeater::axis_name_of(m.axis_mask)),
@@ -1043,7 +1043,7 @@ impl Running {
             true
         });
         let object = self.doc.scene.active();
-        Ok(json!({ "id": id, "name": object.name, "triangles": self.doc.mesh.triangle_count() }).to_string())
+        Ok(json!({ "id": id, "name": object.name, "triangles": self.doc.mesh.live_triangle_count() }).to_string())
     }
 
     fn edit_object(&mut self, args: &Value) -> Result<String, String> {

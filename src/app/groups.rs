@@ -373,6 +373,7 @@ impl Running {
                 });
             }
             Ask::ByAngle => {
+                self.tidy_merged();
                 let angle = self.doc.opts.groups.angle;
                 let made = groups::by_angle(&self.doc.mesh, angle);
                 self.groups_made(made, false, "Groups by Angle", |made, _| match made.groups {

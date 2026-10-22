@@ -142,7 +142,8 @@ fn nearest_vertex(mesh: &Mesh, to: Vec3, within: f32) -> Option<u32> {
             let leaf = &mesh.bvh.leaves[l as usize];
             for v in leaf.vert_start..leaf.vert_end {
                 let d2 = mesh.positions[v as usize].distance_squared(to);
-                if d2 < best.0 && !hidden.is_some_and(|h| h[v as usize]) {
+                // Nor one dynamic topology merged away, which is in no triangle.
+                if d2 < best.0 && !hidden.is_some_and(|h| h[v as usize]) && !mesh.neighbours(v).is_empty() {
                     best = (d2, Some(v));
                 }
             }

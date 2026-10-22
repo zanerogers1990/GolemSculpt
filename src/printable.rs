@@ -126,7 +126,7 @@ pub fn torn_by_stroke(name: &str, before: &EdgeCensus, after: &EdgeCensus) -> Op
 /// news. Hidden faces are checked like the rest, and it says so when there
 /// are any, since the answer is about more than what is on screen.
 pub fn verdict(name: &str, mesh: &Mesh) -> (String, bool) {
-    let triangles = mesh.triangle_count();
+    let triangles = mesh.live_triangle_count();
     if triangles == 0 {
         return (format!("\"{name}\" has no surface to print."), false);
     }

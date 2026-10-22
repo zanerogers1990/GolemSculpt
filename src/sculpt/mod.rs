@@ -1296,7 +1296,7 @@ impl Sculptor {
     /// [`dyntopo::DynTopo::may_grow`]. `smooth_held` as for [`Self::begin`].
     pub fn may_refine(&self, mesh: &Mesh, smooth_held: bool) -> bool {
         let brush = self.effective_brush(smooth_held);
-        self.dyntopo.may_grow(brush, self.settings.mask_mode, mesh.triangle_count())
+        self.dyntopo.may_grow(brush, self.settings.mask_mode, mesh.live_triangle_count())
     }
 
     /// The pen's pressure as the brushes read it, after this sample: 0 to 1.
@@ -2413,7 +2413,8 @@ fn keep_connected(mesh: &Mesh, centres: &[Vec3], verts: &mut Vec<u32>, weights: 
             if held(slot) {
                 grabbed.set(v as usize);
                 let d2 = mesh.positions[v as usize].distance_squared(centre);
-                if d2 < nearest {
+                // Not a vertex dynamic topology merged away: it joins nothing.
+                if d2 < nearest && !mesh.neighbours(v).is_empty() {
                     (nearest, seed) = (d2, Some(v));
                 }
             }

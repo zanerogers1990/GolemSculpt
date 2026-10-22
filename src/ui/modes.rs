@@ -11,7 +11,7 @@ use super::theme::{self, ACCENT, ButtonStyle};
 use crate::sculpt::{Brush, BrushSettings, FlattenMode, SmoothMode};
 
 /// A row of buttons, one lit: the mode to pick from `all`.
-fn mode_row<M: Copy + PartialEq>(
+pub(super) fn mode_row<M: Copy + PartialEq>(
     ui: &mut Ui,
     picked: &mut M,
     all: &[M],

@@ -424,8 +424,10 @@ struct Outgoing {
 /// part of the model on screen, and each with its paint. `slot` is `Doc::mesh`.
 fn outgoing(scene: &Scene, slot: &Mesh, link: &mut State, colours: &io::ExportPaint) -> Outgoing {
     let mut out = Outgoing { objects: Vec::new(), prints: Vec::new(), names: Vec::new(), copies: 0, bare: 0, mended: 0 };
+    // Without the points and loose vertices dynamic topology's merges leave.
+    let tidy = crate::scene::Tidied::of_selected(scene, slot);
     for object in scene.objects.iter().filter(|o| scene.is_selected(o.id)) {
-        let Some(mesh) = scene.mesh(object.mesh, slot).filter(|mesh| !mesh.indices.is_empty()) else {
+        let Some(mesh) = tidy.mesh(scene, object.mesh, slot).filter(|mesh| !mesh.indices.is_empty()) else {
             out.bare += 1;
             continue;
         };

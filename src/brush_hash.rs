@@ -21,6 +21,7 @@ use glam::{Vec2, Vec3};
 use crate::camera::Camera;
 use crate::mesh::primitives::{self, Primitive};
 use crate::mesh::{Mesh, StrokeDelta};
+use crate::sculpt::dyntopo::Method;
 use crate::sculpt::{Brush, PointerSample, Radial, Sculptor};
 
 const SIZE: Vec2 = Vec2::new(1920.0, 1080.0);
@@ -312,10 +313,13 @@ fn layered(run: &mut Run) {
 }
 
 /// Dynamic topology refining a coarse ball, then brushes on what it made,
-/// with it on and off.
+/// with it on and off. Adding only, as dynamic topology did before merges
+/// (2026-10-21), so these lines still show that it does the same; merges
+/// have lines of their own (`merged`).
 fn refined(run: &mut Run) {
     let on = |mut sculptor: Sculptor| {
         sculptor.dyntopo.enabled = true;
+        sculptor.dyntopo.method = Method::Add;
         sculptor
     };
     for brush in [Brush::Clay, Brush::Standard, Brush::SnakeHook, Brush::Smooth, Brush::Inflate] {
@@ -338,13 +342,30 @@ fn refined(run: &mut Run) {
 /// themselves are unchanged when another brush has changed.
 fn refined_presets(run: &mut Run) {
     let mut strips = preset("Clay Strips", 90.0, true);
-    strips.dyntopo.enabled = true;
+    (strips.dyntopo.enabled, strips.dyntopo.method) = (true, Method::Add);
     run.stroke("Clay Strips dyntopo mirror (own ball)", &mut strips, Path::Along, 24, true);
     let mut dam = preset("Dam Standard", 90.0, true);
-    dam.dyntopo.enabled = true;
+    (dam.dyntopo.enabled, dam.dyntopo.method) = (true, Method::Add);
     run.stroke("Dam Standard dyntopo mirror (own ball)", &mut dam, Path::Wave, 24, true);
     run.stroke("Clay Strips refined mirror (own ball)", &mut preset("Clay Strips", 90.0, true), Path::Wave, 24, true);
     run.stroke("Dam Standard refined mirror (own ball)", &mut preset("Dam Standard", 90.0, true), Path::Along, 24, true);
+}
+
+/// Dynamic topology both ways, on a coarse ball of its own: small brushes
+/// add detail, a big one over the same place merges it back, with the
+/// mirror and under radial symmetry.
+fn merged(run: &mut Run) {
+    let both = |mut sculptor: Sculptor| {
+        (sculptor.dyntopo.enabled, sculptor.dyntopo.method) = (true, Method::Both);
+        sculptor
+    };
+    run.stroke("Clay dyntopo both fine mirror", &mut both(holding(Brush::Clay, 40.0, true)), Path::Wave, 24, true);
+    run.stroke("Inflate dyntopo both fine mirror", &mut both(holding(Brush::Inflate, 40.0, true)), Path::Along, 24, true);
+    run.stroke("Clay dyntopo both coarse mirror", &mut both(holding(Brush::Clay, 160.0, true)), Path::Wave, 24, true);
+    run.stroke("Standard dyntopo both coarse radial6", &mut both(radial(holding(Brush::Standard, 140.0, false))), Path::Wave, 20, true);
+    let mut remove = both(holding(Brush::Flatten, 200.0, true));
+    remove.dyntopo.method = Method::Remove;
+    run.stroke("Flatten dyntopo remove mirror", &mut remove, Path::Along, 24, true);
 }
 
 /// `tris` is the size of the main ball (300,000 triangles unless told).
@@ -367,6 +388,14 @@ pub fn run(tris: &[usize]) {
     );
     let mut own = Run::new(primitives::build(Primitive::Sphere, 20_000, 0.5));
     refined_presets(&mut own);
-    let (all, failed) = (run.all.0 ^ coarse.all.0.rotate_left(17) ^ own.all.0.rotate_left(29), run.failed + coarse.failed + own.failed);
+    let mut merges = Run::new(primitives::build(Primitive::Sphere, 20_000, 0.5));
+    merged(&mut merges);
+    println!(
+        "coarse ball after merges: {} triangles in the surface, {} in the lists",
+        merges.mesh.live_triangle_count(),
+        merges.mesh.triangle_count()
+    );
+    let all = run.all.0 ^ coarse.all.0.rotate_left(17) ^ own.all.0.rotate_left(29) ^ merges.all.0.rotate_left(41);
+    let failed = run.failed + coarse.failed + own.failed + merges.failed;
     println!("ALL {all:016x}  undo mismatches {failed}");
 }

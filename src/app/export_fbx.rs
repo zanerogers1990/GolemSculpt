@@ -13,7 +13,7 @@ use glam::Mat4;
 use super::Running;
 use crate::io;
 use crate::mesh::Mesh;
-use crate::scene::Scene;
+use crate::scene::{Scene, Tidied};
 
 /// One object of an export: its name, its mesh, and the places it is written
 /// (itself, then its live copies) with the names they go under.
@@ -25,12 +25,13 @@ struct Part<'a> {
 
 /// What Export FBX writes: the selected objects, in the list's order whatever
 /// order they were picked in, and how many of them have no surface to write.
-/// `slot` is `Doc::mesh`.
-fn parts<'a>(scene: &'a Scene, slot: &'a Mesh) -> (Vec<Part<'a>>, usize) {
+/// `slot` is `Doc::mesh`; `tidy` holds the meshes to write in place of
+/// theirs (see `scene::Tidied`).
+fn parts<'a>(scene: &'a Scene, slot: &'a Mesh, tidy: &'a Tidied) -> (Vec<Part<'a>>, usize) {
     let mut parts = Vec::new();
     let mut left_out = 0;
     for object in scene.objects.iter().filter(|o| scene.is_selected(o.id)) {
-        match scene.mesh(object.mesh, slot).filter(|mesh| !mesh.indices.is_empty()) {
+        match tidy.mesh(scene, object.mesh, slot).filter(|mesh| !mesh.indices.is_empty()) {
             Some(mesh) => parts.push(Part { name: &object.name, mesh, places: scene.export_places(object) }),
             None => left_out += 1,
         }
@@ -79,7 +80,8 @@ impl Running {
     /// why nothing was written.
     pub(super) fn export_fbx_to(&mut self, path: &Path) -> Result<String, String> {
         let scene = &self.doc.scene;
-        let (parts, left_out) = parts(scene, &self.doc.mesh);
+        let tidy = Tidied::of_selected(scene, &self.doc.mesh);
+        let (parts, left_out) = parts(scene, &self.doc.mesh, &tidy);
         if parts.is_empty() {
             let whose = if left_out > 1 { "no selected object has" } else { "this object has no" };
             return Err(format!("There is nothing to export: {whose} surface."));
@@ -137,7 +139,8 @@ mod tests {
 
         // One selected: that object alone, and the box offers its name.
         scene.select(block, &mut slot);
-        let (one, left_out) = parts(&scene, &slot);
+        let tidy = Tidied::default();
+        let (one, left_out) = parts(&scene, &slot, &tidy);
         assert_eq!((one.len(), left_out), (1, 0));
         assert_eq!((one[0].name, one[0].mesh.positions.len()), ("Block", slot.positions.len()));
         assert_eq!(file_stem(&scene), "Block");
@@ -147,7 +150,8 @@ mod tests {
         scene.select(cone, &mut slot);
         scene.select_also(empty);
         scene.select_also(ball);
-        let (several, left_out) = parts(&scene, &slot);
+        let tidy = Tidied::default();
+        let (several, left_out) = parts(&scene, &slot, &tidy);
         assert_eq!(left_out, 1, "the one with no surface");
         assert_eq!(several.iter().map(|part| part.name).collect::<Vec<_>>(), ["Ball", "Tall Cone"]);
         let names = |part: &Part| part.places.iter().map(|place| place.0.clone()).collect::<Vec<_>>();

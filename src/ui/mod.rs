@@ -314,7 +314,7 @@ fn sculpt_head(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
         rect.right_center() - vec2(history_list::WIDTH + 8.0, 0.0),
         Align2::RIGHT_CENTER,
         // Triangles only: the line has the History button at its end now.
-        format!("{} tris", fmt_count(doc.mesh.triangle_count())),
+        format!("{} tris", fmt_count(doc.mesh.live_triangle_count())),
         theme::font(11.0),
         theme::HINT(),
     );
@@ -599,7 +599,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     let tips = doc.opts.tooltips;
     symmetry::card(ui, doc, actions);
 
-    let summary = fmt_count(doc.mesh.triangle_count());
+    let summary = fmt_count(doc.mesh.live_triangle_count());
     theme::category(ui, "Remesh", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {
         // Log slider: equal travel doubles the resolution.
         let mut log = doc.opts.remesh_resolution.log2();
@@ -719,7 +719,7 @@ fn rounded_to_two_figures(value: f32) -> f32 {
 /// row of fractions of what the object has now that set it, and the button.
 fn decimate(ui: &mut egui::Ui, doc: &mut Doc, tips: bool, actions: &mut Vec<Action>) {
     let range = crate::decimate::TARGET_RANGE;
-    let now = doc.mesh.triangle_count();
+    let now = doc.mesh.live_triangle_count();
     let mut log = doc.opts.decimate_target.clamp(*range.start(), *range.end()).log2();
     let percent = |target: f32| if now > 0 { format!(" ({:.0}%)", (target / now as f32 * 100.0).min(999.0)) } else { String::new() };
     let slider = theme::slider(ui, "Target Triangles", &mut log, range.start().log2()..=range.end().log2(), |v| {

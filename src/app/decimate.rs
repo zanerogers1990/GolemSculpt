@@ -117,7 +117,7 @@ impl Running {
         if let Some(job) = doc.tools.jobs.running().first() {
             return Some(format!("{} is still working. Wait for it, or press its Cancel, then decimate.", job.label));
         }
-        let (triangles, target) = (doc.mesh.triangle_count(), target_of(doc.opts.decimate_target));
+        let (triangles, target) = (doc.mesh.live_triangle_count(), target_of(doc.opts.decimate_target));
         if triangles == 0 {
             return Some("Nothing to decimate.".into());
         }
@@ -139,11 +139,13 @@ impl Running {
         if let Some(why) = self.decimate_refusal() {
             // Not an error when it is only that there is nothing to take off.
             let waiting = self.decimate.pending.is_some() || self.doc.tools.jobs.is_busy();
-            return self.status(why, !waiting && self.doc.mesh.triangle_count() > 0);
+            return self.status(why, !waiting && self.doc.mesh.live_triangle_count() > 0);
         }
         let doc = &self.doc;
         let target = target_of(doc.opts.decimate_target);
-        let source = Source::of(&doc.mesh);
+        // Without the points and loose vertices dynamic topology's merges leave.
+        let tidy = crate::scene::tidied(&doc.mesh);
+        let source = Source::of(tidy.as_ref().unwrap_or(&doc.mesh));
         let job = doc.tools.jobs.spawn("Decimate", move |cx| {
             cx.progress("0%");
             let mut progress = |done: f32| {

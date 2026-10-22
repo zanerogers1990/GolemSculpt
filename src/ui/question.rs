@@ -244,7 +244,7 @@ impl Question {
             Question::Delete(id) => {
                 let object = doc.scene.get(*id)?;
                 let linked = doc.scene.users(object.mesh) > 1;
-                let triangles = doc.scene.mesh(object.mesh, &doc.mesh).map_or(0, |mesh| mesh.triangle_count());
+                let triangles = doc.scene.mesh(object.mesh, &doc.mesh).map_or(0, |mesh| mesh.live_triangle_count());
                 delete_words(&object.name, linked, triangles, doc.history.strokes_on(object.mesh))
             }
             Question::Exit { unsaved, lost } => exit_words(doc.path.as_deref(), *unsaved, lost),

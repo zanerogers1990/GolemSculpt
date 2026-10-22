@@ -718,6 +718,9 @@ pub struct Prefs {
     /// longest edge they leave, as a fraction of the brush radius.
     pub dynamic_topology: bool,
     pub dynamic_topology_detail: f32,
+    /// Whether it adds triangles, takes them away, or both (from 2026-10-21;
+    /// a file from before takes the default, both).
+    pub dynamic_topology_method: dyntopo::Method,
     /// Sculpts recently saved or opened, newest first (see `recent.rs`).
     pub recent: Vec<PathBuf>,
     /// How hard the renderer works: shadow map size and the like (see
@@ -757,6 +760,7 @@ impl Default for Prefs {
             starting_detail: opts.new_shape_tris,
             dynamic_topology: dyntopo.enabled,
             dynamic_topology_detail: dyntopo.detail,
+            dynamic_topology_method: dyntopo.method,
             recent: Vec::new(),
             render_quality: opts.quality,
             pen_seen: false,

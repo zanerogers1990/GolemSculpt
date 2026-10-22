@@ -6,7 +6,7 @@ use egui::Color32;
 
 use super::theme::{self, ACCENT};
 use super::tip;
-use crate::sculpt::dyntopo::{DynTopo, MAX_DETAIL, MAX_TRIANGLES, MIN_DETAIL};
+use crate::sculpt::dyntopo::{DynTopo, MAX_DETAIL, MAX_TRIANGLES, MIN_DETAIL, Method};
 
 /// The colour of a warning that is not an error.
 pub const WARNING: Color32 = Color32::from_rgb(242, 190, 77);
@@ -27,10 +27,11 @@ pub fn section(ui: &mut egui::Ui, dyntopo: &mut DynTopo, tips: bool) {
     tip(
         theme::checkbox(ui, &mut dyntopo.enabled, "Dynamic Topology", ACCENT()),
         tips,
-        "Adds triangles under the brush as you sculpt, so detail appears where you work. Standard, Clay, Crease, \
-         Inflate, Flatten and Layer refine; Move, Pose, Snake Hook and Smooth don't. Remesh evens the whole model \
-         out again.",
+        "Adds triangles under the brush as you sculpt, so detail appears where you work, and merges them where a \
+         bigger brush asks for less. Standard, Clay, Crease, Inflate, Flatten and Layer do it; Move, Pose, Snake \
+         Hook and Smooth don't. Remesh evens the whole model out again.",
     );
+    super::modes::mode_row(ui, &mut dyntopo.method, &Method::ALL, Method::name, Method::tip, tips);
     let mut percent = dyntopo.detail * 100.0;
     let range = MIN_DETAIL * 100.0..=MAX_DETAIL * 100.0;
     let slider = theme::slider(ui, "Detail (Fine - Coarse)", &mut percent, range, |v| format!("{v:.0}%"));
@@ -38,7 +39,7 @@ pub fn section(ui: &mut egui::Ui, dyntopo: &mut DynTopo, tips: bool) {
         slider,
         tips,
         "Longest edge left under the brush, as a percentage of the brush radius: lower is finer. A smaller brush \
-         adds finer detail.",
+         adds finer detail. With Both or Remove, edges under 40% of it are merged.",
     )
     .changed()
     {

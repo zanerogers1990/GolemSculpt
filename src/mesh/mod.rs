@@ -415,10 +415,17 @@ impl Mesh {
 
     fn build_adjacency(&mut self) {
         let n = self.positions.len();
+        // The triangles that are part of the surface: not the points dynamic
+        // topology's merges leave (dyntopo.rs), which are in no vertex's list.
+        let live = || {
+            self.indices.par_chunks_exact(3).enumerate().with_min_len(1024).filter(|(_, t)| sound(t, n as u32))
+        };
         // How many corners name each vertex, and so where its triangles start.
         let counts: Vec<AtomicU32> = (0..n).into_par_iter().map(|_| AtomicU32::new(0)).collect();
-        self.indices.par_iter().with_min_len(4096).for_each(|&v| {
-            counts[v as usize].fetch_add(1, Ordering::Relaxed);
+        live().for_each(|(_, t)| {
+            for &v in t {
+                counts[v as usize].fetch_add(1, Ordering::Relaxed);
+            }
         });
         let mut off = vec![0u32; n + 1];
         for i in 0..n {
@@ -427,15 +434,17 @@ impl Mesh {
         // Each corner's triangle into its vertex's run, from every thread, and
         // then each run in order: the lists filling them corner by corner
         // gave, whose triangles came in ascending order.
-        let mut fans = vec![0u32; self.indices.len()];
+        let mut fans = vec![0u32; off[n] as usize];
         {
             let cursor = counts;
             cursor.par_iter().zip(&off[..n]).for_each(|(c, &start)| c.store(start, Ordering::Relaxed));
             let out = SharedMut::new(&mut fans);
-            self.indices.par_iter().enumerate().with_min_len(4096).for_each(|(i, &v)| {
-                let at = cursor[v as usize].fetch_add(1, Ordering::Relaxed);
-                // SAFETY: the cursor hands each place in a run out once.
-                unsafe { out.write(at as usize, (i / 3) as u32) };
+            live().for_each(|(i, t)| {
+                for &v in t {
+                    let at = cursor[v as usize].fetch_add(1, Ordering::Relaxed);
+                    // SAFETY: the cursor hands each place in a run out once.
+                    unsafe { out.write(at as usize, i as u32) };
+                }
             });
             let off = &off;
             (0..n).into_par_iter().with_min_len(1024).for_each_init(Vec::new, |run, v| {
@@ -495,6 +504,13 @@ impl Mesh {
 
     #[inline]
     fn vertex_normal(positions: &[Vec3], indices: &[u32], tris: &[u32], fallback: Vec3) -> Vec3 {
+        // A vertex in no triangle is one dynamic topology's merges folded
+        // away (dyntopo.rs): it faces nowhere, so it adds nothing to a
+        // brush's sum of the normals under it, and it has the same normal
+        // whatever happened before (undo and redo give it back to the bit).
+        if tris.is_empty() {
+            return Vec3::ZERO;
+        }
         // Computed in double so a vertex and its mirror twin get matching
         // normals even though their triangle fans are listed in different
         // orders; float sums here seed symmetry drift over a long session.

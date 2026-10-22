@@ -163,6 +163,32 @@ fn duplicate(mesh: &Mesh) -> Mesh {
     duplicate_placed(mesh, mesh.positions.clone()).0
 }
 
+/// `mesh` without what dynamic topology's merges left behind (points among
+/// its triangles, vertices in none), when it has any: a copy, numbered
+/// afresh, with the same surface and everything on it. What goes to a file
+/// or to Blender, which would take the points for faces and the vertices for
+/// loose points. `None` when the mesh is as clean as a copy would be.
+pub(crate) fn tidied(mesh: &Mesh) -> Option<Mesh> {
+    mesh.has_tombstones().then(|| duplicate(mesh))
+}
+
+/// [`tidied`] copies of the selected objects' meshes that need one, kept for
+/// a hand-off that reads several meshes at once (Export FBX, Send to Blender).
+#[derive(Default)]
+pub struct Tidied(HashMap<u64, Mesh>);
+
+impl Tidied {
+    pub fn of_selected(scene: &Scene, slot: &Mesh) -> Tidied {
+        let ids = scene.objects.iter().filter(|o| scene.is_selected(o.id)).map(|o| o.mesh);
+        Tidied(ids.filter_map(|id| Some((id, tidied(scene.mesh(id, slot)?)?))).collect())
+    }
+
+    /// The scene's mesh `id`, or its tidied copy if it has one.
+    pub fn mesh<'a>(&'a self, scene: &'a Scene, id: u64, slot: &'a Mesh) -> Option<&'a Mesh> {
+        self.0.get(&id).or_else(|| scene.mesh(id, slot))
+    }
+}
+
 /// [`duplicate`] with its vertices at `positions` instead (one for each of
 /// the mesh's own, in the same order), also returning where each of the
 /// mesh's vertices went in the copy.

@@ -3,9 +3,11 @@
 //! triangles consistent) is mesh/dyntopo.rs.
 //!
 //! Detail is tied to the BRUSH RADIUS (Blender's "Brush Detail"): a small
-//! brush adds fine triangles where it works and a big one leaves the density
-//! alone, so zooming in and shrinking the brush is how a sculptor asks for
-//! more detail, and nothing balloons outside the stroke. Only the brushes
+//! brush adds fine triangles where it works and a big one makes the area as
+//! coarse as itself again, so zooming in and shrinking the brush is how a
+//! sculptor asks for more detail, and nothing balloons outside the stroke.
+//! Both ways is the [`Method`] the panel starts on; adding only, or
+//! removing only, are the other two. Only the brushes
 //! that deposit or carve refine (Standard, Clay, Crease, Inflate, Flatten,
 //! Layer). Move and Pose hold the vertices they took hold of at the press
 //! until the release, so the mesh must not change under them; Snake Hook is
@@ -13,9 +15,11 @@
 //! gain from more triangles.
 
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 
 use super::Brush;
 use crate::mesh::Mesh;
+use crate::mesh::dyntopo::EdgeSizes;
 
 /// The longest edge dynamic topology leaves under the brush, as a fraction
 /// of the brush radius: the range of the Detail slider and where it starts.
@@ -26,6 +30,68 @@ pub const DEFAULT_DETAIL: f32 = 0.15;
 /// Dynamic topology stops adding triangles past this: memory, and the frame
 /// rate of every other brush and tool on the object, scale with it.
 pub const MAX_TRIANGLES: usize = 4_000_000;
+
+/// Edges shorter than this share of the detail size are merged away: the
+/// figure Blender uses (`EDGE_LENGTH_MIN_FACTOR`). Bisection never leaves an
+/// edge much under half the size it splits to, so what a split has just made
+/// is never merged straight back.
+pub const MERGE_SHARE: f32 = 0.4;
+
+/// What dynamic topology does to the edges under the brush.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Method {
+    /// Splits the long edges and merges the short ones, so the triangles
+    /// come out about the detail size whatever was there: Blender's
+    /// Subdivide Collapse and Nomad's Uniformisation, both their default.
+    #[default]
+    Both,
+    /// Only splits, as dynamic topology always did until 2026-10-21: an area
+    /// stays as fine as the finest brush that has worked on it.
+    Add,
+    /// Only merges: a brush that takes detail away.
+    Remove,
+}
+
+impl Method {
+    pub const ALL: [Method; 3] = [Method::Both, Method::Add, Method::Remove];
+
+    /// What the panel's button says.
+    pub fn name(self) -> &'static str {
+        match self {
+            Method::Both => "Both",
+            Method::Add => "Add",
+            Method::Remove => "Remove",
+        }
+    }
+
+    /// The button's tooltip.
+    pub fn tip(self) -> &'static str {
+        match self {
+            Method::Both => {
+                "Adds triangles where they are too big for the detail and merges them where they are too small, so the \
+                 surface under the brush comes out about the detail size. A big brush over a fine area makes it coarse \
+                 again."
+            }
+            Method::Add => {
+                "Only adds triangles, never merges them: an area stays as fine as the finest brush that worked on it, \
+                 as dynamic topology was before."
+            }
+            Method::Remove => {
+                "Only merges triangles that are smaller than the detail size: a brush that takes detail away. The shape \
+                 stays as it is; only the triangles change."
+            }
+        }
+    }
+
+    fn splits(self) -> bool {
+        self != Method::Remove
+    }
+
+    fn merges(self) -> bool {
+        self != Method::Add
+    }
+}
 
 /// Cost ceiling for one frame's refining. Longest edges go first, so a frame
 /// that hits it has done the coarsest (most visible) part, and the rest
@@ -80,6 +146,8 @@ pub struct DynTopo {
     pub enabled: bool,
     /// The longest edge left under the brush, as a fraction of its radius.
     pub detail: f32,
+    /// Whether it adds triangles, takes them away, or both.
+    pub method: Method,
     /// The last refine stopped at the triangle limit; the panel says so.
     pub at_limit: bool,
     /// The most triangles a mesh is refined to: [`MAX_TRIANGLES`].
@@ -95,6 +163,7 @@ impl Default for DynTopo {
         Self {
             enabled: false,
             detail: DEFAULT_DETAIL,
+            method: Method::default(),
             at_limit: false,
             limit: MAX_TRIANGLES,
             path: None,
@@ -118,11 +187,12 @@ impl DynTopo {
     }
 
     /// Whether a stroke of `brush` beginning now could change the triangles
-    /// of a mesh that has `triangles` of them. False at the triangle limit,
-    /// where [`Mesh::refine`] turns back before it touches anything. What is
-    /// only worth doing before a stroke that may grow the mesh asks this.
+    /// of a mesh that has `triangles` of them (its live count). False at the
+    /// triangle limit for a method that only adds, where [`Mesh::refine`]
+    /// turns back before it touches anything. What is only worth doing
+    /// before a stroke that may change the mesh asks this.
     pub fn may_grow(&self, brush: Brush, mask: bool, triangles: usize) -> bool {
-        self.takes(brush, mask) && triangles + 2 <= self.limit
+        self.takes(brush, mask) && (self.method.merges() || triangles + 2 <= self.limit)
     }
 
     /// A stroke begins. `brush` is the one it uses (Smooth when Shift makes
@@ -204,13 +274,19 @@ impl DynTopo {
             }
         }
 
-        let stats = mesh.refine(&self.sites, reach, edge, budget, self.limit);
+        let method = self.method;
+        let sizes = EdgeSizes {
+            longest: edge,
+            split: method.splits(),
+            shortest: if method.merges() { edge * MERGE_SHARE } else { 0.0 },
+        };
+        let stats = mesh.retopologize(&self.sites, reach, sizes, budget, self.limit);
         self.at_limit = stats.hit_limit;
         path.last = Some(at);
         path.waiting = None;
         path.edge = edge;
         path.unfinished = stats.hit_budget;
-        path.splits_this_frame += stats.splits;
+        path.splits_this_frame += stats.splits + stats.merges;
     }
 
     /// Once a frame, after the frame's pointer samples: carries on with a

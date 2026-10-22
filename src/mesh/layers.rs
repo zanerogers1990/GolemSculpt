@@ -435,28 +435,30 @@ impl Layers {
 
     /// Layers from plain lists, for a mesh of `vertices` vertices where
     /// entry `i` of each layer's offsets belongs to vertex `place[i]` (or to
-    /// vertex `i` with no `place`). `None` if a list is not that mesh's, or
-    /// holds something that is not a number.
+    /// vertex `i` with no `place`). An entry placed at `u32::MAX` belongs to
+    /// a vertex the mesh was built without (one no triangle used, as dynamic
+    /// topology's merges leave), and is let go. `None` if a list is not that
+    /// mesh's, or holds something that is not a number.
     pub fn restored(saved: SavedLayers, vertices: usize, place: Option<&[u32]>) -> Option<Box<Layers>> {
         let SavedLayers { layers, recording, next_id } = saved;
         if layers.is_empty() {
             return None;
         }
+        let entries = place.map_or(vertices, <[u32]>::len);
         let mut list = Vec::with_capacity(layers.len());
         for layer in layers {
-            let fits = layer.offsets.len() == vertices && layer.offsets.par_iter().all(|offset| offset.is_finite());
+            let fits = layer.offsets.len() == entries && layer.offsets.par_iter().all(|offset| offset.is_finite());
             if !fits || list.iter().any(|other: &Layer| other.id == layer.id) {
                 return None;
             }
             let offsets = match place {
-                Some(place) if place.len() == vertices => {
+                Some(place) => {
                     let mut placed = vec![Vec3::ZERO; vertices];
-                    for (&offset, &to) in layer.offsets.iter().zip(place) {
+                    for (&offset, &to) in layer.offsets.iter().zip(place).filter(|&(_, &to)| to != u32::MAX) {
                         *placed.get_mut(to as usize)? = offset;
                     }
                     placed
                 }
-                Some(_) => return None,
                 None => layer.offsets,
             };
             list.push(Layer { id: layer.id, name: layer.name, on: layer.on, percent: layer.percent.min(100), offsets });
@@ -773,10 +775,12 @@ impl Mesh {
     }
 
     /// The layers for a copy of this mesh whose vertices were renumbered:
-    /// vertex `v` of this mesh is vertex `place[v]` of the copy.
+    /// vertex `v` of this mesh is vertex `place[v]` of the copy, or is not in
+    /// it (`u32::MAX`).
     pub fn layers_renumbered(&self, place: &[u32]) -> Option<Box<Layers>> {
         let layers = self.layers.as_ref()?;
-        Layers::restored(layers.saved(None), self.positions.len(), Some(place))
+        let kept = place.iter().filter(|&&to| to != u32::MAX).count();
+        Layers::restored(layers.saved(None), kept, Some(place))
     }
 
     /// Whether the mesh is on a subdivision level below its finest, where the

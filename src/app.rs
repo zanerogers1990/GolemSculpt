@@ -1299,6 +1299,17 @@ impl Running {
         self.doc.sculptor.last_hit = None;
     }
 
+    /// Builds the mesh again without what dynamic topology's merges left
+    /// behind (mesh/dyntopo.rs), as an undo step of its own, before a tool
+    /// that reads every vertex and triangle and changes the mesh where it is
+    /// (Make Symmetric, Symmetry Cleanup, Groups by Angle). Nothing when
+    /// there is nothing to tidy.
+    fn tidy_merged(&mut self) {
+        if let Some(tidy) = crate::scene::tidied(&self.doc.mesh) {
+            self.replace_mesh(tidy, true);
+        }
+    }
+
     /// Carries out a command. The undo steps it records are called by what
     /// it is (app/undo_names.rs).
     fn act(&mut self, action: Action) {

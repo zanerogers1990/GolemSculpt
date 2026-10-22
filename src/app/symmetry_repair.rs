@@ -218,7 +218,10 @@ impl Running {
     /// up across its own `axis` plane. Changes nothing.
     pub(super) fn check_symmetry(&mut self, axis: Axis) {
         let name = self.doc.scene.active().name.clone();
-        let (text, ok) = symmetry_of(&self.doc.mesh, &name, axis, self.match_tolerance());
+        // Without the vertices dynamic topology's merges left in no triangle,
+        // which would have no partner across the plane.
+        let tidy = crate::scene::tidied(&self.doc.mesh);
+        let (text, ok) = symmetry_of(tidy.as_ref().unwrap_or(&self.doc.mesh), &name, axis, self.match_tolerance());
         self.toast("Check Symmetry");
         self.status(text, ok);
     }
@@ -226,6 +229,7 @@ impl Running {
     /// The Make Symmetric buttons. One undo step, or none if the object
     /// matched already or the repair was refused.
     pub(super) fn make_symmetric(&mut self, axis: Axis, from_positive: bool) {
+        self.tidy_merged();
         let tolerance = self.match_tolerance();
         let doc = &mut self.doc;
         // Reset Shape goes back to the shape before the first thing that moved the mesh (scene.rs).
@@ -244,6 +248,7 @@ impl Running {
     /// The Symmetry Cleanup button. One undo step, or none if the object was
     /// clean already.
     pub(super) fn symmetry_cleanup(&mut self, axis: Axis) {
+        self.tidy_merged();
         let tolerance = self.match_tolerance();
         let doc = &mut self.doc;
         doc.scene.keep_baseline(&doc.mesh);

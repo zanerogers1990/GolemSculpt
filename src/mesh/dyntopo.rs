@@ -4,13 +4,29 @@
 //! and the stroke's undo record. When to refine, where and how fine is the
 //! brush's side of it, in sculpt/dyntopo.rs.
 //!
-//! SPLITS AND FLIPS, never a collapse. The Unity app's first attempt also
-//! collapsed, and that is where it went wrong: collapses retired triangles
-//! into permanent blanks and flattened slivers. Neither a split nor a flip
-//! removes anything. Every vertex and triangle number that existed before
-//! still names the same thing afterwards, which is what keeps the rest of the
-//! app (stroke undo, the mask, hidden faces) valid with no bookkeeping of its
-//! own. Coarsening a region back down is the voxel remesher's job.
+//! SPLITS, FLIPS AND MERGES, and nothing is ever renumbered. Every vertex and
+//! triangle number that existed before still names the same thing
+//! afterwards, which is what keeps the rest of the app (stroke undo, the
+//! mask, hidden faces, face groups) valid with no bookkeeping of its own.
+//!
+//! A merge (an edge collapse: one end of a short edge folded onto the other,
+//! which stays where it is) does take triangles and a vertex away, so it
+//! leaves them in place as tombstones. The two triangles on the edge are
+//! rewritten to a point, all three corners the vertex that stayed: such a
+//! triangle draws nothing, is never hit, is in no vertex's list of
+//! triangles, and is dropped whenever the mesh is built again (`Mesh::new`,
+//! on opening a file or after a remesh). The vertex folded away keeps its
+//! number and everything kept for it, in no triangle and with no neighbours.
+//! So a merge is a rewrite of the triangles round it, which the stroke's
+//! undo record already keeps, and undo needs nothing new. The Unity app's
+//! first attempt collapsed too and left flattened slivers; these merges are
+//! refused wherever they would turn or flatten a triangle, pinch the surface
+//! or move a border (see `merge_refusal`).
+//!
+//! Merging is Blender's "Subdivide Collapse": edges shorter than a share of
+//! the detail size are merged before the long ones are split, so a big brush
+//! over a finely worked area makes it coarse again, and the number of
+//! triangles follows the brush both ways.
 //!
 //! Triangle shape is kept by two things together. Every triangle is bisected
 //! only along its own longest edge (`split_or_defer`), which bounds each
@@ -85,6 +101,26 @@ const FLIP_MIN_NORMAL_DOT: f32 = 0.9;
 /// the longest edge left, so this is never reached by a real stroke.
 const MAX_PASSES: usize = 64;
 
+/// A merge may not turn any triangle it reshapes further than this from the
+/// way it faced (the cosine: 30 degrees). Our decimator allows 78. At 60, a
+/// big brush run along a thin pulled shape merged it into a lumpy polygon
+/// seen end on; at 30 it stays round and nearly as many merges are made
+/// (5,476 triangles left against 5,454 in `--demo-dyntopo` with
+/// `SCULPT_DEMO_DYNTOPO=coarse`).
+const MERGE_MOST_TURN: f32 = 0.866;
+
+/// Fewest triangles a vertex may be left with by a merge, inside the mesh.
+const MERGE_FEWEST_TRIANGLES: usize = 3;
+
+/// Two ways of folding an edge whose longest new edges are this close (as a
+/// share) count as a tie, decided by where the ends are (`try_merge`).
+const MERGE_TIE: f32 = 0.05;
+
+/// Short edges are merged in order of length to this many steps of the
+/// merge size, and within a step from the middle of the object outward
+/// (`merge_order`).
+const MERGE_ORDER_STEPS: f32 = 64.0;
+
 /// Rewritten triangles closer together than this are sent to the renderer as
 /// one run; a few untouched triangles cost less than a second write.
 const UPLOAD_RUN_GAP: u32 = 64;
@@ -101,6 +137,8 @@ const TAIL_REACH: f32 = 3.0;
 #[derive(Clone, Copy, Default, Debug)]
 pub struct RefineStats {
     pub splits: usize,
+    /// Short edges merged away.
+    pub merges: usize,
     pub flips: usize,
     pub vertices_added: usize,
     /// Stopped at the split budget with edges still to split: the caller
@@ -124,13 +162,26 @@ fn longest_first(x: &Edge, y: &Edge) -> Ordering {
     y.length_sq.total_cmp(&x.length_sq).then_with(|| pair(x).cmp(&pair(y)))
 }
 
+/// What a pass under the brush is to make of its edges.
+#[derive(Clone, Copy, Debug)]
+pub struct EdgeSizes {
+    /// The longest an edge may be: longer ones are split (if `split`), and
+    /// no merge makes one longer.
+    pub longest: f32,
+    pub split: bool,
+    /// Edges shorter than this are merged away; 0 merges nothing.
+    pub shortest: f32,
+}
+
 /// Where a refine works and how fine: the spheres of `radius` around `sites`,
-/// down to edges no longer than the square root of `max_edge_sq`.
+/// down to edges no longer than the square root of `max_edge_sq`, and up to
+/// none shorter than the square root of `min_edge_sq`.
 struct Region<'a> {
     sites: &'a [Vec3],
     radius: f32,
     radius_sq: f32,
     max_edge_sq: f32,
+    min_edge_sq: f32,
 }
 
 impl Region<'_> {
@@ -301,6 +352,14 @@ pub(super) struct State {
     /// vertices numbered from `born_from` on are the ones with an entry.
     born_from: u32,
     parents: Vec<[u32; 2]>,
+
+    /// How many triangles merges have left as points (see the module remarks).
+    dead: usize,
+    /// What one merge works with.
+    fan: Vec<u32>,
+    ring: Vec<u32>,
+    /// The vertices this refine's merges folded away and parked.
+    parked: Vec<u32>,
 }
 
 impl State {
@@ -341,6 +400,19 @@ impl Mesh {
     /// with and sends the faces again when it differs.
     pub fn topology_version(&self) -> u64 {
         self.topo.version
+    }
+
+    /// Triangles that are part of the surface: the count less those merges
+    /// have left as points. What the model is said to have, and what the
+    /// triangle limit counts. (`triangle_count` is the length of the lists.)
+    pub fn live_triangle_count(&self) -> usize {
+        self.triangle_count() - self.topo.dead
+    }
+
+    /// Whether merges have left points among the triangles, and vertices in
+    /// none of them: a mesh to build again before it leaves the app.
+    pub fn has_tombstones(&self) -> bool {
+        self.topo.dead > 0
     }
 
     /// The two vertices whose edge was split to make vertex `v`, or `None`
@@ -406,6 +478,7 @@ impl Mesh {
     ///
     /// Inside a stroke (between `begin_stroke` and `end_stroke`) the growth
     /// is part of the stroke's undo record. Outside one it is not recorded.
+    #[cfg(test)]
     pub fn refine(
         &mut self,
         sites: &[Vec3],
@@ -414,7 +487,26 @@ impl Mesh {
         split_budget: usize,
         triangle_limit: usize,
     ) -> RefineStats {
+        let sizes = EdgeSizes { longest: max_edge, split: true, shortest: 0.0 };
+        self.retopologize(sites, radius, sizes, split_budget, triangle_limit)
+    }
+
+    /// [`Self::refine`], with merges: first every edge under the brush
+    /// shorter than `sizes.shortest` is merged away, shortest first, then
+    /// (if `sizes.split`) every one longer than `sizes.longest` is split.
+    /// Merges and splits together make no more than `budget` changes. At the
+    /// triangle limit merges still go on (they bring the count down), and
+    /// splits do not.
+    pub fn retopologize(
+        &mut self,
+        sites: &[Vec3],
+        radius: f32,
+        sizes: EdgeSizes,
+        budget: usize,
+        triangle_limit: usize,
+    ) -> RefineStats {
         let mut stats = RefineStats::default();
+        let max_edge = sizes.longest;
         if sites.is_empty() || !(radius > 0.0) || !(max_edge > 0.0) || self.indices.is_empty() {
             return stats;
         }
@@ -423,19 +515,33 @@ impl Mesh {
         if self.levels.is_some() {
             return stats;
         }
-        if self.triangle_count() + 2 > triangle_limit {
-            stats.hit_limit = true;
-            return stats;
-        }
-        let region = Region { sites, radius, radius_sq: radius * radius, max_edge_sq: max_edge * max_edge };
+        let min_edge = sizes.shortest.min(max_edge);
+        let region = Region {
+            sites,
+            radius,
+            radius_sq: radius * radius,
+            max_edge_sq: max_edge * max_edge,
+            min_edge_sq: if min_edge > 0.0 { min_edge * min_edge } else { 0.0 },
+        };
 
+        // 0. Every edge under the brush too short to keep.
+        let short = if region.min_edge_sq > 0.0 { self.short_edges(&region) } else { Vec::new() };
         // 1. Every triangle the footprint touches that is too coarse, and
-        // their edges. Nearly every call finds none and ends here.
-        let wanted = self.triangles_to_split(&region);
-        if wanted.is_empty() {
+        // their edges. Nearly every call finds none of either and ends here.
+        let split = sizes.split && self.live_triangle_count() + 2 <= triangle_limit;
+        stats.hit_limit = sizes.split && !split;
+        let wanted = if split { self.triangles_to_split(&region) } else { Vec::new() };
+        if short.is_empty() && wanted.is_empty() {
             return stats;
         }
         self.begin_refine();
+        if !short.is_empty() {
+            (stats.merges, stats.hit_budget) = self.merge_short_edges(&region, short, budget);
+            if stats.hit_budget {
+                return self.finish_refine(&region, stats);
+            }
+        }
+        let split_budget = budget - stats.merges;
         for &t in &wanted {
             if self.gather_edges(&region, t, false) {
                 self.queue_triangle_for_flip(t);
@@ -481,7 +587,7 @@ impl Mesh {
                     stats.hit_budget = true;
                     break;
                 }
-                if self.triangle_count() + 4 > triangle_limit {
+                if self.live_triangle_count() + 4 > triangle_limit {
                     stats.hit_limit = true;
                     break;
                 }
@@ -502,12 +608,17 @@ impl Mesh {
             stalled = stats.splits == before;
         }
         self.topo.edges.clear();
+        self.finish_refine(&region, stats)
+    }
 
+    /// The end of every refine that began: what the merges and splits made,
+    /// Delaunay again, and all of it handed on.
+    fn finish_refine(&mut self, region: &Region, mut stats: RefineStats) -> RefineStats {
         stats.vertices_added = self.positions.len() - self.topo.first_vertex as usize;
         if !self.topo.changed.is_empty() || stats.vertices_added > 0 {
             // 4. And what the splits made, Delaunay again.
-            stats.flips += self.flip_toward_delaunay(&region);
-            self.publish(&region);
+            stats.flips += self.flip_toward_delaunay(region);
+            self.publish(region);
         }
         stats
     }
@@ -523,6 +634,7 @@ impl Mesh {
         topo.flip_queued.clear();
         topo.changed.clear();
         topo.touched.clear();
+        topo.parked.clear();
         topo.generation = topo.generation.wrapping_add(1);
         if topo.generation == 0 {
             topo.slot_stamp.fill(0);
@@ -915,6 +1027,299 @@ impl Mesh {
         }
     }
 
+    // ---- merges ------------------------------------------------------------
+
+    /// Every edge of a showing triangle under the brush shorter than the
+    /// region's shortest, shortest first, each once. An edge frozen by the
+    /// mask at both ends is left out.
+    fn short_edges(&self, region: &Region) -> Vec<Edge> {
+        let mut leaves = Vec::new();
+        for &site in region.sites {
+            self.bvh.leaves_in_sphere(site, region.radius, &mut leaves);
+        }
+        leaves.sort_unstable();
+        leaves.dedup();
+        let mesh = self;
+        let edges = move |&leaf: &u32| {
+            let leaf = &mesh.bvh.leaves[leaf as usize];
+            (leaf.tri_start..leaf.tri_end).flat_map(move |t| mesh.short_edges_of(region, t)).flatten()
+        };
+        let under: usize = leaves.iter().map(|&l| self.bvh.leaves[l as usize].tri_count()).sum();
+        let mut edges: Vec<Edge> = if under < PARALLEL_SCAN {
+            leaves.iter().flat_map(edges).collect()
+        } else {
+            leaves.par_iter().with_min_len(8).flat_map_iter(edges).collect()
+        };
+        self.merge_order(region, &mut edges);
+        edges
+    }
+
+    /// Puts short edges in the order they are merged, each once: shortest
+    /// first by steps of the merge size, and within a step from the object's
+    /// middle outward, then by number. Sorted on the exact length, the last
+    /// digits decided between an edge and its mirror twin, and the two sides
+    /// of a mirrored stroke merged in different orders; the steps and the
+    /// distance from the middle are the same for both.
+    fn merge_order(&self, region: &Region, edges: &mut Vec<Edge>) {
+        edges.sort_unstable_by_key(|e| edge_key(e.a, e.b));
+        edges.dedup_by_key(|e| edge_key(e.a, e.b));
+        let key = |e: &Edge| {
+            let step = (e.length_sq / region.min_edge_sq * MERGE_ORDER_STEPS) as u32;
+            let middle = (self.positions[e.a as usize] + self.positions[e.b as usize]).length_squared();
+            (step, middle, edge_key(e.a, e.b))
+        };
+        edges.sort_unstable_by(|x, y| {
+            let ((sx, mx, kx), (sy, my, ky)) = (key(x), key(y));
+            sx.cmp(&sy).then(mx.total_cmp(&my)).then(kx.cmp(&ky))
+        });
+    }
+
+    /// The edges of triangle `t` a merge under the brush wants.
+    fn short_edges_of(&self, region: &Region, t: u32) -> [Option<Edge>; 3] {
+        let [ia, ib, ic] = self.corners(t);
+        if self.hidden.hides(t) || ia == ib || ib == ic || ia == ic {
+            return [None; 3];
+        }
+        [(ia, ib), (ib, ic), (ic, ia)].map(|(a, b)| self.short_edge(region, a, b))
+    }
+
+    /// The short edges round vertex `v`, for the next pass of merges.
+    fn short_edges_round(&self, region: &Region, v: u32, out: &mut Vec<Edge>) {
+        out.extend(self.vv.row(v as usize).iter().filter_map(|&w| self.short_edge(region, v, w)));
+    }
+
+    /// Edge a-b, if a merge under the brush wants it: shorter than the
+    /// region's shortest, under the brush, not frozen by the mask, and on
+    /// surface the stroke under way has not yet moved.
+    ///
+    /// That last is what keeps a stroke's own shape steady. Clay, Standard
+    /// and the other brushes that build from the surface as the stroke found
+    /// it measure from each vertex's place and its triangles' then; a merge
+    /// in ground the stroke has already shaped changes that reference under
+    /// its feet, and differently in each copy of a mirrored or radial stroke
+    /// (one vertex came out 3.9% of a Clay stroke off its five partners,
+    /// against 0.7% with no merges). The merges run just ahead of each dab,
+    /// so the ground a stroke reaches is merged before it is moved; what the
+    /// stroke itself made short waits for the next stroke.
+    fn short_edge(&self, region: &Region, a: u32, b: u32) -> Option<Edge> {
+        let moved = |v: u32| self.in_stroke && self.stamp[v as usize] == self.stroke_id;
+        let (pa, pb) = (self.positions[a as usize], self.positions[b as usize]);
+        let length_sq = pa.distance_squared(pb);
+        let wanted = length_sq < region.min_edge_sq
+            && !self.frozen(a, b)
+            && !moved(a)
+            && !moved(b)
+            && region.touches_segment(pa, pb);
+        wanted.then_some(Edge { a, b, length_sq })
+    }
+
+    /// Merges `edges` (shortest first) and, pass after pass, the short edges
+    /// that each merge leaves round the vertex that stayed, until none is
+    /// left or `budget` merges have been made. Returns how many were, and
+    /// whether the budget is what stopped them.
+    fn merge_short_edges(&mut self, region: &Region, mut edges: Vec<Edge>, budget: usize) -> (usize, bool) {
+        let mut merges = 0;
+        for _ in 0..MAX_PASSES {
+            if edges.is_empty() {
+                break;
+            }
+            let mut next = Vec::new();
+            for &edge in &edges {
+                if merges >= budget {
+                    return (merges, true);
+                }
+                // An earlier merge can have taken it, or made it longer.
+                if !self.vv.contains(edge.a as usize, edge.b) {
+                    continue;
+                }
+                let (pa, pb) = (self.positions[edge.a as usize], self.positions[edge.b as usize]);
+                if pa.distance_squared(pb) >= region.min_edge_sq {
+                    continue;
+                }
+                if let Some(kept) = self.try_merge(region, edge.a, edge.b) {
+                    merges += 1;
+                    self.short_edges_round(region, kept, &mut next);
+                }
+            }
+            self.merge_order(region, &mut next);
+            edges = next;
+        }
+        (merges, false)
+    }
+
+    /// Merges edge a-b if one end can be folded onto the other without harm
+    /// (see [`Self::merge_cost`]), folding away whichever leaves the shorter
+    /// longest edge. Returns the vertex that stays. Only an edge inside the
+    /// surface, with a triangle on each side: a border keeps its vertices.
+    fn try_merge(&mut self, region: &Region, a: u32, b: u32) -> Option<u32> {
+        let (mut t1, mut t2) = match self.edge_triangles(a, b)? {
+            (first, Some(second)) => (first, second),
+            (_, None) => return None,
+        };
+        if !self.runs(t1, a, b) {
+            std::mem::swap(&mut t1, &mut t2);
+        }
+        if !self.runs(t1, a, b) || !self.runs(t2, b, a) {
+            return None;
+        }
+        let (c, d) = (self.third_corner(t1, a, b)?, self.third_corner(t2, b, a)?);
+        if c == d {
+            return None;
+        }
+        // Where the mask is much stronger at one end, that end stays, and
+        // with it the edge of the mask.
+        let may_fold = |keep: u32, gone: u32| self.mask[gone as usize] <= self.mask[keep as usize] + 0.5;
+        let folds = [(a, b), (b, a)]
+            .map(|(keep, gone)| if may_fold(keep, gone) { self.merge_cost(region, keep, gone, [c, d]) } else { None });
+        // Nearly the same either way, the end further from the object's
+        // middle stays: a choice its mirror image and its radial repeats make
+        // alike, where the last digits of two lengths would not, and one
+        // that keeps the outermost point of a curve.
+        let outer = |v: u32| self.positions[v as usize].length_squared();
+        let (keep, gone) = match folds {
+            [Some(x), Some(y)] if (x - y).abs() <= MERGE_TIE * x.max(y) => {
+                if outer(b) > outer(a) { (b, a) } else { (a, b) }
+            }
+            [Some(x), Some(y)] if y < x => (b, a),
+            [Some(_), _] => (a, b),
+            [None, Some(_)] => (b, a),
+            [None, None] => return None,
+        };
+        self.merge(keep, gone, [t1, t2], [c, d]);
+        Some(keep)
+    }
+
+    /// The longest edge (squared) folding `gone` onto `keep` would leave
+    /// round `keep`, or `None` if the fold would harm the surface:
+    ///
+    ///   - `gone` frozen by the mask, on a hidden face, or on a border (of
+    ///     the mesh, or between two face groups): it stays, and so does the
+    ///     border's shape.
+    ///   - The link condition: the two ends share no neighbour but the
+    ///     vertices across their edge, `across`. A third would be a ring of
+    ///     three edges with no triangle in it, a neck, which the fold would
+    ///     pinch into two triangles back to back.
+    ///   - Every vertex keeps at least three triangles.
+    ///   - No triangle turns over, or further than [`MERGE_MOST_TURN`], or
+    ///     flattens to nothing.
+    ///   - No edge longer than the detail size: a merge that made one, the
+    ///     next split would undo.
+    fn merge_cost(&self, region: &Region, keep: u32, gone: u32, across: [u32; 2]) -> Option<f32> {
+        let fan = self.vt.row(gone as usize);
+        if self.mask[gone as usize] >= FROZEN_MASK || fan.iter().any(|&t| self.hidden.hides(t)) || self.on_border(gone) {
+            return None;
+        }
+        let ring = self.vv.row(gone as usize);
+        let common = ring.iter().filter(|&&w| w != keep && self.vv.contains(keep as usize, w)).count();
+        if common != 2 {
+            return None;
+        }
+        if across.iter().any(|&w| self.vt.row(w as usize).len() <= MERGE_FEWEST_TRIANGLES) {
+            return None;
+        }
+        if self.vt.row(keep as usize).len() + fan.len() < MERGE_FEWEST_TRIANGLES + 4 {
+            return None;
+        }
+        let at = self.positions[keep as usize];
+        for &t in fan {
+            let corners = self.corners(t);
+            if corners.contains(&keep) {
+                continue;
+            }
+            let was = corners.map(|w| self.positions[w as usize]);
+            let now = corners.map(|w| if w == gone { at } else { self.positions[w as usize] });
+            let (before, after) = ((was[1] - was[0]).cross(was[2] - was[0]), (now[1] - now[0]).cross(now[2] - now[0]));
+            let (size_before, size_after) = (before.length(), after.length());
+            // A triangle with no area to begin with has no way to turn.
+            if size_before > 0.0 && !(before.dot(after) > MERGE_MOST_TURN * size_before * size_after) {
+                return None;
+            }
+        }
+        let longest = ring
+            .iter()
+            .filter(|&&w| w != keep)
+            .map(|&w| at.distance_squared(self.positions[w as usize]))
+            .fold(0.0, f32::max);
+        (longest <= region.max_edge_sq).then_some(longest)
+    }
+
+    /// Whether vertex `v` is on a border: an edge of it with a triangle on
+    /// one side only (or more than two), or two of its triangles in
+    /// different face groups. A vertex in no triangle counts as one.
+    fn on_border(&self, v: u32) -> bool {
+        let fan = self.vt.row(v as usize);
+        let Some(&first) = fan.first() else { return true };
+        if fan.iter().any(|&t| self.groups.border(first, t)) {
+            return true;
+        }
+        let shared = |w: u32| fan.iter().filter(|&&t| self.corners(t).contains(&w)).count();
+        self.vv.row(v as usize).iter().any(|&w| shared(w) != 2)
+    }
+
+    /// Folds `gone` onto `keep`, which stays where it is. The two triangles
+    /// on their edge, `edge`, become points (`across` holds the vertex
+    /// across the edge in each), and the rest of `gone`'s become `keep`'s.
+    /// `gone` is left in no triangle, with every value kept for it.
+    fn merge(&mut self, keep: u32, gone: u32, edge: [u32; 2], across: [u32; 2]) {
+        let mut fan = std::mem::take(&mut self.topo.fan);
+        fan.clear();
+        fan.extend(self.vt.row(gone as usize).iter().copied().filter(|t| !edge.contains(t)));
+        for t in edge {
+            self.set_triangle(t, [keep; 3]);
+        }
+        self.topo.dead += 2;
+        for &t in &fan {
+            let corners = self.corners(t).map(|w| if w == gone { keep } else { w });
+            self.set_triangle(t, corners);
+            self.vt.add(keep as usize, t);
+        }
+        for (t, w) in edge.into_iter().zip(across) {
+            self.vt.remove(keep as usize, t);
+            self.vt.remove(w as usize, t);
+        }
+        self.vt.clear(gone as usize);
+
+        let mut ring = std::mem::take(&mut self.topo.ring);
+        ring.clear();
+        ring.extend_from_slice(self.vv.row(gone as usize));
+        for &w in &ring {
+            if w == keep {
+                continue;
+            }
+            if across.contains(&w) {
+                self.vv.remove(w as usize, gone);
+            } else {
+                self.vv.replace(w as usize, gone, keep);
+                self.vv.add(keep as usize, w);
+            }
+            self.touch(w);
+        }
+        self.vv.remove(keep as usize, gone);
+        self.vv.clear(gone as usize);
+        self.touch(keep);
+        (self.topo.fan, self.topo.ring) = (fan, ring);
+        self.park(gone, keep);
+    }
+
+    /// Puts vertex `v`, which a merge has left in no triangle, where vertex
+    /// `on` is: on the surface, so that nothing that measures, frames or
+    /// centres the model by its points finds one standing off it. Inside a
+    /// stroke the move is the stroke's to undo, as any brush's is.
+    fn park(&mut self, v: u32, on: u32) {
+        let i = v as usize;
+        if self.in_stroke && self.stamp[i] != self.stroke_id {
+            self.stamp[i] = self.stroke_id;
+            self.orig_pos[i] = self.positions[i];
+            self.orig_nrm[i] = self.normals[i];
+            self.orig_mask[i] = self.mask[i];
+            self.touched.push(v);
+        }
+        self.positions[i] = self.positions[on as usize];
+        // In no triangle, it faces nowhere (`Mesh::vertex_normal`).
+        self.normals[i] = Vec3::ZERO;
+        self.topo.parked.push(v);
+    }
+
     // ---- flips -------------------------------------------------------------
 
     /// Flips every edge of what this refine created or rewrote that is not
@@ -1106,6 +1511,18 @@ impl Mesh {
                 self.bvh.link(leaf, owner);
             }
             self.bvh.enclose(leaf, around);
+            widened.push(leaf);
+        }
+        // A vertex merges parked has moved: its leaf holds it, and the
+        // renderer is sent where it went, as for any vertex that moves.
+        for k in 0..self.topo.parked.len() {
+            let v = self.topo.parked[k];
+            let leaf = self.bvh.vert_leaf[v as usize];
+            let mut around = Aabb::EMPTY;
+            self.reach_of(v, &mut around);
+            self.bvh.enclose(leaf, around);
+            self.dirty_pos.set(leaf as usize);
+            self.dirty_nrm.set(leaf as usize);
             widened.push(leaf);
         }
         for leaf in housed.clone() {
@@ -1418,6 +1835,8 @@ impl Mesh {
         self.recompute_all_normals();
 
         let topo = &mut self.topo;
+        // The points merges left, as many as there are now.
+        topo.dead = self.indices.par_chunks_exact(3).filter(|t| t[0] == t[1] && t[1] == t[2]).count();
         topo.version += 1;
         topo.resend = true;
         topo.unsent.clear();

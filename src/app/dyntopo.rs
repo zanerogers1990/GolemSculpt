@@ -20,6 +20,10 @@
 //!     on the ball.
 //!   - `undo`: the refining stroke is undone again, which has to give back
 //!     the stretched shape as it was.
+//!   - `coarse`: after the refining stroke, a second one along the same
+//!     line with a brush three times the size, barely raising anything: it
+//!     merges what the first one made back to its own coarser detail.
+//!     `coarse-add` is the same with Add Only, which leaves it.
 //!   - `live`: the refining stroke is fed to the app a few samples a frame,
 //!     as a hand would draw it, instead of all before the first frame. The
 //!     picture has to come out the same: this is the one variant in which
@@ -37,6 +41,7 @@ use super::Running;
 use crate::doc::Action;
 use crate::mesh::primitives::{self, Primitive};
 use crate::scene::MirrorCommand;
+use crate::sculpt::dyntopo::Method;
 use crate::sculpt::{Brush, PointerSample};
 
 /// Triangles of the ball the run starts from: few enough that each one can be
@@ -109,6 +114,15 @@ impl Running {
         self.dyntopo_demo_stroke(along);
         if what == "undo" {
             self.act(Action::Undo);
+        }
+        if what.starts_with("coarse") {
+            if what == "coarse-add" {
+                self.doc.sculptor.dyntopo.method = Method::Add;
+            }
+            self.dyntopo_demo_brush(Brush::Inflate, 0.9 * ball, 0.01);
+            self.dyntopo_demo_stroke(stroke_samples(from.lerp(to, -0.1), from.lerp(to, 0.93)));
+            let mesh = &self.doc.mesh;
+            println!("demo-dyntopo {what}: {} triangles in the surface, {} in the lists", mesh.live_triangle_count(), mesh.triangle_count());
         }
         self.dyntopo_demo_frame_shape();
     }

@@ -229,7 +229,9 @@ impl Running {
     pub(super) fn subdivide(&mut self) {
         let started = Instant::now();
         let split = if self.doc.opts.subdivide_flat { Split::Flat } else { Split::Smooth };
-        let (mesh, note) = match levels::subdivided(&self.doc.mesh, split) {
+        // Without what dynamic topology's merges left: levels number every vertex.
+        let tidy = crate::scene::tidied(&self.doc.mesh);
+        let (mesh, note) = match levels::subdivided(tidy.as_ref().unwrap_or(&self.doc.mesh), split) {
             Ok(made) => made,
             Err(why) => return self.status(why, false),
         };

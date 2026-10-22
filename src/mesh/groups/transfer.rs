@@ -210,8 +210,10 @@ pub(crate) fn nearest_points(points: &[Vec3], sources: &[&Source]) -> Vec<Neares
                     let reach =
                         last[k].map_or(f32::INFINITY, |t| source.nearest_on(t, q).distance_squared(q) * 1.001 + 1e-12);
                     let mesh = source.mesh;
-                    let Some((found, _)) =
-                        mesh.bvh.nearest_triangle(&mesh.positions, &mesh.indices, q, reach, |_| false)
+                    // Not a point dynamic topology's merges left: it has no group of its own.
+                    let points = mesh.has_tombstones();
+                    let point = |t: u32| points && mesh.indices[t as usize * 3..t as usize * 3 + 3].windows(2).all(|w| w[0] == w[1]);
+                    let Some((found, _)) = mesh.bvh.nearest_triangle(&mesh.positions, &mesh.indices, q, reach, point)
                     else {
                         continue;
                     };

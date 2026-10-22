@@ -66,6 +66,35 @@ density before the stroke, and speed past a million triangles.
 
 ### 1. Merge small triangles (collapse)
 
+**Built 2026-10-21** (see the README's Dynamic topology section and the
+module notes of `src/mesh/dyntopo.rs`). Where it differs from the plan below:
+
+- The vertex that stays does not move to the middle of the edge (Blender's
+  way); it stays where it is, as in Botsch & Kobbelt and pmp. The one folded
+  away is parked on it, with a zero normal, so that nothing that measures the
+  model or sums normals under a brush finds it.
+- Merges are made only on surface the stroke has not yet moved. Merging in
+  ground a stroke had already shaped changed the stroke-start surface Clay
+  and Standard build from, differently in each copy of a mirrored or radial
+  stroke (one vertex 3.9% of a Clay stroke off its partners, against 0.7%).
+  The merge pass runs just ahead of each dab, so a big brush still coarsens
+  everything it reaches.
+- A merge may turn a triangle 30 degrees at most (the plan said 60): at 60 a
+  big brush along a thin pulled shape left it a lumpy polygon end on.
+- Ties between the two ways of folding an edge, and the order merges are
+  made in, are decided by distance from the object's middle, which mirror
+  images and radial repeats share.
+- Hand-offs (Export OBJ, STL, PLY, FBX, Send to Blender, Decimate,
+  Subdivide, Check Symmetry) get a tidied copy (`scene::tidied`); Make
+  Symmetric, Symmetry Cleanup and Groups by Angle first replace the mesh
+  with one, as an undo step. Shown counts are of the live surface.
+- Still to do: reuse the places merges leave for the triangles splits make.
+  A fine pass then a coarse one left 17,698 triangles in the surface and
+  37,934 in the lists (`--brush-hash`); they are cleared on save and reopen
+  or any rebuild, never drawn or counted, but take memory meanwhile.
+
+What was planned:
+
 The one big thing missing. With it, detail follows the brush both ways: a big
 brush over a fine area makes it coarse again, the triangle count stays
 bounded, and the 4 million cap is rarely met.

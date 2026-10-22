@@ -85,7 +85,7 @@ fn subdivide(ui: &mut egui::Ui, mesh: &Mesh, flat: &mut bool, tips: bool, action
     match refusal {
         Some(why) => theme::hint(ui, &why),
         None => {
-            let (now, after) = (mesh.triangle_count(), levels::triangles_after(mesh));
+            let (now, after) = (mesh.live_triangle_count(), levels::triangles_after(mesh));
             let more = megabytes(subdivide_bytes(mesh, after));
             theme::hint(ui, &format!("{} to {} triangles: about {more} more memory.", fmt_count(now), fmt_count(after)));
         }

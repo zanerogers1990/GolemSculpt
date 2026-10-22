@@ -691,3 +691,34 @@ fn a_move_by_a_matrix_each_side_its_own_carries_each_sides_offsets_by_its_own() 
     }
     assert!(start.iter().any(|p| p.x < 0.0) && start.iter().any(|p| p.x > 0.0));
 }
+
+/// A copy of a mesh that dynamic topology's merges have left vertices in no
+/// triangle (as an export or Send to Blender makes one) keeps its layers,
+/// every vertex it keeps with its own offsets. It used to drop them all.
+#[test]
+fn a_copy_without_the_vertices_merges_left_keeps_the_layers() {
+    use crate::mesh::dyntopo::EdgeSizes;
+    let mut mesh = ball();
+    let (id, _) = mesh.add_layer(Some("Wrinkles".into()));
+    stroke(&mut mesh, bump(0.05, 0.3));
+    let top = [Vec3::Z * 0.5];
+    assert!(mesh.refine(&top, 0.25, 0.01, 1_000_000, usize::MAX).splits > 100);
+    let sizes = EdgeSizes { longest: 0.04, split: true, shortest: 0.016 };
+    assert!(mesh.retopologize(&top, 0.25, sizes, 1_000_000, usize::MAX).merges > 50);
+    assert!(mesh.has_tombstones());
+
+    let copy = crate::scene::tidied(&mesh).expect("the mesh has merges to tidy");
+    assert!(!copy.has_tombstones());
+    assert_eq!(copy.triangle_count(), mesh.live_triangle_count());
+    assert_eq!(copy.layer_rows(), mesh.layer_rows());
+    assert_eq!(offsets(&copy, id).len(), copy.vertex_count());
+    // Each vertex of the copy has the offset of the vertex it was: found by
+    // where it stands, which no two vertices in a triangle share.
+    let mine = offsets(&mesh, id);
+    let alive: Vec<usize> = (0..mesh.vertex_count()).filter(|&v| !mesh.neighbours(v as u32).is_empty()).collect();
+    let theirs = offsets(&copy, id);
+    for (v, p) in copy.positions.iter().enumerate() {
+        let was = alive.iter().copied().find(|&w| mesh.positions[w] == *p).expect("every vertex of the copy was one");
+        assert_eq!(theirs[v], mine[was], "vertex {v}");
+    }
+}

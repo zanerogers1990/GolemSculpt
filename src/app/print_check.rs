@@ -197,7 +197,10 @@ impl Running {
         let name = self.doc.scene.active().name.clone();
         let models: Vec<glam::Mat4> = self.export_places().into_iter().map(|(_, m)| m).collect();
         // A damaged point is written mended, and the line says so (as Save's does).
-        let (result, mended) = Self::split_mended(io::export_stl_placed(&self.doc.mesh, &models, path));
+        // Without the points and loose vertices dynamic topology's merges leave.
+        let tidy = crate::scene::tidied(&self.doc.mesh);
+        let (result, mended) =
+            Self::split_mended(io::export_stl_placed(tidy.as_ref().unwrap_or(&self.doc.mesh), &models, path));
         result?;
         let note = self.export_note();
         // The sentence about mended points ends itself; without one the line still needs its stop.
@@ -606,15 +609,20 @@ mod tests {
         }
     }
 
-    /// At the triangle limit a refine turns back before it touches anything,
-    /// so there is nothing to count the mesh for; one pair of triangles under
-    /// it there is. Each answer is checked against what a refine then does.
+    /// At the triangle limit a refine that only adds turns back before it
+    /// touches anything, so there is nothing to count the mesh for; one pair
+    /// of triangles under it there is. Each answer is checked against what a
+    /// refine then does. One that merges too can change the mesh at the
+    /// limit (merging is how it comes back down), so it is always counted.
     #[test]
     fn a_mesh_at_the_triangle_limit_is_not_counted_for_a_stroke_that_cannot_grow_it() {
         let mut mesh = ball();
         let triangles = mesh.triangle_count();
         let mut sculptor = Sculptor::default();
         (sculptor.settings.brush, sculptor.dyntopo.enabled) = (Brush::Clay, true);
+        sculptor.dyntopo.limit_triangles(triangles);
+        assert!(sculptor.may_refine(&mesh, false), "merges can change a mesh at the limit");
+        sculptor.dyntopo.method = crate::sculpt::dyntopo::Method::Add;
         for (limit, may) in [(triangles, false), (triangles + 1, false), (triangles + 2, true), (triangles + 4, true)] {
             sculptor.dyntopo.limit_triangles(limit);
             assert_eq!(sculptor.may_refine(&mesh, false), may, "limit {limit} on {triangles} triangles");

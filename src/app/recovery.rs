@@ -540,7 +540,7 @@ impl Running {
                 when: io::time_stamp(),
                 document: self.doc.path.clone(),
                 objects: objects.len(),
-                triangles: meshes.iter().map(|mesh| mesh.triangle_count()).sum(),
+                triangles: meshes.iter().map(|mesh| mesh.live_triangle_count()).sum(),
             }
         };
         self.recovery.store.wrote(&file, &about);
@@ -668,7 +668,7 @@ impl Running {
             }
             Step::Scene => match self.scene_for_file() {
                 Ok((meshes, objects, _)) => {
-                    let triangles: usize = meshes.iter().map(|mesh| mesh.triangle_count()).sum();
+                    let triangles: usize = meshes.iter().map(|mesh| mesh.live_triangle_count()).sum();
                     let print = recovery::fingerprint(&meshes, &objects);
                     let (objects, unsaved) = (objects.len(), self.unsaved());
                     println!("scene {print:016x} {objects} objects {triangles} triangles unsaved {unsaved}");
