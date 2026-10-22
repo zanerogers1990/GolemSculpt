@@ -297,3 +297,137 @@ fn undo_and_redo_of_merges_give_back_the_normals_to_the_bit() {
     let redone = bits(&mesh);
     assert!(differ(&redone, &after).is_empty(), "redo: {:?} differ", differ(&redone, &after));
 }
+
+// ---------------------------------------------------------------- taking places back
+
+/// Everything about a mesh undo answers for, to the bit, its face groups
+/// included.
+fn every_bit(mesh: &Mesh) -> (Vec<[u32; 3]>, Vec<[u32; 3]>, Vec<u32>, Vec<u32>, Vec<u16>) {
+    let v = |p: &Vec3| p.to_array().map(f32::to_bits);
+    (
+        mesh.positions.iter().map(v).collect(),
+        mesh.normals.iter().map(v).collect(),
+        mesh.mask.iter().map(|m| m.to_bits()).collect(),
+        mesh.indices.clone(),
+        mesh.group_ids().to_vec(),
+    )
+}
+
+/// Fine, then coarse over the same place, then fine again, each a stroke:
+/// the third takes back the places the second left.
+fn fine_coarse_fine(mesh: &mut Mesh, history: &mut History) -> [(usize, usize); 3] {
+    let centre = region_centre();
+    let mut counts = [(0, 0); 3];
+    for (k, coarse) in [false, true, false].into_iter().enumerate() {
+        mesh.begin_stroke();
+        let stats = if coarse { both_at(mesh, centre, MAX_EDGE * 4.0) } else { both_at(mesh, centre, MAX_EDGE) };
+        assert!(stats.merges + stats.splits > 100, "stroke {k} did little: {stats:?}");
+        push(mesh, centre, 0.002);
+        history.push_stroke(mesh.end_stroke(false).expect("the stroke changed the mesh"));
+        mesh.flush_normals();
+        counts[k] = (mesh.triangle_count(), mesh.vertex_count());
+    }
+    counts
+}
+
+#[test]
+fn a_fine_pass_after_a_coarse_one_takes_back_the_places_merges_left() {
+    let mut mesh = fixture();
+    let mut history = History::default();
+    let [fine, coarse, again] = fine_coarse_fine(&mut mesh, &mut history);
+    // The coarse pass left places behind; the fine one after it took them
+    // back instead of growing the lists by as much again.
+    assert_eq!(coarse, fine, "merges change no list's length");
+    let grown = (again.0 - coarse.0, again.1 - coarse.1);
+    let first = (fine.0 - fixture().triangle_count(), fine.1 - fixture().vertex_count());
+    assert!(grown.0 * 4 < first.0 && grown.1 * 4 < first.1, "the lists grew by {grown:?} against {first:?}");
+    assert!(!mesh.has_tombstones() || mesh.live_triangle_count() * 10 > mesh.triangle_count() * 9);
+    assert_eq!(mesh.live_triangle_count(), live(&mesh));
+    assert_eq!(mesh.live_triangle_count(), 2 * used(&mesh) - 4);
+    assert_closed_manifold(&mesh);
+    assert_sound(&mesh);
+    assert_none_turned(&mesh);
+}
+
+#[test]
+fn undo_and_redo_through_places_taken_back_are_exact() {
+    let mut mesh = fixture();
+    // Two face groups across the region, so the places taken back change group.
+    let centre = region_centre();
+    let ids: Vec<u16> = mesh
+        .indices
+        .chunks_exact(3)
+        .map(|c| 1 + u16::from(corners_of(&mesh, c).iter().map(|p| p.y).sum::<f32>() / 3.0 < centre.y))
+        .collect();
+    mesh.set_group_ids(ids);
+    let rest = mesh.positions.clone();
+    let mut history = History::default();
+    let mut states = vec![every_bit(&mesh)];
+    let centre_stroke = |mesh: &mut Mesh, history: &mut History, coarse: bool| {
+        mesh.begin_stroke();
+        if coarse { both_at(mesh, centre, MAX_EDGE * 4.0) } else { both_at(mesh, centre, MAX_EDGE) };
+        push(mesh, centre, 0.002);
+        history.push_stroke(mesh.end_stroke(false).expect("the stroke changed the mesh"));
+        mesh.flush_normals();
+    };
+    for coarse in [false, true, false, true, false] {
+        centre_stroke(&mut mesh, &mut history, coarse);
+        states.push(every_bit(&mesh));
+        assert_sound(&mesh);
+    }
+    // Reset Shape's resting places still come out, every one a number.
+    let resting = mesh.rest_shape(&rest).expect("the resting shape is this mesh's");
+    assert!(resting.iter().all(|p| p.is_finite()));
+    for back in (0..5).rev() {
+        assert_eq!(history.undo(&mut mesh), Some(false));
+        mesh.flush_normals();
+        assert!(every_bit(&mesh) == states[back], "undo to step {back} did not give it back to the bit");
+        assert_sound(&mesh);
+    }
+    for forward in 1..=5 {
+        assert_eq!(history.redo(&mut mesh), Some(false));
+        mesh.flush_normals();
+        assert!(every_bit(&mesh) == states[forward], "redo to step {forward} did not give it back to the bit");
+    }
+    assert_closed_manifold(&mesh);
+    assert_sound(&mesh);
+}
+
+/// With sculpt layers on the mesh, its vertices keep offsets that only a
+/// record of the layers' own carries, so no place is taken back: the lists
+/// grow as they did before, and the layers stay one entry per vertex.
+#[test]
+fn with_sculpt_layers_no_place_is_taken_back() {
+    let mut mesh = fixture();
+    let (layer, _) = mesh.add_layer(Some("Detail".into()));
+    let mut history = History::default();
+    let [fine, coarse, again] = fine_coarse_fine(&mut mesh, &mut history);
+    let first = (fine.0 - fixture().triangle_count(), fine.1 - fixture().vertex_count());
+    let grown = (again.0 - coarse.0, again.1 - coarse.1);
+    assert!(grown.0 * 2 > first.0 && grown.1 * 2 > first.1, "places were taken back: {grown:?} against {first:?}");
+    assert_eq!(mesh.layers.as_ref().and_then(|layers| layers.offsets(layer)).map(<[Vec3]>::len), Some(mesh.vertex_count()));
+    assert_closed_manifold(&mesh);
+    assert_sound(&mesh);
+}
+
+/// How the lists grow over a session of fine and coarse passes over one
+/// place, taking places back and not (a sculpt layer on the mesh stops it,
+/// and changes nothing else about the strokes):
+/// `cargo test --bin sculpt -- growth_over_a_session --ignored --nocapture`.
+#[test]
+#[ignore]
+fn growth_over_a_session() {
+    for taking_back in [false, true] {
+        let mut mesh = fixture();
+        if !taking_back {
+            let _ = mesh.add_layer(Some("stops taking back".into()));
+        }
+        let mut history = History::default();
+        let mut line = format!("taking back {taking_back:>5}:");
+        for round in 0..6 {
+            let [_, _, again] = fine_coarse_fine(&mut mesh, &mut history);
+            line += &format!("  {round}: {} live of {} ({} vertices)", mesh.live_triangle_count(), again.0, again.1);
+        }
+        println!("{line}");
+    }
+}

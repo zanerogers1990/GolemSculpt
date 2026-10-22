@@ -88,10 +88,15 @@ module notes of `src/mesh/dyntopo.rs`). Where it differs from the plan below:
   Subdivide, Check Symmetry) get a tidied copy (`scene::tidied`); Make
   Symmetric, Symmetry Cleanup and Groups by Angle first replace the mesh
   with one, as an undo step. Shown counts are of the live surface.
-- Still to do: reuse the places merges leave for the triangles splits make.
-  A fine pass then a coarse one left 17,698 triangles in the surface and
-  37,934 in the lists (`--brush-hash`); they are cleared on save and reopen
-  or any rebuild, never drawn or counted, but take memory meanwhile.
+- Splits take back the places merges left under the brush (built after
+  phase 1, the same evening): a vertex in no triangle and two triangles left
+  as points for each split, recorded in the stroke's undo with what the
+  vertex was (place, mask, what it was made from, for Reset Shape) and each
+  place's face group. Six fine-coarse-fine rounds: lists 28,430 triangles
+  without, 8,954 with, for a surface of about 8,900
+  (`growth_over_a_session` in `src/mesh/dyntopo/tests/merges.rs`). Not on
+  an object with sculpt layers, paint or hidden faces, whose vertices carry
+  more in records of their own.
 
 What was planned:
 

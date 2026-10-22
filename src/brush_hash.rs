@@ -353,7 +353,8 @@ fn refined_presets(run: &mut Run) {
 
 /// Dynamic topology both ways, on a coarse ball of its own: small brushes
 /// add detail, a big one over the same place merges it back, with the
-/// mirror and under radial symmetry.
+/// mirror and under radial symmetry, and a small one again takes back the
+/// places the merges left.
 fn merged(run: &mut Run) {
     let both = |mut sculptor: Sculptor| {
         (sculptor.dyntopo.enabled, sculptor.dyntopo.method) = (true, Method::Both);
@@ -366,6 +367,9 @@ fn merged(run: &mut Run) {
     let mut remove = both(holding(Brush::Flatten, 200.0, true));
     remove.dyntopo.method = Method::Remove;
     run.stroke("Flatten dyntopo remove mirror", &mut remove, Path::Along, 24, true);
+    // Fine again where the coarse strokes merged: the splits take back the
+    // places the merges left.
+    run.stroke("Clay dyntopo both fine again mirror", &mut both(holding(Brush::Clay, 40.0, true)), Path::Wave, 24, true);
 }
 
 /// `tris` is the size of the main ball (300,000 triangles unless told).

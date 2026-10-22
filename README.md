@@ -769,12 +769,19 @@ the app remembers how you left it.
   at 4 million triangles, and a line under the slider says when it has;
   merging goes on there, so Both or Remove brings the count back down.
 - What a merge took away stays behind in the mesh's lists, as triangles with
-  no area and points in no triangle, until the mesh is next built afresh:
-  saved and opened again, remeshed, decimated. They are never drawn, never
-  hit and never counted (the counts shown are of the surface). Export, Send
-  to Blender, Decimate, Subdivide and Check Symmetry work on a copy without
-  them; Make Symmetric, Symmetry Cleanup and Groups by Angle first build the
-  mesh again without them, as an undo step of its own.
+  no area and points in no triangle, and the next split near there takes
+  the places back, so the lists stop growing: six rounds of a fine pass, a
+  coarse one and a fine one again over the same place left a ball's lists
+  at the size its surface was at most (8,954 triangles), where before they
+  grew every round (to 28,430, for a surface of about 8,900). An object with
+  sculpt layers, paint or hidden faces is the exception: its places are not
+  taken back (each vertex carries more there, in records of their own), and
+  its lists grow as before. Whatever is left is cleared when the mesh is
+  next built afresh: saved and opened again, remeshed, decimated. It is
+  never drawn, never hit and never counted (the counts shown are of the
+  surface). Export, Send to Blender, Decimate, Subdivide and Check Symmetry
+  work on a copy without it; Make Symmetric, Symmetry Cleanup and Groups by
+  Angle first build the mesh again without it, as an undo step of its own.
 - A stroke that added or merged is one undo step like any other: undo puts
   the triangles back as they were and redo does the stroke again.
 - Masked surface is left alone, and a new vertex takes its mask from the two

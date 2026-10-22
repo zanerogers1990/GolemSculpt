@@ -28,7 +28,6 @@ impl Lists {
         Lists { span, packed: data.len() as u32, data }
     }
 
-    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.span.len()
     }

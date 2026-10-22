@@ -268,6 +268,29 @@ struct StrokeRecord {
     before: Vec<[u32; 3]>,
     /// The quads the stroke retired.
     polys: Option<Polys>,
+    /// The vertices from before the stroke that its splits took back (see
+    /// `take_vertex`), each with what it was until then.
+    reused: Vec<(u32, VertexKept)>,
+    /// The triangle places from before the stroke its splits took back, and
+    /// the face group each was in; none for a mesh without groups.
+    reused_groups: Vec<(u32, u16)>,
+}
+
+/// What undo keeps of a vertex a split took back from a merge: what it was,
+/// besides its triangles, which the stroke's rewritten places keep.
+#[derive(Clone, Copy, PartialEq)]
+struct VertexKept {
+    position: Vec3,
+    mask: f32,
+    /// The two vertices it was last made between, if it was made by a split.
+    parents: Option<[u32; 2]>,
+}
+
+/// A vertex a stroke's splits took back, as it was before and after.
+struct Reused {
+    vertex: u32,
+    before: VertexKept,
+    after: VertexKept,
 }
 
 /// What an undo step keeps of a stroke that grew the mesh, beside the
@@ -292,6 +315,11 @@ pub struct TopologyDelta {
     tail_before: LeafRuns,
     leaves_after: Vec<LeafRuns>,
     polys: Option<Polys>,
+    /// The vertices from before the stroke its splits took back.
+    reused: Vec<Reused>,
+    /// The places from before the stroke its splits took back: each one's
+    /// face group before and after.
+    reused_groups: Vec<(u32, u16, u16)>,
 }
 
 impl TopologyDelta {
@@ -308,6 +336,8 @@ impl TopologyDelta {
             + self.new_groups.len() * 2
             + self.leaves_after.len() * 16
             + self.polys.as_ref().map_or(0, |p| (p.start.len() + p.indices.len()) * 4)
+            + self.reused.len() * std::mem::size_of::<Reused>()
+            + self.reused_groups.len() * 8
     }
 }
 
@@ -353,18 +383,36 @@ pub(super) struct State {
     born_from: u32,
     parents: Vec<[u32; 2]>,
 
-    /// How many triangles merges have left as points (see the module remarks).
+    /// How many triangles merges have left as points, and how many vertices
+    /// in no triangle (see the module remarks).
     dead: usize,
+    orphans: usize,
     /// What one merge works with.
     fan: Vec<u32>,
     ring: Vec<u32>,
     /// The vertices this refine's merges folded away and parked.
     parked: Vec<u32>,
+
+    /// Places merges left near the brush that this refine's splits may take
+    /// (`free_places`): triangles left as points, and vertices in none. The
+    /// splits take from the end.
+    free_slots: Vec<u32>,
+    free_vertices: Vec<u32>,
+    /// The vertices this refine's splits took back, and whether the split
+    /// under way took its vertex back (its triangles may then go in places).
+    taken: Vec<u32>,
+    into_places: bool,
+    /// Where a vertex numbered before `born_from` was made from, when a
+    /// split took it back from a merge (for `rest_shape`): the vertices
+    /// from `born_from` on have theirs in `parents`.
+    reborn: std::collections::HashMap<u32, [u32; 2]>,
 }
 
 impl State {
     pub(super) fn bytes(&self) -> usize {
-        (self.slot_stamp.len() + self.vertex_stamp.len() + self.stroke_stamp.len()) * 4 + self.parents.len() * 8
+        (self.slot_stamp.len() + self.vertex_stamp.len() + self.stroke_stamp.len()) * 4
+            + self.parents.len() * 8
+            + self.reborn.len() * 12
     }
 
     /// The triangles to send to the renderer again, as runs, out of
@@ -412,7 +460,7 @@ impl Mesh {
     /// Whether merges have left points among the triangles, and vertices in
     /// none of them: a mesh to build again before it leaves the app.
     pub fn has_tombstones(&self) -> bool {
-        self.topo.dead > 0
+        self.topo.dead > 0 || self.topo.orphans > 0
     }
 
     /// The two vertices whose edge was split to make vertex `v`, or `None`
@@ -431,32 +479,55 @@ impl Mesh {
     /// between them). `None` if `base` is not this mesh's.
     pub fn rest_shape<'a>(&self, base: &'a [Vec3]) -> Option<Cow<'a, [Vec3]>> {
         let count = self.positions.len();
-        if base.len() == count {
+        let reborn = &self.topo.reborn;
+        if base.len() == count && reborn.is_empty() {
             return Some(Cow::Borrowed(base));
         }
         let born = if self.topo.parents.is_empty() { count } else { self.topo.born_from as usize };
         if base.len() != born || self.topo.parents.len() != count - born {
             return None;
         }
+        // Worked out from their parents: every vertex a split made, and every
+        // one from before that a split took back (`take_vertex`). The rest
+        // rest where `base` has them.
+        const TO_WORK_OUT: u8 = 0;
+        const WORKING: u8 = 1;
+        const KNOWN: u8 = 2;
         let mut rest = base.to_vec();
-        rest.resize(count, Vec3::ZERO);
-        let mut known = vec![false; count - born];
+        rest.extend_from_slice(&self.positions[born..]);
+        let mut state = vec![KNOWN; count];
+        state[born..].fill(TO_WORK_OUT);
+        for &v in reborn.keys().filter(|&&v| (v as usize) < born) {
+            state[v as usize] = TO_WORK_OUT;
+        }
         // A vertex can be numbered before the ones it was made from (a refine
-        // sorts what it added), so each is worked out when first asked for.
+        // sorts what it added, and a split takes back a vertex of any number),
+        // so each is worked out when first asked for.
         let mut waiting = Vec::new();
-        for v in born..count {
+        for v in 0..count {
+            if state[v] != TO_WORK_OUT {
+                continue;
+            }
             waiting.push(v);
             while let Some(&top) = waiting.last() {
-                if known[top - born] {
+                if state[top] == KNOWN {
                     waiting.pop();
                     continue;
                 }
-                let [a, b] = self.topo.parents[top - born].map(|p| p as usize);
-                match [a, b].into_iter().find(|&p| p >= born && !known[p - born]) {
+                let Some([a, b]) = self.parents_of(top as u32).map(|p| p.map(|p| p as usize)) else {
+                    state[top] = KNOWN;
+                    waiting.pop();
+                    continue;
+                };
+                state[top] = WORKING;
+                match [a, b].into_iter().find(|&p| state[p] == TO_WORK_OUT) {
                     Some(parent) => waiting.push(parent),
                     None => {
+                        // Both known; or one is still being worked out further
+                        // down, a loop (a vertex taken back and made from one
+                        // that was made from it), let be as it stands.
                         rest[top] = (rest[a] + rest[b]) * 0.5;
-                        known[top - born] = true;
+                        state[top] = KNOWN;
                         waiting.pop();
                     }
                 }
@@ -542,6 +613,10 @@ impl Mesh {
             }
         }
         let split_budget = budget - stats.merges;
+        // The places merges left near the brush, for the splits to take.
+        if !wanted.is_empty() {
+            self.free_places(&region);
+        }
         for &t in &wanted {
             if self.gather_edges(&region, t, false) {
                 self.queue_triangle_for_flip(t);
@@ -615,7 +690,8 @@ impl Mesh {
     /// Delaunay again, and all of it handed on.
     fn finish_refine(&mut self, region: &Region, mut stats: RefineStats) -> RefineStats {
         stats.vertices_added = self.positions.len() - self.topo.first_vertex as usize;
-        if !self.topo.changed.is_empty() || stats.vertices_added > 0 {
+        let grew = stats.vertices_added > 0 || self.triangle_count() > self.topo.first_triangle as usize;
+        if !self.topo.changed.is_empty() || grew || !self.topo.taken.is_empty() {
             // 4. And what the splits made, Delaunay again.
             stats.flips += self.flip_toward_delaunay(region);
             self.publish(region);
@@ -635,6 +711,9 @@ impl Mesh {
         topo.changed.clear();
         topo.touched.clear();
         topo.parked.clear();
+        topo.free_slots.clear();
+        topo.free_vertices.clear();
+        topo.taken.clear();
         topo.generation = topo.generation.wrapping_add(1);
         if topo.generation == 0 {
             topo.slot_stamp.fill(0);
@@ -841,13 +920,12 @@ impl Mesh {
         self.vv.replace(b as usize, a, m);
         self.vv.add(c as usize, m);
         self.vv.add(d as usize, m);
-        self.vv.push_row(&[a, c, b, d]);
 
         self.vt.replace(a as usize, t2, t4);
         self.vt.replace(b as usize, t1, t3);
         self.vt.add(c as usize, t3);
         self.vt.add(d as usize, t4);
-        self.vt.push_row(&[t1, t3, t2, t4]);
+        self.new_rows(m, &[a, c, b, d], &[t1, t3, t2, t4]);
 
         for v in [a, b, c, d, m] {
             self.touch(v);
@@ -877,11 +955,10 @@ impl Mesh {
         self.vv.replace(a as usize, b, m);
         self.vv.replace(b as usize, a, m);
         self.vv.add(c as usize, m);
-        self.vv.push_row(&[a, c, b]);
 
         self.vt.replace(b as usize, t1, t3);
         self.vt.add(c as usize, t3);
-        self.vt.push_row(&[t1, t3]);
+        self.new_rows(m, &[a, c, b], &[t1, t3]);
 
         for v in [a, b, c, m] {
             self.touch(v);
@@ -934,6 +1011,17 @@ impl Mesh {
             (position, normal, 0)
         };
 
+        // A vertex a merge left in no triangle, near here, if there is one
+        // to take (`free_places`): the mesh's lists stay the length they are.
+        let taken = self.topo.free_vertices.pop();
+        // Its triangles go in places merges left only with it: a vertex
+        // appended is housed in the spatial index with the triangles
+        // appended with it (`house_appended`), and needs some.
+        self.topo.into_places = taken.is_some();
+        if let Some(m) = taken {
+            self.take_vertex(m, [a, b], position, normal, mask, [start, start_normal], stamp);
+            return m;
+        }
         self.positions.push(position);
         self.normals.push(normal);
         self.mask.push(mask);
@@ -956,11 +1044,169 @@ impl Mesh {
         m
     }
 
-    /// Appends a triangle split from triangle `from`, whose face group it is in.
+    /// The neighbours and triangles of `m`, a vertex a split has just made:
+    /// lists of its own after the last, or, for one a split took back, the
+    /// empty lists it had.
+    fn new_rows(&mut self, m: u32, neighbours: &[u32], triangles: &[u32]) {
+        if m as usize == self.vv.len() {
+            self.vv.push_row(neighbours);
+            self.vt.push_row(triangles);
+            return;
+        }
+        for &w in neighbours {
+            self.vv.add(m as usize, w);
+        }
+        for &t in triangles {
+            self.vt.add(m as usize, t);
+        }
+    }
+
+    /// [`Self::add_split_vertex`] into vertex `m`, which a merge left in no
+    /// triangle: everything kept for it is made over as for a new vertex
+    /// between `parents`, and inside a stroke what it was goes in the
+    /// stroke's undo record first. (Only a mesh with no sculpt layers, no
+    /// paint and nothing hidden gives vertices back: those keep more per
+    /// vertex, in records of their own; see `free_places`.)
+    #[allow(clippy::too_many_arguments)]
+    fn take_vertex(
+        &mut self,
+        m: u32,
+        parents: [u32; 2],
+        position: Vec3,
+        normal: Vec3,
+        mask: f32,
+        [start, start_normal]: [Vec3; 2],
+        stamp: u32,
+    ) {
+        let i = m as usize;
+        if self.in_stroke {
+            let kept = self.vertex_kept(m);
+            self.open_stroke_record();
+            let record = self.topo.stroke.as_mut().expect("the stroke's record is open");
+            if m < record.vertices {
+                record.reused.push((m, kept));
+            }
+        }
+        let [ia, ib] = parents.map(|p| p as usize);
+        self.positions[i] = position;
+        self.normals[i] = normal;
+        self.mask[i] = mask;
+        self.orig_pos[i] = start;
+        self.orig_nrm[i] = start_normal;
+        self.orig_mask[i] = mask;
+        self.stamp[i] = stamp;
+        if self.curv_on {
+            self.curv[i] = 0.5 * (self.curv[ia] + self.curv[ib]);
+            self.curv_raw[i] = 0.5 * (self.curv_raw[ia] + self.curv_raw[ib]);
+        }
+        self.set_parents(m, Some(parents));
+        self.topo.orphans -= 1;
+        self.topo.taken.push(m);
+    }
+
+    /// Appends a triangle split from triangle `from`, whose face group it is
+    /// in; or puts it in a place a merge left, if there is one near to take.
     fn add_triangle(&mut self, corners: [u32; 3], from: u32) -> u32 {
+        if let Some(t) = self.topo.into_places.then(|| self.topo.free_slots.pop()).flatten() {
+            self.take_slot(t, corners, from);
+            return t;
+        }
         self.groups.born(from);
         self.indices.extend_from_slice(&corners);
         (self.indices.len() / 3 - 1) as u32
+    }
+
+    /// [`Self::add_triangle`] into place `t`, which a merge left as a point.
+    /// The rewrite goes in the undo record as any rewrite does; the face
+    /// group the place had goes in with it.
+    fn take_slot(&mut self, t: u32, corners: [u32; 3], from: u32) {
+        let group = self.groups.ids.get(from as usize).copied();
+        if let (Some(group), Some(&was)) = (group, self.groups.ids.get(t as usize)) {
+            if self.in_stroke {
+                self.open_stroke_record();
+                let record = self.topo.stroke.as_mut().expect("the stroke's record is open");
+                if t < record.triangles {
+                    record.reused_groups.push((t, was));
+                }
+            }
+            self.groups.ids[t as usize] = group;
+        }
+        self.set_triangle(t, corners);
+        self.topo.dead -= 1;
+    }
+
+    /// What undo keeps of vertex `v` beside its triangles.
+    fn vertex_kept(&self, v: u32) -> VertexKept {
+        VertexKept { position: self.positions[v as usize], mask: self.mask[v as usize], parents: self.parents_of(v) }
+    }
+
+    /// The two vertices vertex `v` was last made between by a split, if it was.
+    fn parents_of(&self, v: u32) -> Option<[u32; 2]> {
+        match v.checked_sub(self.topo.born_from).map(|k| k as usize) {
+            Some(k) if k < self.topo.parents.len() => Some(self.topo.parents[k]),
+            _ => self.topo.reborn.get(&v).copied(),
+        }
+    }
+
+    /// Records what vertex `v` was made between (or that it was not).
+    fn set_parents(&mut self, v: u32, parents: Option<[u32; 2]>) {
+        match (v.checked_sub(self.topo.born_from).map(|k| k as usize), parents) {
+            (Some(k), Some(parents)) if k < self.topo.parents.len() => self.topo.parents[k] = parents,
+            (_, Some(parents)) => {
+                self.topo.reborn.insert(v, parents);
+            }
+            (_, None) => {
+                self.topo.reborn.remove(&v);
+            }
+        }
+    }
+
+    /// Lays out the places merges left under the brush for this refine's
+    /// splits to take: triangles left as points that are not hidden, and
+    /// vertices in no triangle. None where something else is kept per vertex
+    /// that a record of its own would have to carry (sculpt layers, paint),
+    /// or where faces are hidden: a split takes triangle places only with a
+    /// vertex (`add_split_vertex`). Only places from before this stroke: one the stroke has
+    /// already rewritten or moved is in its undo record already, and taken
+    /// again it would be recorded twice over. Taken lowest first.
+    fn free_places(&mut self, region: &Region) {
+        self.topo.free_slots.clear();
+        self.topo.free_vertices.clear();
+        let kept_elsewhere = self.layers.is_some() || self.paint.is_some() || self.hidden.keeps_off();
+        if self.topo.dead == 0 || self.topo.orphans == 0 || kept_elsewhere {
+            return;
+        }
+        let mut leaves = Vec::new();
+        for &site in region.sites {
+            self.bvh.leaves_in_sphere(site, region.radius, &mut leaves);
+        }
+        leaves.sort_unstable();
+        leaves.dedup();
+        let topo = &self.topo;
+        let recorded = |t: u32| {
+            self.in_stroke && topo.stroke.is_some() && topo.stroke_stamp.get(t as usize) == Some(&topo.stroke_generation)
+        };
+        let (mut slots, mut vertices) = (Vec::new(), Vec::new());
+        for &leaf in &leaves {
+            let leaf = &self.bvh.leaves[leaf as usize];
+            for t in (leaf.tri_start..leaf.tri_end).filter(|&t| t < topo.first_triangle) {
+                let [a, b, c] = self.corners(t);
+                if a == b && b == c && !self.hidden.hides(t) && !recorded(t) {
+                    slots.push(t);
+                }
+            }
+            {
+                let moved = |v: u32| self.in_stroke && self.stamp[v as usize] == self.stroke_id;
+                for v in (leaf.vert_start..leaf.vert_end).filter(|&v| v < topo.first_vertex) {
+                    if self.vt.row(v as usize).is_empty() && !moved(v) {
+                        vertices.push(v);
+                    }
+                }
+            }
+        }
+        slots.reverse();
+        vertices.reverse();
+        (self.topo.free_slots, self.topo.free_vertices) = (slots, vertices);
     }
 
     fn set_triangle(&mut self, t: u32, corners: [u32; 3]) {
@@ -1015,6 +1261,8 @@ impl Mesh {
             slots: Vec::new(),
             before: Vec::new(),
             polys: None,
+            reused: Vec::new(),
+            reused_groups: Vec::new(),
         });
     }
 
@@ -1268,6 +1516,7 @@ impl Mesh {
             self.set_triangle(t, [keep; 3]);
         }
         self.topo.dead += 2;
+        self.topo.orphans += 1;
         for &t in &fan {
             let corners = self.corners(t).map(|w| if w == gone { keep } else { w });
             self.set_triangle(t, corners);
@@ -1513,16 +1762,17 @@ impl Mesh {
             self.bvh.enclose(leaf, around);
             widened.push(leaf);
         }
-        // A vertex merges parked has moved: its leaf holds it, and the
-        // renderer is sent where it went, as for any vertex that moves.
-        for k in 0..self.topo.parked.len() {
-            let v = self.topo.parked[k];
+        // A vertex merges parked, or a split took back, has moved: its leaf
+        // holds it, and the renderer is sent where it went and what it is.
+        for k in 0..self.topo.parked.len() + self.topo.taken.len() {
+            let v = if k < self.topo.parked.len() { self.topo.parked[k] } else { self.topo.taken[k - self.topo.parked.len()] };
             let leaf = self.bvh.vert_leaf[v as usize];
             let mut around = Aabb::EMPTY;
             self.reach_of(v, &mut around);
             self.bvh.enclose(leaf, around);
             self.dirty_pos.set(leaf as usize);
             self.dirty_nrm.set(leaf as usize);
+            self.dirty_mask.set(leaf as usize);
             widened.push(leaf);
         }
         for leaf in housed.clone() {
@@ -1764,6 +2014,16 @@ impl Mesh {
             tail_before: record.tail,
             leaves_after: self.bvh.leaves[record.leaves as usize - 1..].iter().map(Leaf::runs).collect(),
             polys: record.polys,
+            reused: record
+                .reused
+                .iter()
+                .map(|&(vertex, before)| Reused { vertex, before, after: self.vertex_kept(vertex) })
+                .collect(),
+            reused_groups: record
+                .reused_groups
+                .iter()
+                .map(|&(t, before)| (t, before, self.groups.ids.get(t as usize).copied().unwrap_or(before)))
+                .collect(),
         }))
     }
 
@@ -1800,8 +2060,21 @@ impl Mesh {
         }
         let added: &[u16] = if undo { &[] } else { &delta.new_groups };
         self.groups.resize(t0, added, self.indices.len() / 3);
+        for &(t, before, after) in &delta.reused_groups {
+            if let Some(id) = self.groups.ids.get_mut(t as usize) {
+                *id = if undo { before } else { after };
+            }
+        }
         for (&v, &p) in verts.iter().zip(positions) {
             self.positions[v as usize] = p;
+        }
+        // The vertices the stroke's splits took back, after the moves: a
+        // brush may have moved one after it was taken.
+        for reused in &delta.reused {
+            let kept = if undo { reused.before } else { reused.after };
+            self.positions[reused.vertex as usize] = kept.position;
+            self.mask[reused.vertex as usize] = kept.mask;
+            self.set_parents(reused.vertex, kept.parents);
         }
 
         // Everything kept per vertex follows the count. Normals are worked
@@ -1835,8 +2108,9 @@ impl Mesh {
         self.recompute_all_normals();
 
         let topo = &mut self.topo;
-        // The points merges left, as many as there are now.
+        // The points merges left, and the vertices in no triangle, as many as there are now.
         topo.dead = self.indices.par_chunks_exact(3).filter(|t| t[0] == t[1] && t[1] == t[2]).count();
+        topo.orphans = (0..count).into_par_iter().filter(|&v| self.vt.row(v).is_empty()).count();
         topo.version += 1;
         topo.resend = true;
         topo.unsent.clear();
