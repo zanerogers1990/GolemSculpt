@@ -224,6 +224,7 @@ impl Running {
         checks.push(("Redo moves it again, and still nothing moved", same(self) && again));
 
         self.act(Action::Remesh);
+        self.remesh_wait();
         println!("{}", self.ui.status.0);
         self.tools_frame();
         let rebuilt = self.ui.status.1 == crate::ui::theme::OK && self.ui.status.0.starts_with("Remeshed to ");

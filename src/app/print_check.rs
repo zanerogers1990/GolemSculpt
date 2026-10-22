@@ -236,7 +236,10 @@ impl Running {
         }
         match what {
             "export" => self.act(Action::ExportStl),
-            "remesh" => self.act(Action::Remesh),
+            "remesh" => {
+                self.act(Action::Remesh);
+                self.remesh_wait();
+            }
             "quads" => self.act(Action::QuadRemesh),
             "play" => self.print_play(),
             "damaged" => {}
@@ -307,6 +310,7 @@ impl Running {
 
         // A remesh closes it, and says that it did.
         self.act(Action::Remesh);
+        self.remesh_wait();
         println!("     {}", self.ui.status.0);
         say("a Remesh says the holes were closed over", self.says("had holes, which were closed over flat", true));
         say("and leaves a closed surface", printable::census(&self.doc.mesh).is_closed());

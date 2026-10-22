@@ -14,11 +14,16 @@
 //! `bvh/grow.rs`, which also lays the tree out again over the same leaves when
 //! growth makes it too deep). It is built from scratch only when a mesh is built.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use glam::Vec3;
 use rayon::prelude::*;
 
 use super::lists::Lists;
+use crate::util::SharedMut;
 
+#[cfg(test)]
+mod build_tests;
 mod grow;
 pub mod nearest;
 #[cfg(test)]
@@ -173,15 +178,44 @@ pub struct Built {
     pub tri_order: Vec<u32>,
 }
 
-enum Tmp {
-    Leaf { start: usize, end: usize },
-    Inner(Box<Tmp>, Box<Tmp>),
+/// How many leaves the tree over `n` triangles has, and the tree over
+/// `n + 1`. A tree's shape follows from its size alone, since every split is
+/// at the middle, so the place of every node and leaf is known before any of
+/// them is made.
+fn leaf_counts(n: usize) -> (usize, usize) {
+    if n < LEAF_MAX_TRIS {
+        (1, 1)
+    } else if n == LEAF_MAX_TRIS {
+        (1, 2)
+    } else {
+        let (a, b) = leaf_counts(n / 2);
+        if n % 2 == 0 { (2 * a, a + b) } else { (a + b, 2 * b) }
+    }
 }
 
-fn build_rec(ids: &mut [u32], base: usize, centroids: &[Vec3]) -> Tmp {
+/// Where a subtree goes: its node and its first leaf, numbered in the order
+/// a walk that takes the left side first meets them, and its parent.
+#[derive(Clone, Copy)]
+struct Place {
+    node: usize,
+    leaf: usize,
+    parent: u32,
+}
+
+/// The tree over `ids`, the triangles from `base` on, put in its places in
+/// `nodes` and `leaves`; `ids` is left in leaf order. Halves are built on
+/// threads of their own, each writing its own places.
+fn build_rec(ids: &mut [u32], base: usize, centroids: &[Vec3], at: Place, nodes: &SharedMut<Node>, leaves: &SharedMut<Leaf>) {
     let n = ids.len();
     if n <= LEAF_MAX_TRIS {
-        return Tmp::Leaf { start: base, end: base + n };
+        let node = Node { bounds: Aabb::EMPTY, a: at.leaf as u32 | LEAF_BIT, b: 0, parent: at.parent };
+        let leaf = Leaf { tri_start: base as u32, tri_end: (base + n) as u32, vert_start: 0, vert_end: 0, node: at.node as u32 };
+        // SAFETY: every node and every leaf has a place of its own.
+        unsafe {
+            nodes.write(at.node, node);
+            leaves.write(at.leaf, leaf);
+        }
+        return;
     }
     let mut b = Aabb::EMPTY;
     for &t in ids.iter() {
@@ -199,37 +233,77 @@ fn build_rec(ids: &mut [u32], base: usize, centroids: &[Vec3]) -> Tmp {
     ids.select_nth_unstable_by(mid, |&x, &y| {
         centroids[x as usize][axis].total_cmp(&centroids[y as usize][axis])
     });
+    let left_leaves = leaf_counts(mid).0;
+    let left = Place { node: at.node + 1, leaf: at.leaf, parent: at.node as u32 };
+    let right = Place { node: at.node + 2 * left_leaves, leaf: at.leaf + left_leaves, parent: at.node as u32 };
+    // SAFETY: as for a leaf.
+    unsafe { nodes.write(at.node, Node { bounds: Aabb::EMPTY, a: left.node as u32, b: right.node as u32, parent: at.parent }) };
     let (l, r) = ids.split_at_mut(mid);
-    let (lt, rt) = if n > 16_384 {
-        rayon::join(|| build_rec(l, base, centroids), || build_rec(r, base + mid, centroids))
+    if n > 16_384 {
+        rayon::join(
+            || build_rec(l, base, centroids, left, nodes, leaves),
+            || build_rec(r, base + mid, centroids, right, nodes, leaves),
+        );
     } else {
-        (build_rec(l, base, centroids), build_rec(r, base + mid, centroids))
-    };
-    Tmp::Inner(Box::new(lt), Box::new(rt))
+        build_rec(l, base, centroids, left, nodes, leaves);
+        build_rec(r, base + mid, centroids, right, nodes, leaves);
+    }
 }
 
-fn flatten(tmp: &Tmp, parent: u32, nodes: &mut Vec<Node>, leaves: &mut Vec<Leaf>) -> u32 {
-    let idx = nodes.len() as u32;
-    nodes.push(Node { bounds: Aabb::EMPTY, a: 0, b: 0, parent });
-    match tmp {
-        Tmp::Leaf { start, end } => {
-            nodes[idx as usize].a = leaves.len() as u32 | LEAF_BIT;
-            leaves.push(Leaf {
-                tri_start: *start as u32,
-                tri_end: *end as u32,
-                vert_start: 0,
-                vert_end: 0,
-                node: idx,
-            });
-        }
-        Tmp::Inner(l, r) => {
-            let a = flatten(l, idx, nodes, leaves);
-            let b = flatten(r, idx, nodes, leaves);
-            nodes[idx as usize].a = a;
-            nodes[idx as usize].b = b;
-        }
+/// Numbers the vertices by first use, triangles taken in the order of `ids`
+/// (leaf order), and gives each leaf the run of numbers its triangles handed
+/// out. Returns where each vertex went (`u32::MAX` for one no triangle
+/// uses), the triangles in leaf order with the new numbers, and the
+/// positions in the new order.
+///
+/// A walk in one order, shared between threads without changing a number:
+/// each vertex's first use is the lowest corner that names it, so that is
+/// found first; each leaf then counts the first uses among its corners, and
+/// the counts, added up in leaf order, say where each leaf's run begins.
+fn number_by_first_use(
+    positions: &[Vec3],
+    indices: &[u32],
+    ids: &[u32],
+    leaves: &mut [Leaf],
+) -> (Vec<u32>, Vec<u32>, Vec<Vec3>) {
+    let corner = |k: usize| indices[ids[k / 3] as usize * 3 + k % 3] as usize;
+    let corners = ids.len() * 3;
+    let first: Vec<AtomicU32> = (0..positions.len()).into_par_iter().map(|_| AtomicU32::new(u32::MAX)).collect();
+    (0..corners).into_par_iter().with_min_len(4096).for_each(|k| {
+        first[corner(k)].fetch_min(k as u32, Ordering::Relaxed);
+    });
+    let is_first = |k: usize| first[corner(k)].load(Ordering::Relaxed) == k as u32;
+    let corners_of = |leaf: &Leaf| leaf.tri_start as usize * 3..leaf.tri_end as usize * 3;
+
+    let counts: Vec<u32> = leaves.par_iter().map(|leaf| corners_of(leaf).filter(|&k| is_first(k)).count() as u32).collect();
+    let mut next = 0u32;
+    for (leaf, count) in leaves.iter_mut().zip(counts) {
+        leaf.vert_start = next;
+        next += count;
+        leaf.vert_end = next;
     }
-    idx
+
+    let mut vert_remap = vec![u32::MAX; positions.len()];
+    let mut old_of_new = vec![0u32; next as usize];
+    {
+        let (remap, olds) = (SharedMut::new(&mut vert_remap), SharedMut::new(&mut old_of_new));
+        leaves.par_iter().for_each(|leaf| {
+            let mut new = leaf.vert_start;
+            for k in corners_of(leaf).filter(|&k| is_first(k)) {
+                let old = corner(k);
+                // SAFETY: only a vertex's first use writes its number, and
+                // each leaf hands out numbers from its own run.
+                unsafe {
+                    remap.write(old, new);
+                    olds.write(new as usize, old as u32);
+                }
+                new += 1;
+            }
+        });
+    }
+    let new_indices: Vec<u32> = (0..corners).into_par_iter().with_min_len(4096).map(|k| vert_remap[corner(k)]).collect();
+    let new_positions: Vec<Vec3> = old_of_new.par_iter().map(|&old| positions[old as usize]).collect();
+    (vert_remap, new_indices, new_positions)
 }
 
 impl Bvh {
@@ -245,56 +319,35 @@ impl Bvh {
             .collect();
         let mut ids: Vec<u32> = (0..tri_count as u32).collect();
 
-        let mut nodes = Vec::new();
-        let mut leaves = Vec::new();
+        let leaf_count = if tri_count > 0 { leaf_counts(tri_count).0 } else { 0 };
+        let blank = Node { bounds: Aabb::EMPTY, a: 0, b: 0, parent: NO_PARENT };
+        let mut nodes = vec![blank; (2 * leaf_count).saturating_sub(1)];
+        let mut leaves = vec![Leaf { tri_start: 0, tri_end: 0, vert_start: 0, vert_end: 0, node: 0 }; leaf_count];
         if tri_count > 0 {
-            let tmp = build_rec(&mut ids, 0, &centroids);
-            flatten(&tmp, NO_PARENT, &mut nodes, &mut leaves);
+            let top = Place { node: 0, leaf: 0, parent: NO_PARENT };
+            build_rec(&mut ids, 0, &centroids, top, &SharedMut::new(&mut nodes), &SharedMut::new(&mut leaves));
         }
 
         // Triangles in leaf order; vertices numbered by first use, which makes
         // each leaf's owned vertices one contiguous run.
-        let mut vert_remap = vec![u32::MAX; positions.len()];
-        let mut new_indices = Vec::with_capacity(indices.len());
-        let mut next = 0u32;
-        for leaf in &mut leaves {
-            leaf.vert_start = next;
-            for &t in &ids[leaf.tri_start as usize..leaf.tri_end as usize] {
-                for c in 0..3 {
-                    let old = indices[t as usize * 3 + c] as usize;
-                    if vert_remap[old] == u32::MAX {
-                        vert_remap[old] = next;
-                        next += 1;
-                    }
-                    new_indices.push(vert_remap[old]);
-                }
-            }
-            leaf.vert_end = next;
-        }
-        let mut new_positions = vec![Vec3::ZERO; next as usize];
-        for (old, &new) in vert_remap.iter().enumerate() {
-            if new != u32::MAX {
-                new_positions[new as usize] = positions[old];
-            }
-        }
+        let (vert_remap, new_indices, new_positions) = number_by_first_use(positions, indices, &ids, &mut leaves);
+        let vert_leaf: Vec<u32> = leaves
+            .par_iter()
+            .enumerate()
+            .flat_map_iter(|(li, leaf)| std::iter::repeat_n(li as u32, (leaf.vert_end - leaf.vert_start) as usize))
+            .collect();
 
-        let mut vert_leaf = vec![0u32; next as usize];
-        for (li, leaf) in leaves.iter().enumerate() {
-            vert_leaf[leaf.vert_start as usize..leaf.vert_end as usize].fill(li as u32);
-        }
-
-        // Symmetric leaf adjacency through shared vertices.
-        let mut pairs: Vec<(u32, u32)> = Vec::new();
-        for (li, leaf) in leaves.iter().enumerate() {
-            let li = li as u32;
-            for &v in &new_indices[leaf.tri_start as usize * 3..leaf.tri_end as usize * 3] {
-                let owner = vert_leaf[v as usize];
-                if owner != li {
-                    pairs.push((li, owner));
-                    pairs.push((owner, li));
-                }
-            }
-        }
+        // Symmetric leaf adjacency through shared vertices: the leaves owning
+        // each leaf's corners, both ways round.
+        let owners = |(li, leaf): (usize, &Leaf)| {
+            let corners = &new_indices[leaf.tri_start as usize * 3..leaf.tri_end as usize * 3];
+            let mut owners: Vec<u32> =
+                corners.iter().map(|&v| vert_leaf[v as usize]).filter(|&owner| owner != li as u32).collect();
+            owners.sort_unstable();
+            owners.dedup();
+            owners.into_iter().flat_map(move |owner| [(li as u32, owner), (owner, li as u32)])
+        };
+        let mut pairs: Vec<(u32, u32)> = leaves.par_iter().enumerate().flat_map_iter(owners).collect();
         pairs.par_sort_unstable();
         pairs.dedup();
         let mut nbr_off = vec![0u32; leaves.len() + 1];

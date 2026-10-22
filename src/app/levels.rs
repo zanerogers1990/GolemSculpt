@@ -130,7 +130,8 @@ pub(super) fn rebuilders() -> [(&'static str, usize, fn(&mut Running)); 10] {
     [
         ("Remesh", 1, |app| {
             app.doc.opts.remesh_resolution = 48.0;
-            app.act(Action::Remesh)
+            app.act(Action::Remesh);
+            app.remesh_wait();
         }),
         ("Quad Remesh", 1, |app| {
             app.doc.opts.quad_target = 400.0;

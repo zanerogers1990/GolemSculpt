@@ -22,13 +22,12 @@ use crate::doc::{Action, Doc, MaskOp, Options, Stats, Tool};
 use crate::history::Next;
 use crate::mesh::Mesh;
 use crate::mesh::primitives::Primitive;
-use crate::printable::Cure;
 use crate::render::flash;
 use crate::render::{DrawItem, Globals, Gpu, Renderer};
 use crate::scene::{Object, Scene};
 use crate::sculpt::{Brush, PointerSample, Sculptor};
 use crate::ui::{self, Cursor, UiState, theme};
-use crate::{io, remesh};
+use crate::io;
 
 mod alpha;
 mod blender;
@@ -70,6 +69,7 @@ mod pen;
 mod pose;
 mod print_check;
 mod recovery;
+mod remesh_job;
 mod selection;
 mod spheres;
 mod still;
@@ -318,6 +318,8 @@ struct Running {
     print_watch: print_check::StrokeWatch,
     /// A Decimate at work in the background (see app/decimate.rs).
     decimate: decimate::State,
+    /// A Remesh at work in the background (see app/remesh_job.rs).
+    remesh: remesh_job::State,
     /// A screenshot the Claude bridge is waiting for.
     capture: Option<bridge::Capture>,
     transform: transform::State,
@@ -624,6 +626,7 @@ impl Running {
             stroke_ended: None,
             print_watch: Default::default(),
             decimate: Default::default(),
+            remesh: Default::default(),
             capture: None,
             transform: Default::default(),
             flash: Default::default(),
@@ -683,6 +686,7 @@ impl Running {
         if let Some(resolution) = running.args.remesh {
             running.doc.opts.remesh_resolution = resolution as f32;
             running.act(Action::Remesh);
+            running.remesh_wait();
         }
         if let Some(quads) = running.args.quad_remesh {
             running.doc.opts.quad_target = quads as f32;
@@ -1441,26 +1445,8 @@ impl Running {
                     self.status(format!("\"{name}\" is now an independent object."), true);
                 }
             }
-            Action::Remesh => {
-                let t = Instant::now();
-                let res = self.doc.opts.remesh_resolution as u32;
-                // The whole model as it is, whatever the brush symmetry.
-                match remesh::voxel_remesh_noted(&self.doc.mesh, res, remesh::AS_IT_IS) {
-                    Ok((mesh, notes)) => {
-                        let tris = mesh.triangle_count();
-                        self.replace_mesh(mesh, true);
-                        self.toast("Remesh");
-                        let ms = t.elapsed().as_secs_f64() * 1000.0;
-                        // What it did about holes the model had, then whether the result is closed.
-                        let text = format!("Remeshed to {tris} triangles in {ms:.0} ms, both sides as they were.{}", notes.after_remesh());
-                        self.status_checked(text, Cure::OtherResolution);
-                    }
-                    Err(e) => {
-                        let name = self.doc.scene.active().name.clone();
-                        self.status(remesh::named(e, &name), false);
-                    }
-                }
-            }
+            // In the background (app/remesh_job.rs).
+            Action::Remesh => self.remesh_start(),
             Action::QuadRemesh => {
                 let target = self.doc.opts.quad_target as usize;
                 // A quad remesh keeps the holes a model has, and can leave new ones.
@@ -1995,8 +1981,9 @@ impl Running {
         // So does a deformer of the Deform card whose settings have changed (app/deform.rs).
         self.deform_frame();
 
-        // A Decimate that has finished in the background takes the model's place.
+        // A Decimate or a Remesh that has finished in the background takes the model's place.
         self.decimate_frame();
+        self.remesh_frame();
 
         // The hosted tools' frame: before the interface, which draws their overlay.
         self.tools_frame();

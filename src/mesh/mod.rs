@@ -23,6 +23,7 @@ mod guard_tests;
 pub use visibility::VisibilityDelta;
 
 use std::ops::Range;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use glam::{DVec3, Vec3};
 use rayon::prelude::*;
@@ -319,8 +320,12 @@ impl Mesh {
     /// came from: its place among the input's sound triangles (see [`sound`]).
     fn new_ordered(positions: Vec<Vec3>, indices: Vec<u32>, mask: Option<Vec<f32>>) -> (Mesh, Vec<u32>, Vec<u32>) {
         let n_in = positions.len() as u32;
-        let clean: Vec<u32> =
-            indices.chunks_exact(3).filter(|t| sound(t, n_in)).flatten().copied().collect();
+        // Nearly always every triangle is sound, and the list is kept as it is.
+        let clean: Vec<u32> = if indices.len() % 3 == 0 && indices.par_chunks_exact(3).all(|t| sound(t, n_in)) {
+            indices
+        } else {
+            indices.par_chunks_exact(3).filter(|t| sound(t, n_in)).flat_map_iter(|t| t.iter().copied()).collect()
+        };
 
         let built = Bvh::build(&positions, &clean);
         let n = built.positions.len();
@@ -410,19 +415,39 @@ impl Mesh {
 
     fn build_adjacency(&mut self) {
         let n = self.positions.len();
+        // How many corners name each vertex, and so where its triangles start.
+        let counts: Vec<AtomicU32> = (0..n).into_par_iter().map(|_| AtomicU32::new(0)).collect();
+        self.indices.par_iter().with_min_len(4096).for_each(|&v| {
+            counts[v as usize].fetch_add(1, Ordering::Relaxed);
+        });
         let mut off = vec![0u32; n + 1];
-        for &v in &self.indices {
-            off[v as usize + 1] += 1;
-        }
         for i in 0..n {
-            off[i + 1] += off[i];
+            off[i + 1] = off[i] + counts[i].load(Ordering::Relaxed);
         }
-        let mut cursor = off.clone();
+        // Each corner's triangle into its vertex's run, from every thread, and
+        // then each run in order: the lists filling them corner by corner
+        // gave, whose triangles came in ascending order.
         let mut fans = vec![0u32; self.indices.len()];
-        for (i, &v) in self.indices.iter().enumerate() {
-            let c = &mut cursor[v as usize];
-            fans[*c as usize] = (i / 3) as u32;
-            *c += 1;
+        {
+            let cursor = counts;
+            cursor.par_iter().zip(&off[..n]).for_each(|(c, &start)| c.store(start, Ordering::Relaxed));
+            let out = SharedMut::new(&mut fans);
+            self.indices.par_iter().enumerate().with_min_len(4096).for_each(|(i, &v)| {
+                let at = cursor[v as usize].fetch_add(1, Ordering::Relaxed);
+                // SAFETY: the cursor hands each place in a run out once.
+                unsafe { out.write(at as usize, (i / 3) as u32) };
+            });
+            let off = &off;
+            (0..n).into_par_iter().with_min_len(1024).for_each_init(Vec::new, |run, v| {
+                let places = off[v] as usize..off[v + 1] as usize;
+                run.clear();
+                // SAFETY: each vertex reads and writes its own run only.
+                run.extend(places.clone().map(|k| unsafe { out.read(k) }));
+                run.sort_unstable();
+                for (k, &t) in places.zip(run.iter()) {
+                    unsafe { out.write(k, t) };
+                }
+            });
         }
 
         let indices = &self.indices;

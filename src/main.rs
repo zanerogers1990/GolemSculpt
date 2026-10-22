@@ -6,6 +6,7 @@ mod backups;
 mod bench;
 mod bench_levels;
 mod bench_matched;
+mod bench_remesh;
 mod bench_render;
 mod brush_feel;
 mod brush_hash;
@@ -83,6 +84,8 @@ enum Errand {
     BenchMatched(Vec<usize>),
     /// `--bench-volume`: remesh and boolean costs, on the source the Unity engine benchmarks use.
     BenchVolume,
+    /// `--bench-remesh`, with resolutions: a Remesh taken apart stage by stage (see bench_remesh.rs).
+    BenchRemesh(Vec<usize>),
     /// `--bench-render`, with triangle counts: the viewport's drawing (see bench_render.rs).
     BenchRender(Vec<usize>),
     /// `--bench-render-ab <other exe> [rounds] [triangles...]`: that bench, this build against another.
@@ -134,6 +137,8 @@ fn errand(args: &[String]) -> Option<Errand> {
         Some(Errand::BenchLevels(numbers(rest)))
     } else if let Some(rest) = after("--bench-deform") {
         Some(Errand::BenchDeform(numbers(rest)))
+    } else if let Some(rest) = after("--bench-remesh") {
+        Some(Errand::BenchRemesh(numbers(rest)))
     } else {
         after("--bench-volume").map(|_| Errand::BenchVolume)
     }
@@ -168,6 +173,7 @@ fn main() {
         // 7 subdivisions (327k triangles) and 8 (1.3M) unless told otherwise.
         Some(Errand::BenchMatched(subdivisions)) => return bench_matched::run(&or(subdivisions, &[7, 8])),
         Some(Errand::BenchVolume) => return bench_matched::run_volume(),
+        Some(Errand::BenchRemesh(resolutions)) => return bench_remesh::run(&resolutions),
         Some(Errand::BenchRender(sizes)) => {
             return bench_render::run(&or(sizes, &[1_000_000, 5_000_000, 10_000_000]));
         }

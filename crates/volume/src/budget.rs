@@ -64,15 +64,15 @@ pub const MAX_TRIANGLES: usize = 80_000_000;
 /// comes out, which [`MAX_TRIANGLES`] bounds.
 ///
 /// A fixed figure rather than a share of the machine's memory, so that the
-/// same file behaves alike everywhere. At the 1024 the app's sliders stop
-/// at, everything the triangle limits allow on a model that fills its
+/// same file behaves alike everywhere. At 1024, where the app's boolean
+/// slider stops (the Remesh card's goes on to [`MAX_RESOLUTION`]), everything the triangle limits allow on a model that fills its
 /// lattice is within it: a union of eight solids at twice the triangle
 /// budget is reckoned at 3.6 GiB, nearly all of it crossings, and an
 /// ordinary model at a small fraction of that. What it stops is the lattice
 /// that fills with empty space, and the surface too large to read.
 ///
-/// At the kernel's own highest resolution (4096, four times where the
-/// app's sliders stop) a remesh at the triangle budget is 2.2 GiB. A union
+/// At the kernel's own highest resolution (4096, where the Remesh card's
+/// slider now stops) a remesh at the triangle budget is 2.2 GiB. A union
 /// of eight solids at twice that budget there is over the limit and
 /// refused; it was let through when the figure counted only what a scan
 /// keeps, and held half as much again as the limit while it ran.

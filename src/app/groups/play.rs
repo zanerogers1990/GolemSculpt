@@ -149,6 +149,7 @@ impl Running {
         self.groups_parts();
         self.doc.opts.remesh_resolution = 224.0;
         self.act(Action::Remesh);
+        self.remesh_wait();
         let v = Vec3::new;
         self.groups_stroke(Brush::Clay, 0.6, 24.0, v(-0.12, 0.45, 0.2), v(0.12, 0.45, 0.2));
         self.groups_stroke(Brush::Clay, 0.5, 20.0, v(-0.08, 0.18, 0.2), v(0.08, 0.2, 0.2));

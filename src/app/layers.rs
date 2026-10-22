@@ -928,6 +928,7 @@ impl Running {
         // The shape a rebuild starts from is the shape with the layers in it.
         self.doc.opts.remesh_resolution = 96.0;
         self.act(Action::Remesh);
+        self.remesh_wait();
         let rebuilt = self.doc.mesh.bounds();
         say(
             "the mesh a rebuild makes has the layers' shape in it",
@@ -1090,6 +1091,7 @@ impl Running {
         // A rebuild of an object with both says both in one sentence.
         self.doc.opts.remesh_resolution = 48.0;
         self.act(Action::Remesh);
+        self.remesh_wait();
         self.levels_watch();
         println!("     {}", self.ui.status.0);
         say(

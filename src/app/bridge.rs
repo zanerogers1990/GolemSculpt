@@ -979,7 +979,7 @@ impl Running {
             }
             "remesh" => {
                 if let Some(resolution) = num(args, "resolution") {
-                    self.doc.opts.remesh_resolution = resolution.round().clamp(4.0, 1024.0);
+                    self.doc.opts.remesh_resolution = resolution.round().clamp(4.0, crate::remesh::HIGHEST);
                 }
                 Action::Remesh
             }
@@ -1015,7 +1015,11 @@ impl Running {
                 return own.unwrap_or_else(|| Err(format!("There is no command \"{name}\".")));
             }
         };
-        self.reported(|app| app.act(action))
+        self.reported(|app| {
+            app.act(action);
+            // The reply is about the remesh done, not one begun.
+            app.remesh_wait();
+        })
     }
 
     fn add_shape(&mut self, args: &Value) -> Result<String, String> {

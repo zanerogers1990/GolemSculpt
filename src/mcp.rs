@@ -804,7 +804,7 @@ fn tools() -> Value {
                      mask_by_material where the material painted with is, mask_by_layer where the layer painted on \
                      has paint.",
                 ),
-                "resolution": number("For remesh: voxels along the longest side, 4 to 1024. Default: the app's setting."),
+                "resolution": number("For remesh: voxels along the longest side, 4 to 4096 (past about 3000 a compact model makes more than the 80 million triangles allowed). Default: the app's setting."),
                 "amount": number("For mask_recesses and mask_peaks: 0 to 1, how much of the surface is taken. 0 is only the sharpest creases or ridges, 1 anything that lies low or stands up at all. Default 0.7."),
                 "flat": boolean("For subdivide: true cuts each face into four and moves nothing; false rounds the model as it divides. Default: the app's setting."),
                 "level": number("For level: the level to go to, 1 for the coarsest."),

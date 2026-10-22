@@ -20,6 +20,7 @@ use super::theme::{self, ACCENT, ButtonStyle};
 use super::{UiState, tip};
 use crate::doc::{Action, Doc};
 use crate::mesh::primitives::Primitive;
+use crate::remesh::{HIGHEST, HIGHEST_BOOLEAN};
 use crate::scene::{Object, Scene};
 
 const ROW: f32 = 24.0;
@@ -609,7 +610,7 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
     // of a big block wants a far higher number than remeshing the block, and
     // moving the Remesh card's slider up there would make the next plain
     // remesh cost more than was asked for.
-    let resolution = st.bool_resolution.unwrap_or(doc.opts.remesh_resolution);
+    let resolution = st.bool_resolution.unwrap_or(doc.opts.remesh_resolution.min(HIGHEST_BOOLEAN));
     let after = if st.bool_delete { "deleted" } else { "hidden afterwards, not deleted: the eye in the list shows them again" };
     let tiles = [
         (Subtract, "bool_subtract", "Subtract", "Cuts the other selected objects out of the bright one."),
@@ -628,14 +629,14 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
         }
     });
     let mut log = resolution.log2();
-    let slider = theme::slider(ui, "Voxel Resolution (across the target)", &mut log, 4f32.log2()..=1024f32.log2(), |v| {
+    let slider = theme::slider(ui, "Voxel Resolution (across the target)", &mut log, 4f32.log2()..=HIGHEST_BOOLEAN.log2(), |v| {
         format!("{:.0}", v.exp2())
     });
     let help = "Voxel density the boolean is computed at, counted along the bright object's longest side: higher captures finer cutter detail but is slower.";
     if tip(slider, tips, help).changed() {
         st.bool_resolution = Some(log.exp2().round());
     }
-    super::rebuild_notes::boolean_estimate(ui, doc, st.bool_resolution.unwrap_or(doc.opts.remesh_resolution));
+    super::rebuild_notes::boolean_estimate(ui, doc, resolution);
     super::rebuild_notes::hint(ui, doc, super::rebuild_notes::Rebuild::Surface, true);
     let help = "Deletes the other selected objects instead of just hiding them (hidden ones can be shown again from the list). Undo (Z) brings them back either way.";
     // Unity's label is "Delete the other objects instead of hiding", which
@@ -650,7 +651,7 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
         // The Remesh card's own setting, so the two cannot disagree.
         let mut log = doc.opts.remesh_resolution.log2();
         let slider =
-            theme::slider(ui, "Remesh Resolution", &mut log, 4f32.log2()..=1024f32.log2(), |v| format!("{:.0}", v.exp2()));
+            theme::slider(ui, "Remesh Resolution", &mut log, 4f32.log2()..=HIGHEST.log2(), |v| format!("{:.0}", v.exp2()));
         let help = "Voxel density of the remesh after the join: higher is more detailed but slower. The same setting as Resolution in the Remesh card, on the Sculpt panel's Mesh tab.";
         if tip(slider, tips, help).changed() {
             doc.opts.remesh_resolution = log.exp2().round();

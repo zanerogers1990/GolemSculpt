@@ -813,7 +813,7 @@ impl Prefs {
     }
 
     pub fn remesh_resolution(&self) -> f32 {
-        fit(self.remesh_resolution, 4.0, 1024.0, crate::doc::Options::default().remesh_resolution).round()
+        fit(self.remesh_resolution, 4.0, crate::remesh::HIGHEST, crate::doc::Options::default().remesh_resolution).round()
     }
 
     pub fn quad_target(&self) -> f32 {

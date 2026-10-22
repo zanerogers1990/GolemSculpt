@@ -1079,6 +1079,38 @@ each triangle.
 Not here: groups are not sent to Blender (they are put back on the model
 when it returns).
 
+## Remesh
+
+**Remesh** (R), in the Remesh card on the Sculpt panel's Mesh tab, rebuilds
+the selected object as one closed surface of even triangles at the card's
+**Resolution**: how many cells fit along the model's longest side. It fuses
+parts that pass through each other and closes holes, and says when it did.
+
+- **Resolution goes from 4 to 4096.** It used to stop at 1024, which is
+  about 10 million triangles on a compact model. The line under the slider
+  says about how many triangles a number makes; past the limit of 80
+  million it says so, and what number would do. Measured on this machine
+  (a lumpy ball, 32 threads, the new sculpt mesh and the check for a closed
+  surface included): 1024 makes 9.6 million triangles in 0.7 s, 2048 makes
+  38 million in 3.2 s, and 3072 makes 80 million in 8 s. Building the
+  sculpt mesh was most of that time, and is now about a third quicker,
+  which also speeds up opening a big file.
+- **How it sculpts up there.** At 40 million triangles a small brush (40
+  pixels across) takes 3 to 6 ms a frame and a large one (150 pixels) 10 to
+  40 ms; a large Snake Hook slows to about 150 ms. Turning the view stays
+  under 10 ms a frame. A mesh takes about 78 bytes of memory a triangle (6
+  GB at 80 million), and again for each step undo can go back to.
+- **It works in the background**, as Decimate does: its progress and a
+  **Cancel** button show at the bottom of the view, and the view can be
+  turned meanwhile. Cancel leaves the model as it was. If the model is
+  changed before it finishes, the result is of a model that is no longer
+  there and is not used; the line says so. One at a time, and not while
+  another job is working.
+- **One undo step**, the old mesh kept whole. It never mirrors (see
+  Symmetry). Join's Remesh Resolution is the same setting. The booleans'
+  Voxel Resolution is a setting of its own and still stops at 1024, since a
+  boolean still runs in the window's own thread.
+
 ## Decimate
 
 **Decimate**, at the foot of the Remesh card, takes triangles off the selected
@@ -2594,7 +2626,8 @@ mirrored across, with Validate and Remove.
   size of the kept object has no resolution that works, and says so:
   "Uniting these objects would make too many triangles at any resolution."
   For an object far from its own mirror plane, or on the far side of it,
-  see Symmetry. At the sliders' highest setting (1024) a model that sits on
+  see Symmetry. At 1024 (where the booleans' slider stops, and the Remesh
+card's used to) a model that sits on
   its mirror planes is never refused for memory: everything the triangle
   limit allows there comes to under the 4 GB, and an ordinary model to a
   small part of it.

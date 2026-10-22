@@ -603,7 +603,8 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     theme::category(ui, "Remesh", Color32::from_rgb(115, 217, 128), &summary, true, |ui| {
         // Log slider: equal travel doubles the resolution.
         let mut log = doc.opts.remesh_resolution.log2();
-        if theme::slider(ui, "Resolution", &mut log, 4f32.log2()..=1024f32.log2(), |v| format!("{:.0}", v.exp2())).changed() {
+        let range = 4f32.log2()..=crate::remesh::HIGHEST.log2();
+        if theme::slider(ui, "Resolution", &mut log, range, |v| format!("{:.0}", v.exp2())).changed() {
             doc.opts.remesh_resolution = log.exp2().round();
         }
         rebuild_notes::remesh_estimate(ui, doc, doc.opts.remesh_resolution);

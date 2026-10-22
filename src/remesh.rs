@@ -31,7 +31,10 @@ use sculpt_volume::budget::{self, MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION}
 use sculpt_volume::remesh::{RemeshSettings, Remeshed, admits, budgeted_resolution, check_mirror_side, remesh_with};
 use sculpt_volume::remesh::surface_area;
 
+use glam::Vec3;
+
 use crate::mesh::Mesh;
+use crate::mesh::bvh::Aabb;
 
 const NO_VOLUME: &str = "Remesh found no solid volume. Is the model closed?";
 
@@ -138,14 +141,59 @@ impl Notes {
 /// decides one; only Cut & Mirror and Make Symmetric say they do that.
 pub const AS_IT_IS: [bool; 3] = [false; 3];
 
+/// Where the Remesh card's Resolution slider stops, and Join's Remesh
+/// Resolution, which is the same setting: the kernel's own ceiling. It used
+/// to be 1024, about 10 million triangles on a compact model. A remesh runs
+/// in the background (app/remesh_job.rs), and at 40 million triangles a
+/// brush the size of a thumb still sculpts at a few milliseconds a frame, so
+/// the triangle limit is the one ceiling left: past it the line under the
+/// slider says so, and what number would do.
+pub const HIGHEST: f32 = MAX_RESOLUTION as f32;
+
+/// Where the booleans' Voxel Resolution stops. A boolean still runs on the
+/// window's own thread, so it keeps the old ceiling, and does not follow the
+/// Remesh card's setting past it.
+pub const HIGHEST_BOOLEAN: f32 = 1024.0;
+
 pub fn voxel_remesh(mesh: &Mesh, resolution: u32, symmetry: [bool; 3]) -> Result<Mesh, String> {
     voxel_remesh_noted(mesh, resolution, symmetry).map(|(rebuilt, _)| rebuilt)
 }
 
 /// [`voxel_remesh`], with what it did about a model that was not closed.
 pub fn voxel_remesh_noted(mesh: &Mesh, resolution: u32, symmetry: [bool; 3]) -> Result<(Mesh, Notes), String> {
-    let bounds = mesh.bounds();
-    if mesh.triangle_count() == 0 || bounds.is_empty() {
+    rebuild(&mesh.positions, &mesh.indices, mesh.bounds(), resolution, symmetry)
+}
+
+/// What a remesh reads of a mesh, copied out of it, for a remesh done on a
+/// thread of its own while the mesh itself goes on being sculpted
+/// (app/remesh_job.rs). It comes out as the remesh of the mesh as it was.
+pub struct Copied {
+    positions: Vec<Vec3>,
+    indices: Vec<u32>,
+    bounds: Aabb,
+}
+
+impl Copied {
+    pub fn of(mesh: &Mesh) -> Copied {
+        Copied { positions: mesh.positions.clone(), indices: mesh.indices.clone(), bounds: mesh.bounds() }
+    }
+
+    /// [`voxel_remesh_noted`] of the mesh this was copied from.
+    pub fn remesh(&self, resolution: u32, symmetry: [bool; 3]) -> Result<(Mesh, Notes), String> {
+        rebuild(&self.positions, &self.indices, self.bounds, resolution, symmetry)
+    }
+}
+
+/// The remesh of the triangles `indices` over `positions`, whose bounds as
+/// the mesh keeps them are `bounds`.
+fn rebuild(
+    positions: &[Vec3],
+    indices: &[u32],
+    bounds: Aabb,
+    resolution: u32,
+    symmetry: [bool; 3],
+) -> Result<(Mesh, Notes), String> {
+    if indices.len() < 3 || bounds.is_empty() {
         return Err("Nothing to remesh.".into());
     }
     let longest = bounds.size().max_element();
@@ -160,14 +208,14 @@ pub fn voxel_remesh_noted(mesh: &Mesh, resolution: u32, symmetry: [bool; 3]) -> 
     // The kernel would lower the resolution to fit the budget. Here the
     // resolution is the user's own number, so say no instead, and say what
     // number would do: one the kernel will not then refuse for memory.
-    let area = surface_area(&mesh.positions, &mesh.indices);
+    let area = surface_area(positions, indices);
     let fits = budgeted_resolution(area, longest as f64, resolution, MAX_TRIANGLES).0;
     if fits < resolution {
         let at = |resolution: u32| RemeshSettings { resolution, ..settings };
-        let admitted = |lower: u32| admits(&mesh.positions, &mesh.indices, &at(lower)).is_ok();
+        let admitted = |lower: u32| admits(positions, indices, &at(lower)).is_ok();
         return Err(too_many(budget::highest_passing(fits, admitted)));
     }
-    let rebuilt = remesh_with(&mesh.positions, &mesh.indices, &settings).map_err(reworded)?;
+    let rebuilt = remesh_with(positions, indices, &settings).map_err(reworded)?;
     let notes = Notes::of(&rebuilt);
     // The remesher's own normals are left: they are the old surface's, not
     // the new one's (`the_remeshers_normals_are_not_the_meshes_own`).
