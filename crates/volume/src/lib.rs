@@ -35,6 +35,7 @@ pub mod qef;
 pub mod remesh;
 pub mod scan;
 pub mod sdf;
+pub mod smooth;
 pub mod topology;
 
 #[cfg(test)]

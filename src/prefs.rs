@@ -706,6 +706,9 @@ pub struct Prefs {
     pub library: crate::brush_files::Kept,
     /// Voxels along the longest side for a voxel remesh.
     pub remesh_resolution: f32,
+    /// The Remesh card's Smooth (from 2026-10-22; a file from before takes
+    /// the default, a light smoothing).
+    pub remesh_smooth: f32,
     /// Quads a quad remesh aims for.
     pub quad_target: f32,
     /// Triangles Decimate brings an object down to.
@@ -754,6 +757,7 @@ impl Default for Prefs {
             brush: BrushPrefs::default(),
             library: crate::brush_files::Kept::default(),
             remesh_resolution: opts.remesh_resolution,
+            remesh_smooth: opts.remesh_smooth,
             quad_target: opts.quad_target,
             decimate_target: opts.decimate_target,
             subdivide_flat: opts.subdivide_flat,
@@ -818,6 +822,10 @@ impl Prefs {
 
     pub fn remesh_resolution(&self) -> f32 {
         fit(self.remesh_resolution, 4.0, crate::remesh::HIGHEST, crate::doc::Options::default().remesh_resolution).round()
+    }
+
+    pub fn remesh_smooth(&self) -> f32 {
+        fit(self.remesh_smooth, 0.0, crate::remesh::MAX_SMOOTH, crate::remesh::DEFAULT_SMOOTH).round()
     }
 
     pub fn quad_target(&self) -> f32 {
@@ -1202,6 +1210,11 @@ mod tests {
         assert_eq!(prefs.dynamic_topology_detail(), dyntopo::DEFAULT_DETAIL);
         assert_eq!(prefs.interface_size(), 3.0);
         assert_eq!(prefs.remesh_resolution(), 4.0);
+        assert_eq!(prefs.remesh_smooth(), crate::remesh::DEFAULT_SMOOTH);
+        prefs.remesh_smooth = 25.0;
+        assert_eq!(prefs.remesh_smooth(), crate::remesh::MAX_SMOOTH);
+        prefs.remesh_smooth = f32::NAN;
+        assert_eq!(prefs.remesh_smooth(), crate::remesh::DEFAULT_SMOOTH);
         assert_eq!(prefs.starting_detail(), Prefs::default().starting_detail);
         let mut settings = Settings::default();
         prefs.brush.apply(&mut settings);

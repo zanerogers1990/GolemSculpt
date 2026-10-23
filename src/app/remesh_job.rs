@@ -73,19 +73,20 @@ impl Running {
         (self.doc.mesh.triangle_count() == 0).then(|| "Nothing to remesh.".into())
     }
 
-    /// Starts remeshing the selected object at the Remesh card's Resolution,
-    /// in the background, the whole model as it is, whatever the brush
-    /// symmetry.
+    /// Starts remeshing the selected object at the Remesh card's Resolution
+    /// and Smooth, in the background, the whole model as it is, whatever the
+    /// brush symmetry.
     pub(super) fn remesh_start(&mut self) {
         if let Some(why) = self.remesh_refusal() {
             return self.status(why, false);
         }
         let doc = &self.doc;
         let resolution = doc.opts.remesh_resolution as u32;
+        let smooth = doc.opts.remesh_smooth as u32;
         let copied = Copied::of(&doc.mesh);
         let job = doc.tools.jobs.spawn("Remesh", move |cx| {
             cx.progress("rebuilding the surface");
-            let (mesh, notes) = copied.remesh(resolution, remesh::AS_IT_IS)?;
+            let (mesh, notes) = copied.remesh(resolution, remesh::AS_IT_IS, smooth)?;
             drop(copied);
             if cx.cancelled() {
                 return Err(CANCELLED.into());

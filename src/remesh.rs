@@ -30,6 +30,7 @@
 use sculpt_volume::budget::{self, MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION};
 use sculpt_volume::remesh::{RemeshSettings, Remeshed, admits, budgeted_resolution, check_mirror_side, remesh_with};
 use sculpt_volume::remesh::surface_area;
+use sculpt_volume::smooth as smoothing;
 
 use glam::Vec3;
 
@@ -159,9 +160,15 @@ pub fn voxel_remesh(mesh: &Mesh, resolution: u32, symmetry: [bool; 3]) -> Result
     voxel_remesh_noted(mesh, resolution, symmetry).map(|(rebuilt, _)| rebuilt)
 }
 
+/// Where the Remesh card's Smooth stops, and where it starts out: light,
+/// enough to iron out the stair-steps a remesh leaves along a groove and the
+/// old facets a step up brings back (see [`smoothed`]).
+pub const MAX_SMOOTH: f32 = 10.0;
+pub const DEFAULT_SMOOTH: f32 = 2.0;
+
 /// [`voxel_remesh`], with what it did about a model that was not closed.
 pub fn voxel_remesh_noted(mesh: &Mesh, resolution: u32, symmetry: [bool; 3]) -> Result<(Mesh, Notes), String> {
-    rebuild(&mesh.positions, &mesh.indices, mesh.bounds(), resolution, symmetry)
+    rebuild(&mesh.positions, &mesh.indices, mesh.bounds(), resolution, symmetry, 0)
 }
 
 /// What a remesh reads of a mesh, copied out of it, for a remesh done on a
@@ -178,20 +185,23 @@ impl Copied {
         Copied { positions: mesh.positions.clone(), indices: mesh.indices.clone(), bounds: mesh.bounds() }
     }
 
-    /// [`voxel_remesh_noted`] of the mesh this was copied from.
-    pub fn remesh(&self, resolution: u32, symmetry: [bool; 3]) -> Result<(Mesh, Notes), String> {
-        rebuild(&self.positions, &self.indices, self.bounds, resolution, symmetry)
+    /// [`voxel_remesh_noted`] of the mesh this was copied from, smoothed
+    /// `smooth` times over: the Remesh card's Smooth, 0 for not at all (see
+    /// [`smoothed`]).
+    pub fn remesh(&self, resolution: u32, symmetry: [bool; 3], smooth: u32) -> Result<(Mesh, Notes), String> {
+        rebuild(&self.positions, &self.indices, self.bounds, resolution, symmetry, smooth)
     }
 }
 
 /// The remesh of the triangles `indices` over `positions`, whose bounds as
-/// the mesh keeps them are `bounds`.
+/// the mesh keeps them are `bounds`, smoothed `smooth` times over.
 fn rebuild(
     positions: &[Vec3],
     indices: &[u32],
     bounds: Aabb,
     resolution: u32,
     symmetry: [bool; 3],
+    smooth: u32,
 ) -> Result<(Mesh, Notes), String> {
     if indices.len() < 3 || bounds.is_empty() {
         return Err("Nothing to remesh.".into());
@@ -215,11 +225,53 @@ fn rebuild(
         let admitted = |lower: u32| admits(positions, indices, &at(lower)).is_ok();
         return Err(too_many(budget::highest_passing(fits, admitted)));
     }
-    let rebuilt = remesh_with(positions, indices, &settings).map_err(reworded)?;
+    let rebuilt = smoothed(positions, indices, area, longest, &settings, smooth).map_err(reworded)?;
     let notes = Notes::of(&rebuilt);
     // The remesher's own normals are left: they are the old surface's, not
-    // the new one's (`the_remeshers_normals_are_not_the_meshes_own`).
+    // the new one's (`the_remeshers_normals_are_not_the_meshes_own`), and
+    // after smoothing not even quite that.
     Ok((Mesh::new(rebuilt.mesh.positions, rebuilt.mesh.indices, None), notes))
+}
+
+/// [`remesh_with`], smoothed `smooth` times over (the Remesh card's Smooth).
+///
+/// A remesh copies the old surface exactly, its flat faces and the edges
+/// between them included. Stepped up to a finer resolution, the old
+/// triangles are bigger than the new cells and come back as ripples, and
+/// along a groove that runs across the lattice the rebuild adds stair-steps
+/// of its own. So, above zero: where the old triangles are bigger than the
+/// new cells, the old mesh is first refined into a smooth one a step or two
+/// finer, keeping its sharp edges; and the result is relaxed `smooth` times,
+/// which irons out wrinkles a cell or two across and leaves the size and the
+/// forms (see `sculpt_volume::smooth`, which has the measurements). Zero is
+/// the remesh as it always was.
+///
+/// A mirrored rebuild is never smoothed: it comes out exactly symmetric, and
+/// would come out of smoothing only nearly so. Remesh itself never mirrors
+/// ([`AS_IT_IS`]).
+fn smoothed(
+    positions: &[Vec3],
+    indices: &[u32],
+    area: f64,
+    longest: f32,
+    settings: &RemeshSettings,
+    smooth: u32,
+) -> Result<Remeshed, String> {
+    if smooth == 0 || settings.mirror.contains(&true) {
+        return remesh_with(positions, indices, settings);
+    }
+    let cell = longest / settings.resolution as f32;
+    let steps = smoothing::refine_steps(area, smoothing::live_triangles(indices), cell);
+    let mut refined: Option<(Vec<Vec3>, Vec<u32>)> = None;
+    for _ in 0..steps {
+        let (p, i) = refined.as_ref().map_or((positions, indices), |(p, i)| (p.as_slice(), i.as_slice()));
+        refined = Some(smoothing::refine(p, i));
+    }
+    let (p, i) = refined.as_ref().map_or((positions, indices), |(p, i)| (p.as_slice(), i.as_slice()));
+    let mut rebuilt = remesh_with(p, i, settings)?;
+    drop(refined);
+    smoothing::relax(&mut rebuilt.mesh.positions, &rebuilt.mesh.indices, smooth);
+    Ok(rebuilt)
 }
 
 /// The kernel's account of a failure, in the words this app has always used
@@ -240,6 +292,9 @@ fn reworded(error: String) -> String {
         error
     }
 }
+
+#[cfg(test)]
+mod smooth_tests;
 
 #[cfg(test)]
 mod tests {

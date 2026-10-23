@@ -9,6 +9,10 @@
 //!
 //! The model is a lumpy ball unless `SCULPT_BENCH_REMESH_FILE` names a file
 //! (`.sclp`, whose selected object is used, or anything Import reads).
+//! `SCULPT_BENCH_REMESH_FROM=512` remeshes it at 512 first, so that each line
+//! is a step up from there, and `SCULPT_BENCH_REMESH_SMOOTH=2` remeshes with
+//! the Remesh card's Smooth at 2: the kernel column is then the smoothing and
+//! the rebuild together, and Mesh::new is included in it.
 
 use std::time::Instant;
 
@@ -29,9 +33,23 @@ pub fn run(resolutions: &[usize]) {
         Ok(mesh) => mesh,
         Err(e) => return eprintln!("bench-remesh: {e}"),
     };
+    let setting = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<u32>().ok());
+    let mesh = match setting("SCULPT_BENCH_REMESH_FROM") {
+        Some(from) => match crate::remesh::voxel_remesh(&mesh, from, crate::remesh::AS_IT_IS) {
+            Ok(stepped) => stepped,
+            Err(e) => return eprintln!("bench-remesh: the first remesh, at {from}: {e}"),
+        },
+        None => mesh,
+    };
+    let smooth = setting("SCULPT_BENCH_REMESH_SMOOTH").unwrap_or(0);
+    println!("smooth: {smooth}");
     println!("source: {} triangles, {} vertices, {:.0} MB held", mesh.triangle_count(), mesh.vertex_count(), mb(mesh.memory_bytes()));
     println!("{:>6} {:>10} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}", "res", "triangles", "kernel", "Mesh::new", "census", "total", "held MB", "peak MB");
     for resolution in resolutions {
+        if smooth > 0 {
+            smoothed_line(&mesh, resolution, smooth);
+            continue;
+        }
         let settings = RemeshSettings { resolution, mirror: [false; 3], max_triangles: sculpt_volume::budget::MAX_TRIANGLES };
         let start = Instant::now();
         let rebuilt = match remesh_with(&mesh.positions, &mesh.indices, &settings) {
@@ -61,6 +79,28 @@ pub fn run(resolutions: &[usize]) {
             if closed { "" } else { "  (not closed)" },
         );
     }
+}
+
+/// One line of a remesh with Smooth, as the Remesh button runs it.
+fn smoothed_line(mesh: &Mesh, resolution: u32, smooth: u32) {
+    let start = Instant::now();
+    let built = match crate::remesh::Copied::of(mesh).remesh(resolution, crate::remesh::AS_IT_IS, smooth) {
+        Ok((built, _)) => built,
+        Err(e) => return println!("{resolution:>6} refused: {e}"),
+    };
+    let kernel = start.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let closed = crate::printable::census(&built).is_closed();
+    let census = t.elapsed().as_secs_f64();
+    println!(
+        "{resolution:>6} {:>10} {kernel:>8.2}s {:>9} {census:>8.2}s {:>8.2}s {:>9.0} {:>9.0}{}",
+        built.triangle_count(),
+        "(in it)",
+        start.elapsed().as_secs_f64(),
+        mb(built.memory_bytes()),
+        mb(peak_bytes()),
+        if closed { "" } else { "  (not closed)" },
+    );
 }
 
 fn mb(bytes: usize) -> f64 {

@@ -39,6 +39,7 @@ pub mod tabs;
 pub mod theme;
 mod tools;
 mod rebuild_notes;
+mod remesh_smooth;
 mod history_list;
 mod status_row;
 mod view_handles;
@@ -609,6 +610,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
             doc.opts.remesh_resolution = log.exp2().round();
         }
         rebuild_notes::remesh_estimate(ui, doc, doc.opts.remesh_resolution);
+        remesh_smooth::slider(ui, &mut doc.opts, tips);
         let style = ButtonStyle { badge: "R", active: Some(ACCENT()), ..Default::default() };
         if tip(
             theme::button(ui, ui.available_width(), "Remesh", style),

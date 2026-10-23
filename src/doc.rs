@@ -41,6 +41,9 @@ pub struct Options {
     pub ui_scale: f32,
     /// Voxels along the longest side for a voxel remesh.
     pub remesh_resolution: f32,
+    /// The Remesh card's Smooth, 0 to `remesh::MAX_SMOOTH` in whole steps:
+    /// how much a remesh irons out (see `remesh::smoothed`).
+    pub remesh_smooth: f32,
     /// Quads a quad remesh aims for.
     pub quad_target: f32,
     /// Triangles Decimate brings the selected object down to.
@@ -106,6 +109,7 @@ impl Default for Options {
             tooltips: true,
             ui_scale: 1.0,
             remesh_resolution: 128.0,
+            remesh_smooth: crate::remesh::DEFAULT_SMOOTH,
             quad_target: 5000.0,
             decimate_target: 200_000.0,
             decimate_preview: Default::default(),

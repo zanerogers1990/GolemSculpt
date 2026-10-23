@@ -650,6 +650,7 @@ impl Running {
                 "cavity": doc.opts.cavity,
                 "panels": !doc.opts.clean_view,
                 "remesh_resolution": doc.opts.remesh_resolution,
+                "remesh_smooth": doc.opts.remesh_smooth,
                 "new_shape_triangles": doc.opts.new_shape_tris,
                 "interface_scale": round(doc.opts.ui_scale),
             },
@@ -980,6 +981,9 @@ impl Running {
             "remesh" => {
                 if let Some(resolution) = num(args, "resolution") {
                     self.doc.opts.remesh_resolution = resolution.round().clamp(4.0, crate::remesh::HIGHEST);
+                }
+                if let Some(smooth) = num(args, "smooth") {
+                    self.doc.opts.remesh_smooth = smooth.round().clamp(0.0, crate::remesh::MAX_SMOOTH);
                 }
                 Action::Remesh
             }

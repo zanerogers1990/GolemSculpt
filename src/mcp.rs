@@ -805,6 +805,7 @@ fn tools() -> Value {
                      has paint.",
                 ),
                 "resolution": number("For remesh: voxels along the longest side, 4 to 4096 (past about 3000 a compact model makes more than the 80 million triangles allowed). Default: the app's setting."),
+                "smooth": number("For remesh: how much it irons out, 0 (off: the old surface copied exactly, sharpest and quickest) to 10. A little takes out jagged groove edges and the old mesh's facets after a step up in resolution; more softens the finest lines. Default: the app's setting (2 unless changed)."),
                 "amount": number("For mask_recesses and mask_peaks: 0 to 1, how much of the surface is taken. 0 is only the sharpest creases or ridges, 1 anything that lies low or stands up at all. Default 0.7."),
                 "flat": boolean("For subdivide: true cuts each face into four and moves nothing; false rounds the model as it divides. Default: the app's setting."),
                 "level": number("For level: the level to go to, 1 for the coarsest."),

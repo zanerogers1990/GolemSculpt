@@ -230,6 +230,7 @@ impl Running {
         opts.tabs = kept.tabs();
         opts.theme = kept.theme();
         opts.remesh_resolution = kept.remesh_resolution();
+        opts.remesh_smooth = kept.remesh_smooth();
         opts.quad_target = kept.quad_target();
         opts.decimate_target = kept.decimate_target();
         opts.subdivide_flat = kept.subdivide_flat;
@@ -273,6 +274,7 @@ impl Running {
             brush: BrushPrefs::of(&library.base_image(settings)),
             library: crate::brush_files::Kept::of(library, settings),
             remesh_resolution: opts.remesh_resolution,
+            remesh_smooth: opts.remesh_smooth,
             quad_target: opts.quad_target,
             decimate_target: opts.decimate_target,
             subdivide_flat: opts.subdivide_flat,
