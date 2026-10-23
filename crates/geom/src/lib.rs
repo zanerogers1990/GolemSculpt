@@ -21,7 +21,7 @@ pub mod vector;
 mod testing;
 
 pub use adjacency::{MeshAdjacency, MeshEdges};
-pub use decimate::{Decimated, decimate};
+pub use decimate::{Decimated, Extra, Keep, Progressive, decimate, decimate_keeping, progressive};
 pub use edge_census::{EdgeCensus, edge_census};
 pub use mesh::{Aabb, TriMesh};
 pub use symmetry::{SymmetryGroup, SymmetryOp};

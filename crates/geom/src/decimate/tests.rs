@@ -399,6 +399,196 @@ fn edges_with_three_sheets_and_slivers_of_nothing_do_not_stop_it() {
     assert!(done.triangle_count() <= 100 && EdgeCensus::of(&done).holes == Some(1));
 }
 
+/// A ball with lumps that are mirror images across all three planes, cut at
+/// the planes `cut` (any of X, Y, Z) and kept on their positive sides: what
+/// a caller decimates for a mirrored model. And the whole ball, for its shape.
+fn mirrored_ball(rings: usize, segs: usize, cut: [bool; 3]) -> (TriMesh, TriMesh) {
+    let mut ball = uv_sphere(rings, segs);
+    for p in &mut ball.positions {
+        let d = *p;
+        let lumps = (d.y * d.y * 7.0 + 1.0).sin() * (d.z * d.z * 9.0).cos() + 0.5 * (d.x * d.x * 8.0 + d.y * d.y * 5.0).cos();
+        *p = d * (1.0 + 0.12 * lumps);
+        // The planes are where the ball's own points are: on them exactly.
+        for axis in 0..3 {
+            if cut[axis] && p[axis].abs() < 1e-5 {
+                p[axis] = 0.0;
+            }
+        }
+    }
+    let kept = ball.indices.chunks_exact(3).filter(|c| c.iter().all(|&v| (0..3).all(|axis| !cut[axis] || ball.positions[v as usize][axis] >= 0.0)));
+    let indices: Vec<u32> = kept.flatten().copied().collect();
+    let used: HashSet<u32> = indices.iter().copied().collect();
+    // Numbered afresh, without the vertices of the other side.
+    let mut number = vec![u32::MAX; ball.positions.len()];
+    let mut positions = Vec::new();
+    for v in 0..ball.positions.len() as u32 {
+        if used.contains(&v) {
+            number[v as usize] = positions.len() as u32;
+            positions.push(ball.positions[v as usize]);
+        }
+    }
+    let part = TriMesh::new(positions, indices.iter().map(|&v| number[v as usize]).collect());
+    (part, ball)
+}
+
+/// `mesh` and its mirror image across the plane `axis` = 0, joined where its
+/// vertices are on the plane.
+fn with_its_mirror_image(mesh: &TriMesh, axis: usize) -> TriMesh {
+    let mut positions = mesh.positions.clone();
+    let twin: Vec<u32> = mesh
+        .positions
+        .iter()
+        .enumerate()
+        .map(|(v, p)| {
+            if p[axis] == 0.0 {
+                v as u32
+            } else {
+                let mut q = *p;
+                q[axis] = -q[axis];
+                positions.push(q);
+                positions.len() as u32 - 1
+            }
+        })
+        .collect();
+    let mut indices = mesh.indices.clone();
+    for c in mesh.indices.chunks_exact(3) {
+        indices.extend_from_slice(&[twin[c[0] as usize], twin[c[2] as usize], twin[c[1] as usize]]);
+    }
+    TriMesh::new(positions, indices)
+}
+
+#[test]
+fn a_half_cut_at_mirror_planes_stays_a_half_and_mirrors_back_into_one_closed_model() {
+    for cut in [[true, false, false], [true, false, true], [true, true, true]] {
+        let what = format!("cut at {cut:?}");
+        let (part, ball) = mirrored_ball(100, 200, cut);
+        let on_planes = |p: &Vec3| (0..3).filter(|&axis| cut[axis] && p[axis] == 0.0).fold(0u8, |bits, axis| bits | 1 << axis);
+        let before = part.triangle_count();
+        let target = before / 10;
+        let keep = Keep { seams: cut, ..Keep::default() };
+        let done = decimate_keeping(&part.positions, &part.indices, &keep, target, &mut |_| true).unwrap();
+        assert!(done.reached() && done.triangle_count() + 1 >= target, "{what}: {} of {target}", done.triangle_count());
+        let mesh = TriMesh::new(done.positions.clone(), done.indices.clone());
+        // Nothing went past a plane, and the cut's edge is still on its planes: every open
+        // edge runs along one of them, and no triangle lies in one.
+        for p in &mesh.positions {
+            assert!((0..3).all(|axis| !cut[axis] || p[axis] >= 0.0), "{what}: a point past a plane at {p}");
+        }
+        let triangles: Vec<[u32; 3]> = mesh.indices.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        for &(a, b, count, _) in &edges_of(&triangles) {
+            if count == 1 {
+                let both = on_planes(&mesh.positions[a as usize]) & on_planes(&mesh.positions[b as usize]);
+                assert!(both != 0, "{what}: an open edge off the planes");
+            }
+        }
+        for t in &triangles {
+            assert!(t.iter().fold(!0u8, |all, &v| all & on_planes(&mesh.positions[v as usize])) == 0, "{what}: a triangle in a plane");
+        }
+        // Mirrored every way it was cut: one closed ball again, the shape it was.
+        let mut whole = mesh;
+        for axis in (0..3).filter(|&axis| cut[axis]) {
+            whole = with_its_mirror_image(&whole, axis);
+        }
+        assert_closed_and_sound(&whole, &what);
+        assert_eq!(euler(&whole), 2, "{what}: one ball");
+        let copies = 1usize << cut.iter().filter(|&&c| c).count();
+        assert_eq!(whole.triangle_count(), done.triangle_count() * copies);
+        let off = whole.signed_volume() / ball.signed_volume() - 1.0;
+        println!("{what}: {} triangles, volume off by {:.3}%", whole.triangle_count(), off * 100.0);
+        assert!(off.abs() < 0.004, "{what}: volume off by {off}");
+    }
+}
+
+#[test]
+fn weighted_surface_keeps_more_of_its_triangles_and_the_count_is_the_same() {
+    let (ball, _) = mirrored_ball(100, 200, [false; 3]);
+    let target = ball.triangle_count() / 10;
+    // Triangles over the top of the ball, and under it.
+    let split = |done: &Decimated| {
+        let centre = |t: usize| (0..3).map(|k| done.positions[done.indices[t * 3 + k] as usize].y).sum::<f32>() / 3.0;
+        let top = (0..done.triangle_count()).filter(|&t| centre(t) > 0.1).count();
+        let bottom = (0..done.triangle_count()).filter(|&t| centre(t) < -0.1).count();
+        (top, bottom)
+    };
+    let plain = decimate_keeping(&ball.positions, &ball.indices, &Keep::default(), target, &mut |_| true).unwrap();
+    let mut shares = Vec::new();
+    for weight in [8.0f32, 64.0, 512.0] {
+        let weights: Vec<f32> = ball.positions.iter().map(|p| if p.y > 0.0 { weight } else { 1.0 }).collect();
+        let keep = Keep { weights: &weights, ..Keep::default() };
+        let done = decimate_keeping(&ball.positions, &ball.indices, &keep, target, &mut |_| true).unwrap();
+        assert!(done.reached() && done.triangle_count() + 1 >= target);
+        assert_closed_and_sound(&TriMesh::new(done.positions.clone(), done.indices.clone()), "weighted");
+        let ((top, bottom), (plain_top, plain_bottom)) = (split(&done), split(&plain));
+        let share = (top as f64 / bottom as f64) / (plain_top as f64 / plain_bottom as f64);
+        println!("weight {weight}: top {top}, bottom {bottom} (without: {plain_top}, {plain_bottom}): {share:.2} times the share");
+        shares.push(share);
+    }
+    // More weight, more triangles; about the cube root of it as many again.
+    assert!(shares.windows(2).all(|w| w[1] > w[0]), "{shares:?}");
+    assert!(shares[0] > 1.4 && shares[1] > 2.5 && shares[2] > 4.0, "{shares:?}");
+    // A weight under 1 counts as 1.
+    let light = vec![0.25f32; ball.positions.len()];
+    let done = decimate_keeping(&ball.positions, &ball.indices, &Keep { weights: &light, ..Keep::default() }, target, &mut |_| true);
+    assert_eq!(done.unwrap(), plain);
+}
+
+#[test]
+fn planes_a_vertex_answers_for_are_paid_for() {
+    // A flat sheet whose left third also stands for a corrugated surface (the
+    // other side of a mirrored model that is not the same there).
+    let sheet = grid(60, 40);
+    let extra: Vec<Extra> = sheet
+        .positions
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.x < 20.0)
+        .map(|(v, p)| {
+            let slope = (p.x * 1.3).sin() * 0.8;
+            Extra { vertex: v as u32, point: *p, normal: Vec3::new(slope, 0.0, 1.0).normalize(), area: 1.0 }
+        })
+        .collect();
+    let keep = Keep { extra: &extra, ..Keep::default() };
+    let done = decimate_keeping(&sheet.positions, &sheet.indices, &keep, 400, &mut |_| true).unwrap();
+    assert!(done.reached());
+    let centre = |t: usize| (0..3).map(|k| done.positions[done.indices[t * 3 + k] as usize].x).sum::<f32>() / 3.0;
+    let left = (0..done.triangle_count()).filter(|&t| centre(t) < 20.0).count();
+    let right = (0..done.triangle_count()).filter(|&t| centre(t) > 40.0).count();
+    assert!(left > right * 4, "{left} on the left against {right} on the right");
+    // The sheet itself is flat still: extra planes weigh, they do not move it off its own.
+    assert!(done.positions.iter().all(|p| p.z.abs() < 1e-3));
+}
+
+#[test]
+fn a_run_written_down_gives_the_mesh_for_any_count_to_the_bit() {
+    let model = lumpy(80, 160);
+    let values: Vec<f32> = model.positions.iter().map(|p| (p.y + 1.0).clamp(0.0, 1.0)).collect();
+    let locked: Vec<bool> = model.positions.iter().map(|p| p.y > -0.05 && p.x > 3.7).collect();
+    let weights: Vec<f32> = model.positions.iter().map(|p| if p.z > 0.6 { 20.0 } else { 1.0 }).collect();
+    let (part, _) = mirrored_ball(60, 120, [true, false, true]);
+    let plain = Keep::default();
+    let full = Keep { values: Some(&values), locked: &locked, weights: &weights, ..Keep::default() };
+    let cut = Keep { seams: [true, false, true], ..Keep::default() };
+    for (mesh, keep, what) in [(&model, &plain, "plain"), (&model, &full, "masked and weighted"), (&part, &cut, "a quarter")] {
+        let written = progressive(&mesh.positions, &mesh.indices, keep, 200, &mut |_| true).unwrap();
+        assert_eq!(written.triangles_before(), mesh.triangle_count());
+        assert!(written.fewest() <= 201 || what == "masked and weighted", "{what}: {}", written.fewest());
+        let before = mesh.triangle_count();
+        let targets = [before + 10, before, before - 1, before * 3 / 4, before / 3, before / 20, 1_000, 201, 200];
+        for target in targets.into_iter().filter(|&t| t >= 200) {
+            let direct = decimate_keeping(&mesh.positions, &mesh.indices, keep, target, &mut |_| true).unwrap();
+            let at = written.at(target);
+            let bits = |p: &[Vec3]| p.iter().map(|p| p.to_array().map(f32::to_bits)).collect::<Vec<_>>();
+            assert_eq!(at.indices, direct.indices, "{what} at {target}");
+            assert_eq!(bits(&at.positions), bits(&direct.positions), "{what} at {target}");
+            let value_bits = |v: &Option<Vec<f32>>| v.as_ref().map(|v| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+            assert_eq!(value_bits(&at.values), value_bits(&direct.values), "{what} at {target}");
+            assert_eq!((at.triangle_source, at.target, at.triangles_before, at.locked), (direct.triangle_source, direct.target, direct.triangles_before, direct.locked), "{what} at {target}");
+        }
+        // Asked for under the floor: the floor.
+        assert_eq!(written.at(10).triangle_count(), written.fewest());
+    }
+}
+
 /// Run with `--release -- --ignored --nocapture`. The sizes are the app's
 /// own benchmark's (200k and 1M triangles) and one between; the targets are
 /// what a game model is cut down to.

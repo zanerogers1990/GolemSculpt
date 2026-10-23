@@ -959,7 +959,8 @@ impl Running {
             MouseButton::Left if mods.alt_key() && mods.shift_key() => Drag::Pan,
             MouseButton::Left if mods.alt_key() => Drag::Orbit,
             // The clean view is for looking: no tool or brush takes the press.
-            MouseButton::Left | MouseButton::Right if self.doc.opts.clean_view => {
+            // So is a Decimate preview: what is shown is not the model a brush would work on.
+            MouseButton::Left | MouseButton::Right if self.doc.opts.clean_view || self.decimate.previewing() => {
                 if button == MouseButton::Left { Drag::Orbit } else { Drag::Ui }
             }
             // A click for the Face Groups card: Ctrl + Shift + click on a group, or one the card armed.
@@ -1092,7 +1093,7 @@ impl Running {
         if code == KeyCode::Escape && self.escape_drag() {
             return;
         }
-        if self.spheres_key_pressed(code) || self.tools_key_pressed(code) || self.deform_key(code) {
+        if self.spheres_key_pressed(code) || self.tools_key_pressed(code) || self.decimate_key(code) || self.deform_key(code) {
             return;
         }
         if self.brush_step_key(code) {
@@ -1331,6 +1332,10 @@ impl Running {
         self.paint_before(&action);
         // And a deformation on the model is applied (app/deform.rs).
         self.deform_before(&action);
+        // A Decimate preview is closed, unless the command is only about the view (app/decimate.rs).
+        if self.decimate_before(&action) {
+            return;
+        }
         // While the SSphere tool is up, Z steps its rig first.
         if matches!(action, Action::Undo | Action::Redo)
             && (self.spheres_undo(action == Action::Redo) || self.tools_undo(action == Action::Redo))
@@ -1490,6 +1495,9 @@ impl Running {
             Action::Paint(action) => self.paint_act(action),
             Action::Decimate => self.decimate_asking(),
             Action::DecimateAnyway => self.decimate_start(),
+            Action::DecimatePreview => self.decimate_preview_start(),
+            Action::DecimateApply => self.decimate_apply(),
+            Action::DecimateCancel => self.decimate_cancel(),
             Action::Mask(op) => {
                 let delta = match op {
                     MaskOp::Invert => self.doc.mesh.remap_mask(|_, _, m| 1.0 - m),
@@ -2063,7 +2071,11 @@ impl Running {
             self.redraw = true;
         }
         let rebuilt = std::mem::take(&mut doc.mesh_replaced);
-        self.renderer.sync_mesh(&self.gpu, doc.scene.active_mesh(), &mut doc.mesh, rebuilt);
+        // A Decimate preview is drawn in the model's place; the model itself is not touched (app/decimate.rs).
+        match self.decimate.shown_mut() {
+            Some(preview) => self.renderer.sync_mesh(&self.gpu, doc.scene.active_mesh(), preview, false),
+            None => self.renderer.sync_mesh(&self.gpu, doc.scene.active_mesh(), &mut doc.mesh, rebuilt),
+        }
         let shown: Vec<u64> = doc.scene.objects.iter().map(|o| o.mesh).collect();
         for (id, mesh) in doc.scene.parked_mut() {
             if shown.contains(&id) {

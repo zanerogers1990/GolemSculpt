@@ -25,17 +25,30 @@
 //!   - **Locked vertices are not moved and not removed** (the caller's mask):
 //!     a neighbour may be folded into one, at the locked vertex's own place.
 //!     Surface with every corner locked is left exactly as it is.
+//!   - **Weighted surface keeps more of its triangles** ([`Keep::weights`],
+//!     the soft part of a mask): its planes count for more, so folding it
+//!     costs more and it is folded later.
 //!   - **Borders keep their line.** Each open edge adds a plane through
 //!     itself, square to its triangle, to its two ends, so sliding a border
 //!     vertex along the border is cheap and pulling the border in is dear.
+//!   - **A half of a mirrored model stays a half** ([`Keep::seams`]): the
+//!     edge where it was cut stays on the mirror plane, and nothing else
+//!     comes onto it or past it, so the decimated half and its mirror image
+//!     join up into one closed model again, exactly symmetric.
 //!   - **A value per vertex is carried** (the mask): the new vertex takes it
 //!     from the two ends, by how far along the edge it was placed.
 //!   - **The same input gives the same output**, on any number of cores: the
 //!     collapses are made one at a time, in order of cost and then of vertex
 //!     number.
+//!   - **A count is the first so many collapses of one order.** The order
+//!     does not depend on the count asked for, so a run written down once to
+//!     a floor ([`progressive`]) gives the mesh for any count above it at
+//!     once, the very mesh a run for that count makes.
 //!
-//! It does not keep a mesh's mirror symmetry: the two halves are collapsed in
-//! whatever order their costs come, which rounding alone makes different.
+//! A whole mesh's mirror symmetry is not kept: the two halves are collapsed
+//! in whatever order their costs come, which rounding alone makes different.
+//! A caller that wants it decimates one half, cut at the plane, with
+//! [`Keep::seams`], and mirrors the result.
 //!
 //! The work is the caller's thread's. Setting up (quadrics, the first cost of
 //! every edge) uses rayon; the collapses themselves are one after another,
@@ -75,6 +88,49 @@ const LENGTH_TIE: f64 = 1e-8;
 
 /// How many collapses are made between one call of `progress` and the next.
 const PROGRESS_EVERY: usize = 4096;
+
+/// What a decimation holds to besides the count. Everything may be left at
+/// its default: nothing carried, locked, weighted or cut.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Keep<'a> {
+    /// One number for each vertex, carried onto the result (a mask): the new
+    /// vertex of a collapse takes it from the two ends, by how far along the
+    /// edge it was placed.
+    pub values: Option<&'a [f32]>,
+    /// Vertices that may be neither moved nor removed. It may be shorter
+    /// than the vertex list, or empty: a vertex it does not reach is free.
+    pub locked: &'a [bool],
+    /// How much each vertex's surface counts, 1 and up; empty is 1 for all.
+    /// A triangle's plane weighs its area times the mean of its corners'
+    /// weights, so moving weighted surface costs that many times more, and
+    /// it keeps more of its triangles: where it bends, about the cube root
+    /// of the weight as many again to the same area.
+    pub weights: &'a [f32],
+    /// The planes X = 0, Y = 0 and Z = 0 the mesh was cut at, to be mirrored
+    /// afterwards. The mesh lies on the positive side of each plane ticked,
+    /// and its vertices exactly on one are the cut's edge, where the mirror
+    /// image joins on. Those stay on their planes and only slide along them;
+    /// every other vertex stays clear of the planes, on the positive side;
+    /// and no triangle is left lying in one. So the result, mirrored, is one
+    /// whole surface again.
+    pub seams: [bool; 3],
+    /// Planes some vertices stand for besides their own triangles': surface
+    /// the mesh does not have but answers for (the other side of a mirrored
+    /// model, where that side is not the mirror image of this one), so that
+    /// what is there is paid for too.
+    pub extra: &'a [Extra],
+}
+
+/// A plane a vertex stands for besides its own triangles' ([`Keep::extra`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Extra {
+    pub vertex: u32,
+    /// A point on the plane, and its unit normal.
+    pub point: Vec3,
+    pub normal: Vec3,
+    /// The area of surface it is the plane of: what it weighs.
+    pub area: f32,
+}
 
 /// A decimated mesh.
 #[derive(Clone, Debug, PartialEq)]
@@ -223,10 +279,33 @@ impl Ord for Candidate {
     }
 }
 
+/// One collapse, as a progressive run writes it down.
+#[derive(Clone, Copy, Debug)]
+struct Step {
+    keep: u32,
+    gone: u32,
+    /// Where `keep` was put, in the input's own frame, if that moved it.
+    moved_to: Option<Vec3>,
+    /// The value `keep` carries after it.
+    value: f32,
+    /// Triangles left after it.
+    left: u32,
+}
+
+/// What a progressive run writes down as it goes.
+struct Log {
+    steps: Vec<Step>,
+    /// For each triangle, the step that took it away; `u32::MAX` if none did.
+    died: Vec<u32>,
+}
+
 /// The mesh while it is being collapsed.
 struct Work<'a> {
     /// About the middle of the mesh's box, so the quadrics are of small numbers.
     positions: Vec<DVec3>,
+    /// Where the input's origin is in `positions`' frame (the middle, negated):
+    /// on the cut planes, the coordinate a vertex stays at.
+    origin: DVec3,
     triangles: Vec<[u32; 3]>,
     live_triangle: Vec<bool>,
     /// The triangles on each vertex; dead ones are cleared out as they are met.
@@ -239,6 +318,13 @@ struct Work<'a> {
     /// Moved from where the input had it.
     shifted: Vec<bool>,
     locked: &'a [bool],
+    /// Which cut planes each vertex is on, a bit for each of X, Y and Z;
+    /// empty when the mesh was not cut.
+    seam: Vec<u8>,
+    /// The cut planes, as bits.
+    seams: u8,
+    /// Each vertex's weight ([`Keep::weights`]); empty when all are 1.
+    weights: Vec<f32>,
     values: Option<Vec<f32>>,
     live_triangles: usize,
     tie: f64,
@@ -246,6 +332,7 @@ struct Work<'a> {
     /// marked with the number of the look.
     seen: Vec<u32>,
     look: u32,
+    log: Option<Log>,
 }
 
 /// Where the vertex an edge collapses to goes, what it costs, how far along
@@ -264,26 +351,64 @@ impl Work<'_> {
         self.locked.get(v as usize).copied().unwrap_or(false)
     }
 
-    /// Where edge `a`-`b` would collapse to; `None` when both ends are locked.
+    fn seam_of(&self, v: u32) -> u8 {
+        self.seam.get(v as usize).copied().unwrap_or(0)
+    }
+
+    fn weight_of(&self, v: u32) -> f64 {
+        self.weights.get(v as usize).map_or(1.0, |&w| w as f64)
+    }
+
+    /// `p` put on the cut planes `on`.
+    fn onto(&self, mut p: DVec3, on: u8) -> DVec3 {
+        for axis in 0..3 {
+            if on & 1 << axis != 0 {
+                p[axis] = self.origin[axis];
+            }
+        }
+        p
+    }
+
+    /// Whether `p` is clear of every cut plane but those in `on`, on the
+    /// side the mesh is.
+    fn clear_of_seams(&self, p: DVec3, on: u8) -> bool {
+        (0..3).all(|axis| (self.seams & !on) & 1 << axis == 0 || p[axis] > self.origin[axis])
+    }
+
+    /// Where edge `a`-`b` would collapse to; `None` when both ends are locked,
+    /// or the two are on cut planes that neither end's place is on both of.
     fn place(&self, a: u32, b: u32) -> Option<Place> {
         let (pa, pb) = (self.positions[a as usize], self.positions[b as usize]);
         let sum = self.quadrics[a as usize].plus(&self.quadrics[b as usize]);
         let (edge, length_sq) = (pb - pa, (pb - pa).length_squared());
         let along_of = |p: DVec3| if length_sq > 0.0 { ((p - pa).dot(edge) / length_sq).clamp(0.0, 1.0) } else { 0.5 };
-        // An end that is locked stays, where it is. Of two free ends, one on
-        // a border and the other not, the border's stays where it is: a
-        // border is only ever moved along itself. Else the lower number
-        // stays, at the cheapest point.
+        // An end that is locked stays, where it is. A vertex on a cut plane
+        // stays on it, so an end that is on planes the other is not on
+        // stays where it is too, and two ends each on a plane the other is
+        // not on are not folded together. Of two free ends, one on a border
+        // and the other not, the border's stays where it is: a border is
+        // only ever moved along itself. Else the lower number stays, at the
+        // cheapest point.
+        let (seam_a, seam_b) = (self.seam_of(a), self.seam_of(b));
+        let (a_may_stay, b_may_stay) = (seam_b & !seam_a == 0, seam_a & !seam_b == 0);
         let (border_a, border_b) = (self.border[a as usize], self.border[b as usize]);
         let (at, keep_b) = match (self.is_locked(a), self.is_locked(b)) {
             (true, true) => return None,
-            (true, false) => (pa, false),
-            (false, true) => (pb, true),
+            (true, false) if a_may_stay => (pa, false),
+            (false, true) if b_may_stay => (pb, true),
+            (true, false) | (false, true) => return None,
+            (false, false) if seam_a != seam_b => match (a_may_stay, b_may_stay) {
+                (true, _) => (pa, false),
+                (_, true) => (pb, true),
+                _ => return None,
+            },
             (false, false) if border_a != border_b => (if border_b { pb } else { pa }, border_b),
             (false, false) => {
                 let middle = (pa + pb) * 0.5;
                 let near = |p: &DVec3| (*p - middle).length_squared() <= FARTHEST_PLACE * FARTHEST_PLACE * length_sq;
-                let at = match sum.least().filter(near) {
+                // On the planes the two ends are on, and clear of the others.
+                let fits = |p: &DVec3| self.clear_of_seams(*p, seam_a);
+                let at = match sum.least().map(|p| self.onto(p, seam_a)).filter(near).filter(fits) {
                     Some(least) => least,
                     // The cheapest of the two ends and the middle; the middle on a tie.
                     None => {
@@ -295,7 +420,8 @@ impl Work<'_> {
                 (at, false)
             }
         };
-        Some(Place { at, cost: sum.at(at) + self.tie * length_sq, along: along_of(at), keep_b })
+        let weight = self.weight_of(a).max(self.weight_of(b));
+        Some(Place { at, cost: sum.at(at) + self.tie * weight * length_sq, along: along_of(at), keep_b })
     }
 
     fn candidate(&self, a: u32, b: u32) -> Option<Candidate> {
@@ -342,7 +468,7 @@ impl Work<'_> {
 
     /// Whether collapsing edge `keep`-`gone` onto `at` leaves the surface the
     /// surface it was: same connectivity, no triangle turned over or
-    /// flattened. Both fans must be tidy.
+    /// flattened, none lying in a cut plane. Both fans must be tidy.
     fn sound(&mut self, keep: u32, gone: u32, at: DVec3, scratch: &mut Vec<u32>) -> bool {
         // The triangles on the edge itself, and the vertex across each.
         let mut across = [u32::MAX; 2];
@@ -403,7 +529,9 @@ impl Work<'_> {
         if merged < fewest(border_keep || border_gone) {
             return false;
         }
-        // No triangle that stays may turn over, or lose its area.
+        // No triangle that stays may turn over, or lose its area, or come to
+        // lie in a cut plane, where it would be its own mirror image.
+        let merged_seam = self.seam_of(keep) | self.seam_of(gone);
         for (moved, other) in [(keep, gone), (gone, keep)] {
             for &t in &self.fans[moved as usize] {
                 let corners = self.triangles[t as usize];
@@ -418,6 +546,9 @@ impl Work<'_> {
                 if size_before > 0.0 && !(before.dot(after) > MOST_TURN * size_before * size_after) {
                     return false;
                 }
+                if self.seams != 0 && corners.map(|w| if w == moved { merged_seam } else { self.seam_of(w) }).iter().fold(!0, |all, &s| all & s) != 0 {
+                    return false;
+                }
             }
         }
         true
@@ -428,7 +559,8 @@ impl Work<'_> {
     /// must be tidy, and the collapse [`Self::sound`].
     fn collapse(&mut self, keep: u32, gone: u32, at: DVec3, along_from_keep: f64) {
         let (k, g) = (keep as usize, gone as usize);
-        self.shifted[k] |= self.positions[k] != at;
+        let moved = self.positions[k] != at;
+        self.shifted[k] |= moved;
         self.positions[k] = at;
         let other = self.quadrics[g];
         self.quadrics[k].add(&other);
@@ -436,13 +568,24 @@ impl Work<'_> {
             let t = along_from_keep as f32;
             values[k] = values[k] + (values[g] - values[k]) * t;
         }
+        if !self.weights.is_empty() {
+            let t = along_from_keep as f32;
+            self.weights[k] = self.weights[k] + (self.weights[g] - self.weights[k]) * t;
+        }
+        if !self.seam.is_empty() {
+            self.seam[k] |= self.seam[g];
+        }
         self.border[k] |= self.border[g];
+        let step = self.log.as_ref().map_or(0, |log| log.steps.len() as u32);
         let fan = std::mem::take(&mut self.fans[g]);
         for t in fan {
             let corners = &mut self.triangles[t as usize];
             if corners.contains(&keep) {
                 self.live_triangle[t as usize] = false;
                 self.live_triangles -= 1;
+                if let Some(log) = &mut self.log {
+                    log.died[t as usize] = step;
+                }
             } else {
                 for corner in corners.iter_mut().filter(|c| **c == gone) {
                     *corner = keep;
@@ -453,6 +596,16 @@ impl Work<'_> {
         self.tidy(keep);
         self.live_vertex[g] = false;
         self.version[k] = self.version[k].wrapping_add(1);
+        if let Some(log) = &mut self.log {
+            let origin = self.origin;
+            log.steps.push(Step {
+                keep,
+                gone,
+                moved_to: moved.then(|| (at - origin).as_vec3()),
+                value: self.values.as_ref().map_or(0.0, |values| values[k]),
+                left: self.live_triangles as u32,
+            });
+        }
     }
 }
 
@@ -506,6 +659,209 @@ pub fn decimate(
     target: usize,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Option<Decimated> {
+    decimate_keeping(positions, indices, &Keep { values, locked, ..Keep::default() }, target, progress)
+}
+
+/// [`decimate`], holding to everything `keep` asks.
+pub fn decimate_keeping(
+    positions: &[Vec3],
+    indices: &[u32],
+    keep: &Keep,
+    target: usize,
+    progress: &mut dyn FnMut(f32) -> bool,
+) -> Option<Decimated> {
+    let run = run(positions, indices, keep, target, false, progress)?;
+    let work = &run.work;
+    // What is left, its vertices numbered as its triangles first name them.
+    let vertex_count = positions.len();
+    let mut number = vec![u32::MAX; vertex_count];
+    let mut out_positions = Vec::new();
+    let mut out_values = work.values.as_ref().map(|_| Vec::new());
+    let mut out_indices = Vec::with_capacity(work.live_triangles * 3);
+    let mut triangle_source = Vec::with_capacity(work.live_triangles);
+    for (t, corners) in work.triangles.iter().enumerate().filter(|(t, _)| work.live_triangle[*t]) {
+        for &v in corners {
+            let v = v as usize;
+            if number[v] == u32::MAX {
+                number[v] = out_positions.len() as u32;
+                // A vertex that was never moved is the very point it was.
+                out_positions.push(if work.shifted[v] { (work.positions[v] - work.origin).as_vec3() } else { positions[v] });
+                if let (Some(out), Some(values)) = (&mut out_values, &work.values) {
+                    out.push(values[v]);
+                }
+            }
+            out_indices.push(number[v]);
+        }
+        triangle_source.push(run.sources[t]);
+    }
+    progress(1.0);
+    Some(Decimated {
+        positions: out_positions,
+        indices: out_indices,
+        values: out_values,
+        triangle_source,
+        target: run.target,
+        triangles_before: run.triangles_before,
+        locked: run.locked,
+    })
+}
+
+/// A decimation written down collapse by collapse, from the whole mesh down
+/// to a floor, so that the mesh at any count in between can be had at once
+/// ([`Progressive::at`]) without decimating again: what a slider that is
+/// being dragged shows. The mesh it gives for a count is, to the bit, the
+/// mesh [`decimate_keeping`] makes for that count with the same `keep`.
+pub struct Progressive {
+    positions: Vec<Vec3>,
+    values: Option<Vec<f32>>,
+    /// The input's triangles, without those that name a vertex twice or one
+    /// the mesh does not have, and which triangle of the input each is.
+    triangles: Vec<[u32; 3]>,
+    sources: Vec<u32>,
+    steps: Vec<Step>,
+    died: Vec<u32>,
+    floor: usize,
+    locked: usize,
+}
+
+/// Decimates a mesh as far down as `floor` triangles, writing each collapse
+/// down, for [`Progressive::at`]. As [`decimate_keeping`] in all else:
+/// `None` if `progress` said to stop.
+pub fn progressive(
+    positions: &[Vec3],
+    indices: &[u32],
+    keep: &Keep,
+    floor: usize,
+    progress: &mut dyn FnMut(f32) -> bool,
+) -> Option<Progressive> {
+    let run = run(positions, indices, keep, floor, true, progress)?;
+    progress(1.0);
+    let log = run.work.log.expect("a progressive run writes a log");
+    Some(Progressive {
+        positions: positions.to_vec(),
+        values: keep.values.map(|v| {
+            let mut carried = v.to_vec();
+            carried.resize(positions.len(), 0.0);
+            carried
+        }),
+        triangles: run.triangles,
+        sources: run.sources,
+        steps: log.steps,
+        died: log.died,
+        floor: run.target,
+        locked: run.locked,
+    })
+}
+
+impl Progressive {
+    /// Triangles the input had.
+    pub fn triangles_before(&self) -> usize {
+        self.triangles.len()
+    }
+
+    /// The fewest triangles it can give: the floor it was taken down to, or
+    /// more where no collapse was left that keeps the surface whole.
+    pub fn fewest(&self) -> usize {
+        self.steps.last().map_or(self.triangles.len(), |s| s.left as usize)
+    }
+
+    /// The count it was taken down to: [`Self::at`] holds a count to it.
+    pub fn floor(&self) -> usize {
+        self.floor
+    }
+
+    /// Roughly what it holds, in bytes.
+    pub fn bytes(&self) -> usize {
+        self.positions.len() * 12
+            + self.values.as_ref().map_or(0, |v| v.len() * 4)
+            + self.triangles.len() * 20
+            + self.died.len() * 4
+            + self.steps.len() * size_of::<Step>()
+    }
+
+    /// The mesh decimated to about `target` triangles (held to no fewer
+    /// than the floor): the first so many of the collapses, put together.
+    pub fn at(&self, target: usize) -> Decimated {
+        let before = self.triangles.len();
+        let target = target.clamp(self.floor, self.floor.max(before));
+        // A run stops at the collapse that brings it to the count or under.
+        let count = if before <= target {
+            0
+        } else {
+            (self.steps.partition_point(|s| s.left as usize > target) + 1).min(self.steps.len())
+        };
+        let steps = &self.steps[..count];
+        // Which vertex each of the input's is by then: the one it was folded
+        // into, and the one that one was, and so on, worked back from the last.
+        let mut into: Vec<u32> = (0..self.positions.len() as u32).collect();
+        for step in steps.iter().rev() {
+            into[step.gone as usize] = into[step.keep as usize];
+        }
+        let mut places = self.positions.clone();
+        let mut values = self.values.clone();
+        for step in steps {
+            if let Some(at) = step.moved_to {
+                places[step.keep as usize] = at;
+            }
+            if let Some(values) = &mut values {
+                values[step.keep as usize] = step.value;
+            }
+        }
+        let mut number = vec![u32::MAX; self.positions.len()];
+        let mut out_positions = Vec::new();
+        let mut out_values = values.as_ref().map(|_| Vec::new());
+        let mut out_indices = Vec::new();
+        let mut triangle_source = Vec::new();
+        for (t, corners) in self.triangles.iter().enumerate().filter(|(t, _)| self.died[*t] as usize >= count) {
+            for &v in corners {
+                let v = into[v as usize] as usize;
+                if number[v] == u32::MAX {
+                    number[v] = out_positions.len() as u32;
+                    out_positions.push(places[v]);
+                    if let (Some(out), Some(values)) = (&mut out_values, &values) {
+                        out.push(values[v]);
+                    }
+                }
+                out_indices.push(number[v]);
+            }
+            triangle_source.push(self.sources[t]);
+        }
+        Decimated {
+            positions: out_positions,
+            indices: out_indices,
+            values: out_values,
+            triangle_source,
+            target,
+            triangles_before: before,
+            locked: self.locked,
+        }
+    }
+}
+
+/// A finished run of collapses, and what was made of the input to begin it.
+struct Run<'a> {
+    work: Work<'a>,
+    /// The input's triangles as the run began (for a progressive run; empty
+    /// otherwise), and which triangle of the input each is.
+    triangles: Vec<[u32; 3]>,
+    sources: Vec<u32>,
+    triangles_before: usize,
+    /// The count asked for, held to what can be asked.
+    target: usize,
+    locked: usize,
+}
+
+/// Sets the mesh up and collapses edges, cheapest first, until `target`
+/// triangles are left or no collapse is left that keeps the surface whole.
+/// With `record`, every collapse is written down (`Work::log`).
+fn run<'a>(
+    positions: &[Vec3],
+    indices: &[u32],
+    keep: &Keep<'a>,
+    target: usize,
+    record: bool,
+    progress: &mut dyn FnMut(f32) -> bool,
+) -> Option<Run<'a>> {
     let vertex_count = positions.len();
     let named = |corners: &[u32]| corners.iter().all(|&v| (v as usize) < vertex_count);
     let distinct = |c: &[u32]| c[0] != c[1] && c[1] != c[2] && c[0] != c[2];
@@ -517,7 +873,7 @@ pub fn decimate(
         .unzip();
     let triangles_before = triangles.len();
     let target = target.clamp(FEWEST, FEWEST.max(triangles_before));
-    let locked_count = locked.iter().take(vertex_count).filter(|&&l| l).count();
+    let locked_count = keep.locked.iter().take(vertex_count).filter(|&&l| l).count();
 
     // About the middle of the box, in double: the quadrics are sums of
     // products of coordinates, and a model far from its own centre would
@@ -528,6 +884,29 @@ pub fn decimate(
     });
     let middle = if vertex_count > 0 && (low + high).is_finite() { (low + high) * 0.5 } else { DVec3::ZERO };
     let moved: Vec<DVec3> = positions.par_iter().map(|p| p.as_dvec3() - middle).collect();
+
+    // The cut planes, and which of them each vertex is on: exactly on, as
+    // the cut put it.
+    let seams = (0..3).filter(|&axis| keep.seams[axis]).fold(0u8, |bits, axis| bits | 1 << axis);
+    let seam: Vec<u8> = if seams == 0 {
+        Vec::new()
+    } else {
+        positions
+            .par_iter()
+            .map(|p| (0..3).filter(|&axis| seams & 1 << axis != 0 && p[axis] == 0.0).fold(0u8, |bits, axis| bits | 1 << axis))
+            .collect()
+    };
+    let weights: Vec<f32> = if keep.weights.is_empty() {
+        Vec::new()
+    } else {
+        let mut weights: Vec<f32> = keep.weights.iter().take(vertex_count).map(|&w| if w >= 1.0 { w } else { 1.0 }).collect();
+        weights.resize(vertex_count, 1.0);
+        weights
+    };
+    let weight_of = |v: u32| weights.get(v as usize).map_or(1.0, |&w| w as f64);
+    // The mean of some vertices' weights: exactly 1 with no weights given,
+    // so that a run without them is the run it always was.
+    let mean_weight = |vs: &[u32]| if weights.is_empty() { 1.0 } else { vs.iter().map(|&v| weight_of(v)).sum::<f64>() / vs.len() as f64 };
 
     let mut fans: Vec<Vec<u32>> = {
         let mut degree = vec![0u32; vertex_count];
@@ -544,7 +923,8 @@ pub fn decimate(
         }
     }
 
-    // Each triangle's plane, weighted by its area, on its three corners.
+    // Each triangle's plane, weighted by its area (and its corners' weight),
+    // on its three corners.
     let planes: Vec<Option<(DVec3, f64)>> = triangles
         .par_iter()
         .map(|corners| {
@@ -559,9 +939,18 @@ pub fn decimate(
     for (corners, plane) in triangles.iter().zip(&planes) {
         let Some((normal, weight)) = plane else { continue };
         area += weight;
-        let quadric = Quadric::plane(*normal, moved[corners[0] as usize], *weight);
+        let weight = weight * mean_weight(corners);
+        let quadric = Quadric::plane(*normal, moved[corners[0] as usize], weight);
         for &v in corners {
             quadrics[v as usize].add(&quadric);
+        }
+    }
+    for extra in keep.extra {
+        let v = extra.vertex as usize;
+        let normal = extra.normal.as_dvec3();
+        if v < vertex_count && normal.is_finite() && normal.length_squared() > 0.0 && extra.area > 0.0 {
+            let weight = extra.area as f64 * weight_of(extra.vertex);
+            quadrics[v].add(&Quadric::plane(normal.normalize(), extra.point.as_dvec3() - middle, weight));
         }
     }
 
@@ -579,15 +968,18 @@ pub fn decimate(
         let across = (pb - pa).cross(normal);
         let length_sq = (pb - pa).length_squared();
         if across.length_squared() > 0.0 {
-            let quadric = Quadric::plane(across.normalize(), pa, BORDER_WEIGHT * length_sq);
+            let quadric = Quadric::plane(across.normalize(), pa, BORDER_WEIGHT * length_sq * mean_weight(&[a, b]));
             quadrics[a as usize].add(&quadric);
             quadrics[b as usize].add(&quadric);
         }
     }
 
     let mean_area = if triangles_before > 0 { area / triangles_before as f64 } else { 0.0 };
+    let log = record.then(|| Log { steps: Vec::new(), died: vec![u32::MAX; triangles_before] });
+    let first_triangles = if record { triangles.clone() } else { Vec::new() };
     let mut work = Work {
         positions: moved,
+        origin: -middle,
         live_triangle: vec![true; triangles_before],
         triangles,
         fans,
@@ -596,8 +988,11 @@ pub fn decimate(
         version: vec![0; vertex_count],
         border,
         shifted: vec![false; vertex_count],
-        locked,
-        values: values.map(|v| {
+        locked: keep.locked,
+        seam,
+        seams,
+        weights,
+        values: keep.values.map(|v| {
             let mut carried = v.to_vec();
             carried.resize(vertex_count, 0.0);
             carried
@@ -606,6 +1001,7 @@ pub fn decimate(
         tie: LENGTH_TIE * mean_area,
         seen: vec![0; vertex_count],
         look: 0,
+        log,
     };
 
     let to_remove = triangles_before.saturating_sub(target).max(1);
@@ -671,38 +1067,7 @@ pub fn decimate(
             }
         }
     }
-
-    // What is left, its vertices numbered as its triangles first name them.
-    let mut number = vec![u32::MAX; vertex_count];
-    let mut out_positions = Vec::new();
-    let mut out_values = work.values.as_ref().map(|_| Vec::new());
-    let mut out_indices = Vec::with_capacity(work.live_triangles * 3);
-    let mut triangle_source = Vec::with_capacity(work.live_triangles);
-    for (t, corners) in work.triangles.iter().enumerate().filter(|(t, _)| work.live_triangle[*t]) {
-        for &v in corners {
-            let v = v as usize;
-            if number[v] == u32::MAX {
-                number[v] = out_positions.len() as u32;
-                // A vertex that was never moved is the very point it was.
-                out_positions.push(if work.shifted[v] { (work.positions[v] + middle).as_vec3() } else { positions[v] });
-                if let (Some(out), Some(values)) = (&mut out_values, &work.values) {
-                    out.push(values[v]);
-                }
-            }
-            out_indices.push(number[v]);
-        }
-        triangle_source.push(sources[t]);
-    }
-    progress(1.0);
-    Some(Decimated {
-        positions: out_positions,
-        indices: out_indices,
-        values: out_values,
-        triangle_source,
-        target,
-        triangles_before,
-        locked: locked_count,
-    })
+    Some(Run { work, triangles: first_triangles, sources, triangles_before, target, locked: locked_count })
 }
 
 #[cfg(test)]

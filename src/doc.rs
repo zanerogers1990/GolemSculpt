@@ -45,6 +45,9 @@ pub struct Options {
     pub quad_target: f32,
     /// Triangles Decimate brings the selected object down to.
     pub decimate_target: f32,
+    /// What the Remesh card shows of a Decimate preview; the app sets it
+    /// every frame (see ui/decimate.rs). Not kept between runs.
+    pub decimate_preview: crate::ui::decimate::Preview,
     /// Subdivide only cuts faces up, moving nothing, instead of smoothing.
     /// Not kept between runs: smooth is what is nearly always wanted.
     pub subdivide_flat: bool,
@@ -105,6 +108,7 @@ impl Default for Options {
             remesh_resolution: 128.0,
             quad_target: 5000.0,
             decimate_target: 200_000.0,
+            decimate_preview: Default::default(),
             subdivide_flat: false,
             new_shape_tris: 200_000.0,
             clean_view: false,
@@ -366,11 +370,19 @@ pub enum Action {
     Remesh,
     QuadRemesh,
     /// The Decimate button: bring the active object down to the Target
-    /// Triangles of the Remesh card, asking first if its symmetry would no
-    /// longer be exact (see app/decimate.rs).
+    /// Triangles of the Remesh card, asking first if its radial symmetry
+    /// would no longer be exact (see app/decimate.rs). With the preview
+    /// open, it keeps what the preview shows.
     Decimate,
     /// The answer "Decimate Anyway" to that question: straight to the work.
     DecimateAnyway,
+    /// The Preview button under Decimate: show the active object decimated,
+    /// following Target Triangles, without changing it yet.
+    DecimatePreview,
+    /// Keep what the preview shows, as one undo step (Enter).
+    DecimateApply,
+    /// Close the preview and leave the model as it was (Esc).
+    DecimateCancel,
     /// Add a subdivision level above the active object's finest and go to
     /// it (see app/levels.rs).
     Subdivide,

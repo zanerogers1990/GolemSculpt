@@ -1156,8 +1156,25 @@ triangles, and an engine usually allows one model somewhere between 200k and
 - **Target Triangles** is the count to come down to, from 1k to 4M. It starts
   at 200k, and the app remembers it. The figure in brackets is what share
   that is of the triangles the object has now, and **75%**, **50%**, **25%**
-  and **10%** set the target to that share. The button is grey while the
-  object is at or under the target.
+  and **10%** set the target to that share. **Decimate** does it in one go;
+  **Preview** shows it first (below). The buttons are grey while the object
+  is at or under the target.
+- **Preview** shows the model decimated before anything is changed, and
+  follows the slider: drag Target Triangles and the model is shown at that
+  count at once, so the count can be chosen by eye, with Wireframe on to see
+  where the triangles went. **Apply** (Enter, or the Decimate button) keeps
+  what is shown as one undo step, the very mesh Decimate would have made;
+  **Cancel** (Esc) leaves the model as it was. The first press works the
+  decimation out in the background, all the way down to 1k with every fold
+  written down (a few seconds on a large model, with its progress and a
+  Cancel at the bottom of the view); after that any count is put together
+  from what was written down in a few hundredths of a second. The model
+  itself is not touched while the preview is open: saving, the recovery
+  copies and every command see it as it is. A press on the model turns the
+  view instead of sculpting; Undo closes the preview; any other command
+  that is not only about the view (a Remesh, a save, a mask) closes it
+  first and then runs. This is ZBrush's Decimation Master pre-process and
+  Cinema 4D's live Polygon Reduction, the slider drawn on the model.
 - **Where the triangles come from.** Flat and gently curved surface gives its
   triangles up first; ridges, creases and fine detail keep theirs longest.
   (It is quadric edge collapse, Garland and Heckbert's method: an edge is
@@ -1180,28 +1197,77 @@ triangles, and an engine usually allows one model somewhere between 200k and
 - **The mask protects**, as it does from brushes. Fully masked surface keeps
   every point and every triangle exactly as it was: mask a face, decimate,
   and the face keeps its detail while the rest of the figure pays for it.
-  The soft edge of a mask is decimated like the rest, and the mask is
-  carried across it. If the masked part alone has more triangles than the
-  target, it stops there and the line says why.
+  If the masked part alone has more triangles than the target, it stops
+  there and the line says why.
+- **A softer mask keeps more detail, the stronger it is.** Surface masked
+  short of fully is decimated, but folding it costs more, so it keeps more
+  of its triangles: measured on a lumpy ball, half of it masked at 50% kept
+  about four times the triangles to the area the unmasked half did, and at
+  95% about thirteen times. The count is the same; the rest pays. (Each
+  step of mask strength multiplies what a fold there costs, up to a
+  thousand times; triangles left go with about the cube root of that.) It
+  is how ZBrush's Decimation Master reads a mask, and Blender's Decimate
+  modifier a vertex group. The mask is carried onto the new points.
 - **Hidden parts are decimated with the rest, and stay hidden.** The budget
   is the whole model's, as is the file an export writes.
 - **Face groups stay as they were.** Every face left is one the model had,
   and it stays in its group, so a group's border stays on the faces it ran
-  along.
-- **Symmetry is not kept exactly, so it asks first.** The two sides of a
-  mirror (or the repeats of a radial symmetry) are thinned each in its own
-  order, so afterwards the model is symmetric to the eye and its points no
-  longer pair up across the plane. Brushes still mirror. When the object has
-  a Local mirror or radial symmetry on, a question says this and offers
-  **Decimate Anyway** (Enter) or **Cancel** (Esc); for a mirror it also says
-  what puts it right afterwards: Cut & Mirror (see Symmetry) keeps one side
-  and mirrors it, at about the same count. A World symmetry is not asked
-  about: the world's planes cut the mesh anywhere, and it was never exact.
-  The other way would have been to refuse until the symmetry is turned off.
-  That was not done because the way past a refusal (untick the mirror,
-  decimate, tick it again) gives exactly the same model in more steps; the
-  only thing to decide is whether exact symmetry matters for this model, so
-  that is the question.
+  along. (With a mirror on, see below, that is so on the side decimated;
+  a face of the other side takes the group of the model's face nearest it.)
+- **A mirror is kept exactly.** With a Local mirror on (X, Y or Z, or any
+  two or all three), the model is cut at the mirror planes, the part on the
+  plus side of each is decimated, and that part is mirrored back, so the
+  sides of the result are mirror images of each other point for point and
+  triangle for triangle; the line says so ("Its sides mirror each other
+  across X, point for point."). The cut is Cut & Mirror's own, with the
+  Symmetry card's Match Tolerance for which points count as on the plane,
+  and the edge of the cut is held to the plane while the part is decimated,
+  so the halves join up again into one closed model. Nothing is asked. With
+  a mirror it is also about twice as quick: half the model is decimated.
+  This is what ZBrush's Decimation Master and Blender's Decimate (Symmetry)
+  do.
+- **Where the sides are a little off, each keeps its own shape.** A model
+  sculpted with a mirror is seldom exactly symmetric, so the other side is
+  not thrown away. Where it is further from the mirror image of the
+  decimated side than the Match Tolerance (half a triangle's width, about),
+  its surface is paid for in triangles as well, on both sides, and
+  afterwards its points are moved onto its own shape; the line says how far
+  apart the sides were at most ("where they were not alike (up to 0.82 mm
+  apart), each kept its own shape"). Nearer than half the tolerance the
+  sides count as the same and come out exact. Where a point cannot be moved
+  onto its own shape without folding a triangle over, it is not, and the
+  line says how many and how far off they are. The mask protects on both
+  sides the same way: a part masked on either side keeps its detail on
+  both, and each side keeps its own mask. Hidden parts too: each side keeps
+  its own.
+- **Where the sides are two different shapes, nothing is mirrored.** When
+  anywhere the other side is more than eight Match Tolerances from the
+  mirror image (a door on one side only, a cut a few millimetres deep), mirrored
+  triangles could not follow the difference, so the model is decimated
+  whole, as it is, exactly as with no mirror on, and the line says so:
+  "With Mirror X on, its sides are not mirror images of each other (up to
+  12.30 mm apart), so it was decimated as it is: each side keeps its own
+  shape, and their points do not pair up." The preview's line says it when
+  the preview opens. A mirror switched on for the brushes never makes one
+  side over into the other: that is how Remesh once lost a door
+  (docs/remesh-symmetry-fix.md), and why Remesh ignores symmetry.
+  (Eight, because Zane's 13-million-triangle figure, sculpted with Mirror X,
+  has all of one side within eight tolerances of the other's mirror image
+  and 99.8% of it within one: at four it was taken for two shapes over a
+  few specks 0.65 mm off.)
+- **Radial symmetry is not kept exactly, so it asks first.** The repeats of
+  a radial symmetry are thinned each in its own order, so afterwards they
+  match to the eye and their points no longer pair up. Brushes still work on
+  all of them. When the object has a Local radial symmetry on, a question
+  says this and offers **Decimate Anyway** (Enter) or **Cancel** (Esc); a
+  mirror on as well is still kept. The preview does not ask; its line says
+  the repeats will not match. A World symmetry is not asked about, and its
+  mirror is not kept: the world's planes cut the mesh anywhere, and it was
+  never exact in it. The other way would have been to refuse until the
+  radial symmetry is turned off. That was not done because the way past a
+  refusal (untick it, decimate, tick it again) gives exactly the same model
+  in more steps; the only thing to decide is whether exact repeats matter
+  for this model, so that is the question.
 - **It works in the background.** Its progress and a **Cancel** button show
   at the bottom of the view, and the view can be turned meanwhile. Cancel
   leaves the model as it was. If the model is changed before it finishes (a
@@ -1214,6 +1280,10 @@ triangles, and an engine usually allows one model somewhere between 200k and
   Reset Shape goes back no further than the decimated shape.
 - **How long.** Measured on this machine, the new sculpt mesh included:
   200k to 100k triangles in 0.17 s, 1M to 500k in 1.3 s, 1M to 200k in 2.3 s.
+  In one run on 22 October 2026, with other work on the machine: 1M to 200k
+  in 3.7 s whole and 1.8 s with Mirror X; working the preview out for 1M
+  triangles 5.3 s (64 MB held while it is open), and then each count shown
+  in 44 ms (12 ms for a 200k model).
 
 ## Transform gizmo
 
@@ -3132,7 +3202,7 @@ Left out on purpose: the Unity app's mold maker and hard-surface tool.
 ```
 cargo test --release          # engine tests
 cargo test -p sculpt-geom --release timing_of_decimation -- --ignored --nocapture   # the decimation engine alone at 200k / 500k / 1M triangles, to 50% and 20%: time, closed, same volume
-cargo test --release timing_of_a_decimate -- --ignored --nocapture                  # Decimate as the app runs it, sculpt mesh included, at 200k and 1M triangles; prints the status lines
+cargo test --release timing_of_a_decimate -- --ignored --nocapture                  # Decimate as the app runs it, sculpt mesh included, at 200k and 1M triangles, with Mirror X, and the preview worked out and a count shown; prints the status lines and times
 cargo test --release timing_of_a_clay -- --ignored --nocapture   # what dynamic topology costs a frame at 330k / 1.3M / 3M triangles
 sculpt.exe --bench            # engine timings at 200k / 1M / 4M triangles
 sculpt.exe --bench-render 1000000 5000000 10000000   # the viewport's drawing alone: ms per frame orbiting and with nothing changing (a pointer move), per finish, half off screen, faces hidden
@@ -3152,7 +3222,7 @@ SCULPT_DEMO_SYMMETRY=repair sculpt.exe --screenshot out.png --demo-symmetry --de
 sculpt.exe --screenshot out.png --demo-symmetry      # two objects with a symmetry each (a ball with Mirror X, a turned cube with five repeats about its own Y), a stroke on each, the Symmetry card showing the selected one's (SCULPT_DEMO_SYMMETRY=cube selects the cube; world stands a turned ball astride the world's X plane with Mirror X in World space; select:<name> with a file selects that object of it; cut presses Cut & Mirror on a copy of a lumpy model, then Undo and Redo, and shows the model before and after in wireframe, printing the status line and a line per check, and cut:alone shows the result by itself (add --demo-ui "float=Symmetry@640:20" to see the whole card, buttons and all); corner presses Layer once where Mirror X and Y cross and once clear of the crossing, seen from the side, where both steps should be one height, and corner:front shows the same from where the dabs were made; even draws five short strokes down a ball with Mirror X, on the plane, 0.2, 0.4 and 0.75 of a brush radius from it and well clear of it, which should all stand as tall with no hard line down the middle, and even:clay or even:inflate:0.3 draws them with that brush at that strength)
 sculpt.exe --screenshot out.png --demo --demo-hide   # half of the model hidden, cut on a slant
 sculpt.exe --screenshot out.png --demo --decimate 8000 --look "wire=on"   # the scripted sculpt decimated to that many triangles by the routine under the Decimate button (it waits for the job), status line printed; add --demo-ui "float=Remesh@440:20" to see the card
-sculpt.exe --screenshot out.png --demo --demo-decimate   # Decimate worked through its button, its question about symmetry, Undo, Redo, Cancel and a model edited under it; prints the status lines and a line per check (SCULPT_DEMO_DECIMATE=ask stops at the question, for a picture of it)
+sculpt.exe --screenshot out.png --demo --demo-decimate   # Decimate worked through its buttons, its question about radial symmetry, a mirror kept point for point, the preview (opened, slider moved, Apply, Esc, an edit, Undo), Undo, Redo, Cancel and a model edited under it; prints the status lines and a line per check; the picture is the preview left open (add --demo-ui "size=0.75,float=Remesh@1240:40" to see the card; SCULPT_DEMO_DECIMATE=ask stops at the question, for a picture of it)
 sculpt.exe --screenshot out.png --demo-dyntopo       # a spike pulled out of a coarse ball, then refined by an Inflate stroke with dynamic topology on; wireframe showing (SCULPT_DEMO_DYNTOPO=off | dense | instance | mirror | undo | live for more)
 sculpt.exe --screenshot out.png --clean-view --demo-feel Standard   # a brush (any library name) at 10%, 50% and 100% Strength and then tapering with the pen, four strokes across a ball; Standard:rough lays a fine ripple first (for the smoothing brushes), Standard:fin strokes a thin slab and Standard:back shows that slab from behind; Standard:thrice makes each stroke three passes there and back
 sculpt.exe --screenshot out.png --demo-scene   # one of each shape + instances

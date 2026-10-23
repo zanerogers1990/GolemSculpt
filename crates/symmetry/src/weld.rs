@@ -37,6 +37,10 @@ pub struct MirrorWelded {
     /// The vertices made where an edge of the input crossed the plane. They
     /// are the last `cuts.len()` vertices of `mesh`, in this order.
     pub cuts: Vec<CutVertex>,
+    /// For each triangle of `mesh`, the input triangle it is (or is a piece
+    /// of, where the cut went through it). The triangles come in pairs: one
+    /// on the kept side, then its mirror image, both naming the same one.
+    pub triangle_source: Vec<u32>,
     /// Triangles of the input kept, whole or in part.
     pub kept_triangles: usize,
     /// The rest of the input's triangles: thrown away and rebuilt.
@@ -264,14 +268,20 @@ pub fn mirror_and_weld(
     // two corners, keeping the first in place, so a normal pass that takes a
     // face's edges from that corner sums exactly negated terms on the two
     // halves.
-    let emit = |out: &mut Vec<u32>, a: Corner, b: Corner, c: Corner| out.extend([a.0, b.0, c.0, a.1, c.1, b.1]);
+    // Each with the input triangle it comes from, fourth.
+    let emit_from = |t: usize| {
+        move |out: &mut Vec<[u32; 4]>, a: Corner, b: Corner, c: Corner| {
+            out.extend([[a.0, b.0, c.0, t as u32], [a.1, c.1, b.1, t as u32]])
+        }
+    };
 
-    let out_indices: Vec<u32> = par::gather(triangle_count, |t, out| {
+    let out_triangles: Vec<[u32; 4]> = par::gather(triangle_count, |t, out| {
         if !kept(t) {
             // Wholly cut off, or lying IN the plane: such a triangle is its own
             // mirror image and would come out as two coincident faces.
             return;
         }
+        let emit = emit_from(t);
         let corners = corners(indices, t);
         let sides = corners.map(|i| side[i as usize]);
         if !sides.contains(&CUT_OFF) {
@@ -313,11 +323,14 @@ pub fn mirror_and_weld(
         if first[i as usize] == k as u32 { work[i as usize] } else { axis.reflect(work[i as usize]) }
     }));
     out_positions.extend(cut_positions);
+    let out_indices: Vec<u32> = out_triangles.par_iter().with_min_len(8192).flat_map_iter(|t| [t[0], t[1], t[2]]).collect();
+    let triangle_source: Vec<u32> = out_triangles.par_iter().with_min_len(8192).map(|t| t[3]).collect();
 
     Some(MirrorWelded {
         mesh: TriMesh::new(out_positions, out_indices),
         source,
         cuts,
+        triangle_source,
         kept_triangles,
         discarded_triangles: triangle_count - kept_triangles,
     })
@@ -719,6 +732,27 @@ mod tests {
             assert_eq!(welded.discarded_triangles, 0);
             assert!((welded.mesh.signed_volume() - full.signed_volume()).abs() < 1e-9 * full.signed_volume());
         }
+    }
+
+    #[test]
+    fn each_triangle_names_the_one_it_was_cut_from_and_its_mirror_image_the_same() {
+        let full = octa_sphere(10, 1.0);
+        // Turned a little, so that the plane goes through triangles and not along their edges.
+        let turned: Vec<Vec3> = full.positions.iter().map(|p| Vec3::new(p.x * 0.96 + p.y * 0.28, p.y * 0.96 - p.x * 0.28, p.z)).collect();
+        let welded = mirror_and_weld(&turned, &full.indices, Axis::X, true, 1e-4).unwrap();
+        let mesh = &welded.mesh;
+        assert_eq!(welded.triangle_source.len(), mesh.triangle_count());
+        for (t, pair) in welded.triangle_source.chunks_exact(2).enumerate() {
+            assert_eq!(pair[0], pair[1], "a triangle and its mirror image come from one");
+            // The kept one lies within the triangle it came from (a piece of it, or the whole).
+            let from: Vec<Vec3> = full.indices[pair[0] as usize * 3..pair[0] as usize * 3 + 3].iter().map(|&v| turned[v as usize]).collect();
+            let normal = (from[1] - from[0]).cross(from[2] - from[0]).normalize();
+            for p in mesh.triangle(t * 2) {
+                assert!((p - from[0]).dot(normal).abs() < 1e-5, "triangle {t} is off the plane of the one it names");
+            }
+        }
+        let sources: HashSet<u32> = welded.triangle_source.iter().copied().collect();
+        assert_eq!(sources.len(), welded.kept_triangles);
     }
 
     #[test]

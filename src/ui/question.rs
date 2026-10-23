@@ -50,9 +50,9 @@ pub enum Question {
     /// Export STL for Printing was pressed on an object that is not a closed
     /// surface. `text` is the question, with what is wrong (`printable.rs`).
     ExportNotClosed { object: u64, text: String },
-    /// Decimate was pressed on an object with a Local symmetry on, which it
-    /// would no longer be exact about. `text` is the question
-    /// (`app/decimate.rs`).
+    /// Decimate was pressed on an object with a Local radial symmetry on,
+    /// whose repeats it would no longer keep exact (a mirror it keeps).
+    /// `text` is the question (`app/decimate.rs`).
     DecimateSymmetric { object: u64, text: String },
 }
 
