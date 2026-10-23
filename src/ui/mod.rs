@@ -74,6 +74,9 @@ pub struct UiState {
     pub status_seen: status::Seen,
     /// Where the radial brush menu is open (points), if it is.
     pub radial: Option<Pos2>,
+    /// Space has been let go: the wheel closes at the end of the next frame,
+    /// once it has seen a tap that came in with the release.
+    pub radial_closing: bool,
     /// The object list: rename, drag-to-reorder and its text fields.
     pub graph: scene_graph::State,
     /// The transform gizmo as the app laid it out for this frame, in window
@@ -109,6 +112,7 @@ impl UiState {
             status: (String::new(), theme::HINT()),
             status_seen: Default::default(),
             radial: None,
+            radial_closing: false,
             graph: Default::default(),
             gizmo: Vec::new(),
             recent: Default::default(),

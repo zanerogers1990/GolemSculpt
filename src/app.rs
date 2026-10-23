@@ -1178,9 +1178,10 @@ impl Running {
             KeyCode::Delete if idle => self.delete_key(),
             KeyCode::KeyH if idle && !ctrl => self.hide_key(),
             KeyCode::Slash | KeyCode::NumpadDivide if idle && !ctrl => self.local_view_key(),
-            KeyCode::Space if idle && self.ui.radial.is_none() => {
+            KeyCode::Space if idle && (self.ui.radial.is_none() || self.ui.radial_closing) => {
                 let ppp = self.egui_ctx.pixels_per_point();
                 self.ui.radial = Some(egui::pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp));
+                self.ui.radial_closing = false;
             }
             KeyCode::Escape => {
                 // The wheel and the clean view first; then the Transform tool is put away.
@@ -1216,7 +1217,9 @@ impl Running {
                 }
                 self.input.gauge = None;
             }
-            KeyCode::Space => self.ui.radial = None,
+            // Not closed here: a tap on a tile may have come in with the
+            // release, and the wheel has not seen it yet (ui/overlay.rs).
+            KeyCode::Space => self.ui.radial_closing = self.ui.radial.is_some(),
             _ => {}
         }
     }

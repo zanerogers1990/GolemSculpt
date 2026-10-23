@@ -342,7 +342,10 @@ fn brush_tile(library: &Library, tile: Option<usize>) -> (&str, &'static str, St
 /// Under it is a bar for the one value worth setting from here: the brush's
 /// strength, or the next sphere's size.
 pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState, actions: &mut Vec<Action>) {
-    let Some(anchor) = state.radial else { return };
+    let Some(anchor) = state.radial else {
+        state.radial_closing = false;
+        return;
+    };
     let screen = ctx.content_rect();
     let open = ctx.animate_bool_with_time(Id::new("radial_open"), true, 0.11);
     let spheres = doc.tool == Tool::SSpheres;
@@ -378,6 +381,7 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState, acti
     let mut clicked = None;
     let mut unpinned = None;
     let tips = doc.opts.tooltips;
+    let (pressed, right_pressed) = presses(ctx);
     egui::Area::new(Id::new("radial_menu"))
         .order(Order::Foreground)
         .fixed_pos(center - Vec2::splat(half))
@@ -394,7 +398,8 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState, acti
             for (i, &(name, icon, active)) in tiles.iter().enumerate() {
                 let a = i as f32 / tiles.len() as f32 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
                 let at = c + vec2(a.cos(), a.sin()) * ring * scale;
-                let hovered = pointer.is_some_and(|q| q.distance(at) < pick);
+                let on_tile = |q: Pos2| q.distance(at) < pick;
+                let hovered = pointer.is_some_and(on_tile);
                 let size = tile_size * scale * if hovered { 1.1 } else { 1.0 };
                 let tile = Rect::from_center_size(at, Vec2::splat(size));
                 let fill = if hovered {
@@ -430,12 +435,12 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState, acti
                 }
                 if hovered {
                     hovered_name = Some(name);
-                    if response.clicked() {
-                        clicked = Some(i);
-                    }
-                    if response.secondary_clicked() {
-                        unpinned = Some(i);
-                    }
+                }
+                if pressed.is_some_and(on_tile) {
+                    clicked = Some(i);
+                }
+                if right_pressed.is_some_and(on_tile) {
+                    unpinned = Some(i);
                 }
             }
             p.circle_filled(c, 40.0 * scale, fade(theme::CARD()));
@@ -475,6 +480,31 @@ pub fn radial_menu(ctx: &egui::Context, doc: &mut Doc, state: &mut UiState, acti
         }
         state.radial = None;
     }
+    // Space was let go since the last frame: what came in before that has
+    // been seen, a tap on a tile among it, so the wheel can close now.
+    if std::mem::take(&mut state.radial_closing) {
+        state.radial = None;
+    }
+}
+
+/// Where the pen or the mouse came down this frame, with the left button
+/// and with the right. A wheel's tile is taken as it is pressed, not when
+/// egui would call it a click: a pen's tap that slid a few points or rested
+/// a moment is no click, and it was the pick that went missing.
+fn presses(ctx: &egui::Context) -> (Option<Pos2>, Option<Pos2>) {
+    ctx.input(|i| {
+        let mut presses = (None, None);
+        for event in &i.events {
+            if let egui::Event::PointerButton { pos, button, pressed: true, .. } = *event {
+                match button {
+                    egui::PointerButton::Primary => presses.0 = presses.0.or(Some(pos)),
+                    egui::PointerButton::Secondary => presses.1 = presses.1.or(Some(pos)),
+                    _ => {}
+                }
+            }
+        }
+        presses
+    })
 }
 
 /// The size of the plate a wheel's bar sits on, and the gap between it and
@@ -810,5 +840,85 @@ mod tests {
             // The tiles grow a tenth under the pointer.
             assert!(wheel.ring + wheel.tile * 0.55 <= wheel.disc && wheel.disc < wheel.half, "{count} tiles spill off the wheel");
         }
+    }
+
+    /// A scene of one small ball, with the Sculpt tool up.
+    fn wheel_doc() -> Doc {
+        use crate::mesh::primitives::{self, Primitive};
+        Doc {
+            mesh: primitives::build(Primitive::Sphere, 8, 0.5),
+            scene: crate::scene::Scene::new("Ball"),
+            mesh_replaced: false,
+            history: Default::default(),
+            sculptor: Default::default(),
+            camera: Default::default(),
+            opts: Default::default(),
+            path: None,
+            stats: Default::default(),
+            tool: Tool::Sculpt,
+            spheres: Default::default(),
+            tools: Default::default(),
+            turntable: Default::default(),
+            timelapse: Default::default(),
+            still: Default::default(),
+        }
+    }
+
+    /// A tap on a brush's tile takes that brush up however the pen taps:
+    /// sliding while it is down, resting there, or let go in the same frame
+    /// as Space. A tap was lost both ways: egui calls neither a slide nor a
+    /// rest a click, and letting go of Space shut the wheel before it had
+    /// seen the tap. Space let go with no tap closes the wheel, the brush
+    /// left as it was; a tap on the middle picks nothing.
+    #[test]
+    fn a_tap_on_the_wheel_takes_the_brush_up_however_the_pen_taps() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut state = UiState::new(&ctx);
+        let mut doc = wheel_doc();
+        let center = pos2(800.0, 450.0);
+        let at = |doc: &Doc, brush: Brush| center + brush_wheel_tile(&doc.sculptor.library, Library::base(brush)).unwrap();
+        let (snake, mover) = (at(&doc, Brush::SnakeHook), at(&doc, Brush::Move));
+        let in_hand = |doc: &Doc| doc.sculptor.library.selected(&doc.sculptor.settings);
+        let run = |doc: &mut Doc, state: &mut UiState, events: Vec<Event>| {
+            let mut actions = Vec::new();
+            frame(&ctx, events, |ctx| radial_menu(ctx, doc, state, &mut actions));
+        };
+        let before = in_hand(&doc);
+        assert_ne!(before, Library::base(Brush::SnakeHook));
+        state.radial = Some(center);
+        // Long enough for the wheel to have opened all the way.
+        for _ in 0..20 {
+            run(&mut doc, &mut state, vec![]);
+        }
+
+        // The middle is no tile.
+        run(&mut doc, &mut state, vec![Event::PointerMoved(center), button(center, true)]);
+        run(&mut doc, &mut state, vec![button(center, false)]);
+        assert_eq!((in_hand(&doc), state.radial), (before, Some(center)));
+
+        // Down on Snake Hook and slid well past what egui counts as a click.
+        let slid = snake + vec2(14.0, 9.0);
+        run(&mut doc, &mut state, vec![Event::PointerMoved(snake), button(snake, true), Event::PointerMoved(slid)]);
+        assert_eq!(in_hand(&doc), Library::base(Brush::SnakeHook), "taken up as the pen lands");
+        assert_eq!(state.radial, None, "and the wheel closes");
+        for _ in 0..60 {
+            run(&mut doc, &mut state, vec![]);
+        }
+        run(&mut doc, &mut state, vec![button(slid, false)]);
+        assert_eq!(in_hand(&doc), Library::base(Brush::SnakeHook));
+
+        // The whole tap and Space let go between two frames.
+        state.radial = Some(center);
+        state.radial_closing = true;
+        run(&mut doc, &mut state, vec![Event::PointerMoved(mover), button(mover, true), button(mover, false)]);
+        assert_eq!(in_hand(&doc), Library::base(Brush::Move));
+        assert_eq!((state.radial, state.radial_closing), (None, false));
+
+        // Space let go and nothing tapped.
+        state.radial = Some(center);
+        state.radial_closing = true;
+        run(&mut doc, &mut state, vec![]);
+        assert_eq!((in_hand(&doc), state.radial, state.radial_closing), (Library::base(Brush::Move), None, false));
     }
 }
