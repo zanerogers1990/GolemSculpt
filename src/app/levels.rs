@@ -368,6 +368,7 @@ impl Running {
             "leveldown" => Action::LevelBy(-1),
             "deletelowerlevels" => Action::DeleteLevels { lower: true },
             "deletehigherlevels" => Action::DeleteLevels { lower: false },
+            "reconstructsubdiv" => Action::ReconstructSubdiv,
             _ => return None,
         };
         Some(self.said(|app| app.act(action)))
@@ -811,6 +812,8 @@ impl Running {
         self.act(Action::Level(1));
     }
 }
+
+mod reconstruct;
 
 #[cfg(test)]
 mod tests;

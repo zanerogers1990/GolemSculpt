@@ -750,6 +750,7 @@ fn tools() -> Value {
                         "mask_grow", "mask_shrink", "mask_recesses", "mask_peaks", "clone", "instance", "make_unique",
                         "set_origin_to_mesh",
                         "subdivide", "level", "level_up", "level_down", "delete_lower_levels", "delete_higher_levels",
+                        "reconstruct_subdiv",
                         "layer_new", "layer_record", "layer_strength", "layer_show", "layer_hide", "layer_rename",
                         "layer_delete", "layer_bake", "layer_bake_all",
                         "group_masked", "group_visible", "auto_groups", "groups_by_angle", "clear_groups",
@@ -769,6 +770,8 @@ fn tools() -> Value {
                      times the triangles above the finest and goes to it; level goes to the level given; level_up \
                      and level_down step one; delete_lower_levels and delete_higher_levels drop the levels below \
                      or above the one the object is on. What is sculpted on one level is kept on the others. \
+                     reconstruct_subdiv finds the levels below a quad model that was subdivided elsewhere \
+                     (ZBrush, Blender) and leaves it on the finest of them. \
                      Sculpt layers (get_state gives each object's layers): layer_new adds an empty layer and \
                      starts recording on it, so strokes go into the layer and leave the model underneath alone; \
                      layer_record makes the named layer the one that records, or with no layer stops recording, \

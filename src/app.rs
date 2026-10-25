@@ -550,11 +550,20 @@ impl Running {
                     Err(e) => open_status = Some((files::start_up_failure(file, &e), false)),
                 }
             } else {
-                match import_mesh(file, None) {
-                    Ok((m, at)) => {
-                        mesh = m;
-                        scene = Scene::new(&stem(file));
-                        scene.active_mut().position = at;
+                match import_meshes(file, None) {
+                    Ok((objects, at)) => {
+                        let mut objects = objects.into_iter();
+                        if let Some((name, first)) = objects.next() {
+                            mesh = first;
+                            scene = Scene::new(&name);
+                            scene.active_mut().position = at;
+                            let first = scene.active().id;
+                            for (name, more) in objects {
+                                scene.add(&name, more, &mut mesh);
+                                scene.active_mut().position = at;
+                            }
+                            scene.select(first, &mut mesh);
+                        }
                     }
                     Err(e) => open_status = Some((files::start_up_failure(file, &e), false)),
                 }
@@ -1490,6 +1499,7 @@ impl Running {
             Action::SymmetryCleanup { axis } => self.symmetry_cleanup(axis),
             // Subdivision levels are in app/levels.rs.
             Action::Subdivide => self.subdivide(),
+            Action::ReconstructSubdiv => self.reconstruct_subdiv(),
             Action::Level(level) => self.level_to(level),
             Action::LevelBy(by) => self.level_by(by),
             Action::DeleteLevels { lower } => self.delete_levels(lower),
@@ -2341,13 +2351,23 @@ fn stem(path: &std::path::Path) -> String {
     path.file_stem().map_or("Model".into(), |s| s.to_string_lossy().into_owned())
 }
 
-/// Reads a model file and returns its mesh with the position its object
-/// should be given (see [`io::place_import`]). `first_half_size` is the half
-/// size of the scene's first object, which an OBJ is fitted to.
-fn import_mesh(path: &std::path::Path, first_half_size: Option<Vec3>) -> io::Result<(Mesh, Vec3)> {
-    let mut raw = io::import(path)?;
-    let at = io::place_import(&mut raw, first_half_size);
-    Ok((io::imported_mesh(raw), at))
+/// Reads a model file and returns a mesh and a name for each object in it
+/// (the file's own name for one it does not name), with the position every
+/// one of them should be given (see [`io::place_imports`]).
+/// `first_half_size` is the half size of the scene's first object, which a
+/// file without units is fitted to.
+fn import_meshes(path: &std::path::Path, first_half_size: Option<Vec3>) -> io::Result<(Vec<(String, Mesh)>, Vec3)> {
+    let mut objects = io::import_objects(path)?;
+    let at = io::place_imports(&mut objects, first_half_size);
+    let file = stem(path);
+    let meshes = objects
+        .into_iter()
+        .map(|mut raw| {
+            let name = if raw.name.is_empty() { file.clone() } else { std::mem::take(&mut raw.name) };
+            (name, io::imported_mesh(raw))
+        })
+        .collect();
+    Ok((meshes, at))
 }
 
 /// Puts a loaded file's objects in place of the scene's. Gives back what

@@ -12,6 +12,9 @@ env_logger = "0.11.11"
 glam = { version = "0.34", features = ["bytemuck"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "hdr", "exr"] }
 log = "0.4.34"
+# Inflates the zlib-packed arrays of a binary FBX on import (src/io/fbx_read.rs);
+# already built for the PNG reader.
+miniz_oxide = "0.8"
 # The shader compiler wgpu itself uses (the same version), to check a custom
 # material's WGSL before the graphics card ever sees it (src/materials/custom.rs).
 naga = { version = "30.0.1", features = ["wgsl-in"] }

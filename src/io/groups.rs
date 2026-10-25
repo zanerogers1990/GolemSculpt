@@ -213,8 +213,26 @@ impl ObjGroups {
 }
 
 /// The mesh of a model read from a file, with the groups the file gave it,
-/// and its colours as a paint layer if it gave colours (`io/painted.rs`).
+/// its colours as a paint layer if it gave colours (`io/painted.rs`), and its
+/// polygons if it was made of quads.
 pub fn imported_mesh(raw: RawMesh) -> Mesh {
+    if raw.polys.is_some() {
+        // The way a saved mesh with quads is built, which carries everything else along too.
+        let painted = !raw.colours.is_empty() && raw.colours.len() == raw.positions.len();
+        let loaded = super::LoadedMesh {
+            groups: (!raw.groups.is_empty()).then(|| SavedGroups { ids: raw.groups, levels: Vec::new() }),
+            paint: painted.then(|| super::painted::imported_stack(raw.colours)),
+            positions: raw.positions,
+            indices: raw.indices,
+            mask: None,
+            polys: raw.polys,
+            hidden: None,
+            levels: None,
+            layers: None,
+            lost: [false; 4],
+        };
+        return loaded.build().0;
+    }
     if !raw.colours.is_empty() && raw.colours.len() == raw.positions.len() {
         let stack = super::painted::imported_stack(raw.colours);
         return crate::mesh::paint::built_with(raw.positions, raw.indices, None, &raw.groups, Some(&stack));

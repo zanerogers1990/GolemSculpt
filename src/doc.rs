@@ -390,6 +390,10 @@ pub enum Action {
     /// Add a subdivision level above the active object's finest and go to
     /// it (see app/levels.rs).
     Subdivide,
+    /// Find the subdivision levels below the active object, a quad model
+    /// subdivided elsewhere, and keep it on the finest (see
+    /// app/levels/reconstruct.rs).
+    ReconstructSubdiv,
     /// Go to this subdivision level of the active object; 0 is the coarsest.
     Level(usize),
     /// Go this many levels finer, or coarser if negative.

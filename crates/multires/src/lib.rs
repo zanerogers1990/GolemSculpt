@@ -22,6 +22,8 @@
 //!   follows an edit made lower down; `dirty` does the same from what the
 //!   edit changed, so that a dab low down is not paid for at every vertex.
 //! * [`subdivide`] is one subdivision on its own, with no levels kept.
+//! * [`reconstruct`] goes the other way: the levels below a quad mesh that
+//!   was made by subdividing (`unsubdivide`).
 //!
 //! # What a caller can rely on
 //!
@@ -52,6 +54,7 @@ mod loop_scheme;
 mod mesh;
 mod refine;
 mod turn;
+mod unsubdivide;
 
 #[cfg(test)]
 mod tests;
@@ -60,6 +63,7 @@ pub use levels::{Levels, LevelsParts, Rider, Scheme, StepUndo, Stepped, face_val
 pub use mesh::{LevelMesh, Polys};
 pub use refine::{Channel, Split};
 pub use turn::{Fan, Turn};
+pub use unsubdivide::{Coarser, Rebuilt, reconstruct, unsubdivide};
 
 /// What [`subdivide`] makes.
 #[derive(Clone, Debug, PartialEq)]

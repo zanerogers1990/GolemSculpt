@@ -22,6 +22,8 @@ use crate::doc::{Action, Doc};
 use crate::mesh::Mesh;
 use crate::mesh::levels;
 
+mod reconstruct;
+
 /// The card's colour on the panel.
 const TINT: Color32 = Color32::from_rgb(170, 150, 235);
 
@@ -57,6 +59,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
              itself on a low level comes back up as a softer, lower swelling: the finer levels round it off.",
         );
         subdivide(ui, mesh, &mut doc.opts.subdivide_flat, tips, actions);
+        reconstruct::button(ui, mesh, tips, actions);
         let Some((level, count)) = place else { return };
         ui.add_space(6.0);
         rows(ui, mesh, level, count, tips, actions);

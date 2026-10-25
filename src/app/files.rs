@@ -30,7 +30,7 @@ use super::file_undo::File;
 use super::tools::Tools;
 pub(super) use super::unsaved::Mark;
 use super::unsaved::opening_question;
-use super::{Running, import_mesh, install, is_native, stem};
+use super::{Running, import_meshes, install, is_native};
 use crate::camera::{Camera, SavedView};
 use crate::doc::{Action, OpenHow};
 use crate::history::FileState;
@@ -888,8 +888,8 @@ impl Running {
     pub(super) fn import_action(&mut self) {
         let pick = rfd::FileDialog::new()
             .set_title("Import")
-            .add_filter("Models and sculpts", &["obj", "stl", "sclp", unity_import::EXTENSION])
-            .add_filter("Models", &["obj", "stl"])
+            .add_filter("Models and sculpts", &[io::MODEL_EXTENSIONS, &["sclp", unity_import::EXTENSION]].concat())
+            .add_filter("Models", io::MODEL_EXTENSIONS)
             .add_filter("Sculpt", &["sclp"])
             .add_filter("Unity app sculpt", &[unity_import::EXTENSION])
             .pick_file();
@@ -1026,22 +1026,33 @@ impl Running {
     }
 
     fn add_model(&mut self, path: PathBuf) {
-        // An OBJ is fitted to the size of the scene's first object (as Unity does).
+        // A file without units is fitted to the size of the scene's first object (as Unity does).
         let first = self.doc.scene.objects.first().and_then(|o| self.doc.scene.mesh(o.mesh, &self.doc.mesh));
         let first_half_size = first.map(|m| m.bounds().size() * 0.5);
-        match import_mesh(&path, first_half_size) {
-            Ok((mesh, at)) => {
-                let (tris, verts) = (mesh.triangle_count(), mesh.vertex_count());
-                let size = mesh.bounds().size().to_array().map(|s| sculpt_geom::units::format(s, sculpt_geom::LengthUnit::Millimetres, false));
-                let name = stem(&path);
+        match import_meshes(&path, first_half_size) {
+            Ok((objects, at)) => {
+                let count = objects.len();
+                let (tris, verts) = objects.iter().fold((0, 0), |(t, v), (_, m)| (t + m.triangle_count(), v + m.vertex_count()));
+                let bounds = objects.iter().map(|(_, m)| m.bounds()).reduce(crate::mesh::bvh::Aabb::union);
+                let size = bounds.map_or(Vec3::ZERO, |b| b.size());
+                let size = size.to_array().map(|s| sculpt_geom::units::format(s, sculpt_geom::LengthUnit::Millimetres, false));
                 self.edit_scene(|scene, slot| {
-                    scene.add(&name, mesh, slot);
-                    scene.active_mut().position = at;
+                    let mut first = None;
+                    for (name, mesh) in objects {
+                        let id = scene.add(&name, mesh, slot);
+                        scene.active_mut().position = at;
+                        first.get_or_insert(id);
+                    }
+                    // The first object in the file is the one to carry on with (a body before its eyes).
+                    if let Some(first) = first {
+                        scene.select(first, slot);
+                    }
                     true
                 });
                 self.frame_view();
+                let objects = if count == 1 { String::new() } else { format!("{count} objects, ") };
                 let message = format!(
-                    "Added {} ({tris} triangles, {verts} vertices, {} x {} x {} mm)",
+                    "Added {} ({objects}{tris} triangles, {verts} vertices, {} x {} x {} mm)",
                     path.display(),
                     size[0],
                     size[1],

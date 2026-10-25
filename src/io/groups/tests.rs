@@ -295,7 +295,7 @@ fn a_quad_mesh_goes_out_as_quads_under_its_groups() {
 fn groups_named_by_another_program_are_read_as_groups() {
     // Three triangles side by side and one off on its own, as text.
     let points = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nv 2 0 0\nv 2 1 0\nv 5 5 5\nv 6 5 5\nv 5 6 5\n";
-    let read = |faces: &str| super::super::parse_obj(format!("{points}{faces}").as_bytes()).unwrap().groups;
+    let read = |faces: &str| super::super::parse_obj(format!("{points}{faces}").as_bytes()).unwrap().remove(0).groups;
     // Names of any kind become groups in the order they are met; a name met again is the same group.
     assert_eq!(read("g head\nf 1 2 3\ng body\nf 2 4 3\ng head\nf 2 5 4\ng tail fin\nf 7 8 9\n"), [1, 2, 1, 3]);
     // Our own names keep their numbers, and other names take the numbers left free.

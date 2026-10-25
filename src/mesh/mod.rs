@@ -118,7 +118,7 @@ pub struct Mesh {
 /// follow every stroke for free; anything that rebuilds the triangles builds a
 /// new mesh, which starts without them, and dynamic topology retires them the
 /// first time it splits one.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Polys {
     pub start: Vec<u32>,
     pub indices: Vec<u32>,

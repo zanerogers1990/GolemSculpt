@@ -2,6 +2,9 @@
 //! Wavefront OBJ and STL (binary and ASCII). Export as FBX is in `io/fbx.rs`,
 //! as PLY in `io/ply.rs`, and what every export writes of a model's paint
 //! (and an OBJ's colours read back) in `io/painted.rs`. STL has no colour.
+//! Import of FBX is in `io/fbx_read.rs`, of PLY in `io/ply_read.rs` and of
+//! glTF in `io/gltf.rs`; every reader hands its faces to `io/polygons.rs`,
+//! which welds them and keeps quads as quads.
 //!
 //! A `.sclp` keeps the whole scene exactly: every mesh as raw arrays, then
 //! one JSON section for everything else (objects, look, camera, tool state).
@@ -47,13 +50,17 @@ use crate::mesh::{Mesh, Polys};
 pub type Result<T> = std::result::Result<T, String>;
 
 mod fbx;
+mod fbx_read;
+mod gltf;
 mod groups;
 mod layers;
 mod levels;
 mod link;
 mod paint;
+mod polygons;
 pub(crate) mod painted;
 mod ply;
+mod ply_read;
 mod tool_data;
 mod repair;
 #[cfg(test)]
@@ -71,8 +78,15 @@ pub use painted::ExportPaint;
 pub use ply::export_ply_placed;
 pub use repair::{note_saved, notes_opened};
 
-/// A model as read from a file, already in the app's axes and units.
+/// A model as read from a file, already in the app's axes and units. A file
+/// holding several objects gives one of these for each (see
+/// [`import_objects`]), every one in the file's own space, so that placed
+/// together they stand as they did in the program that wrote them.
+#[derive(Default, Debug)]
 pub struct RawMesh {
+    /// The object's name in the file; empty when the file names none, and the
+    /// object then takes the file's name.
+    pub name: String,
     pub positions: Vec<Vec3>,
     pub indices: Vec<u32>,
     /// The file states a real size (an STL, in millimetres), so the model keeps
@@ -85,35 +99,116 @@ pub struct RawMesh {
     /// The colour of each vertex, where the file gave colours (an OBJ's
     /// `v x y z r g b` lines: see `io/painted.rs`); empty otherwise.
     pub colours: Vec<crate::mesh::paint::Rgba8>,
+    /// The file's polygons, where any had more than three corners (a model
+    /// of quads, from ZBrush, Blender or a retopology), numbered as
+    /// `positions`; `indices` are each cut as a fan from its first corner
+    /// (`io/polygons.rs`). `None` for a model of triangles.
+    pub polys: Option<Polys>,
 }
 
+/// The model file types Import reads, for the file dialog and drag and drop.
+pub const MODEL_EXTENSIONS: &[&str] = &["obj", "stl", "ply", "fbx", "glb", "gltf"];
+
+/// Reads a model file as one model: every object it holds joined into one
+/// mesh. Import itself keeps them apart ([`import_objects`]).
 pub fn import(path: &Path) -> Result<RawMesh> {
+    let mut objects = import_objects(path)?.into_iter();
+    let mut whole = objects.next().ok_or("The file contains no triangles")?;
+    for raw in objects {
+        whole.join(raw);
+    }
+    Ok(whole)
+}
+
+/// Reads a model file: one [`RawMesh`] for each object in it that has any
+/// faces, in the file's order, never none.
+pub fn import_objects(path: &Path) -> Result<Vec<RawMesh>> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut bytes = Vec::new();
     File::open(path)
         .and_then(|mut f| f.read_to_end(&mut bytes))
         .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
-    let raw = match ext.as_str() {
+    let objects = match ext.as_str() {
         "obj" => parse_obj(&bytes)?,
-        "stl" => parse_stl(&bytes)?,
-        other => return Err(format!("Unsupported file type \".{other}\" (use .obj or .stl)")),
+        "stl" => vec![parse_stl(&bytes)?],
+        "ply" => ply_read::parse(&bytes)?,
+        "glb" | "gltf" => gltf::parse(&bytes, path)?,
+        "fbx" => fbx_read::parse(&bytes)?,
+        other => return Err(format!("Unsupported file type \".{other}\" (use {})", model_types())),
     };
-    if raw.indices.is_empty() {
+    let objects: Vec<RawMesh> = objects.into_iter().filter(|raw| !raw.indices.is_empty()).collect();
+    if objects.is_empty() {
         return Err("The file contains no triangles".into());
     }
-    Ok(raw)
+    Ok(objects)
 }
 
-fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
+/// ".obj, .stl or ...", for messages.
+pub fn model_types() -> String {
+    let all: Vec<String> = MODEL_EXTENSIONS.iter().map(|e| format!(".{e}")).collect();
+    match all.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
+
+impl RawMesh {
+    /// Adds `other` to this model, as one mesh. Polygons are kept only if
+    /// both had them, groups only if both had them, and colours likewise.
+    fn join(&mut self, other: RawMesh) {
+        let base = self.positions.len() as u32;
+        let (tris, other_tris) = (self.indices.len() / 3, other.indices.len() / 3);
+        self.polys = match (self.polys.take(), other.polys) {
+            (Some(mut mine), Some(theirs)) => {
+                let corners = mine.indices.len() as u32;
+                mine.start.extend(theirs.start.iter().skip(1).map(|&s| s + corners));
+                mine.indices.extend(theirs.indices.iter().map(|&c| c + base));
+                Some(mine)
+            }
+            _ => None,
+        };
+        self.groups = match (self.groups.is_empty(), other.groups.is_empty()) {
+            (true, true) => Vec::new(),
+            _ => {
+                let mut groups = if self.groups.is_empty() { vec![0; tris] } else { std::mem::take(&mut self.groups) };
+                groups.extend(if other.groups.is_empty() { vec![0; other_tris] } else { other.groups });
+                groups
+            }
+        };
+        if self.colours.len() == self.positions.len() && other.colours.len() == other.positions.len() {
+            self.colours.extend(other.colours);
+        } else {
+            self.colours.clear();
+        }
+        self.positions.extend(other.positions);
+        self.indices.extend(other.indices.iter().map(|&i| i + base));
+    }
+}
+
+/// An OBJ: an object for each `o` line (faces before the first are an object
+/// of their own, named by nothing), its faces kept as the polygons they are,
+/// and its `g` groups as face groups.
+fn parse_obj(bytes: &[u8]) -> Result<Vec<RawMesh>> {
     let text = String::from_utf8_lossy(bytes);
     let mut positions: Vec<Vec3> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
+    // Every face in the file, numbered as `positions`, and where each object's begin.
+    let mut faces = polygons::Faces::default();
+    let mut objects: Vec<(String, usize)> = vec![(String::new(), 0)];
     let mut face: Vec<u32> = Vec::new();
     let mut named = groups::ObjGroups::default();
     let mut colours = painted::ObjColours::default();
     for line in text.lines() {
         let mut parts = line.split_ascii_whitespace();
         match parts.next() {
+            Some("o") => {
+                let name = line.trim_start().strip_prefix('o').unwrap_or("").trim().to_owned();
+                match objects.last_mut() {
+                    // Nothing was in the last one yet: this is its name.
+                    Some(last) if last.1 == faces.count() => last.0 = name,
+                    _ => objects.push((name, faces.count())),
+                }
+            }
             Some("g") => named.named(line),
             Some("v") => {
                 let mut c = [0.0f32; 3];
@@ -136,9 +231,8 @@ fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
                         face.push(index as u32);
                     }
                 }
-                // Fan-triangulate polygons.
-                for k in 1..face.len().saturating_sub(1) {
-                    indices.extend_from_slice(&[face[0], face[k], face[k + 1]]);
+                if face.len() >= 3 {
+                    faces.push(&face, None);
                     named.triangle();
                 }
             }
@@ -146,12 +240,44 @@ fn parse_obj(bytes: &[u8]) -> Result<RawMesh> {
         }
     }
     let colours = colours.bytes();
-    let (positions, indices, first) = weld_exact(positions, indices);
-    // A welded vertex takes the colour of the first line that named its place.
-    let colours = if colours.is_empty() { colours } else { first.iter().map(|&i| colours[i as usize]).collect() };
-    // The groups of the triangles `tidy` is about to keep.
-    let groups = named.ids(|t| sound_triangle(&positions, &indices[t * 3..t * 3 + 3]));
-    Ok(RawMesh { groups, ..tidy(positions, indices, false, colours) })
+    // One group per face, numbered across the whole file (empty for none).
+    let groups = named.ids(|_| true);
+    let ends: Vec<usize> = objects.iter().skip(1).map(|o| o.1).chain([faces.count()]).collect();
+    Ok(objects
+        .into_iter()
+        .zip(ends)
+        .filter(|((_, from), to)| to > from)
+        .map(|((name, from), to)| {
+            // This object's faces, and the vertices they use, in the file's order.
+            let mut used = vec![u32::MAX; positions.len()];
+            let mut own = polygons::Faces::default();
+            let mut corners = Vec::new();
+            for f in from..to {
+                corners.clear();
+                for &c in &faces.corners[faces.start[f] as usize..faces.start[f + 1] as usize] {
+                    used[c as usize] = 0;
+                    corners.push(c);
+                }
+                own.push(&corners, groups.get(f).copied());
+            }
+            let mut points = Vec::new();
+            let mut tints = Vec::new();
+            for (i, slot) in used.iter_mut().enumerate() {
+                if *slot == 0 {
+                    *slot = points.len() as u32;
+                    points.push(positions[i]);
+                    if let Some(&c) = colours.get(i) {
+                        tints.push(c);
+                    }
+                }
+            }
+            own.corners.iter_mut().for_each(|c| *c = used[*c as usize]);
+            if tints.len() != points.len() {
+                tints.clear();
+            }
+            polygons::raw_mesh(name, points, &own, false, tints)
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------- STL axes
@@ -403,11 +529,12 @@ fn bounds_of(points: &[Vec3]) -> (Vec3, Vec3) {
     })
 }
 
-/// Merges vertices at exactly the same position. OBJ files often split
-/// vertices along seams; sculpting needs a connected surface or the mesh tears
-/// apart under the brush. Also gives back, for each welded vertex, the first
-/// of the vertices it was made of.
-fn weld_exact(positions: Vec<Vec3>, indices: Vec<u32>) -> (Vec<Vec3>, Vec<u32>, Vec<u32>) {
+/// Merges vertices at exactly the same position. Files often split vertices
+/// along seams; sculpting needs a connected surface or the mesh tears apart
+/// under the brush. Gives back the welded positions, the welded number of
+/// each vertex handed in, and for each welded vertex the first of the
+/// vertices it was made of.
+fn weld_exact_mapped(positions: Vec<Vec3>) -> (Vec<Vec3>, Vec<u32>, Vec<u32>) {
     let mut map: HashMap<[u32; 3], u32> = HashMap::with_capacity(positions.len());
     let mut out: Vec<Vec3> = Vec::new();
     let mut first = Vec::new();
@@ -422,8 +549,7 @@ fn weld_exact(positions: Vec<Vec3>, indices: Vec<u32>) -> (Vec<Vec3>, Vec<u32>, 
         });
         remap.push(id);
     }
-    let indices = indices.iter().map(|&i| remap[i as usize]).collect();
-    (out, indices, first)
+    (out, remap, first)
 }
 
 /// Drops what could only hurt a sculpt: triangles that collapsed to a line or
@@ -458,7 +584,7 @@ fn tidy(positions: Vec<Vec3>, indices: Vec<u32>, real_size: bool, colours: Vec<c
     } else {
         Vec::new()
     };
-    RawMesh { positions: out, indices: kept, real_size, groups: Vec::new(), colours }
+    RawMesh { positions: out, indices: kept, real_size, colours, ..Default::default() }
 }
 
 /// Whether [`tidy`] keeps triangle `t`: three different corners, each a number.
@@ -481,15 +607,42 @@ fn sound_triangle(positions: &[Vec3], t: &[u32]) -> bool {
 /// new object arrives. The vertices stay where the file had them, apart from
 /// that one uniform scale, so a symmetry plane the modeller built about X = 0
 /// is still the mesh's own X = 0.
+/// The smallest a model that states its size is believed to be across, in app
+/// units: half a millimetre.
+const SMALLEST_REAL: f32 = 0.05;
+/// The largest, in app units: fifty metres.
+const LARGEST_REAL: f32 = 5_000.0;
+
+#[cfg_attr(not(test), allow(dead_code))] // the app places a file's objects together
 pub fn place_import(raw: &mut RawMesh, first_half_size: Option<Vec3>) -> Vec3 {
-    let (mut lo, mut hi) = bounds_of(&raw.positions);
-    if !raw.real_size {
+    place_imports(std::slice::from_mut(raw), first_half_size)
+}
+
+/// [`place_import`] for every object a file held, as one: one scale for all
+/// of them (from their bounds together), and one position, which puts the
+/// centre of the lot on the scene centre. So the objects stand as they did in
+/// the program that wrote them, each still about the file's own origin (the
+/// eyes of a head keep its symmetry plane, as subtools do in ZBrush).
+///
+/// A file that states its units can still state them wrongly: an FBX saying
+/// a unit is a metre around coordinates written in centimetres arrives a
+/// hundred times too big. A real size under [`SMALLEST_REAL`] or over
+/// [`LARGEST_REAL`] across is taken for that, and fitted as a file without
+/// units is.
+pub fn place_imports(objects: &mut [RawMesh], first_half_size: Option<Vec3>) -> Vec3 {
+    let (mut lo, mut hi) = objects
+        .iter()
+        .map(|raw| bounds_of(&raw.positions))
+        .fold((Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+    let across = (hi - lo).max_element();
+    let believable = (SMALLEST_REAL..=LARGEST_REAL).contains(&across);
+    if !objects.iter().all(|raw| raw.real_size) || !believable {
         if let Some(first) = first_half_size {
             let target = (first.x + first.y + first.z) / 3.0 * 2.0;
             let model = ((hi - lo) * 0.5).max_element();
             if model > 1e-5 && target > 1e-5 {
                 let scale = target / model;
-                for p in &mut raw.positions {
+                for p in objects.iter_mut().flat_map(|raw| raw.positions.iter_mut()) {
                     *p *= scale;
                 }
                 (lo, hi) = (lo * scale, hi * scale);
@@ -2274,9 +2427,7 @@ mod tests {
         let mut obj = RawMesh {
             positions: cube_facets(50.0).concat().iter().map(|p| *p + Vec3::new(30.0, 0.0, 0.0)).collect(),
             indices: (0..36).collect(),
-            real_size: false,
-            groups: Vec::new(),
-            colours: Vec::new(),
+            ..Default::default()
         };
         let at = place_import(&mut obj, Some(Vec3::splat(0.5)));
         let (lo, hi) = bounds_of(&obj.positions);
@@ -2285,7 +2436,7 @@ mod tests {
         assert_close(at, -(lo + hi) * 0.5, 1e-6, "position puts the centre at the origin");
         assert_close(at, Vec3::new(-30.0 * 0.02, 0.0, 0.0), 1e-5, "centre was at x = 30, scaled by 0.02");
         // Nothing to fit to: size is left alone, but it is still centred.
-        let mut alone = RawMesh { positions: vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 4.0, 2.0), Vec3::ZERO], indices: vec![0, 1, 2], real_size: false, groups: Vec::new(), colours: Vec::new() };
+        let mut alone = RawMesh { positions: vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 4.0, 2.0), Vec3::ZERO], indices: vec![0, 1, 2], ..Default::default() };
         assert_close(place_import(&mut alone, None), Vec3::new(-10.0, -2.0, -1.0), 1e-6, "centred only");
         assert_eq!(alone.positions[1], Vec3::new(20.0, 4.0, 2.0));
         // An STL keeps the size it was written at.
@@ -2293,6 +2444,81 @@ mod tests {
         place_import(&mut stl, Some(Vec3::splat(0.5)));
         let (lo, hi) = bounds_of(&stl.positions);
         assert_close(hi - lo, Vec3::splat(10.0), 1e-4, "a 100 mm cube is 10 units");
+    }
+
+    /// Two named objects sharing the file's vertex list, as Blender writes
+    /// them: a quad pair and a triangle, the triangle's corners given by
+    /// negative (relative) numbers.
+    const TWO_OBJECTS: &str = "# two objects
+v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+v 2 0 0
+v 2 1 0
+o Body
+f 1 2 3 4
+f 2/7 5/8 6/9 3/10
+o Left Eye
+v 5 5 5
+v 6 5 5
+v 5 6 5
+f -3 -2 -1
+";
+
+    #[test]
+    fn an_obj_gives_an_object_for_each_o_line_with_its_quads_and_name() {
+        let objects = parse_obj(TWO_OBJECTS.as_bytes()).unwrap();
+        assert_eq!(objects.len(), 2);
+        let (body, eye) = (&objects[0], &objects[1]);
+        assert_eq!((body.name.as_str(), eye.name.as_str()), ("Body", "Left Eye"));
+        assert_eq!(body.positions.len(), 6, "only the vertices the body's faces use");
+        assert_eq!(body.indices.len(), 12);
+        assert_eq!(body.polys.as_ref().map(|p| p.start.clone()), Some(vec![0, 4, 8]), "the quads are kept");
+        assert_eq!(eye.positions, vec![Vec3::new(5.0, 5.0, 5.0), Vec3::new(6.0, 5.0, 5.0), Vec3::new(5.0, 6.0, 5.0)]);
+        assert!(eye.polys.is_none(), "a model of triangles has no polygons");
+    }
+
+    #[test]
+    fn an_obj_without_o_lines_is_one_unnamed_object_and_import_joins_the_rest() {
+        let plain = TWO_OBJECTS.replace("o Body
+", "").replace("o Left Eye
+", "");
+        let objects = parse_obj(plain.as_bytes()).unwrap();
+        assert_eq!(objects.len(), 1);
+        assert!(objects[0].name.is_empty(), "it takes the file's name");
+        assert_eq!(objects[0].indices.len(), 15);
+        assert!(objects[0].polys.is_some(), "a triangle among quads is a polygon of three");
+
+        let path = temp("two objects.obj");
+        std::fs::write(&path, TWO_OBJECTS).unwrap();
+        let whole = import(&path).unwrap();
+        assert_eq!((whole.positions.len(), whole.indices.len()), (9, 15));
+        assert!(whole.polys.is_none(), "the eye had none, so the join has none");
+        assert_eq!(import_objects(&path).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_files_objects_are_fitted_and_placed_as_one() {
+        let mut objects = parse_obj(TWO_OBJECTS.as_bytes()).unwrap();
+        let eye_was = objects[1].positions[0];
+        // Together they span 0..6 in X and Y and 0..5 in Z: half of the longest side is 3.
+        let at = place_imports(&mut objects, Some(Vec3::splat(0.75)));
+        let scale = 1.5 / 3.0;
+        assert_close(objects[1].positions[0], eye_was * scale, 1e-6, "one scale for both");
+        assert_close(at, -Vec3::new(3.0, 3.0, 2.5) * scale, 1e-6, "one position, the centre of the lot");
+    }
+
+    #[test]
+    fn a_stated_size_past_belief_is_fitted_like_a_file_without_units() {
+        // A model that says it is real size and is a kilometre across.
+        let mut huge = RawMesh { positions: vec![Vec3::ZERO, Vec3::X * 100_000.0, Vec3::Y], indices: vec![0, 1, 2], real_size: true, ..Default::default() };
+        place_import(&mut huge, Some(Vec3::splat(0.5)));
+        assert_close(huge.positions[1], Vec3::X * 2.0, 1e-4, "fitted to the first object");
+        // One at a believable size keeps it.
+        let mut part = RawMesh { positions: vec![Vec3::ZERO, Vec3::X * 30.0, Vec3::Y], indices: vec![0, 1, 2], real_size: true, ..Default::default() };
+        place_import(&mut part, Some(Vec3::splat(0.5)));
+        assert_eq!(part.positions[1], Vec3::X * 30.0);
     }
 
     #[test]

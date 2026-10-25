@@ -1,7 +1,7 @@
 //! A file dragged from Explorer onto the window. A sculpt (`.sclp`, or a
 //! `.sculpt` from the Unity app) is opened exactly as Open opens one: in place
 //! of the scene, asking first only when that would put unsaved work aside
-//! (`open_chosen`). A model (`.obj`, `.stl`) is added to the scene as Import
+//! (`open_chosen`). A model (any of `io::MODEL_EXTENSIONS`) is added to the scene as Import
 //! adds it. Either is one undo step. Anything else is turned away with a line
 //! saying what can be dropped.
 //!
@@ -30,7 +30,7 @@ pub(super) fn kind(path: &Path) -> Dropped {
     match extension.as_str() {
         "sclp" => Dropped::Sculpt,
         e if e == unity_import::EXTENSION => Dropped::Sculpt,
-        "obj" | "stl" => Dropped::Model,
+        e if crate::io::MODEL_EXTENSIONS.contains(&e) => Dropped::Model,
         _ => Dropped::Other,
     }
 }
@@ -62,7 +62,7 @@ impl Running {
             Dropped::Sculpt => self.open_chosen(path),
             Dropped::Model => self.load(path, false),
             Dropped::Other => self.status(
-                format!("{} is not a file GolemSculpt opens. Drop a sculpt (.sclp, .sculpt) or a model (.obj, .stl).", name(&path)),
+                format!("{} is not a file GolemSculpt opens. Drop a sculpt (.sclp, .sculpt) or a model ({}).", name(&path), crate::io::model_types()),
                 false,
             ),
         }

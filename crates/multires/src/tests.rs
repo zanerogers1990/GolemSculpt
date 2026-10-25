@@ -10,6 +10,7 @@
 //! * `riders`: the app's own vectors on the surface, through a split and up from an edit.
 //! * `symmetry`: mirrored meshes and mirrored edits stay mirrored.
 //! * `timing`: speed and memory at the app's sizes (`--ignored`).
+//! * `unsubdivide`: the levels below a subdivided quad mesh found again.
 
 mod carry;
 mod dirty;
@@ -22,3 +23,4 @@ mod shapes;
 mod stack;
 mod symmetry;
 mod timing;
+mod unsubdivide;

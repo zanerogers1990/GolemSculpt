@@ -63,7 +63,7 @@ sculpts at full strength and full size).
 | J | Keys tool on / off |
 | Z, Shift + Z (also Ctrl + Z, Ctrl + Y) | Undo, redo |
 | Ctrl + S, Ctrl + Shift + S, Ctrl + O | Save, save as, open |
-| (Drag a file onto the window) | A sculpt (.sclp, .sculpt) opens as Open opens one; a model (.obj, .stl) is imported |
+| (Drag a file onto the window) | A sculpt (.sclp, .sculpt) opens as Open opens one; a model (.obj, .stl, .ply, .fbx, .glb, .gltf) is imported |
 | Ctrl + N | New scene (asks first if anything would be lost) |
 | Ctrl + Q | Quit (asks first if anything would be lost) |
 | Enter | Finish what the tool that is up is doing: fuse the tubes or muscles, accept an Extract, create a lathe's mesh, build the keys |
@@ -839,7 +839,17 @@ one level is kept on the others.
   and the detail sculpted on them. Neither changes the model on screen.
 - A model from **Quad Remesh** subdivides into quads and stays quads on every
   level, so Quad Remesh then Subdivide is the clean way to a model whose
-  faces follow its form. Any other model subdivides as triangles.
+  faces follow its form. A quad model imported from ZBrush or Blender does
+  the same. Any other model subdivides as triangles.
+- **Reconstruct Subdiv** (under Subdivide, for a quad model with no levels)
+  is for a model subdivided in ZBrush or Blender and brought in at its finest
+  level: it finds the levels it was made from and puts them back, as many as
+  there are, and leaves you on the finest. The model does not move; step down
+  with Page Down, change the big forms and come back up with the detail kept.
+  It works out whether the quads really came from subdividing only when it
+  is pressed, and says so in words if they did not (a quad remesh, or a model
+  edited after it was subdivided, has no levels to find). A model of separate
+  pieces goes down only as far as every piece can. One undo step.
 - **Everything works on the level you are on**: brushes, the mask, hiding
   parts, Check for Printing, a measure, Send to Blender, and export (OBJ, FBX
   and STL write that level, quads included). Go to the finest level before
@@ -2118,16 +2128,42 @@ pair; after that they can be moved apart and the joints stay on them.
   A file that has been moved or deleted drops out of the tiles.
 - **Drag a file onto the window** from Explorer: a sculpt (`.sclp`, or a
   `.sculpt` from the Unity app) opens as Open opens one, asking first only
-  if unsaved work would be put aside; a model (`.obj`, `.stl`) is added to
+  if unsaved work would be put aside; a model (`.obj`, `.stl`, `.ply`,
+  `.fbx`, `.glb`, `.gltf`) is added to
   the scene as Import adds it. While the file is over the window a toast says
   which ("Drop to Open", "Drop to Import"). Anything else is turned away with
   a line saying what can be dropped. Either is one undo step.
-- **Import** adds an `.obj` or `.stl` model to the scene, centred, or the
+- **Import** adds a model (`.obj`, `.stl`, `.ply`, `.fbx`, `.glb` or `.gltf`) to the scene, centred, or the
   objects of another `.sclp` where they were saved, with their live arrays. An STL comes
   in at its real size (millimetres, Z up; one unit is 10 mm, so a 10 mm ball is
   one unit across), welded into one connected surface, with inside-out
   triangles turned the right way. An OBJ is fitted to the size of the first
   object, as in the Unity app.
+  - **A file with several objects** (an OBJ's `o` lines) comes in as that
+    many objects, named as the file names them, standing where they stood
+    in the program that wrote them: they share one scale and one position,
+    so eyes stay in their sockets and each object keeps the file's own
+    symmetry plane, as ZBrush subtools do. The first object in the file is
+    the one selected. All of it is one undo step.
+  - **Quads stay quads.** A model made of quads (from ZBrush, Blender or a
+    retopology) keeps them, so **Subdivide** uses Catmull-Clark as those
+    programs do, and an export writes the quads back out. A triangle in
+    among the quads is kept as a face of three.
+  - **FBX** (binary, as ZBrush, Blender, Maya and 3D-Coat write it) brings
+    each model in as its own object, at its real size, upright whichever way
+    the file says is up, with quads kept and vertex colours as a paint layer.
+    A text FBX is turned away with a line saying to export it as binary.
+  - **glTF** (`.glb`, or `.gltf` with its `.bin` beside it) brings each
+    object in at its real size (glTF counts in metres) with its vertex
+    colours. A compressed glTF (Draco or Meshopt) is turned away with a line
+    saying to export it without compression.
+  - **PLY** (text or binary, from scanners, MeshLab and our own export) is
+    fitted to the scene as an OBJ is, with its vertex colours. A PLY of
+    points with no faces says it has no surface to sculpt.
+  - A file that states its size but states it wrongly (smaller than half a
+    millimetre or bigger than fifty metres across) is fitted to the scene
+    instead. UVs, materials, normals and animation are not read: the app
+    has nowhere to keep them yet.
 - **Sculpts from the Unity app** (`.sculpt`) open with **Open** and
   **Import** just as a `.sclp` does, and show in Recent. They arrive the same
   way round and the same size: every object with its mesh, mask, hidden

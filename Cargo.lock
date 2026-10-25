@@ -2461,6 +2461,7 @@ dependencies = [
  "glam",
  "image",
  "log",
+ "miniz_oxide 0.8.9",
  "naga",
  "pollster 1.0.1",
  "rayon",

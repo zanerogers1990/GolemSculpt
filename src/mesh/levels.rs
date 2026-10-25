@@ -46,6 +46,9 @@
 //! **Dynamic topology** splits triangles in place, which a level's numbering
 //! does not survive, so a mesh with levels is never refined (`Mesh::refine`).
 //!
+//! **Reconstruct Subdiv** gives a quad model that was subdivided elsewhere
+//! the levels below it, found from its faces (`levels/reconstruct.rs`).
+//!
 //! **The way back up is quick.** A mesh below its finest level keeps what
 //! the finest level's mesh was built into (`levels/cached.rs`), so stepping
 //! up to it again does not build a ten-million-triangle mesh from nothing.
@@ -63,6 +66,9 @@ mod cached;
 mod grouped;
 mod layered;
 mod painted;
+mod reconstruct;
+
+pub use reconstruct::reconstructed;
 
 /// The most triangles a level made by Subdivide may have. Past this a mesh
 /// and its undo no longer fit comfortably in memory, and a step between
