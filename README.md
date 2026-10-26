@@ -111,12 +111,22 @@ on now.
 - **S, F and D**, the keys held to drag the size, strength and focal shift,
   can move too; the strength key tapped twice frames the model, whichever
   key it is.
+- **Keys like ZBrush**: the **ZBrush** button at the top puts ZBrush's keys
+  on the commands the two share: W for the gizmo, D and Shift + D up and
+  down the levels, F to frame, Shift + F for the wireframe, P for
+  perspective, C to pick up a colour, U and O held for strength and focal
+  shift, Ctrl + I to invert the mask, Ctrl + Shift + A to clear it. Where
+  ZBrush uses a key this app had for something else, that command loses it
+  (Remesh's R, the turntable's O and the Paint brush's P), and keeps its
+  button. **GolemSculpt** puts every key back as the app ships it. Either
+  asks to be pressed twice when keys were changed some other way. ZBrush's
+  Alt to subtract and Ctrl to mask are things the pen does, not keys: here
+  Ctrl inverts the brush and the Mask button paints the mask.
 - A changed command gets a **↺** beside it, which puts it back on the key
   the app ships with; **Reset All Shortcuts** (press it twice) puts them all
   back. The header says how many are changed.
 - Kept for the app, and refused with a word why: Space (the brush wheel),
-  Esc, Enter, Tab, [ and ], O (the turntable), Backspace, Ctrl + Q and
-  Ctrl + = / Ctrl + -. What the pen and mouse do with a key held (Alt to
+  Esc, Enter, Tab, [ and ], Backspace, Ctrl + Q and Ctrl + = / Ctrl + -. What the pen and mouse do with a key held (Alt to
   orbit, Ctrl to invert the brush, Shift to smooth) is how sculpting works,
   not a command; the card lists those last, as they are.
 - The keys are kept in the settings file with the rest, and only the ones

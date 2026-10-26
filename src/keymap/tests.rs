@@ -129,13 +129,40 @@ fn a_settings_file_cannot_put_a_command_on_a_reserved_or_unreadable_key() {
 
 #[test]
 fn the_keys_kept_for_the_app_are_refused_with_a_reason() {
-    for text in ["Space", "Esc", "Enter", "Tab", "[", "Shift + ]", "Ctrl + Q", "Ctrl + =", "Backspace", "O"] {
+    for text in ["Space", "Esc", "Enter", "Tab", "[", "Shift + ]", "Ctrl + Q", "Ctrl + =", "Backspace"] {
         assert!(reserved(&chord(text)).is_some(), "{text} is kept");
     }
-    for text in ["Q", "Ctrl + Shift + Q", "=", "Alt + Space", "Shift + O"] {
+    for text in ["Q", "Ctrl + Shift + Q", "=", "Alt + Space", "O"] {
         let kept = reserved(&chord(text)).is_some();
         assert_eq!(kept, text == "Alt + Space", "{text}");
     }
+}
+
+#[test]
+fn the_zbrush_preset_puts_zbrushs_keys_where_a_zbrush_hand_expects_them() {
+    let mut keys = shipped();
+    keys.set("decimate", Some(chord("Q")));
+    keys.apply(ZBRUSH);
+    assert_eq!(keys.command(&chord("W")), Some("transform"));
+    assert_eq!(keys.command(&chord("D")), Some("level_up"));
+    assert_eq!(keys.command(&chord("Shift + D")), Some("level_down"));
+    assert_eq!(keys.command(&chord("F")), Some("frame"));
+    assert_eq!(keys.command(&chord("U")), Some("hold_strength"));
+    assert_eq!(keys.command(&chord("O")), Some("hold_focal"));
+    assert_eq!(keys.command(&chord("P")), Some("ortho"));
+    assert_eq!(keys.command(&chord("Ctrl + D")), Some("subdivide"), "the keys they share stay");
+    assert_eq!(keys.command(&chord("R")), None, "R is ZBrush's rotate, never a surprise remesh");
+    assert!(keys.keys("decimate").is_empty(), "a preset starts from the shipped keys");
+    assert!(keys.is(ZBRUSH));
+    keys.set("decimate", Some(chord("Q")));
+    assert!(!keys.is(ZBRUSH), "a change on top is no longer the preset");
+    for (id, key) in ZBRUSH {
+        assert!(keys.commands().iter().any(|c| c.id == *id), "{id} is a command");
+        assert!(key.is_none_or(|k| Chord::parse(k).is_some_and(|c| reserved(&c).is_none())), "{id}'s key");
+    }
+    // The shipped keys are a preset too: none changed.
+    keys.reset_all();
+    assert!(keys.is(&[]));
 }
 
 #[test]

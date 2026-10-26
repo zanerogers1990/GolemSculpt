@@ -39,7 +39,6 @@ pub const FIXED: &[(&str, &[(&str, &str)])] = &[
         ("Ctrl + Alt + drag", "Zoom"),
         ("Scroll off the model", "Zoom"),
         ("Double-click background", "Frame the selection"),
-        ("O", "Spin the view (turntable)"),
         ("Tab", "Clean view: hide the panels"),
         ("Ctrl + = / Ctrl + -", "Interface size"),
     ]),
@@ -87,6 +86,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, capture: &mut Option<String>) {
         );
         let find_id = Id::new("shortcut_find");
         let mut find = ui.data(|d| d.get_temp::<String>(find_id)).unwrap_or_default();
+        presets(ui, &mut doc.opts.keys, tips);
         let field = egui::TextEdit::singleline(&mut find)
             .hint_text("Find a command or a brush")
             .font(theme::font(12.0))
@@ -154,6 +154,50 @@ fn row(ui: &mut egui::Ui, keys: &mut Keymap, c: &Listed, capture: &mut Option<St
             }
         }
     });
+}
+
+/// The ready-made sets of keys: the app's own, and ZBrush's. A press when
+/// keys have been changed some other way asks to be pressed again, since what
+/// was changed goes and Undo cannot bring it back.
+fn presets(ui: &mut egui::Ui, keys: &mut Keymap, tips: bool) {
+    let id = Id::new("shortcuts_preset_armed");
+    let now = ui.input(|i| i.time);
+    let armed: Option<String> =
+        ui.data(|d| d.get_temp::<(String, f64)>(id)).filter(|(_, at)| now - at < RESET_ALL_SECONDS).map(|(name, _)| name);
+    let ours: &[(&str, Option<&str>)] = &[];
+    let sets = [
+        ("GolemSculpt", ours, "Every key as the app ships it."),
+        (
+            "ZBrush",
+            keymap::ZBRUSH,
+            "ZBrush's keys where this app has the command: W gizmo, D / Shift + D levels, F frame, Shift + F \
+             wireframe, P perspective, C colour pick, U and O held for strength and focal shift, Ctrl + I and \
+             Ctrl + Shift + A for the mask. ZBrush's Alt to subtract and Ctrl to mask are the pen's, not keys: here \
+             Ctrl inverts the brush and the Mask button paints the mask.",
+        ),
+    ];
+    let custom = !sets.iter().any(|(_, set, _)| keys.is(set));
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Keys like").font(theme::font(11.0)).color(theme::HINT()));
+        let w = ((ui.available_width() - 6.0) / sets.len() as f32).max(40.0);
+        for (name, set, help) in sets {
+            let on = keys.is(set);
+            let asking = armed.as_deref() == Some(name);
+            let text = if asking { "Again to Switch" } else { name };
+            let style = ButtonStyle { height: 22.0, active: (on || asking).then_some(ACCENT()), ..Default::default() };
+            if theme::tip(theme::button(ui, w, text, style), tips, help).clicked() && !on {
+                if custom && !asking {
+                    ui.data_mut(|d| d.insert_temp(id, (name.to_owned(), now)));
+                } else {
+                    keys.apply(set);
+                    ui.data_mut(|d| d.remove::<(String, f64)>(id));
+                }
+            }
+        }
+    });
+    if armed.is_some() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
 }
 
 /// Reset All, which asks to be pressed a second time: the changes are not an

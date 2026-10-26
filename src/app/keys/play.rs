@@ -111,5 +111,19 @@ impl Running {
         say("Reset All puts every key back", self.prefs_now().shortcuts.is_empty());
         self.play_press(KeyCode::Digit2, none);
         say("and 2 takes Clay again", in_hand(self) == "Clay");
+
+        // Keys like ZBrush's.
+        self.doc.opts.keys.apply(crate::keymap::ZBRUSH);
+        self.play_press(KeyCode::KeyW, none);
+        say("with ZBrush's keys, W brings the gizmo up", self.transform_active());
+        self.play_press(KeyCode::KeyW, none);
+        self.play_press(KeyCode::KeyU, none);
+        say("U held is the strength drag", self.input.gauge.is_some());
+        self.key_released(KeyCode::KeyU);
+        say("R remeshes nothing", !self.play_press(KeyCode::KeyR, none));
+        self.play_press(KeyCode::KeyO, none);
+        say("O held is the focal drag, not the turntable", self.input.gauge.is_some() && !self.doc.turntable.spin.on);
+        self.key_released(KeyCode::KeyO);
+        self.doc.opts.keys.reset_all();
     }
 }

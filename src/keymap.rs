@@ -18,7 +18,7 @@
 //! sculpting works, not a command, and a few keys have a job too close to the
 //! app's workings to move: Space for the brush wheel, Esc and Enter for
 //! cancelling and finishing, Tab for the clean view, [ and ] for the brush's
-//! size, O for the turntable, and Ctrl + Q, Ctrl + = and Ctrl + -. Those are [`reserved`], and the
+//! size, and Ctrl + Q, Ctrl + = and Ctrl + -. Those are [`reserved`], and the
 //! Keyboard Shortcuts card lists them as they are.
 
 use std::collections::BTreeMap;
@@ -228,7 +228,6 @@ pub fn reserved(chord: &Chord) -> Option<&'static str> {
         K::Tab => "Tab is kept for the clean view.",
         K::Backspace => "Backspace takes a key away while you choose one.",
         K::BracketLeft | K::BracketRight => "[ and ] are kept for the brush's size and strength.",
-        K::KeyO if !chord.ctrl && !chord.shift && !chord.alt => "O is kept for spinning the view (the turntable).",
         K::KeyQ if ctrl_only => "Ctrl + Q is kept for quitting.",
         K::Equal | K::Minus if ctrl_only => "Ctrl + = and Ctrl + - are kept for the interface size.",
         _ => return None,
@@ -285,6 +284,7 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "view_top", name: "Top view", group: "View", keys: &["Numpad 7"] },
     Command { id: "view_bottom", name: "Bottom view", group: "View", keys: &["Ctrl + Numpad 7"] },
     Command { id: "wireframe", name: "Wireframe on / off", group: "View", keys: &[] },
+    Command { id: "turntable", name: "Spin the view (turntable)", group: "View", keys: &["O"] },
     Command { id: "fullscreen", name: "Fullscreen", group: "View", keys: &["F11"] },
     Command { id: "hide", name: "Hide the selection", group: "Objects", keys: &["H"] },
     Command { id: "hide_others", name: "Hide everything else", group: "Objects", keys: &["Shift + H"] },
@@ -300,6 +300,31 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "open", name: "Open", group: "File and undo", keys: &["Ctrl + O"] },
     Command { id: "import", name: "Import", group: "File and undo", keys: &[] },
     Command { id: "new_scene", name: "New scene (asks first)", group: "File and undo", keys: &["Ctrl + N"] },
+];
+
+/// ZBrush's keys for the commands this app shares with it, so that hands used
+/// to ZBrush find them where they expect: W for the gizmo, D and Shift + D up
+/// and down the levels, F to frame, Shift + F for the wireframe (Polyframe),
+/// P for perspective, C to pick up a colour, U and O held for strength and
+/// focal shift, Ctrl + I to invert the mask and Ctrl + Shift + A to clear
+/// it. What ZBrush puts on a key this app uses for something else loses the
+/// app's: Remesh (R, ZBrush's rotate), the turntable (O) and the Paint brush
+/// (P). Everything not named keeps the key it ships with.
+pub const ZBRUSH: &[(&str, Option<&str>)] = &[
+    ("hold_strength", Some("U")),
+    ("hold_focal", Some("O")),
+    ("frame", Some("F")),
+    ("wireframe", Some("Shift + F")),
+    ("transform", Some("W")),
+    ("ortho", Some("P")),
+    ("eyedropper", Some("C")),
+    ("level_up", Some("D")),
+    ("level_down", Some("Shift + D")),
+    ("mask_invert", Some("Ctrl + I")),
+    ("mask_clear", Some("Ctrl + Shift + A")),
+    ("remesh", None),
+    ("turntable", None),
+    ("paint", None),
 ];
 
 /// A command the card can list: id, name, group and the keys it ships with,
@@ -434,6 +459,23 @@ impl Keymap {
     /// Every command back on the keys it ships with.
     pub fn reset_all(&mut self) {
         self.changed.clear();
+    }
+
+    /// Every command on the keys it ships with, then the ones `preset` names
+    /// on the keys it gives them (none for `None`), each taking its key from
+    /// whatever had it.
+    pub fn apply(&mut self, preset: &[(&str, Option<&str>)]) {
+        self.reset_all();
+        for (id, key) in preset {
+            self.set(id, key.and_then(Chord::parse));
+        }
+    }
+
+    /// Whether the keys are exactly `preset`'s: what the card lights up.
+    pub fn is(&self, preset: &[(&str, Option<&str>)]) -> bool {
+        let mut fresh = Keymap { changed: BTreeMap::new(), ..self.clone() };
+        fresh.apply(preset);
+        fresh.changed == self.changed
     }
 
     /// Keeps `keys` for command `id`, as a change only if they differ from

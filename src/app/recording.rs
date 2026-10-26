@@ -317,6 +317,8 @@ impl Running {
         let bare = !(mods.control_key() || mods.alt_key() || mods.shift_key());
         let clean = self.doc.opts.clean_view;
         let looping = self.recording.looping.is_some();
+        // The turntable's key and the fullscreen key are the Keyboard Shortcuts card's (app/keys.rs).
+        let command = self.key_command(code);
         match code {
             // Tab for the panels. Not with a modifier: Alt + Tab is the system's.
             KeyCode::Tab => {
@@ -325,8 +327,8 @@ impl Running {
                 }
                 return true;
             }
-            // O for "orbit": T is the Tube tool's.
-            KeyCode::KeyO if bare => {
+            // O as shipped, for "orbit": T is the Tube tool's.
+            _ if command.as_deref() == Some("turntable") => {
                 if !looping {
                     let spin = &mut self.doc.turntable.spin;
                     spin.on = !spin.on;
@@ -351,7 +353,7 @@ impl Running {
         // None of the bare-key shortcuts work in the clean view: an R there
         // would remesh, a Z undo, a Delete ask about an object no panel is
         // showing. Fullscreen and quit still do.
-        clean && code != KeyCode::F11 && !(code == KeyCode::KeyQ && mods.control_key())
+        clean && command.as_deref() != Some("fullscreen") && !(code == KeyCode::KeyQ && mods.control_key())
     }
 
     /// Whether the pointer itself should be hidden: in the clean view, once
