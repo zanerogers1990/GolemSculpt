@@ -3417,6 +3417,7 @@ Left out on purpose: the Unity app's mold maker and hard-surface tool.
 ## For development
 
 ```
+cargo build --profile dist    # the program as handed over (target/dist): the whole program optimised as one piece, about 2% faster per brush frame than --release, a minute or so slower to build
 cargo test --release          # engine tests
 cargo test -p sculpt-geom --release timing_of_decimation -- --ignored --nocapture   # the decimation engine alone at 200k / 500k / 1M triangles, to 50% and 20%: time, closed, same volume
 cargo test --release timing_of_a_decimate -- --ignored --nocapture                  # Decimate as the app runs it, sculpt mesh included, at 200k and 1M triangles, with Mirror X, and the preview worked out and a count shown; prints the status lines and times

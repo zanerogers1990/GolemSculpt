@@ -67,6 +67,19 @@ codegen-units = 4
 # (src/app/recovery.rs). `panic = "abort"` here would silently switch both off.
 panic = "unwind"
 
+# The program as it is handed over (`cargo build --profile dist`, into
+# target/dist): the release build with the whole program optimised as one
+# piece. Measured on 2026-10-26 against release: about 2% less time per brush
+# frame, results the same to the bit, a minute or so more to build from
+# nothing. Everyday builds stay `--release`, which links much faster.
+# (Tried the same day and left out: `target-cpu=x86-64-v3`, 1.7% slower per
+# brush frame and not the same to the bit; mimalloc, 2% faster per frame and
+# 8% per remesh but about 40% more memory at the peak of a big remesh.)
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
 # The app is this package. Geometry and tools live in their own crates under
 # `crates/`, each built and tested on its own (see crates/README.md). A plain
 # `cargo build` or `cargo test` here still means the app alone.

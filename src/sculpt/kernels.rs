@@ -405,7 +405,7 @@ pub(super) fn facing(enabled: bool, n: Vec3, p: Vec3, cam: Vec3) -> f32 {
     if cos >= 0.2 { 1.0 } else { smooth(cos / 0.2) }
 }
 
-fn leaf_vertex_total(mesh: &Mesh, leaves: &[u32]) -> usize {
+pub(super) fn leaf_vertex_total(mesh: &Mesh, leaves: &[u32]) -> usize {
     leaves
         .iter()
         .map(|&l| {

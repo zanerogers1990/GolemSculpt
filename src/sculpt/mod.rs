@@ -25,6 +25,7 @@ mod library_tests;
 mod modes;
 mod pace;
 pub mod paint;
+mod pool;
 mod pose;
 mod radial;
 mod share;
@@ -2020,7 +2021,11 @@ impl Sculptor {
             dab.plane = stroke.plane;
         }
         let began = Instant::now();
-        Self::apply_symmetric(mesh, stroke, &p, dab);
+        // On as many threads as suit the dab's size (sculpt/pool.rs).
+        let mut near = Vec::new();
+        mesh.bvh.leaves_in_sphere(center, radius, &mut near);
+        let reach = kernels::leaf_vertex_total(mesh, &near);
+        pool::run(reach, || Self::apply_symmetric(mesh, stroke, &p, dab));
         stroke.meter.dab(began.elapsed());
         // The path's own place, not the scattered one: the next dab's
         // heading and gap are the stroke's.
