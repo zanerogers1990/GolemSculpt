@@ -1,0 +1,2 @@
+Made for GolemSculpt by tools/make_teal_matcap.py (no outside source).
+Teal Matte: the matte teal ZBrush-style look, grey-teal front, cyan rim band, brown edge lines in crevices.
