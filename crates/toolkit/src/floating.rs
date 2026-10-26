@@ -250,7 +250,7 @@ pub(crate) fn show(ui: &mut Ui, key: &str, header: &CardHeader, docked: Id, body
             put_back = button.clicked();
             theme::paint_card_header(ui, rect, header, Corner::Dock, &bar, &button);
             bar.on_hover_cursor(egui::CursorIcon::Grab);
-            button.on_hover_text("Put this card back in its panel.");
+            crate::translate::hover(button, "Put this card back in its panel.");
             // Never taller than the window: a long card scrolls.
             let room = (screen.height() - theme::CARD_HEADER_HEIGHT - 2.0).max(40.0);
             egui::ScrollArea::vertical().max_height(room).auto_shrink([false, true]).show(ui, |ui| {

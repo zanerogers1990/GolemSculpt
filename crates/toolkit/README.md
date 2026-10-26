@@ -501,7 +501,10 @@ number into it, read back through `|v| text`, so give it a readout that is a
 number at both ends of the range; Shift + drag is fine: `src/typed.rs`), `checkbox`,
 `text_field` / `labelled_field`, `shortcuts(ui, &[(key, what)])`,
 `row_width(ui, n, gap)` for a row of equal buttons, `tip(response, cx.tips,
-text)`, `count(n)`, and the colours. Those the user's theme sets are read by
+text)` (which shows the tip in the language chosen for tooltips, see
+`translate.rs`: give it a whole English sentence, and a tooltip of your own
+is translated once `tools/translations.py` has listed it), `count(n)`, and
+the colours. Those the user's theme sets are read by
 calling them, so a panel is in the theme's colours the moment it changes
 (`ACCENT()`, `TEXT()`, `HINT()`, `CARD()`, `CONTROL()`, `FIELD()`; see
 `palette.rs`); those that say something by their colour are the same in

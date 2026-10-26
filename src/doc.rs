@@ -38,6 +38,9 @@ pub struct Options {
     /// Orbit and zoom around the last sculpted point.
     pub stroke_pivot: bool,
     pub tooltips: bool,
+    /// The language tooltips are in, by its code ("en", "es"...; see
+    /// `sculpt_toolkit::translate`). Kept in the settings file.
+    pub tooltip_language: &'static str,
     pub ui_scale: f32,
     /// Voxels along the longest side for a voxel remesh.
     pub remesh_resolution: f32,
@@ -121,6 +124,7 @@ impl Default for Options {
             symmetry_tolerance: crate::app::symmetry_repair::DEFAULT_TOLERANCE,
             stroke_pivot: true,
             tooltips: true,
+            tooltip_language: "en",
             ui_scale: 1.0,
             remesh_resolution: 128.0,
             remesh_smooth: crate::remesh::DEFAULT_SMOOTH,

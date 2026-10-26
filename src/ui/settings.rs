@@ -12,7 +12,8 @@ use crate::doc::{Doc, Options};
 const PER_ROW: usize = 2;
 
 /// Puts the theme the options name up, and has a backdrop nobody chose
-/// follow it. Called every frame; it does nothing while nothing has changed.
+/// follow it; puts tooltips in the language they name. Called every frame;
+/// it does nothing while nothing has changed.
 ///
 /// A sculpt keeps its backdrop in its file, and a new scene starts with the
 /// built-in theme's. Either is one of the themes' own backdrops unless the
@@ -20,6 +21,7 @@ const PER_ROW: usize = 2;
 /// of those goes with the theme that is up, and any other is left alone.
 pub fn apply_theme(ctx: &egui::Context, o: &mut Options) {
     theme::set_theme(ctx, o.theme);
+    sculpt_toolkit::translate::set(ctx, o.tooltip_language);
     let now = theme::palette();
     let follows = sculpt_toolkit::palette::stock_backdrop(o.background, o.background_top);
     if follows && (o.background, o.background_top) != (now.backdrop, now.backdrop_top) {
@@ -104,6 +106,7 @@ fn interface(ui: &mut egui::Ui, o: &mut Options, tips: bool) {
         theme::hint(ui, "Ctrl + = and Ctrl + - also work.");
         let label = if o.tooltips { "Tooltips: On" } else { "Tooltips: Off" };
         tip(theme::checkbox(ui, &mut o.tooltips, label, ACCENT()), tips, "Say what a button does when the pointer rests on it.");
+        sculpt_toolkit::translate::picker(ui, &mut o.tooltip_language, tips);
     });
 }
 

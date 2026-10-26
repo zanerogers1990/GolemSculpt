@@ -78,6 +78,12 @@ impl Home {
         self.writable
     }
 
+    /// The first time the app is opened here: there is no settings file yet,
+    /// and this run may write one.
+    pub fn first_run(&self) -> bool {
+        self.writable && self.settings_file().is_some_and(|file| !file.exists())
+    }
+
     /// Remembers nothing and writes nothing.
     pub fn nowhere() -> Home {
         Home { dir: None, writable: false }
@@ -698,6 +704,9 @@ pub struct Prefs {
     /// 1 is 100 %.
     pub interface_size: f32,
     pub tooltips: bool,
+    /// The language tooltips are in, by its code (from 2026-10-26; a file
+    /// from before, or a code the app does not know, gives English).
+    pub tooltip_language: String,
     pub fullscreen: bool,
     /// "mm" or "in".
     pub unit: String,
@@ -773,6 +782,7 @@ impl Default for Prefs {
         Self {
             interface_size: opts.ui_scale,
             tooltips: opts.tooltips,
+            tooltip_language: opts.tooltip_language.to_owned(),
             fullscreen: false,
             unit: LengthUnit::default().suffix().to_owned(),
             cards: BTreeMap::new(),
@@ -848,6 +858,11 @@ impl Prefs {
     /// The values the app reads from here, brought into range.
     pub fn interface_size(&self) -> f32 {
         fit(self.interface_size, 0.75, 3.0, 1.0)
+    }
+
+    /// One of the languages the app has, by its code: English for any other.
+    pub fn tooltip_language(&self) -> &'static str {
+        sculpt_toolkit::translate::find(&self.tooltip_language).code
     }
 
     pub fn remesh_resolution(&self) -> f32 {

@@ -210,6 +210,12 @@ impl Running {
     pub(super) fn files_start(&mut self, opened: Option<io::Details>) {
         let kept = self.files.kept.clone();
         self.apply_prefs(&kept);
+        // The first time a person opens the app here: which language the
+        // tooltips are in, Windows' own to start with (ui/first_language.rs).
+        if self.files.home.first_run() && !prefs::scripted() {
+            self.doc.opts.tooltip_language = sculpt_toolkit::translate::system_language().code;
+            crate::ui::first_language::ask(&self.egui_ctx);
+        }
         if let Some(details) = opened {
             self.apply_details(&details);
             if let Some(path) = self.doc.path.clone() {
@@ -226,6 +232,7 @@ impl Running {
         let opts = &mut self.doc.opts;
         opts.ui_scale = kept.interface_size();
         opts.tooltips = kept.tooltips;
+        opts.tooltip_language = kept.tooltip_language();
         opts.folded = [kept.left_panel_folded, kept.right_panel_folded];
         opts.tabs = kept.tabs();
         opts.theme = kept.theme();
@@ -266,6 +273,7 @@ impl Running {
         Prefs {
             interface_size: opts.ui_scale,
             tooltips: opts.tooltips,
+            tooltip_language: opts.tooltip_language.to_owned(),
             fullscreen: self.window.fullscreen().is_some(),
             unit: self.doc.tools.unit.suffix().to_owned(),
             cards: prefs::cards::snapshot(&self.egui_ctx),

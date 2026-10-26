@@ -14,6 +14,7 @@ pub mod decimate;
 pub mod deform;
 mod dyntopo;
 mod falloff;
+pub mod first_language;
 pub mod groups;
 mod layers;
 mod levels;
@@ -141,7 +142,7 @@ fn fmt_count(n: usize) -> String {
 }
 
 fn tip(response: egui::Response, on: bool, text: &str) -> egui::Response {
-    if on { response.on_hover_text(text) } else { response }
+    if on { sculpt_toolkit::translate::hover(response, text) } else { response }
 }
 
 /// Builds the whole interface for one frame. Returns the commands the user
@@ -157,6 +158,7 @@ pub fn build(
     let mut actions = Vec::new();
     let screen = ctx.content_rect();
     settings::apply_theme(&ctx, &mut doc.opts);
+    first_language::show(&ctx, &mut doc.opts);
     // However the brush was taken up (the list, the wheel, a number key), it is the most recent.
     brushes::note_in_hand(&mut state.recent_brushes, &doc.sculptor.library, &doc.sculptor.settings);
 
@@ -864,14 +866,14 @@ fn export_menu(button: &egui::Response, doc: &mut Doc, actions: &mut Vec<Action>
             ),
         ];
         for (label, action, help) in formats {
-            if ui.button(label).on_hover_text(help).clicked() {
+            if sculpt_toolkit::translate::hover(ui.button(label), help).clicked() {
                 actions.push(action);
                 ui.close();
             }
         }
         ui.separator();
         let help = "Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.";
-        ui.checkbox(&mut doc.opts.fbx_material_weights, "FBX: material weights in UVs").on_hover_text(help);
+        sculpt_toolkit::translate::hover(ui.checkbox(&mut doc.opts.fbx_material_weights, "FBX: material weights in UVs"), help);
         // The list that shows the selection is on another tab, so say here what the file would hold.
         let picked = doc.scene.selected().len();
         if picked > 1 {

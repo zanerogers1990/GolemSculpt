@@ -3264,6 +3264,21 @@ the Settings tab has 75%, 100%, 125%, 150% and 200%; Ctrl + = and Ctrl + -
 step between 75% and 300% a tenth at a time. Tooltips are switched on and
 off in the same card.
 
+**Tooltips can be in another language.** **Tooltip Language**, in the same
+card, puts every tooltip and "How it works" note in Spanish, Portuguese
+(Brazil), French, German, Italian, Polish, Turkish, Russian, Japanese,
+Chinese (Simplified) or Korean, for someone more at home in one of those than
+in English. The first time the app is opened on a computer it asks, before
+anything else, with the language Windows is in already picked and the
+question's own words turning to whichever is picked. The buttons and cards
+keep their English names, and a tooltip
+names them as they are on screen, so it can be matched to what it is about.
+Each language is a plain text file in `crates/toolkit/translations/`, the
+English and the translation in pairs of lines; a translation is fixed by
+editing its line and rebuilding. A tooltip written since is shown in English
+until `python tools/translations.py todo DIR` lists it for translating
+(`status` counts what each language is missing).
+
 **Either panel folds away.** Each panel has a small arrow tab on its inner
 edge, just under the view gizmo's buttons. Tap it and the whole panel
 goes, leaving only a slim tab at the edge of the screen; tap that and the

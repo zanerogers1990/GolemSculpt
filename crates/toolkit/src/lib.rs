@@ -13,6 +13,7 @@ pub mod ctx;
 pub mod draw;
 pub mod example;
 pub mod floating;
+mod fonts;
 pub mod jobs;
 pub mod palette;
 pub mod saved;
@@ -20,6 +21,7 @@ pub mod scene;
 pub mod testing;
 pub mod theme;
 pub mod tool;
+pub mod translate;
 pub mod typed;
 pub mod view;
 

@@ -219,7 +219,7 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
             actions.push(Action::Snap(yaw, pitch));
         }
         if let (Some(name), true) = (named, doc.opts.tooltips) {
-            response.on_hover_text(name);
+            sculpt_toolkit::translate::hover(response, name);
         }
 
         // Each button has one of the pan, zoom and Home handles at its left
@@ -231,7 +231,7 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
             let r = theme::button(ui, 76.0, label, theme::ButtonStyle { height: 22.0, ..Default::default() });
             let help = "Switch between perspective and orthographic (Numpad 5). An axis view goes orthographic by \
                         itself, and back to perspective when you turn the view by hand.";
-            if r.on_hover_text(help).clicked() {
+            if sculpt_toolkit::translate::hover(r, help).clicked() {
                 actions.push(Action::ToggleOrtho);
             }
         });
@@ -255,7 +255,8 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
                 }
             });
             if tips {
-                menu.response.on_hover_text(
+                sculpt_toolkit::translate::hover(
+                    menu.response,
                     "The lens the view is seen through. Wide (18-24 mm) bends the model toward you, as a camera held \
                      close does; 50 mm is about what the eye sees; 85 mm and up flatten it, as portraits are taken. \
                      The model stays the size it is on screen.",
@@ -271,7 +272,7 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
                 ..Default::default()
             };
             let r = theme::button(ui, 76.0, "Stroke Pivot", style);
-            if r.on_hover_text("Orbit and zoom around the last place you sculpted.").clicked() {
+            if sculpt_toolkit::translate::hover(r, "Orbit and zoom around the last place you sculpted.").clicked() {
                 doc.opts.stroke_pivot = !doc.opts.stroke_pivot;
             }
         });
@@ -287,7 +288,7 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
             };
             let style = theme::ButtonStyle { height: 22.0, badge: &badge, ..Default::default() };
             let r = theme::button(ui, 76.0, "Frame", style);
-            if r.on_hover_text(format!("Fit the model in view ({said}, or double-click the background).")).clicked() {
+            if sculpt_toolkit::translate::hover(r, &format!("Fit the model in view ({said}, or double-click the background).")).clicked() {
                 actions.push(Action::Frame);
             }
         });

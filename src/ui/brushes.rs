@@ -134,7 +134,7 @@ fn menu_items(ui: &mut Ui, library: &Library, i: usize, actions: &mut Vec<Action
             let shift = library.shift() == i;
             let label = if shift { "Shift Smooths With This (On)" } else { "Shift Smooths With This" };
             let item = noted(ui.button(label), "menu:Shift");
-            let item = item.on_hover_text("Holding Shift with any brush smooths with the one brush that has this on.");
+            let item = sculpt_toolkit::translate::hover(item, "Holding Shift with any brush smooths with the one brush that has this on.");
             if item.clicked() {
                 // Taking the mark off a brush hands Shift back to the base Smooth.
                 ask(actions, Ask::ShiftUses(if shift { Library::base(Brush::Smooth) } else { i }));
@@ -143,12 +143,12 @@ fn menu_items(ui: &mut Ui, library: &Library, i: usize, actions: &mut Vec<Action
         }
         ui.separator();
         let item = noted(ui.button("Duplicate"), "menu:Duplicate");
-        if item.on_hover_text("Make a brush of your own that starts as this one is now.").clicked() {
+        if sculpt_toolkit::translate::hover(item, "Make a brush of your own that starts as this one is now.").clicked() {
             ask(actions, Ask::Duplicate(i));
             ui.close();
         }
         let back = if entry.origin == Origin::User { "Put it back as it was when you made it." } else { "Put it back as it came with the app." };
-        if noted(ui.button("Reset"), "menu:Reset").on_hover_text(back).clicked() {
+        if sculpt_toolkit::translate::hover(noted(ui.button("Reset"), "menu:Reset"), back).clicked() {
             ask(actions, Ask::Reset(i));
             ui.close();
         }
@@ -157,12 +157,12 @@ fn menu_items(ui: &mut Ui, library: &Library, i: usize, actions: &mut Vec<Action
             ui.close();
         }
         // Opens a file box: never pressed by the self-check, so not noted.
-        if ui.button("Export Brush...").on_hover_text("Write this brush to a file you can keep or pass on.").clicked() {
+        if sculpt_toolkit::translate::hover(ui.button("Export Brush..."), "Write this brush to a file you can keep or pass on.").clicked() {
             ask(actions, Ask::Export(i));
             ui.close();
         }
         ui.separator();
-        if ui.button("Reset the Space Wheel").on_hover_text("Put the wheel back to the brushes it started with.").clicked() {
+        if sculpt_toolkit::translate::hover(ui.button("Reset the Space Wheel"), "Put the wheel back to the brushes it started with.").clicked() {
             ask(actions, Ask::ResetWheel);
             ui.close();
         }

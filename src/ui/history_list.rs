@@ -32,7 +32,7 @@ pub(super) fn button(ui: &mut Ui, doc: &Doc, tips: bool, actions: &mut Vec<Actio
     } else {
         "History: every step Undo would take back, by name. Tap one to go back to just before it."
     };
-    let r = if tips { r.on_hover_text(help) } else { r };
+    let r = if tips { sculpt_toolkit::translate::hover(r, help) } else { r };
     egui::Popup::menu(&r).show(|ui| {
         ui.set_min_width(220.0);
         if !back.is_empty() {

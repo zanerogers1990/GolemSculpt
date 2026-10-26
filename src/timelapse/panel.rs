@@ -17,7 +17,7 @@ fn choice(ui: &mut egui::Ui, labels: &[&str], tips: Option<&[&str]>, current: Op
             let style = ButtonStyle { active: (current == Some(i)).then_some(ACCENT()), height: 24.0, ..Default::default() };
             let mut button = theme::button(ui, w, label, style);
             if let Some(tip) = tips.and_then(|t| t.get(i)) {
-                button = button.on_hover_text(*tip);
+                button = sculpt_toolkit::translate::hover(button, tip);
             }
             if button.clicked() {
                 picked = Some(i);

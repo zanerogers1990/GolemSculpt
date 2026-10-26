@@ -58,7 +58,7 @@ pub(super) fn handle(ui: &mut Ui, kind: Handle, tips: bool, actions: &mut Vec<Ac
         }
     };
     if tips {
-        response.on_hover_text(help);
+        sculpt_toolkit::translate::hover(response, help);
     }
 }
 

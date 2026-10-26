@@ -59,28 +59,7 @@ pub fn wheel_disc() -> Color32 {
 /// Installs Segoe UI (the Unity app's face) and the visuals of the theme
 /// that is up (see [`crate::palette`]).
 pub fn install(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
-    let mut add = |name: &str, file: &str, family: FontFamily| {
-        let path = format!("C:\\Windows\\Fonts\\{file}");
-        if let Ok(bytes) = std::fs::read(path) {
-            fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_owned(bytes)));
-            fonts.families.entry(family).or_default().insert(0, name.to_owned());
-            true
-        } else {
-            false
-        }
-    };
-    add("segoe", "segoeui.ttf", FontFamily::Proportional);
-    if !add("segoe-bold", "segoeuib.ttf", FontFamily::Name("bold".into())) {
-        // No bold face available: fall back to the regular one.
-        let regular = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-        fonts.families.insert(FontFamily::Name("bold".into()), regular);
-    } else {
-        let fallback = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-        fonts.families.entry(FontFamily::Name("bold".into())).or_default().extend(fallback);
-    }
-    ctx.set_fonts(fonts);
-
+    install_fonts(ctx);
     ctx.set_theme(egui::Theme::Dark);
     crate::palette::visuals(ctx);
     ctx.all_styles_mut(|style| {
@@ -92,6 +71,33 @@ pub fn install(ctx: &egui::Context) {
         style.text_styles.insert(egui::TextStyle::Button, font(12.0));
         style.text_styles.insert(egui::TextStyle::Small, font(10.0));
     });
+}
+
+/// Segoe UI, and after it Windows' font for the letters of the language
+/// tooltips are in when Segoe has not got them (see [`crate::fonts`]).
+pub(crate) fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    let add = |fonts: &mut FontDefinitions, name: &str, file: &str, family: FontFamily| {
+        let path = format!("C:\\Windows\\Fonts\\{file}");
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_owned(bytes)));
+            fonts.families.entry(family).or_default().insert(0, name.to_owned());
+            true
+        } else {
+            false
+        }
+    };
+    add(&mut fonts, "segoe", "segoeui.ttf", FontFamily::Proportional);
+    crate::fonts::add_scripts(&mut fonts);
+    if !add(&mut fonts, "segoe-bold", "segoeuib.ttf", FontFamily::Name("bold".into())) {
+        // No bold face available: fall back to the regular one.
+        let regular = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+        fonts.families.insert(FontFamily::Name("bold".into()), regular);
+    } else {
+        let fallback = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+        fonts.families.entry(FontFamily::Name("bold".into())).or_default().extend(fallback);
+    }
+    ctx.set_fonts(fonts);
 }
 
 fn hover_overlay(ui: &Ui, rect: Rect, radius: f32, response: &Response) {
@@ -158,7 +164,7 @@ pub fn category_as(
             ui.data_mut(|d| d.insert_persisted(id, open));
         }
         paint_card_header(ui, rect, &header, Corner::Chevron(open), &response, &button);
-        button.on_hover_text("Float this card over the view. Drag it by its title; the same button puts it back.");
+        crate::translate::hover(button, "Float this card over the view. Drag it by its title; the same button puts it back.");
         note_open(ui.ctx(), title, open);
         if open {
             card_body(ui, body);
@@ -407,7 +413,7 @@ pub fn about(ui: &mut Ui, text: &str) {
     }
     response.on_hover_ui(|ui| {
         ui.set_max_width(280.0);
-        ui.label(egui::RichText::new(text).font(font(12.0)));
+        ui.label(egui::RichText::new(crate::translate::tooltip(text)).font(font(12.0)));
     });
 }
 
@@ -721,9 +727,10 @@ pub fn row_width(ui: &Ui, n: usize, spacing: f32) -> f32 {
     ((ui.available_width() - spacing * (n as f32 - 1.0)) / n as f32).floor()
 }
 
-/// Adds a tooltip when tooltips are switched on (`cx.tips`).
+/// Adds a tooltip when tooltips are switched on (`cx.tips`), in the language
+/// chosen for them (see [`crate::translate`]).
 pub fn tip(response: Response, on: bool, text: &str) -> Response {
-    if on { response.on_hover_text(text) } else { response }
+    if on { crate::translate::hover(response, text) } else { response }
 }
 
 /// A small line of text in a colour: a count, a result ([`OK`]), a problem
