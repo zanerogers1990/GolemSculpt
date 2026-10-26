@@ -5,7 +5,7 @@
 //! view put back on the way out.
 //!
 //! One rule for all of them: **hiding or showing an object is an undo step**,
-//! whether by an eye button or by H, Shift + H or Alt + H, so Z brings back
+//! whether by an eye button or by H, Shift + H or Alt + H, so Ctrl+Z brings back
 //! what a stray key hid. (The Unity app's keys were not undo steps, and the
 //! eye buttons here were: the two did not agree.) Local View is the one
 //! exception, as it is a way of looking rather than a change: / takes it back,

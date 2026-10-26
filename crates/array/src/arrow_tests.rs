@@ -299,7 +299,7 @@ fn a_drag_cut_short_by_putting_the_tool_away_ends_where_it_is_as_one_step() {
     near(world(&bench, &tool, object, 1), to, "the point stays where the arrow took it");
     assert_eq!(tool_steps(&tool), steps + 1);
     assert!(bench.undo(&mut tool));
-    near(world(&bench, &tool, object, 1), target.position, "and one Z takes it back");
+    near(world(&bench, &tool, object, 1), target.position, "and one Ctrl+Z takes it back");
 }
 
 #[test]

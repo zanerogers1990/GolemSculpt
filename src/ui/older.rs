@@ -60,7 +60,7 @@ fn rows(ui: &mut egui::Ui, rows: &[Row], can_replace: bool, tips: bool, actions:
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let help = if can_replace {
-                    "Open this version in place of the scene. It has no file of its own: Save asks where to keep it. Undo (Z) brings the scene back."
+                    "Open this version in place of the scene. It has no file of its own: Save asks where to keep it. Undo (Ctrl+Z) brings the scene back."
                 } else {
                     "Save the scene first: it has changes that are not saved. Add Objects works now, and keeps the scene as it is."
                 };
@@ -69,7 +69,7 @@ fn rows(ui: &mut egui::Ui, rows: &[Row], can_replace: bool, tips: bool, actions:
                     actions.push(Action::OpenOlder { file: row.file.clone(), add: false });
                 }
                 let style = ButtonStyle { active: Some(theme::ACCENT()), ..Default::default() };
-                let help = "Add this version's objects to the scene, beside what is there: the way to get back an object that was deleted. Nothing of the scene changes, and Undo (Z) takes them out again.";
+                let help = "Add this version's objects to the scene, beside what is there: the way to get back an object that was deleted. Nothing of the scene changes, and Undo (Ctrl+Z) takes them out again.";
                 if super::tip(theme::button(ui, 92.0, "Add Objects", style), tips, help).clicked() {
                     actions.push(Action::OpenOlder { file: row.file.clone(), add: true });
                 }

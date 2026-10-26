@@ -261,7 +261,7 @@ impl Extract {
         let added = receipt.added.first().and_then(|id| cx.scene().info(*id)).map(|info| info.name.to_owned());
         match added {
             Some(name) => {
-                let text = format!("Extracted \"{name}\": {} triangles. Undo (Z) removes it.", theme::count(triangles));
+                let text = format!("Extracted \"{name}\": {} triangles. Undo (Ctrl+Z) removes it.", theme::count(triangles));
                 cx.status(text, true);
             }
             None => cx.status("The extract could not be added to the scene.", false),

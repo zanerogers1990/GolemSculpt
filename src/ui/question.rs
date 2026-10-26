@@ -130,7 +130,7 @@ fn exit_words(file: Option<&std::path::Path>, unsaved: bool, lost: &[String]) ->
 fn open_words(path: &std::path::Path, unsaved: bool, lost: &[String]) -> String {
     let name = file_name(path);
     let aside = "The scene you have has changes that are not saved. Opening puts it aside: \
-                 Undo (Z) brings its objects back, but only until the app is closed.";
+                 Undo (Ctrl+Z) brings its objects back, but only until the app is closed.";
     match (unsaved, lost.is_empty()) {
         (true, true) => format!("Open \"{name}\"? {aside}"),
         (false, true) => format!("Open \"{name}\" in place of the scene you have, or add its objects to it?"),
@@ -153,12 +153,12 @@ fn open_words(path: &std::path::Path, unsaved: bool, lost: &[String]) -> String 
 /// question says which is which.
 fn new_scene_words(file: Option<&std::path::Path>, unsaved: bool, lost: &[String]) -> String {
     let aside = format!(
-        "{} A new scene puts this one aside: Undo (Z) brings it back, but only until the app is closed.",
+        "{} A new scene puts this one aside: Undo (Ctrl+Z) brings it back, but only until the app is closed.",
         unsaved_words(file)
     );
     match (unsaved, lost.is_empty()) {
         (true, true) => format!("Start a new scene? {aside}"),
-        (false, true) => "Start a new scene in place of the one you have? Undo (Z) brings this one back.".to_owned(),
+        (false, true) => "Start a new scene in place of the one you have? Undo (Ctrl+Z) brings this one back.".to_owned(),
         (true, false) => format!(
             "Start a new scene? {aside}\n\nSaving does not keep these, and a new scene loses them either way: {}. \
              Undo does not bring them back.",
@@ -223,7 +223,7 @@ fn triangle_words(count: usize) -> String {
 /// object, and nothing of the work goes.
 fn delete_words(name: &str, linked: bool, triangles: usize, strokes: usize) -> String {
     if linked {
-        return format!("Delete \"{name}\"? The mesh and its other copies stay. Undo (Z) restores it.");
+        return format!("Delete \"{name}\"? The mesh and its other copies stay. Undo (Ctrl+Z) restores it.");
     }
     let work = match strokes {
         0 => triangle_words(triangles),
@@ -231,7 +231,7 @@ fn delete_words(name: &str, linked: bool, triangles: usize, strokes: usize) -> S
         n => format!("{}, and {n} strokes since GolemSculpt started", triangle_words(triangles)),
     };
     format!(
-        "Delete \"{name}\"? It has {work}.\n\nUndo (Z) restores it, but only until GolemSculpt is closed. \
+        "Delete \"{name}\"? It has {work}.\n\nUndo (Ctrl+Z) restores it, but only until GolemSculpt is closed. \
          A save after this leaves it out of the file; the save before is kept in Older Versions (File tab)."
     )
 }
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(
             new_scene_words(Some(&file), true, &[]),
             "Start a new scene? \"dragon head.sclp\" has changes that have not been saved. \
-             A new scene puts this one aside: Undo (Z) brings it back, but only until the app is closed."
+             A new scene puts this one aside: Undo (Ctrl+Z) brings it back, but only until the app is closed."
         );
         let never_saved = new_scene_words(None, true, &[]);
         assert!(never_saved.starts_with("Start a new scene? This scene has not been saved. A new scene puts"));
@@ -566,7 +566,7 @@ mod tests {
         let file = PathBuf::from("dragon head.sclp");
         let text = new_scene_words(Some(&file), true, &[TUBES.to_owned()]);
         assert!(text.starts_with("Start a new scene? \"dragon head.sclp\" has changes that have not been saved."));
-        assert!(text.contains("Undo (Z) brings it back"), "the scene's objects are one Undo away");
+        assert!(text.contains("Undo (Ctrl+Z) brings it back"), "the scene's objects are one Undo away");
         assert!(text.ends_with(
             "Saving does not keep these, and a new scene loses them either way: \
              3 unmerged tubes (Merge or Keep Separate first). Undo does not bring them back."
@@ -601,7 +601,7 @@ mod tests {
         assert!(delete_words("Cube", false, 12, 1).contains("12 triangles, and 1 stroke since"));
         // An instance: the mesh stays with its other copies, and so does the work.
         let linked = delete_words("Door copy", true, 1_234_567, 34);
-        assert_eq!(linked, "Delete \"Door copy\"? The mesh and its other copies stay. Undo (Z) restores it.");
+        assert_eq!(linked, "Delete \"Door copy\"? The mesh and its other copies stay. Undo (Ctrl+Z) restores it.");
         let question = Question::Delete(7);
         assert_eq!(labels(&question), ["Delete", "Cancel"]);
     }

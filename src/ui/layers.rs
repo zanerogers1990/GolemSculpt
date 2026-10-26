@@ -75,7 +75,7 @@ pub fn card(ui: &mut Ui, doc: &mut Doc, assets: &Assets, actions: &mut Vec<Actio
              touching the rest. The red dot marks the layer that records what you sculpt; with no dot lit you sculpt \
              the model underneath, and the layers ride on it.\n\n\
              Remesh, Decimate, Join, a boolean and the other commands that rebuild the mesh merge the layers into the \
-             model first. Undo (Z) brings them back.",
+             model first. Undo (Ctrl+Z) brings them back.",
         );
         new_layer(ui, rows.len(), tips, actions);
         if rows.is_empty() {
@@ -89,7 +89,7 @@ pub fn card(ui: &mut Ui, doc: &mut Doc, assets: &Assets, actions: &mut Vec<Actio
         }
         notes(ui, &rows, held);
         let help = "Makes every layer part of the model as it shows now, and empties the list: the shape does not \
-                    change. A layer that is turned down is baked turned down, and a hidden one adds nothing. Undo (Z) \
+                    change. A layer that is turned down is baked turned down, and a hidden one adds nothing. Undo (Ctrl+Z) \
                     brings them back.";
         if tip(theme::button(ui, ui.available_width(), "Bake All", ButtonStyle::default()), tips, help).clicked() {
             actions.push(Action::Layer(LayerAction::BakeAll));
@@ -103,7 +103,7 @@ fn new_layer(ui: &mut Ui, count: usize, tips: bool, actions: &mut Vec<Action>) {
     ui.add_enabled_ui(count < MOST_LAYERS, |ui| {
         let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
         let help = "Adds an empty layer and starts recording on it: what you sculpt from now on goes into the layer, \
-                    and the model underneath is left as it is. Undo (Z) removes it.";
+                    and the model underneath is left as it is. Undo (Ctrl+Z) removes it.";
         if tip(theme::button(ui, ui.available_width(), "New Layer", style), tips, help).clicked() {
             actions.push(Action::Layer(LayerAction::New(None)));
         }
@@ -158,7 +158,7 @@ fn layer(ui: &mut Ui, mesh: u64, row: &LayerRow, held: bool, assets: &Assets, ti
     // The bin.
     let response = ui.interact(bin, Id::new(("layer_bin", row.id)), if held { Sense::hover() } else { Sense::click() });
     let hovered = response.hovered() && !held;
-    let help = format!("Deletes this layer and what it added to the shape. Undo (Z) brings it back.{wait}");
+    let help = format!("Deletes this layer and what it added to the shape. Undo (Ctrl+Z) brings it back.{wait}");
     if tip(response, tips, &help).clicked() {
         actions.push(Action::Layer(LayerAction::Delete(row.id)));
     }
@@ -173,7 +173,7 @@ fn layer(ui: &mut Ui, mesh: u64, row: &LayerRow, held: bool, assets: &Assets, ti
     ui.painter().rect_filled(bake, 5.0, fill);
     ui.painter().text(bake.center(), Align2::CENTER_CENTER, "Bake", theme::font(12.0), theme::TEXT());
     let help = "Makes what this layer adds, as it shows now, part of the model underneath, and takes the layer off \
-                the list: the shape does not change. Turned down, it is baked turned down. Undo (Z) brings it back.";
+                the list: the shape does not change. Turned down, it is baked turned down. Undo (Ctrl+Z) brings it back.";
     if tip(response, tips, help).clicked() {
         actions.push(Action::Layer(LayerAction::Bake(row.id)));
     }

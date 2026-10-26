@@ -237,9 +237,9 @@ impl ArrayTool {
         placement.position += by;
         cx.commit("Move Arrayed Object", vec![Command::Place { object, placement }]);
         self.picked = Some(index);
-        // It is a step of the scene's history, not the tool's: say so, since Z
+        // It is a step of the scene's history, not the tool's: say so, since Ctrl+Z
         // steps the array's own edits first.
-        let text = "Moved the object and its array. That is a step of the scene's history: Z undoes the array's own \
+        let text = "Moved the object and its array. That is a step of the scene's history: Ctrl+Z undoes the array's own \
                     edits first, then this.";
         self.say(cx, text, true);
     }

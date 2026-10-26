@@ -733,7 +733,7 @@ fn create_adds_one_object_in_one_undo_step_and_puts_the_tool_away() {
     assert_eq!(bench.doc.undo_steps(), 1);
     assert!(bench.status.as_ref().is_some_and(|s| s.1 && s.0.starts_with("Created Lathe")));
 
-    // The profile is kept for another, and the tool's own history is empty, so Z reaches the scene.
+    // The profile is kept for another, and the tool's own history is empty, so Ctrl+Z reaches the scene.
     assert_eq!(tool.profile.len(), 7);
     assert!(!tool.can_undo(false));
     assert!(bench.undo(&mut tool));
@@ -799,7 +799,7 @@ fn undoing_the_create_hands_the_profile_back_and_redo_puts_the_tool_away_again()
     bench.frame(&mut tool);
     assert!(!bench.started, "nothing to hand back while the object stands");
 
-    assert!(bench.undo_scene(), "Z, with the tool away");
+    assert!(bench.undo_scene(), "Ctrl+Z, with the tool away");
     bench.frame(&mut tool);
     assert!(bench.started, "the tool asks to come back up");
     assert_eq!(tool.created(), None);
@@ -1115,7 +1115,7 @@ fn an_untouched_preset_is_not_work_and_an_outline_shaped_by_hand_is_until_create
     assert_eq!(at_risk(&tool), shaped);
     bench.enter(&mut tool);
 
-    // Z puts the vase back as it was loaded; Shift + Z the user's outline.
+    // Ctrl+Z puts the vase back as it was loaded; Ctrl + Shift + Z the user's outline.
     assert!(bench.undo(&mut tool));
     assert_eq!(at_risk(&tool), None);
     assert!(bench.redo(&mut tool));
@@ -1124,7 +1124,7 @@ fn an_untouched_preset_is_not_work_and_an_outline_shaped_by_hand_is_until_create
     // Created: the outline is an object of the scene, and the profile kept for the next one is a copy.
     create(&mut bench, &mut tool);
     assert_eq!(at_risk(&tool), None, "created, the shape is in the scene and in its file");
-    // Z takes the object away again: the profile is the only place the shape is. Shift + Z: in the scene.
+    // Ctrl+Z takes the object away again: the profile is the only place the shape is. Ctrl + Shift + Z: in the scene.
     assert!(bench.undo_scene());
     bench.frame(&mut tool);
     assert_eq!(at_risk(&tool), shaped);

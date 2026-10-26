@@ -784,7 +784,7 @@ impl Running {
             text += " The paint Blender sent could not be read, so the shapes came without it.";
         }
         if changed {
-            text += " Undo (Z) puts the scene back as it was.";
+            text += " Undo (Ctrl+Z) puts the scene back as it was.";
         }
         if let Some(note) = io::notes_opened(repaired, 0) {
             text += &format!(" {note}");

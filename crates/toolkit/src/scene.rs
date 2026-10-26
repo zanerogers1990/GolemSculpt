@@ -540,7 +540,7 @@ pub trait Document: Scene {
 ///
 /// Everything that changes the object list (add, replace, place, mirror, show,
 /// rename, delete, select) happens inside one `begin`/`end` pair, so however
-/// many objects a tool touches, Z takes it all back at once. Masks and
+/// many objects a tool touches, Ctrl+Z takes it all back at once. Masks and
 /// hidden faces are set after that, each as its own step, in the order given:
 /// they are stored with the mesh they belong to and undone like a brush
 /// stroke, so they cannot ride in the same step. A command that cannot be

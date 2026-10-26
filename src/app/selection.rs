@@ -218,7 +218,7 @@ impl Running {
             (Some(_), None) => format!(" It was remeshed into one surface.{}", notes.after_remesh()),
             (None, None) => String::new(),
         };
-        text += " Undo (Z) brings the separate objects back.";
+        text += " Undo (Ctrl+Z) brings the separate objects back.";
         self.status_checked(text, if remeshed { Cure::OtherResolution } else { Cure::Remesh });
         self.toast("Join");
         self.flash.start(self.doc.scene.active_id(), flash::Kind::Select);
@@ -249,12 +249,12 @@ impl Running {
         // The Unity app's line, then what it leaves unsaid: how to get things back.
         let text = if delete {
             format!(
-                "{verb} {count} object{plural}, deleted. {} triangles in {ms:.0} ms. Undo (Z) brings back the shape and what was deleted.",
+                "{verb} {count} object{plural}, deleted. {} triangles in {ms:.0} ms. Undo (Ctrl+Z) brings back the shape and what was deleted.",
                 grouped(made.triangles)
             )
         } else {
             format!(
-                "{verb} {count} object{plural}, hidden. {} triangles in {ms:.0} ms. The eye in the list shows a hidden one again; undo (Z) brings back the shape and shows them.",
+                "{verb} {count} object{plural}, hidden. {} triangles in {ms:.0} ms. The eye in the list shows a hidden one again; undo (Ctrl+Z) brings back the shape and shows them.",
                 grouped(made.triangles)
             )
         };
@@ -274,7 +274,7 @@ impl Running {
                 doc.sculptor.last_hit = None;
                 self.toast("Reset Shape");
                 self.status(
-                    format!("\"{name}\" is back to the shape it had before sculpting. Undo (Z) brings the sculpt back."),
+                    format!("\"{name}\" is back to the shape it had before sculpting. Undo (Ctrl+Z) brings the sculpt back."),
                     true,
                 );
             }
@@ -291,7 +291,7 @@ impl Running {
         let name = doc.scene.spawn_name(kind.name());
         self.add_object(&name, mesh);
         let name = self.doc.scene.active().name.clone();
-        self.status(format!("Added \"{name}\" at the centre. Undo (Z) removes it."), true);
+        self.status(format!("Added \"{name}\" at the centre. Undo (Ctrl+Z) removes it."), true);
     }
 
     /// The Delete key: asks before deleting the active object. Delete sits

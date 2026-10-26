@@ -143,9 +143,9 @@ impl Running {
         let aspect = self.view.size.x / self.view.size.y.max(1.0);
         let document = fresh_document(self.doc.opts.new_shape_tris, aspect);
         self.put_in_place(document, FileState::new_scene());
-        self.status("New scene. Undo (Z) brings back the scene you had.", true);
         // The new scene is seen through the lens last chosen, framed as it was.
         self.doc.camera.set_lens(self.doc.opts.lens);
+        self.status("New scene. Undo (Ctrl+Z) brings back the scene you had.", true);
         self.toast("New Scene");
     }
 }

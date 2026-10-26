@@ -354,7 +354,7 @@ impl Running {
                     };
                     self.status(
                         format!(
-                            "Reshaped the unmasked part of \"{object}\"{how}; the masked part stayed where it was. Undo (Z) puts it back."
+                            "Reshaped the unmasked part of \"{object}\"{how}; the masked part stayed where it was. Undo (Ctrl+Z) puts it back."
                         ),
                         true,
                     );

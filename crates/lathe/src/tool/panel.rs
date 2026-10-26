@@ -27,7 +27,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Drag the axis", "Move the lathe"),
     ("Delete", "Delete the selected"),
     ("Enter", "Create the mesh"),
-    ("Z / Shift+Z", "Undo / redo"),
+    ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
     ("Esc", "Cancel, deselect, leave"),
     ("Drag background", "Orbit"),
 ];
@@ -95,7 +95,7 @@ impl Lathe {
                 for &preset in row {
                     let r = theme::button(ui, w, preset.name(), ButtonStyle::default());
                     let help = format!(
-                        "Replaces the profile with a {} to shape from. Undoable (Z).",
+                        "Replaces the profile with a {} to shape from. Undoable (Ctrl+Z).",
                         preset.name().to_lowercase()
                     );
                     if theme::tip(r, cx.tips, &help).clicked() {
@@ -116,19 +116,19 @@ impl Lathe {
             }
             ui.add_enabled_ui(self.can_step(false), |ui| {
                 let r = theme::button(ui, w, "Undo", ButtonStyle::default());
-                if theme::tip(r, cx.tips, "Undoes the last profile edit (Z).").clicked() {
+                if theme::tip(r, cx.tips, "Undoes the last profile edit (Ctrl+Z).").clicked() {
                     self.step(cx, false);
                 }
             });
             ui.add_enabled_ui(self.can_step(true), |ui| {
                 let r = theme::button(ui, w, "Redo", ButtonStyle::default());
-                if theme::tip(r, cx.tips, "Redoes it (Shift+Z).").clicked() {
+                if theme::tip(r, cx.tips, "Redoes it (Ctrl+Shift+Z).").clicked() {
                     self.step(cx, true);
                 }
             });
         });
         let text = match self.history.next_undo(&self.profile, &self.plane) {
-            Some(label) => format!("Undo (Z): {label}"),
+            Some(label) => format!("Undo (Ctrl+Z): {label}"),
             None => "Profile history empty.".to_owned(),
         };
         theme::hint(ui, &text);

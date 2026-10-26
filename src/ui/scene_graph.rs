@@ -420,9 +420,9 @@ fn rows(ui: &mut Ui, scene: &Scene, assets: &Assets, st: &mut State, tips: bool,
             let response = ui.interact(trash, Id::new(("object_trash", o.id)), Sense::click());
             look.hover[2] = response.hovered();
             let help = if look.linked {
-                "Deletes this object, after asking. The mesh and its other copies stay. Undo (Z) restores it."
+                "Deletes this object, after asking. The mesh and its other copies stay. Undo (Ctrl+Z) restores it."
             } else {
-                "Deletes this object, after asking. Undo (Z) restores it."
+                "Deletes this object, after asking. Undo (Ctrl+Z) restores it."
             };
             // It asks, as the Delete key does: the bin sits at the end of
             // every row, and one click on the wrong one cost the Door.
@@ -504,7 +504,7 @@ fn selected(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: b
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, usize::from(reset) + usize::from(unique), 6.0);
             let style = ButtonStyle { height: 26.0, ..Default::default() };
-            let help = "Puts the selected object back to the shape it had before any sculpting: as it was made, loaded or last remeshed. Undo (Z) brings the sculpt back.";
+            let help = "Puts the selected object back to the shape it had before any sculpting: as it was made, loaded or last remeshed. Undo (Ctrl+Z) brings the sculpt back.";
             if reset && tip(theme::button(ui, w, "Reset Shape", style), tips, help).clicked() {
                 actions.push(Action::ResetShape);
             }
@@ -583,7 +583,7 @@ fn selected(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: b
     }
     if doc.scene.origin_off_mesh(&doc.mesh).is_some() {
         let style = ButtonStyle { height: 26.0, ..Default::default() };
-        let help = "Moves the object's centre to the middle of its mesh without moving the object: nothing changes on screen. The centre is where the gizmo sits, what the object turns and resizes about, and where its own (Local) mirror planes and radial axis pass, so those come with it. For a piece cut off a model, which keeps the model's centre. Instances, live mirror copies and arrays stay where they are. Undo (Z) puts the centre back.";
+        let help = "Moves the object's centre to the middle of its mesh without moving the object: nothing changes on screen. The centre is where the gizmo sits, what the object turns and resizes about, and where its own (Local) mirror planes and radial axis pass, so those come with it. For a piece cut off a model, which keeps the model's centre. Instances, live mirror copies and arrays stay where they are. Undo (Ctrl+Z) puts the centre back.";
         if tip(theme::button(ui, ui.available_width(), "Set Origin to Mesh", style), tips, help).clicked() {
             actions.push(Action::SetOriginToMesh);
         }
@@ -622,7 +622,7 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
         ui.spacing_mut().item_spacing.x = 4.0;
         for (op, icon, label, what) in tiles {
             let r = theme::tile(ui, vec2(w, 46.0), assets.icon(icon), label, "", None);
-            let help = format!("{what} The others are {after}. It clears the mask, as a remesh does. Undo (Z) restores the shape and the others.");
+            let help = format!("{what} The others are {after}. It clears the mask, as a remesh does. Undo (Ctrl+Z) restores the shape and the others.");
             if tip(r, tips, &help).clicked() {
                 actions.push(Action::Boolean { op, resolution: resolution as u32, delete: st.bool_delete });
             }
@@ -638,7 +638,7 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
     }
     super::rebuild_notes::boolean_estimate(ui, doc, resolution);
     super::rebuild_notes::hint(ui, doc, super::rebuild_notes::Rebuild::Surface, true);
-    let help = "Deletes the other selected objects instead of just hiding them (hidden ones can be shown again from the list). Undo (Z) brings them back either way.";
+    let help = "Deletes the other selected objects instead of just hiding them (hidden ones can be shown again from the list). Undo (Ctrl+Z) brings them back either way.";
     // Unity's label is "Delete the other objects instead of hiding", which
     // is wider than this panel.
     tip(theme::checkbox(ui, &mut st.bool_delete, "Delete the others instead of hiding", ACCENT()), tips, help);
@@ -659,7 +659,7 @@ fn combine(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: bo
         super::rebuild_notes::join_estimate(ui, doc, doc.opts.remesh_resolution);
     }
     let style = ButtonStyle { icon: assets.icon("join"), ..Default::default() };
-    let help = "Merges every selected object into the bright one, as one mesh. Each shell is kept as it is, masks included. Undo (Z) brings the separate objects back.";
+    let help = "Merges every selected object into the bright one, as one mesh. Each shell is kept as it is, masks included. Undo (Ctrl+Z) brings the separate objects back.";
     if tip(theme::button(ui, ui.available_width(), "Join", style), tips, help).clicked() {
         actions.push(Action::Join { remesh: st.join_remesh });
     }

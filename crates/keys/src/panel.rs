@@ -65,7 +65,7 @@ pub(crate) fn panel(keys: &mut Keys, ui: &mut Ui, cx: &mut Ctx) {
                 ("R over a joint", "Turn it 90 degrees"),
                 ("V", "Show pegs / sockets / both"),
                 ("Enter", "Build the keys"),
-                ("Z / Shift + Z", "Undo / redo a joint edit"),
+                ("Ctrl + Z / Ctrl + Shift + Z", "Undo / redo a joint edit"),
                 ("Esc", "Let go, stop a build, leave"),
                 ("J", "Keys on / off"),
                 ("Drag on background", "Orbit"),
@@ -114,7 +114,7 @@ fn pieces(keys: &mut Keys, ui: &mut Ui, cx: &mut Ctx) {
                 keys.auto_place(cx);
             }
             let r = theme::button(ui, w, "Clear", ButtonStyle::default());
-            if theme::tip(r, cx.tips, "Removes every joint (Z brings them back).").clicked() {
+            if theme::tip(r, cx.tips, "Removes every joint (Ctrl+Z brings them back).").clicked() {
                 keys.clear_keys(cx);
             }
             let r = theme::button(ui, w, "Swap Sides", ButtonStyle::default());
@@ -146,7 +146,7 @@ fn pieces(keys: &mut Keys, ui: &mut Ui, cx: &mut Ctx) {
         }
     });
     if keys.pair.as_ref().is_some_and(|pair| pair.showing == Showing::Keyed) {
-        theme::hint(ui, "These pieces have their keys. Undo (Z) takes them off and gives the planned joints back.");
+        theme::hint(ui, "These pieces have their keys. Undo (Ctrl+Z) takes them off and gives the planned joints back.");
     } else {
         theme::hint(ui, "Red joints will not fit where they are, and are left out of the build.");
     }

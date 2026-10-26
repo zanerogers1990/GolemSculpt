@@ -172,7 +172,7 @@ impl Running {
             steps(self) == count && self.doc.opts.deform.params.angle == 0.0,
         );
 
-        // Enter keeps it; one Z takes it back exactly.
+        // Enter keeps it; one Ctrl+Z takes it back exactly.
         self.doc.opts.deform.params.angle = 45.0;
         self.deform_frame();
         let bent = bits(&self.doc.mesh.positions);
@@ -182,10 +182,10 @@ impl Running {
         println!("     {}", self.ui.status.0);
         self.act(Action::Undo);
         self.deform_frame();
-        say("which Z takes back to the bit", bits(&self.doc.mesh.positions) == rest);
+        say("which Ctrl+Z takes back to the bit", bits(&self.doc.mesh.positions) == rest);
         self.act(Action::Redo);
         self.deform_frame();
-        say("and Shift+Z puts back", bits(&self.doc.mesh.positions) == bent);
+        say("and Ctrl+Shift+Z puts back", bits(&self.doc.mesh.positions) == bent);
         self.act(Action::Undo);
         self.deform_frame();
 
@@ -307,7 +307,7 @@ impl Running {
         say("the bridge's deform tool tapers it as one undo step", answer.is_ok() && steps(self) == count + 1);
         self.act(Action::Undo);
         self.deform_frame();
-        say("which Z takes back", bits(&self.doc.mesh.positions) == rest);
+        say("which Ctrl+Z takes back", bits(&self.doc.mesh.positions) == rest);
 
         // Three posts bent as one row, and one Z for all three.
         let ids = self.deform_posts();
@@ -330,10 +330,10 @@ impl Running {
         say("kept as one step for each, tied together", steps(self) == count + 3);
         self.act(Action::Undo);
         self.deform_frame();
-        say("one Z puts all three back to the bit", shapes(self) == before);
+        say("one Ctrl+Z puts all three back to the bit", shapes(self) == before);
         self.act(Action::Redo);
         self.deform_frame();
-        say("one Shift+Z bends all three again", shapes(self) == bent);
+        say("one Ctrl+Shift+Z bends all three again", shapes(self) == bent);
         self.deform_look();
     }
 }

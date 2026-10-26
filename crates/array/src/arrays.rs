@@ -3,7 +3,7 @@
 //! There is no array in the scene: the tool keeps one `ArrayState` per object
 //! it has been given, with its layout worked out so a frame only multiplies
 //! matrices. The history is the tool's own (the scene's has no room for this),
-//! stepped by Z while the tool is up. An edit is a before and an after of one
+//! stepped by Ctrl+Z while the tool is up. An edit is a before and an after of one
 //! object's whole array, which is small: a handful of settings and points.
 
 use std::collections::BTreeMap;
@@ -85,7 +85,7 @@ impl Step {
 /// switched. The scene has its own undo, so the tool cannot take such a step
 /// back itself. It keeps the step in its history all the same, for two
 /// reasons. One is order: Z answers the newest edit, whichever history it
-/// is in, so a step of the scene that is on top is left to the scene's Z
+/// is in, so a step of the scene that is on top is left to the scene's Ctrl+Z
 /// instead of the tool's own older steps being undone first. The other is the
 /// array's half of the edit, if there is one (carrying the object shifts the
 /// array's points the other way, so the path stays where it is in the

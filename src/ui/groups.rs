@@ -135,7 +135,7 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
         using(ui, doc, tips, actions);
         ui.add_space(6.0);
         ui.add_enabled_ui(count > 0, |ui| {
-            let help = "Takes every group off this object. Its shape does not change. Undo (Z) brings them back.";
+            let help = "Takes every group off this object. Its shape does not change. Undo (Ctrl+Z) brings them back.";
             if tip(theme::button(ui, ui.available_width(), "Clear Groups", ButtonStyle::default()), tips, help)
                 .clicked()
             {

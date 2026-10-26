@@ -469,7 +469,7 @@ impl Running {
         doc.opts.groups.picked = None;
         self.redraw = true;
         self.toast("Clear Groups");
-        self.status(format!("Cleared {}. Undo (Z) brings them back.", counted(count).to_lowercase()), true);
+        self.status(format!("Cleared {}. Undo (Ctrl+Z) brings them back.", counted(count).to_lowercase()), true);
     }
 
     fn groups_arm(&mut self, armed: Option<Armed>) {

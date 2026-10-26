@@ -530,7 +530,7 @@ fn a_split_over_a_copy_cuts_the_object_there_and_the_piece_is_a_plain_object_whe
         assert_eq!(piece.placement, kept.placement);
 
         assert!(scenes.live.undo_scene());
-        assert_eq!(scenes.live.doc.objects(), vec![scenes.object], "one Z brings the whole object back");
+        assert_eq!(scenes.live.doc.objects(), vec![scenes.object], "one Ctrl+Z brings the whole object back");
         assert_near(volume_of(&scenes.live, scenes.object), whole, 1e-9);
         assert_eq!(scenes.live.doc.info(scenes.object).unwrap().mirror.map(|m| m.axis_mask), Some(axes));
     }

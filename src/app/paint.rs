@@ -107,7 +107,7 @@ impl Doc {
                 self.history.push_paint(step);
                 let name = self.mesh.paint_rows().into_iter().find(|r| r.id == id).map(|r| r.name).unwrap_or_default();
                 said = Some(format!(
-                    "Made the paint layer \"{name}\" to paint on (Paint Layers card, on the Mesh tab). Undo (Z) takes \
+                    "Made the paint layer \"{name}\" to paint on (Paint Layers card, on the Mesh tab). Undo (Ctrl+Z) takes \
                      the stroke back, and then the layer."
                 ));
             }
@@ -189,7 +189,7 @@ impl Running {
             PaintAction::Delete(id) => {
                 let name = self.paint_row(id).map_or_else(String::new, |r| quoted(&r));
                 let result = self.doc.mesh.delete_paint_layer(id);
-                self.paint_result(result, || format!("Deleted the paint layer {name}. Undo (Z) brings it back."));
+                self.paint_result(result, || format!("Deleted the paint layer {name}. Undo (Ctrl+Z) brings it back."));
             }
             PaintAction::Rename(id, name) => {
                 let result = self.doc.mesh.rename_paint_layer(id, &name);
@@ -216,13 +216,13 @@ impl Running {
                 let name = self.paint_row(id).map_or_else(String::new, |r| quoted(&r));
                 let result = self.doc.mesh.merge_paint_down(id);
                 self.paint_result(result, || {
-                    format!("Merged {name} into the layer under it: the paint looks the same. Undo (Z) splits them again.")
+                    format!("Merged {name} into the layer under it: the paint looks the same. Undo (Ctrl+Z) splits them again.")
                 });
             }
             PaintAction::FlattenAll => {
                 let result = self.doc.mesh.flatten_paint();
                 self.paint_result(result, || {
-                    "Flattened the paint layers into one, as they showed (hidden ones are dropped). Undo (Z) brings \
+                    "Flattened the paint layers into one, as they showed (hidden ones are dropped). Undo (Ctrl+Z) brings \
                      them back."
                         .into()
                 });
@@ -239,7 +239,7 @@ impl Running {
             PaintAction::Clear(id) => {
                 let name = self.paint_row(id).map_or_else(String::new, |r| quoted(&r));
                 let result = self.doc.mesh.clear_paint(id, ChannelSet::SURFACE);
-                self.paint_result(result, || format!("Cleared {name}: it is empty now. Undo (Z) brings its paint back."));
+                self.paint_result(result, || format!("Cleared {name}: it is empty now. Undo (Ctrl+Z) brings its paint back."));
             }
             PaintAction::RecomputeCavity(id) => {
                 let result = self.doc.mesh.snapshot_paint_cavity(id);
@@ -372,7 +372,7 @@ impl Running {
             (true, false) => "the colour",
             _ => "the material",
         };
-        self.paint_result(result, || format!("Filled {} with {what}. Undo (Z) takes it back.", area_words(area)));
+        self.paint_result(result, || format!("Filled {} with {what}. Undo (Ctrl+Z) takes it back.", area_words(area)));
     }
 
     /// The eyedropper at window position `at`: the colour and the strongest

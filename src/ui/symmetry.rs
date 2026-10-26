@@ -223,7 +223,7 @@ fn repair(ui: &mut egui::Ui, space: Space, tolerance: &mut f32, tips: bool, acti
             "Moves the {moved} side's vertices onto the mirror image of the {copied} side, each onto its own partner \
              across the object's own {} plane. No triangle changes. With a mask painted only the unmasked part \
              moves. Where too much of the model has no partner nothing is changed and the status line says so: \
-             Cut & Mirror is for that. One undo step (Z).",
+             Cut & Mirror is for that. One undo step (Ctrl+Z).",
             axis.name()
         )
     });
@@ -234,7 +234,7 @@ fn repair(ui: &mut egui::Ui, space: Space, tolerance: &mut f32, tips: bool, acti
         format!(
             "Keeps the {kept} side of the selected object and rebuilds its {rebuilt} side as the exact mirror \
              image of it, across the object's own {} plane. What was on the {rebuilt} side is thrown away. The \
-             mask comes across; hidden parts are cut too and show again. One undo step (Z).",
+             mask comes across; hidden parts are cut too and show again. One undo step (Ctrl+Z).",
             axis.name()
         )
     });
@@ -243,7 +243,7 @@ fn repair(ui: &mut egui::Ui, space: Space, tolerance: &mut f32, tips: bool, acti
     let cleanup = theme::button(ui, ui.available_width(), "Symmetry Cleanup", ButtonStyle::default());
     let help = "Puts the vertices that sit close to the plane exactly on it, and merges the doubled ones that leaves: \
                 two halves joined along the plane become one surface. Neither side is moved as a whole. One undo \
-                step (Z).";
+                step (Ctrl+Z).";
     if tip(cleanup, tips, help).clicked() {
         actions.push(Action::SymmetryCleanup { axis });
     }

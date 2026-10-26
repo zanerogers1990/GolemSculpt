@@ -373,7 +373,7 @@ impl Running {
         if session.warned {
             text += " The two halves of the mirrored model now differ.";
         }
-        text += " Undo (Z) puts it back.";
+        text += " Undo (Ctrl+Z) puts it back.";
         self.toast(params.kind.name());
         self.status(text, !session.warned);
         self.redraw = true;

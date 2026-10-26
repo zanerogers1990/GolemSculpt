@@ -302,7 +302,7 @@ impl TubeTool {
 
     /// The merged models replace the old ones: one step on the scene's
     /// history for all of them, with the tubes riding on it. One Z un-merges
-    /// and hands them back live; Shift+Z merges them again.
+    /// and hands them back live; Ctrl+Shift+Z merges them again.
     fn land(&mut self, cx: &mut Ctx, result: Result<Fused, String>) {
         let targets = std::mem::take(&mut self.finish.targets);
         let loose = std::mem::take(&mut self.finish.loose);
@@ -357,7 +357,7 @@ impl TubeTool {
         }
 
         let mut message = if merged > 0 {
-            format!("Merged {} in {:.1}s. Z undoes it and gives the {many} back.", plural(merged, one, many), fused.seconds)
+            format!("Merged {} in {:.1}s. Ctrl+Z undoes it and gives the {many} back.", plural(merged, one, many), fused.seconds)
         } else {
             "Nothing merged.".to_owned()
         };
@@ -447,7 +447,7 @@ impl TubeTool {
         self.remove_tubes(&kept);
         self.finish.record(Made::Objects { added: receipt.added, before }, kept);
         let (one, many) = (format!("{} object", kind.one()), format!("{} objects", kind.one()));
-        self.say(format!("Made {}. Z undoes it and gives the {} back.", plural(count, &one, &many), kind.many()));
+        self.say(format!("Made {}. Ctrl+Z undoes it and gives the {} back.", plural(count, &one, &many), kind.many()));
     }
 
     /// Voxel size for a kept tube: the anchor's own density where there is

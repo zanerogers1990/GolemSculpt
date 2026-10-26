@@ -434,7 +434,7 @@ pub fn line(name: &str, report: &Report, seconds: f64) -> (String, bool) {
             format!(" It was not a closed surface before and is not now: {warning}")
         }
     };
-    (text + " Undo (Z) brings the triangles back.", closed)
+    (text + " Undo (Ctrl+Z) brings the triangles back.", closed)
 }
 
 #[cfg(test)]
@@ -492,7 +492,7 @@ mod tests {
             text,
             format!(
                 "Decimated \"Sphere\" from {} to {} triangles in 250 ms. It was a closed surface and still is. Undo \
-                 (Z) brings the triangles back.",
+                 (Ctrl+Z) brings the triangles back.",
                 grouped(before),
                 grouped(mesh.triangle_count())
             )
@@ -616,7 +616,7 @@ mod tests {
         let (text, ok) = line("Ball", &report, 1.26);
         assert!(!ok);
         assert!(text.contains(" in 1.3 s. It was not a closed surface before and is not now: \"Ball\" has "), "{text}");
-        assert!(text.ends_with(" A Remesh (R) usually closes it. Undo (Z) brings the triangles back."), "{text}");
+        assert!(text.ends_with(" A Remesh (R) usually closes it. Undo (Ctrl+Z) brings the triangles back."), "{text}");
     }
 
     #[test]
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(
             line("Ring", &report, 0.004).0,
             "Decimated \"Ring\" from 5,000 to 16 triangles in 4 ms. 4 were asked for: any fewer would tear or fold \
-             the surface. It was a closed surface and still is. Undo (Z) brings the triangles back."
+             the surface. It was a closed surface and still is. Undo (Ctrl+Z) brings the triangles back."
         );
         // And for the one thing that must never happen.
         let torn = Report { closed_after: EdgeCensus { open: 3, crowded: 0, holes: Some(1) }, target: 16, ..report };

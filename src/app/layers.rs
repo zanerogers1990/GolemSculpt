@@ -124,7 +124,7 @@ impl Running {
         self.status(
             format!(
                 "Added the layer {name}. It is recording: what you sculpt now goes into it, and can be turned down, \
-                 hidden or deleted without touching the rest. Undo (Z) removes it."
+                 hidden or deleted without touching the rest. Undo (Ctrl+Z) removes it."
             ),
             true,
         );
@@ -229,15 +229,15 @@ impl Running {
         self.layers_changed(step);
         let name = quoted(&row);
         let text = match (bake, row.on && row.percent > 0) {
-            (false, _) => format!("Deleted the layer {name} and what it added. Undo (Z) brings it back."),
+            (false, _) => format!("Deleted the layer {name} and what it added. Undo (Ctrl+Z) brings it back."),
             (true, true) => format!(
-                "Baked {name} into the model at {}%: the shape is the same and the layer is gone. Undo (Z) brings it \
+                "Baked {name} into the model at {}%: the shape is the same and the layer is gone. Undo (Ctrl+Z) brings it \
                  back.",
                 row.percent
             ),
             (true, false) => format!(
                 "{name} was not showing, so there was nothing of it to bake: the shape is the same and the layer is \
-                 gone. Undo (Z) brings it back."
+                 gone. Undo (Ctrl+Z) brings it back."
             ),
         };
         self.toast(if bake { "Bake" } else { "Delete Layer" });
@@ -253,7 +253,7 @@ impl Running {
         let layers = if count == 1 { "The layer is".to_owned() } else { format!("All {count} layers are") };
         self.toast("Bake All");
         self.status(
-            format!("{layers} part of the model now, as they showed: the shape is the same. Undo (Z) brings them back."),
+            format!("{layers} part of the model now, as they showed: the shape is the same. Undo (Ctrl+Z) brings them back."),
             true,
         );
     }

@@ -61,7 +61,7 @@ fn moved_line(name: &str, moved: &OriginMoved, symmetry: Symmetry) -> String {
     if symmetry.space == Space::Local && !symmetry.is_off() {
         text += &format!(" Its own symmetry ({}) goes through the new centre now.", symmetry.summary());
     }
-    text + " Undo (Z) puts the centre back."
+    text + " Undo (Ctrl+Z) puts the centre back."
 }
 
 /// Why the centre cannot be moved just now, if it cannot: `job` is a
@@ -291,7 +291,7 @@ mod tests {
         let one = OriginMoved { shift: Vec3::X, objects: vec![(1, stand, stand)] };
         assert_eq!(
             moved_line("Rivet", &one, Symmetry::default()),
-            "Moved the centre of \"Rivet\" to the middle of its mesh. Nothing moved in the scene. Undo (Z) puts \
+            "Moved the centre of \"Rivet\" to the middle of its mesh. Nothing moved in the scene. Undo (Ctrl+Z) puts \
              the centre back."
         );
         let three = OriginMoved { shift: Vec3::X, objects: vec![(1, stand, stand); 3] };
@@ -301,13 +301,13 @@ mod tests {
             moved_line("Rivet", &three, local),
             "Moved the centre of \"Rivet\" to the middle of its mesh. Nothing moved in the scene. Its 2 instances \
              share the mesh, and stay where they are too. Its own symmetry (X + Radial 6) goes through the new \
-             centre now. Undo (Z) puts the centre back."
+             centre now. Undo (Ctrl+Z) puts the centre back."
         );
         // The world's planes stay in the world: nothing to say of them.
         let two = OriginMoved { shift: Vec3::X, objects: vec![(1, stand, stand); 2] };
         let world = Symmetry { space: Space::World, ..local };
         let said = moved_line("Rivet", &two, world);
-        assert!(said.contains(" Its instance shares the mesh, and stays where it is too. Undo (Z)"), "{said}");
+        assert!(said.contains(" Its instance shares the mesh, and stays where it is too. Undo (Ctrl+Z)"), "{said}");
     }
 
     #[test]

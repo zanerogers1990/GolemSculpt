@@ -1070,7 +1070,7 @@ impl Running {
         }
     }
 
-    /// Z while a hosted tool is up: its own history first. False sends the
+    /// Ctrl+Z while a hosted tool is up: its own history first. False sends the
     /// press on to the scene's history.
     pub(super) fn tools_undo(&mut self, redo: bool) -> bool {
         if !self.tools_active() {
@@ -1299,7 +1299,7 @@ impl Running {
         println!("play: the wheel off the model moved the camera from {distance:.2} to {:.2}", self.doc.camera.distance);
         let steps = self.doc.history.steps();
         self.act(Action::Undo);
-        println!("play: Z with the tool up left the scene history at {:?} (was {steps:?})", self.doc.history.steps());
+        println!("play: Ctrl+Z with the tool up left the scene history at {:?} (was {steps:?})", self.doc.history.steps());
         for press in 1..=4 {
             let taken = self.tools_key_pressed(KeyCode::Escape);
             println!("play: Esc {press}: taken {taken}, tool now {:?}", self.doc.tool);

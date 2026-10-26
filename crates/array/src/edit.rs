@@ -100,7 +100,7 @@ impl ArrayTool {
     /// Z: cancels a gesture in progress, else takes back the last edit.
     /// False (so the scene's history answers) when the tool has none, or when
     /// the newest is one the scene holds (see [`crate::arrays::Scened`]): the
-    /// scene's Z takes it back, and the tool follows when it sees that.
+    /// scene's Ctrl+Z takes it back, and the tool follows when it sees that.
     pub(crate) fn undo(&mut self, cx: &mut Ctx) -> bool {
         if self.cancel_gesture() {
             self.say(cx, "Cancelled.", true);
@@ -112,13 +112,13 @@ impl ArrayTool {
         }
         let Some(step) = self.history.undo.pop() else { return false };
         self.arrays.set(step.object, step.before.clone());
-        self.say(cx, format!("Undid {}. Shift+Z brings it back.", step.label), true);
+        self.say(cx, format!("Undid {}. Ctrl+Shift+Z brings it back.", step.label), true);
         self.history.redo.push(step);
         self.clamp_picked();
         true
     }
 
-    /// Shift+Z.
+    /// Ctrl+Shift+Z.
     pub(crate) fn redo(&mut self, cx: &mut Ctx) -> bool {
         self.commit_edit();
         if self.history.redo.last().is_none_or(|step| step.scene.is_some()) {

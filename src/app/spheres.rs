@@ -248,7 +248,7 @@ impl Running {
         true
     }
 
-    /// Z while the tool is up. The rig has its own history, so forty sphere
+    /// Ctrl+Z while the tool is up. The rig has its own history, so forty sphere
     /// drags do not bury the mesh edits either side of them; with nothing
     /// left there, the press falls through to the scene's history (false).
     pub(super) fn spheres_undo(&mut self, redo: bool) -> bool {
@@ -349,7 +349,7 @@ impl Running {
                 let mut text = format!("Made \"{name}\" from the spheres: {tris} triangles in {ms:.0} ms.");
                 text += &match earlier {
                     Some((_, old)) => format!(" The earlier skin \"{old}\" is hidden, not deleted."),
-                    None => " Undo (Z) removes it.".to_owned(),
+                    None => " Undo (Ctrl+Z) removes it.".to_owned(),
                 };
                 self.status_checked(text, crate::printable::Cure::Remesh);
             }
@@ -535,9 +535,9 @@ impl Running {
         });
         say("one drag is one step in the spheres' own history", steps(self) == Some(("Move Sphere", 1)));
         self.act(Action::Undo);
-        say("which Z takes back, every sphere exactly where it was", world(self) == before && steps(self).is_none());
+        say("which Ctrl+Z takes back, every sphere exactly where it was", world(self) == before && steps(self).is_none());
         self.act(Action::Redo);
-        say("and Shift+Z brings back", world(self) == after);
+        say("and Ctrl+Shift+Z brings back", world(self) == after);
         self.act(Action::Undo);
 
         // Esc mid-drag puts them back and the rest of the drag does nothing.

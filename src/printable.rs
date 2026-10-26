@@ -118,7 +118,7 @@ pub fn torn_by_stroke(name: &str, before: &EdgeCensus, after: &EdgeCensus) -> Op
     let faults = faults(after)?;
     Some(format!(
         "That stroke opened the surface of \"{name}\": it now has {faults}, so it may not print. \
-         Undo (Z) takes the stroke back, and a Remesh (R) usually closes it."
+         Undo (Ctrl+Z) takes the stroke back, and a Remesh (R) usually closes it."
     ))
 }
 
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(
             torn_by_stroke("Bust", &CLOSED, &hole).unwrap(),
             "That stroke opened the surface of \"Bust\": it now has 4 open edges (1 hole), so it may not print. \
-             Undo (Z) takes the stroke back, and a Remesh (R) usually closes it."
+             Undo (Ctrl+Z) takes the stroke back, and a Remesh (R) usually closes it."
         );
         assert!(torn_by_stroke("Bust", &hole, &EdgeCensus { open: 8, holes: Some(2), ..hole }).is_some());
         let crowded = EdgeCensus { crowded: 1, ..CLOSED };

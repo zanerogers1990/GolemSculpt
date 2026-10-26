@@ -142,7 +142,7 @@ and dragged to set the strength the first F of F F.
 
 If the window loses focus (Alt-Tab, a click on another program) while a button
 or key is held, the drag ends there as if you had let go (a stroke is kept as
-its one undo step) and every held key is let go, so Z works at once on coming
+its one undo step) and every held key is let go, so Ctrl + Z works at once on coming
 back.
 
 ## Brushes
@@ -732,7 +732,7 @@ points on the plane.
   with the rest and everything shows again afterwards, and a quad-remeshed
   object comes out as triangles, as after anything that rebuilds a mesh.
   Instances share the mesh, so they all change together.
-- It is one undo step: Z brings the whole model back, with its mask, its
+- It is one undo step: Ctrl + Z brings the whole model back, with its mask, its
   hidden parts and its quads.
 - The status line says what was kept and what was replaced ("Cut & mirrored
   +X onto -X: kept 3461 triangles, replaced 2347, now 3478 vertices."),
@@ -761,7 +761,7 @@ What an object starts with, as in the Unity app:
 
 Changing a symmetry is not an undo step, and no undo puts an older setting
 back, as in the Unity app: Z after ticking an axis steps back the last change
-to the model, and an object that Z brings back has the symmetry it was left
+to the model, and an object that Ctrl + Z brings back has the symmetry it was left
 with. Each object's symmetry is saved with it in the `.sclp` file, so a scene
 whose symmetry has been changed has something to save: closing asks first
 (see Files), until it is saved or the setting is put back as it was.
@@ -922,7 +922,7 @@ one level is kept on the others.
   Remesh, Decimate, Cut & Mirror, Join, the booleans, Trim, Split, a tube or
   muscle fused in, Keys, a mesh that comes back changed from Blender. They
   work on the level you are on, nothing is asked, the status line says the
-  levels were dropped, and Undo (Z) brings them back. Strokes, the mask,
+  levels were dropped, and Undo (Ctrl + Z) brings them back. Strokes, the mask,
   Reset Shape, Set Origin to Mesh and moving the object do not touch them.
 - Levels are saved in the `.sclp` file, and in the copies kept in case of a
   crash, and a file opens on the level it was saved on. The card says how
@@ -1086,7 +1086,7 @@ deleted without touching the rest, and nothing is lost by trying.
     100% afterwards does not bring the patch back. (What is left is the
     rounding of the last digit the computer keeps: a ten-millionth of the
     model's size or so, and a few millionths if the layer was down at 1%
-    when it was erased.) **Undo (Z)** is how you get it back: one stroke is
+    when it was erased.) **Undo (Ctrl + Z)** is how you get it back: one stroke is
     one step.
   - **Ctrl and the right button erase too.** There is no opposite stroke:
     once rubbed out, the detail is in no layer for a brush to bring back.
@@ -1125,7 +1125,7 @@ deleted without touching the rest, and nothing is lost by trying.
   model**: Remesh, Quad Remesh, Decimate, Cut & Mirror, Join, the booleans,
   Trim, Split, a tube or muscle fused in, Keys, a mesh that comes back
   changed from Blender. The new mesh is built from the shape as it shows,
-  nothing is asked, the status line says the layers were merged, and Undo (Z)
+  nothing is asked, the status line says the layers were merged, and Undo (Ctrl + Z)
   brings them back. Set Origin to Mesh, Clone and Make Unique keep them, and
   instances share them.
 - Export, Send to Blender, Check for Printing and a measure all see the shape
@@ -1347,7 +1347,7 @@ triangles, and an engine usually allows one model somewhere between 200k and
   rim where it was, and a gap that goes right through (under an arm) stays
   open. The status line says how it was and how it is, by the same count of
   open edges Check for Printing makes: "Decimated "Sphere" from 202,800 to
-  50,700 triangles in 253 ms. It was a closed surface and still is. Undo (Z)
+  50,700 triangles in 253 ms. It was a closed surface and still is. Undo (Ctrl + Z)
   brings the triangles back." For a model that had holes it says that it was
   not closed before and is not now, in red, with what closes it.
 - **The count is a target.** When no fold is left that keeps the surface
@@ -1433,7 +1433,7 @@ triangles, and an engine usually allows one model somewhere between 200k and
   stroke, an undo, a remesh), the result is of a model that is no longer
   there and is not used; the line says so, and Decimate is one press away.
   One at a time, and not while a merge or a cut is still working.
-- **One undo step**: Z brings every triangle back (the mesh from before is
+- **One undo step**: Ctrl + Z brings every triangle back (the mesh from before is
   kept whole, and counts towards undo's memory). Instances share the mesh,
   so they all change. A quad-remeshed object comes out as triangles, and
   Reset Shape goes back no further than the decimated shape.
@@ -1543,15 +1543,15 @@ of the range it works over.
 - What you see is not kept until you press **Apply** (or Enter). **Cancel**
   (or Esc) puts the model back exactly as it was; Esc again puts the
   deformers away. Anything else you do (another tool, a click on another
-  object, Z, a save) applies it first, so Z right after a bend takes the bend
-  back and Shift+Z puts it on again. **Done** keeps it and brings the arrows
+  object, Z, a save) applies it first, so Ctrl + Z right after a bend takes the bend
+  back and Ctrl+Shift+Z puts it on again. **Done** keeps it and brings the arrows
   back. Each Apply is one undo step.
 - The masked part stays where it is and a half-masked part goes half way, so
   mask the body to bend only an arm. Hidden parts stay where they are. Stay in
   Group belongs to brushes; to deform one face group, use **Mask All But
   Group** first.
 - With several objects selected they are deformed together, as one row or
-  group, about their shared centre; one Z takes them all back.
+  group, about their shared centre; one Ctrl + Z takes them all back.
 - With sculpt layers, a deformation goes where a stroke would: into the layer
   that records, or into the model underneath with the layers' detail carried
   round with it. It is refused, as a stroke is, while the recording layer is
@@ -1603,7 +1603,7 @@ shape before sculpting detail.
 | A | Solid preview of the skin |
 | X | Symmetry across the red plane |
 | Space (hold) | SSphere wheel, with the size of the next sphere under it |
-| Z, Shift + Z | Undo, redo the spheres (they keep their own history) |
+| Ctrl + Z, Ctrl + Shift + Z | Undo, redo the spheres (they keep their own history) |
 | F F | Frame the spheres |
 
 In Move mode the selected sphere carries the Transform gizmo's arrows: drag one
@@ -1689,7 +1689,7 @@ click on one picks the object, and Mask, Hide, Trim and Split act through them
    reflections of each copy, as there are of the object.
 4. **One Object** turns the copies into real geometry inside the object (a
    remesh then fuses them); **Separate Objects** makes each copy an object of
-   its own. Either is one undo step, and Z gives the live array back. Large
+   its own. Either is one undo step, and Ctrl + Z gives the live array back. Large
    meshes are built on a background job, with the array on screen until it lands.
    A mirrored array stays mirrored: the object keeps its mirror, and each
    separate object gets the same live mirror.
@@ -1713,7 +1713,7 @@ for you) has the gizmo's arrows on it, and only the arrows: a point can be
 moved but not turned or resized. The dot itself is still the free move, on the
 plane facing you; an arrow is a straight pull along one axis, for placing a
 point exactly. The copies follow as the layout says. One drag is one undo
-step: for any point but the first it is one of the array's own, and Z puts the
+step: for any point but the first it is one of the array's own, and Ctrl + Z puts the
 point back exactly where it was. The first point is the square start point,
 the object's own place, so there the arrows carry the object and the whole
 array together, as dragging the square does, and the step is the scene's.
@@ -1748,13 +1748,13 @@ reflected, and a stroke or a shape works through both as it does on the object.
 Mask, Hide, Trim and Split are described with them below.
 
 Dragging on the background orbits (except while Draw Curve is on). Arrays are
-the tool's, not the scene's, and while the tool is up Z steps the array's own
+the tool's, not the scene's, and while the tool is up Ctrl + Z steps the array's own
 edits first, then the scene's. The exceptions are a pose, Copies Back onto the
 Path and a mirror switch: each is a step of the scene's history (it changes the
-object, or its mirror), but Z takes it back in order with the array's own
+object, or its mirror), but Ctrl + Z takes it back in order with the array's own
 edits, and the array follows when the scene takes one back, even with the tool
 away. Moving the object by its square start point is a step of the scene's
-alone, which Z reaches after the array's own edits.
+alone, which Ctrl + Z reaches after the array's own edits.
 
 **Arrays in files.** An array is saved in the `.sclp` file with its object, so
 closing the app does not lose it: save, close, open, and it is there, live, on
@@ -1775,7 +1775,7 @@ app with its objects and without them.
   row in the file. The arrays of the scene it replaced are not thrown away:
   Undo brings that scene back with its arrays as they were, and Redo brings
   the file's. The Array tool's own undo steps end at an Open, so while the tool
-  is up the first Z undoes the Open itself, not an array edit to an object that
+  is up the first Ctrl + Z undoes the Open itself, not an array edit to an object that
   is no longer there.
 - **Import** adds the file's arrays to its objects as they join the scene. The
   scene's own arrays, and the tool's steps, are untouched, and one Undo takes
@@ -1793,7 +1793,7 @@ Press the **Lathe** button to turn a solid like clay on a wheel. A starting
 vase stands beside the model with its outline drawn over it: a curve through
 round handles on both sides of a dashed axis. Drag a handle and the solid
 follows live. **Create Mesh** (Enter) makes it a new object to sculpt, selected
-and ready, in one undo step; Z right after takes it away again and brings the
+and ready, in one undo step; Ctrl + Z right after takes it away again and brings the
 lathe back with its profile. The profile is kept, so the next Create can be a
 variation.
 
@@ -1813,7 +1813,7 @@ The panel starts from a preset (vase, bowl, cup, bottle, egg, ring) and holds
 closed loop, cap open ends, even triangles, **Radial Symmetry on Create**, and
 the Density, Radius, Height and Scale sliders; the preview is drawn at up to
 256 around and Create always uses the full Density. Dragging on the
-background orbits. The profile is a scaffold: not saved, with its own Z while
+background orbits. The profile is a scaffold: not saved, with its own Ctrl + Z while
 the tool is up. The app asks before it closes over an outline you have shaped
 and not yet created (a preset as it was loaded is nothing to lose); opening
 another sculpt leaves the profile as it is.
@@ -1823,8 +1823,8 @@ symmetry of its own, round the axis it was turned about (its own Y, which runs
 through its middle), so every stroke you make on it is repeated all the way
 round: eight times, which is what every object starts with, and the Symmetry
 card changes it. It is the new object's symmetry, as in the Unity app. The
-object that was selected before keeps its own, Z right after Create takes the
-symmetry away with the object, and Shift + Z brings both back. Unticked, the
+object that was selected before keeps its own, Ctrl + Z right after Create takes the
+symmetry away with the object, and Ctrl + Shift + Z brings both back. Unticked, the
 new object starts with no symmetry, like any other.
 
 ## Tube
@@ -1889,7 +1889,7 @@ its own.
 | Scroll over a point | The same |
 | S + move sideways | Thickness of the point under the pointer, else of the tube |
 | Enter | Merge |
-| Z, Shift + Z | Undo, redo the tubes' own edits |
+| Ctrl + Z, Ctrl + Shift + Z | Undo, redo the tubes' own edits |
 | Esc | Cancel the drag, then deselect, then put the tool away |
 
 Dragging on the background orbits, as everywhere else (the Unity app drew a
@@ -1900,11 +1900,11 @@ tube among the rest of the model while you sculpt, merge it or keep it
 separate). The app asks before it closes over live tubes, saved scene or not,
 and before a sculpt is opened in place of the scene: a tube stands on the
 object it was drawn on, and goes when that object does (adding a sculpt's
-objects to the scene keeps them). While the tool is up Z steps the
+objects to the scene keeps them). While the tool is up Ctrl + Z steps the
 tubes' own edits first (a point moved, a slider changed), then the scene's.
-Merge and Keep Separate are steps of the scene's history: Z right after one
+Merge and Keep Separate are steps of the scene's history: Ctrl + Z right after one
 gives the tubes back live, with the tool brought up if it was put away, and
-Shift + Z fuses them again. A tube thinner than the model's own detail comes
+Ctrl + Shift + Z fuses them again. A tube thinner than the model's own detail comes
 out thicker than drawn: undo, remesh the model finer, and merge again.
 
 ## Muscle
@@ -2101,7 +2101,7 @@ cut face, and leaves them to be changed before anything is built.
 | Scroll over a joint | Turn it 15 degrees (Shift: 5); R turns it 90 |
 | V | Show the half with the pegs, the half with the sockets, or both |
 | Enter | Build the joints into both pieces |
-| Z, Shift + Z | Undo, redo a joint edit |
+| Ctrl + Z, Ctrl + Shift + Z | Undo, redo a joint edit |
 | Esc | Let go of a joint, then stop a build, then put the tool away |
 
 Dragging off the cut face orbits. The panel picks the key's shape (circle,
@@ -2111,7 +2111,7 @@ gets the pegs, and under **Fit** the clearance, extra socket depth, chamfers,
 draft and minimum wall, all in millimetres. **Build Keys** changes both pieces
 in one undo step, in the background on a large model. The planned joints are a
 scaffold: not saved, kept when the tool is put away, and handed back when the
-build is undone, so Z then J is how built keys are changed. Once a joint has
+build is undone, so Ctrl + Z then J is how built keys are changed. Once a joint has
 been placed, moved, turned or removed by hand the app asks before it closes,
 or opens a sculpt in place of the scene, over joints that are not built yet;
 joints the tool planned by itself and nobody touched are nothing to lose. The pieces must
@@ -2437,7 +2437,7 @@ pair; after that they can be moved apart and the joints stay on them.
   Exit Without Saving).
   (A run also drops its own regular copies beyond the newest three.) So
   Restore It removes nothing by itself: the copies stay until the restored
-  scene is saved. Restore It followed by Exit Without Saving, or by Undo (Z)
+  scene is saved. Restore It followed by Exit Without Saving, or by Undo (Ctrl + Z)
   and closing, leaves them where they are, and the next start asks again;
   the earlier copy beside one made on a fault is still there to be had if
   the newest turns out bad. Undo of the restore puts the scene from before
@@ -2944,7 +2944,7 @@ mirrored across, with Validate and Remove.
   the object (for Join and the booleans, any selected object) has that the
   rebuild would lose, when it has any: "Drops the subdivision levels, merges
   the sculpt layers into the model, clears the mask and shows the hidden
-  parts again. Undo (Z) brings it all back." Each names only what it loses:
+  parts again. Undo (Ctrl + Z) brings it all back." Each names only what it loses:
   Decimate keeps the mask and what is hidden, a plain Join keeps each mask.
   Under Quad Remesh another line says it ignores symmetry, while the object
   has a mirror axis or radial symmetry on.
@@ -3017,7 +3017,7 @@ card's used to) a model that sits on
     middle: do not press it there, or Undo.
   - **What comes across:** the mask, hidden parts, the quads of a quad
     remesh, and the shape Reset Shape goes back to.
-  - **One undo step.** Z puts back every point of the mesh and every
+  - **One undo step.** Ctrl + Z puts back every point of the mesh and every
     Position exactly (the mesh from before is kept whole, as for a remesh,
     and counts towards undo's memory), and an array follows. It is saved
     like any other change: a `.sclp` saved afterwards holds the mesh about
@@ -3072,7 +3072,7 @@ card's used to) a model that sits on
 - Every one of these is an undo step, a Join or a boolean included (one
   step brings the separate objects back, shown again if they were hidden).
   So is every hide and show: an eye button, H, Shift + H and Alt + H alike,
-  so Z brings back what a stray key hid. (The Unity app's keys were not undo
+  so Ctrl + Z brings back what a stray key hid. (The Unity app's keys were not undo
   steps, and the eye buttons here were; now the one rule holds for both.)
   Local View (/) is not: it is a way of looking, and / takes it back. What it
   hides is saved with the scene all the same (a sculpt saved in Local View
@@ -3087,7 +3087,7 @@ card's used to) a model that sits on
   count as one, as Undo takes them. A step recorded by work that finished in
   the background, or inside a tool, is called by what kind of change it is
   ("Rebuild", "Objects"). While SSpheres or another tool with an undo of its
-  own is up, Z steps through that first, so the list is not offered.
+  own is up, Ctrl + Z steps through that first, so the list is not offered.
 - Undo keeps the last 500 steps (it was 100), and no more memory than a quarter of the
   computer's (16 GB on a 64 GB machine; never less than 2 GB). An object that
   was deleted, joined into another or opened over stays in memory, whole, for

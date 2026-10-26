@@ -341,7 +341,7 @@ fn once_make_skin_has_used_the_spheres_they_are_not_named_until_the_skin_is_gone
     let skin = doc.scene.add("SSphere Mesh", Mesh::new(made.skin.positions, made.skin.indices, None), &mut doc.mesh);
     doc.spheres.skin_object = Some(skin);
     assert!(doc.scaffolds_at_risk(Loss::Closing).is_empty(), "the shape is an object of the scene now");
-    // Z takes the skin away: the spheres are the only place the shape is.
+    // Ctrl+Z takes the skin away: the spheres are the only place the shape is.
     doc.scene.remove(skin, &mut doc.mesh);
     assert_eq!(doc.scaffolds_at_risk(Loss::Closing).len(), 1);
 }

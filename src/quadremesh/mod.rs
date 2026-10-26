@@ -167,10 +167,10 @@ impl Report {
         match (self.census().is_closed(), was_closed) {
             (true, _) => "",
             (false, true) => {
-                " The model was closed before, so it may not print now: try a different number of quads, or Undo (Z)."
+                " The model was closed before, so it may not print now: try a different number of quads, or Undo (Ctrl+Z)."
             }
             (false, false) => {
-                " The model was not closed before either, so it may not print: Undo (Z), Remesh (R) to close it, \
+                " The model was not closed before either, so it may not print: Undo (Ctrl+Z), Remesh (R) to close it, \
                  then Quad Remesh again."
             }
         }

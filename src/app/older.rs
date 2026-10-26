@@ -74,7 +74,7 @@ fn left_out_words(names: &[String], kept: bool) -> String {
     let back = if kept {
         format!("The save before, which has {them}, is kept: File tab, Older Versions, Add Objects.")
     } else {
-        format!("Undo (Z) brings {them} back, but only until GolemSculpt is closed.")
+        format!("Undo (Ctrl+Z) brings {them} back, but only until GolemSculpt is closed.")
     };
     format!(". {} {were} deleted and {were} not saved. {back}", listed(&quoted))
 }
@@ -199,7 +199,7 @@ impl Running {
         self.status(
             format!(
                 "Opened {} ({objects}) in place of the scene. It has no file of its own: Save (Ctrl + S) asks \
-                 where to keep it. Undo (Z) brings the scene from before back.",
+                 where to keep it. Undo (Ctrl+Z) brings the scene from before back.",
                 file_name(&file)
             ),
             true,
@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(
             two,
             ". \"Door\" and \"Hinge\" were deleted and were not saved. \
-             Undo (Z) brings them back, but only until GolemSculpt is closed."
+             Undo (Ctrl+Z) brings them back, but only until GolemSculpt is closed."
         );
     }
 }

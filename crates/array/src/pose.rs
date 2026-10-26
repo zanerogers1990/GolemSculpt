@@ -334,10 +334,10 @@ impl ArrayTool {
         let text = if spaced {
             let wider = posing.spacing.is_some_and(|at_press| after.settings.spacing > at_press.gap);
             let how = if wider { "Spaced the copies further apart" } else { "Packed the copies closer together" };
-            format!("{how}: every gap is the same. Z takes it back; Spread Along the Path fits them to it again.")
+            format!("{how}: every gap is the same. Ctrl+Z takes it back; Spread Along the Path fits them to it again.")
         } else {
             let what = if moved { "Moved" } else { "Turned" };
-            format!("{what} every copy the same way. Z takes it back; Copies Back onto the Path undoes any move.")
+            format!("{what} every copy the same way. Ctrl+Z takes it back; Copies Back onto the Path undoes any move.")
         };
         let label = if spaced && !placed { "Space Array Copies" } else { "Pose Array Copies" };
         self.history.push(Step { object, label, before: posing.state, after, scene });
@@ -441,7 +441,7 @@ impl ArrayTool {
 
     // ---- following the scene's history -------------------------------------------
 
-    /// Notices that the scene's Z (or Shift+Z) has taken back or redone the
+    /// Notices that the scene's Ctrl+Z (or Ctrl+Shift+Z) has taken back or redone the
     /// object's half of a step, and does the array's half to match. The steps of
     /// a kind, newest first, stop at the first the scene still has done: older
     /// ones are done too. An object that something else has moved since is

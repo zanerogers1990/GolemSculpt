@@ -1,5 +1,5 @@
 //! Making the array real, taking it off, and handing it back when the scene's
-//! Z undoes it. Ported from `ArrayController.Finish.cs`.
+//! Ctrl+Z undoes it. Ported from `ArrayController.Finish.cs`.
 //!
 //! Make It Real is one commit either way: the object's own mesh becomes every
 //! copy's geometry together ("One Object": separate shells, which a remesh
@@ -249,12 +249,12 @@ impl ArrayTool {
         let message = match start.apply {
             Apply::One => format!(
                 "Applied: {} copies are now one object ({} vertices). Remesh to fuse them together. \
-                 Undo (Z) gives the live array back.",
+                 Undo (Ctrl+Z) gives the live array back.",
                 start.copies,
                 crate::bake::grouped(start.vertices * start.copies)
             ),
             Apply::Separate => {
-                format!("Applied: {} separate objects. Undo (Z) gives the live array back.", start.copies)
+                format!("Applied: {} separate objects. Undo (Ctrl+Z) gives the live array back.", start.copies)
             }
         };
         self.say(cx, message, true);
@@ -285,7 +285,7 @@ impl ArrayTool {
         self.cancel_gesture();
         self.edit(cx, "Remove Array", false, |state| *state = ArrayState::none());
         self.picked = None;
-        self.say(cx, "Array removed. Undo (Z) brings it back.", true);
+        self.say(cx, "Array removed. Undo (Ctrl+Z) brings it back.", true);
     }
 
     /// Notices that the scene's undo took an apply back (or its redo did it

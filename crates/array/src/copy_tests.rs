@@ -439,7 +439,7 @@ fn moving_a_copy_with_the_gizmo_moves_the_object_and_every_copy_the_same_way_and
         assert_eq!(tool.picked_copy().map(|p| p.copy), Some(k), "the copy stays picked");
         assert!(bench.status.as_ref().unwrap().0.starts_with("Moved every copy the same way"));
 
-        // Z takes the object back through the scene, and the tool puts the points back to match.
+        // Ctrl+Z takes the object back through the scene, and the tool puts the points back to match.
         assert!(bench.undo(&mut tool));
         assert_eq!(placement(&bench, object), was.object);
         bench.frame(&mut tool);
@@ -601,7 +601,7 @@ fn copies_back_onto_the_path_undoes_a_move_and_leaves_a_turn() {
     }
     assert_eq!(bench.status.as_ref().map(|s| s.0.as_str()), Some("Copies are back on the path."));
 
-    // Z puts the move back, and the next puts the object where it was before the move.
+    // Ctrl+Z puts the move back, and the next puts the object where it was before the move.
     assert!(bench.undo(&mut tool));
     bench.frame(&mut tool);
     assert_eq!(placement(&bench, object), posed);
@@ -691,7 +691,7 @@ fn the_scenes_own_undo_takes_a_pose_back_when_the_tool_is_away_and_the_array_fol
     bench.env.active = false;
     bench.call(|cx| tool.edit(cx, "Array Count", false, |a| a.settings.count = 7));
 
-    assert!(bench.undo_scene(), "Z with the tool away is the scene's alone");
+    assert!(bench.undo_scene(), "Ctrl+Z with the tool away is the scene's alone");
     bench.frame(&mut tool);
     assert_eq!(placement(&bench, object), was.0);
     let state = tool.state(object);
@@ -819,7 +819,7 @@ fn moving_the_objects_centre_onto_its_mesh_leaves_every_copy_where_it_is_and_fol
     }
     assert_eq!(state.settings, was.settings);
 
-    // The scene's own Z, with the tool away: the object goes back, and the array with it, exactly.
+    // The scene's own Ctrl+Z, with the tool away: the object goes back, and the array with it, exactly.
     bench.leave(&mut tool);
     bench.env.active = false;
     assert!(bench.undo_scene());
@@ -827,7 +827,7 @@ fn moving_the_objects_centre_onto_its_mesh_leaves_every_copy_where_it_is_and_fol
     assert_eq!(placement(&bench, object), stood);
     assert_eq!(tool.state(object), was, "the array is as it was, to the bit");
     assert_eq!(copies(&bench.frame(&mut tool), object), before);
-    // And Shift + Z moves the centre again.
+    // And Ctrl + Shift + Z moves the centre again.
     assert!(bench.redo_scene());
     bench.frame(&mut tool);
     assert_eq!(tool.state(object), state);
@@ -871,7 +871,7 @@ fn dragging_a_copy_along_the_path_spaces_every_copy_and_leaves_the_object() {
     let longer = copy_positions(&tool, &bench, object);
     near(longer[7] - longer[0], Vec3::new(0.0, 4.9, 0.0), "seven gaps of 0.7");
 
-    // Z takes the count back, then the spacing.
+    // Ctrl+Z takes the count back, then the spacing.
     assert!(bench.undo(&mut tool));
     assert!(bench.undo(&mut tool));
     assert_eq!(tool.state(object), was.state);

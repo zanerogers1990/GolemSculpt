@@ -120,11 +120,11 @@ impl Running {
                     return;
                 }
                 if axes & 7 == 0 {
-                    self.status(format!("Removed the mirror of \"{name}\". Undo (Z) brings it back."), true);
+                    self.status(format!("Removed the mirror of \"{name}\". Undo (Ctrl+Z) brings it back."), true);
                     self.toast("Mirror Off");
                 } else {
                     let across = MirrorRepeater::axis_name_of(axes & 7);
-                    self.status(format!("Mirrored \"{name}\" across {across}. Undo (Z) takes it off again."), true);
+                    self.status(format!("Mirrored \"{name}\" across {across}. Undo (Ctrl+Z) takes it off again."), true);
                     self.toast("Mirror");
                 }
             }
@@ -149,7 +149,7 @@ impl Running {
                     format!("{count} mirror copies are now separate objects")
                 };
                 let text =
-                    format!("Validated: {what}. Undo (Z) makes {} live again.", if count == 1 { "it" } else { "them" });
+                    format!("Validated: {what}. Undo (Ctrl+Z) makes {} live again.", if count == 1 { "it" } else { "them" });
                 self.status(text, true);
                 self.toast("Validate Mirror");
                 for new in made {

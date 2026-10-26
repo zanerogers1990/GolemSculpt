@@ -635,7 +635,7 @@ fn a_lasso_split_gives_two_closed_objects_whose_volumes_add_up() {
 
     assert_eq!(bench.doc.undo_steps(), 1);
     assert!(bench.undo(&mut tool));
-    assert_eq!(bench.doc.objects(), vec![ball], "one Z brings the whole object back");
+    assert_eq!(bench.doc.objects(), vec![ball], "one Ctrl+Z brings the whole object back");
     assert_eq!(bench.doc.info(ball).unwrap().mesh, before);
     assert_near(volume_of(&bench, ball), whole, 1e-9);
 }

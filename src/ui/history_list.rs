@@ -5,7 +5,7 @@
 //! below them, what Redo would bring back, the next first. The names are the
 //! history's own (app/undo_names.rs).
 //!
-//! While SSpheres or a hosted tool is up, Z steps through that tool's own
+//! While SSpheres or a hosted tool is up, Ctrl+Z steps through that tool's own
 //! history first, so the list, which is the scene's, is not offered then.
 
 use egui::Ui;
@@ -28,7 +28,7 @@ pub(super) fn button(ui: &mut Ui, doc: &Doc, tips: bool, actions: &mut Vec<Actio
     let style = ButtonStyle { height: 24.0, ..Default::default() };
     let r = ui.add_enabled_ui(usable, |ui| theme::button(ui, WIDTH, "\u{2026}", style)).inner;
     let help = if own_history {
-        "While this tool is up, Z steps through its own history first; the scene's history list is here again once it is put away."
+        "While this tool is up, Ctrl+Z steps through its own history first; the scene's history list is here again once it is put away."
     } else {
         "History: every step Undo would take back, by name. Tap one to go back to just before it."
     };

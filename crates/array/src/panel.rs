@@ -77,7 +77,7 @@ pub fn show(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
         });
         theme::hint(
             ui,
-            "An array stays with its object and is saved in the .sclp file, so it comes back live. Z steps it while \
+            "An array stays with its object and is saved in the .sclp file, so it comes back live. Ctrl+Z steps it while \
              Array is up. Make it real to turn the copies into geometry.",
         );
     });
@@ -96,7 +96,7 @@ pub fn show(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
                 ("Drag a copy along", "Space them all"),
                 ("Click an object", "Switch to it"),
                 ("Esc", "Cancel, stop, leave"),
-                ("Z, Shift + Z", "Undo, redo"),
+                ("Ctrl + Z, Ctrl + Shift + Z", "Undo, redo"),
                 ("Y", "Array on / off"),
                 ("Drag on background", "Orbit"),
             ],
@@ -378,19 +378,19 @@ fn make_real(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
         let w = theme::row_width(ui, 2, 6.0);
         let r = theme::button(ui, w, "One Object", ButtonStyle::default());
         let help = "Turns the copies into real geometry inside the selected object - ready to Remesh into one fused \
-                    piece. Undo (Z) gives the live array back.";
+                    piece. Undo (Ctrl+Z) gives the live array back.";
         if theme::tip(r, cx.tips, help).clicked() {
             tool.apply(cx, Apply::One);
         }
         let r = theme::button(ui, w, "Separate Objects", ButtonStyle::default());
-        let help = "Turns every copy into its own independent object, so each can be sculpted differently. Undo (Z) \
+        let help = "Turns every copy into its own independent object, so each can be sculpted differently. Undo (Ctrl+Z) \
                     gives the live array back.";
         if theme::tip(r, cx.tips, help).clicked() {
             tool.apply(cx, Apply::Separate);
         }
     });
     let r = theme::button(ui, ui.available_width(), "Remove Array", ButtonStyle::default());
-    if theme::tip(r, cx.tips, "Takes the copies away and leaves the object as it is. Undo (Z) brings them back.")
+    if theme::tip(r, cx.tips, "Takes the copies away and leaves the object as it is. Undo (Ctrl+Z) brings them back.")
         .clicked()
     {
         tool.remove(cx);

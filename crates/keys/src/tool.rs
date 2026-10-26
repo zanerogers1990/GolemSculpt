@@ -261,7 +261,7 @@ impl Keys {
         let Some(line) = self.pair_line(cx) else { return };
         let Some(pair) = &self.pair else { return };
         if pair.showing == Showing::Keyed {
-            self.say(cx, format!("{line} already have their keys. Undo (Z) takes them off so the joints can be changed."), true);
+            self.say(cx, format!("{line} already have their keys. Undo (Ctrl+Z) takes them off so the joints can be changed."), true);
             return;
         }
         if pair.plan.joints.iter().all(|jp| jp.map.eligible_cells() == 0) {
@@ -391,7 +391,7 @@ impl Keys {
         popped
     }
 
-    /// Z or Shift+Z on the joints. False when there is nothing to step, so
+    /// Ctrl+Z or Ctrl+Shift+Z on the joints. False when there is nothing to step, so
     /// the press goes on to the scene's history.
     fn step(&mut self, redo: bool) -> bool {
         if self.drag.is_some() {
@@ -542,7 +542,7 @@ impl Keys {
             let why = applied.first_problem.unwrap_or_else(|| "it did not fit".to_string());
             text.push_str(&format!(" {} could not be built: {why}.", applied.failed));
         }
-        text.push_str(" Undo (Z) takes the keys off and gives the joints back.");
+        text.push_str(" Undo (Ctrl+Z) takes the keys off and gives the joints back.");
         self.say(cx, text, applied.failed == 0 && receipt.failed == 0);
         if cx.active {
             cx.finish();

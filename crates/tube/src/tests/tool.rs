@@ -185,7 +185,7 @@ fn the_radius_at_a_point_changes_by_its_handle_the_wheel_and_s() {
     assert!(bench.send(&mut tool, sculpt_toolkit::Event::Wheel(-1.0)));
     assert!((tool.selected_point_size() - 2.2).abs() < 0.03);
     assert!(bench.undo(&mut tool));
-    assert!((tool.points(0)[end].size - 2.0).abs() < 0.02, "one Z takes the whole run of notches back");
+    assert!((tool.points(0)[end].size - 2.0).abs() < 0.02, "one Ctrl+Z takes the whole run of notches back");
     assert!(bench.undo(&mut tool));
     assert_eq!(tool.points(0)[end].size, 1.0);
     assert_eq!(tool.selected_point(), None, "stepping the history lets go of the point");
@@ -530,14 +530,14 @@ fn keep_separate_is_one_undo_step_that_hands_the_tube_back() {
     assert!(bench.frame(&mut tool).previews().is_empty());
     assert!(!Tool::can_undo(&tool, false), "the tool's own history went with the tube");
 
-    // Z reaches the scene, the object goes, and the tube is live again.
+    // Ctrl+Z reaches the scene, the object goes, and the tube is live again.
     assert!(bench.undo(&mut tool));
     assert_eq!(bench.doc.objects(), vec![body]);
     bench.frame(&mut tool);
     assert_eq!(tool.tube_count(), 1);
     assert_eq!(tool.points(0), kept.as_slice());
     assert!(status(&bench).contains("live again"), "{}", status(&bench));
-    // Shift+Z makes the object again and takes the tube away.
+    // Ctrl+Shift+Z makes the object again and takes the tube away.
     assert!(bench.redo(&mut tool));
     bench.frame(&mut tool);
     assert_eq!((tool.tube_count(), bench.doc.objects().len()), (0, 2));
@@ -631,7 +631,7 @@ fn merge_runs_in_the_background_and_is_one_undo_step_that_hands_the_tube_back() 
     assert_eq!(tool.tube_count(), 1);
     assert_eq!(tool.points(0), drawn.as_slice());
     assert_eq!(bench.frame(&mut tool).previews().len(), 1);
-    // Shift+Z merges it again: the tube goes, with nothing recomputed.
+    // Ctrl+Shift+Z merges it again: the tube goes, with nothing recomputed.
     assert!(bench.redo(&mut tool));
     bench.frame(&mut tool);
     assert_eq!(tool.tube_count(), 0);

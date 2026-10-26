@@ -15,7 +15,7 @@
 //! stands. The card says so when the object's symmetry is the world's.
 //!
 //! Here is what the app adds: the mesh that comes back takes the old one's
-//! place as one undo step (the old mesh is kept whole, so Z gives back the
+//! place as one undo step (the old mesh is kept whole, so Ctrl+Z gives back the
 //! mask, the hidden parts and the quads with it), the mask is carried across,
 //! and the status line says what was kept, what was replaced, and whether
 //! the result is a closed surface. Like everything that rebuilds a mesh, the
@@ -186,8 +186,8 @@ mod tests {
     }
 
     /// As the app records it (`Running::replace_mesh`): the old mesh is the
-    /// undo step, so one Z gives back every vertex, the mask and what was
-    /// hidden, and one Shift + Z the cut.
+    /// undo step, so one Ctrl+Z gives back every vertex, the mask and what was
+    /// hidden, and one Ctrl + Shift + Z the cut.
     #[test]
     fn one_undo_step_gives_the_model_back_as_it_was() {
         let mut mesh = lopsided();

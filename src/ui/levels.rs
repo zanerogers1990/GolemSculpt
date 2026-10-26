@@ -83,7 +83,7 @@ fn subdivide(ui: &mut egui::Ui, mesh: &Mesh, flat: &mut bool, badge: &str, tips:
         let style = ButtonStyle { badge, active: Some(ACCENT()), ..Default::default() };
         let help = "Adds a level with four times the triangles above the finest one and moves to it (Ctrl + D). The \
                     model is rounded a little as it is divided, as clay is when it is smoothed; tick Flat to keep every \
-                    point where it is. A quad remesh divides into quads. Undo (Z) takes the level away again.";
+                    point where it is. A quad remesh divides into quads. Undo (Ctrl+Z) takes the level away again.";
         if tip(theme::button(ui, ui.available_width(), "Subdivide", style), tips, help).clicked() {
             actions.push(Action::Subdivide);
         }
@@ -150,14 +150,14 @@ fn deleters(ui: &mut egui::Ui, level: usize, count: usize, tips: bool, actions: 
         let w = theme::row_width(ui, 2, 6.0);
         ui.add_enabled_ui(level > 0, |ui| {
             let help = "Throws away the levels below this one, so this becomes the coarsest. The model does not change. \
-                        Undo (Z) brings them back.";
+                        Undo (Ctrl+Z) brings them back.";
             if tip(theme::button(ui, w, "Delete Lower", ButtonStyle::default()), tips, help).clicked() {
                 actions.push(Action::DeleteLevels { lower: true });
             }
         });
         ui.add_enabled_ui(level + 1 < count, |ui| {
             let help = "Throws away the levels above this one, and the detail that was sculpted on them, so this becomes \
-                        the finest. Undo (Z) brings them back.";
+                        the finest. Undo (Ctrl+Z) brings them back.";
             if tip(theme::button(ui, w, "Delete Higher", ButtonStyle::default()), tips, help).clicked() {
                 actions.push(Action::DeleteLevels { lower: false });
             }

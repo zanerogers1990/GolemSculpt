@@ -351,7 +351,7 @@ impl Running {
             _ => {}
         }
         // None of the bare-key shortcuts work in the clean view: an R there
-        // would remesh, a Z undo, a Delete ask about an object no panel is
+        // would remesh, a Ctrl+Z undo, a Delete ask about an object no panel is
         // showing. Fullscreen and quit still do.
         clean && command.as_deref() != Some("fullscreen") && !(code == KeyCode::KeyQ && mods.control_key())
     }

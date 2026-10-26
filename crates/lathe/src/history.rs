@@ -2,7 +2,7 @@
 //!
 //! Forty handle drags on the scene's history would bury the mesh edits either side of them, so the
 //! profile is a scaffold that keeps its own: Z answers here while the tool is up and has something to
-//! undo, and falls through to the scene's history otherwise, which is how Z right after Create takes
+//! undo, and falls through to the scene's history otherwise, which is how Ctrl+Z right after Create takes
 //! the new object away again.
 //!
 //! A step is a snapshot of everything the artist can change by hand: the control points, whether the
@@ -160,7 +160,7 @@ impl History {
         !self.redo.is_empty()
     }
 
-    /// What Z would undo, for the panel.
+    /// What Ctrl+Z would undo, for the panel.
     pub fn next_undo(&self, profile: &LatheProfile, plane: &Plane) -> Option<&str> {
         if self.has_open_edit(profile, plane) {
             return self.open.as_ref().map(|open| open.label.as_str());

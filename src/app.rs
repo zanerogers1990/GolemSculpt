@@ -1305,7 +1305,7 @@ impl Running {
         if self.decimate_before(&action) {
             return;
         }
-        // While the SSphere tool is up, Z steps its rig first.
+        // While the SSphere tool is up, Ctrl+Z steps its rig first.
         if matches!(action, Action::Undo | Action::Redo)
             && (self.spheres_undo(action == Action::Redo) || self.tools_undo(action == Action::Redo))
         {
@@ -1399,7 +1399,7 @@ impl Running {
                 let name = self.doc.scene.get(id).map(|o| o.name.clone()).unwrap_or_default();
                 if self.edit_scene(|scene, slot| scene.remove(id, slot)) {
                     self.older_deleted(id, &name);
-                    self.status(format!("Deleted \"{name}\". Undo (Z) restores it."), true);
+                    self.status(format!("Deleted \"{name}\". Undo (Ctrl+Z) restores it."), true);
                 } else if self.doc.scene.objects.len() < 2 {
                     self.status("The last object cannot be deleted.", false);
                 }

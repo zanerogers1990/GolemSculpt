@@ -256,7 +256,7 @@ impl SizeCard {
             if !r.has_focus() && submitted != Some(axis) {
                 self.fields[axis].clone_from(&self.shown[axis]);
             }
-            let help = "The selected object's real size along this axis. Type a new size and press Enter to resize it: a unit (\"3in\", \"76mm\", \"1 1/4in\") overrides the display unit. Undo (Z) puts it back.";
+            let help = "The selected object's real size along this axis. Type a new size and press Enter to resize it: a unit (\"3in\", \"76mm\", \"1 1/4in\") overrides the display unit. Undo (Ctrl+Z) puts it back.";
             theme::tip(r, cx.tips, help);
         }
         let label = if self.keep_proportions { "Keep Proportions" } else { "Keep Proportions (Off)" };
@@ -284,7 +284,7 @@ impl SizeCard {
         match resize(cx, object, axis, target, self.keep_proportions) {
             Ok(()) => {
                 let axis_name = AXIS_NAMES[axis].to_lowercase();
-                cx.status(format!("{name}: {axis_name} set to {}. Undo (Z) puts it back.", units::format(target, cx.unit, true)), true);
+                cx.status(format!("{name}: {axis_name} set to {}. Undo (Ctrl+Z) puts it back.", units::format(target, cx.unit, true)), true);
                 // Re-measured right away rather than on the timer, so the
                 // other two boxes update on the same frame.
                 self.measure(cx, true);

@@ -68,12 +68,12 @@ pub fn show(ui: &mut Ui, doc: &Doc, assets: &Assets, tips: bool, actions: &mut V
         ui.spacing_mut().item_spacing.x = 4.0;
         let w = theme::row_width(ui, 2, 4.0);
         let style = ButtonStyle { height: 26.0, ..Default::default() };
-        let help = "Turns the live mirror copies into real, separate objects, exactly where they are. Undo (Z) makes them live again.";
+        let help = "Turns the live mirror copies into real, separate objects, exactly where they are. Undo (Ctrl+Z) makes them live again.";
         if tip(theme::button(ui, w, "Validate", style), tips, help).clicked() {
             actions.push(Action::Mirror(MirrorCommand::Validate));
         }
         let style = ButtonStyle { height: 26.0, ..Default::default() };
-        let help = "Removes the selected object's live mirror copies. Undo (Z) brings them back.";
+        let help = "Removes the selected object's live mirror copies. Undo (Ctrl+Z) brings them back.";
         if tip(theme::button(ui, w, "Remove", style), tips, help).clicked() {
             actions.push(Action::Mirror(MirrorCommand::Remove));
         }

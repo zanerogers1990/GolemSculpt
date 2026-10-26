@@ -109,7 +109,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
             line(ui, &format!("{count} spheres."), theme::HINT());
         }
         match s.undo_summary() {
-            Some((label, steps)) => line(ui, &format!("Undo (Z): {label}. {steps} step(s) held."), theme::HINT()),
+            Some((label, steps)) => line(ui, &format!("Undo (Ctrl+Z): {label}. {steps} step(s) held."), theme::HINT()),
             None => line(ui, "Sphere history empty.", theme::HINT()),
         }
         if count == 0 {
@@ -138,9 +138,9 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
             });
             ui.add_enabled_ui(count > 0, |ui| {
                 let r = theme::button(ui, w, "Clear All", ButtonStyle::default());
-                if tip(r, tips, "Removes every sphere. Undo (Z) brings them back.").clicked() {
+                if tip(r, tips, "Removes every sphere. Undo (Ctrl+Z) brings them back.").clicked() {
                     s.clear();
-                    s.say(format!("Cleared {count} spheres. Undo (Z) brings them back."));
+                    s.say(format!("Cleared {count} spheres. Undo (Ctrl+Z) brings them back."));
                 }
             });
         });
@@ -194,7 +194,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
                     format!("Attached to \"{name}\". The spheres will follow it and mirror across its plane.")
                 } else if plane_moved && s.symmetry() {
                     format!(
-                        "Attached to \"{name}\". No sphere moved, but the mirror plane is now that object's, so the mirrored half has. Undo (Z) puts it back."
+                        "Attached to \"{name}\". No sphere moved, but the mirror plane is now that object's, so the mirrored half has. Undo (Ctrl+Z) puts it back."
                     )
                 } else {
                     format!("Attached to \"{name}\". No sphere moved; they follow it from now on.")
@@ -323,7 +323,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, state: &UiState, actions: &mut Ve
             ("A", "Solid preview"),
             ("X", "Symmetry"),
             ("Space (hold)", "SSphere menu"),
-            ("Z / Shift+Z", "Undo / redo"),
+            ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
             ("Drag on background", "Orbit"),
             ("F F", "Frame the spheres"),
         ];

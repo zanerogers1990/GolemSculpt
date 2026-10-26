@@ -22,10 +22,10 @@
 //! | Click a copy | The gizmo's arrows and rings sit on it: turning or moving it does the same to every copy |
 //! | Click another object | Switch to it |
 //! | Esc | Cancel the gesture, then stop drawing, then let go of the point or copy, then leave |
-//! | Z, Shift + Z | Step the array's own history |
+//! | Ctrl + Z, Ctrl + Shift + Z | Step the array's own history |
 //!
 //! Y brings the tool up and puts it away. A drag on empty background orbits.
-//! Arrays are the tool's, not the scene's: they have their own Z while the tool
+//! Arrays are the tool's, not the scene's: they have their own Ctrl+Z while the tool
 //! is up (the scene's takes over when the tool's history is empty, or the tool
 //! is away). They are kept in `.sclp` files all the same, by the tool through the
 //! toolkit's save and load hooks (`saved.rs` is the shape in the file), one array

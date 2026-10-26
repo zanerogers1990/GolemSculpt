@@ -92,12 +92,12 @@ impl Running {
             self.kept_change(back);
             self.lost_save(file);
         }
-        // H hides as the eye buttons do: one undo step, which Z takes back.
+        // H hides as the eye buttons do: one undo step, which Ctrl+Z takes back.
         self.kept_change("hide");
         say("H makes the scene unsaved", self.unsaved() && self.closing().is_some());
         say("and is an undo step", self.doc.history.steps().0 == steps.0 + 1);
         self.act(Action::Undo);
-        say("which Z takes back", self.doc.scene.objects.iter().all(|o| o.visible));
+        say("which Ctrl+Z takes back", self.doc.scene.objects.iter().all(|o| o.visible));
         self.lost_save(file);
     }
 
@@ -107,14 +107,14 @@ impl Running {
         self.tools_demo("array");
         say("an array made is unsaved work", self.unsaved() && self.closing().is_some_and(|(unsaved, _)| unsaved));
         say("which Save keeps", self.lost_save(file));
-        // Z with the tool up steps the array's own history first.
+        // Ctrl+Z with the tool up steps the array's own history first.
         let steps = self.doc.history.steps();
         self.act(Action::Undo);
         let own = self.doc.history.steps() == steps;
         say("Z on the array's own edit is unsaved work, though the scene's history stands", own && self.unsaved());
         say("and closing asks the ordinary question", self.closing() == Some((true, Vec::new())));
         self.act(Action::Redo);
-        say("Shift + Z puts the array back: nothing unsaved", self.doc.history.steps() == steps && !self.unsaved());
+        say("Ctrl + Shift + Z puts the array back: nothing unsaved", self.doc.history.steps() == steps && !self.unsaved());
         self.tools_leave();
     }
 
@@ -169,7 +169,7 @@ impl Running {
         say("after Make Skin the spheres are not named", self.scaffolds_at_risk(Loss::Closing).is_empty());
         say("and the skin is unsaved work like any object", self.closing() == Some((true, Vec::new())));
         self.act(Action::Undo);
-        say("Z takes the skin away: the spheres are named again", named(&self.scaffolds_at_risk(Loss::Closing)));
+        say("Ctrl+Z takes the skin away: the spheres are named again", named(&self.scaffolds_at_risk(Loss::Closing)));
         self.act(Action::Redo);
         self.lost_save(file);
     }

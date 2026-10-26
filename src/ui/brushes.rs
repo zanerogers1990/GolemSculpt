@@ -253,7 +253,7 @@ pub fn erase_layer_note(ui: &mut Ui, mesh: &Mesh) {
         ui,
         &format!(
             "Rubs \"{name}\", the layer that is recording, out under the ring, back to the model underneath. \
-             Strength is how much of it one pass takes. Undo (Z) brings it back."
+             Strength is how much of it one pass takes. Undo (Ctrl+Z) brings it back."
         ),
     );
 }

@@ -29,7 +29,7 @@ const GHOST: Color32 = Color32::from_rgba_premultiplied(120, 150, 190, 150);
 pub struct Studs {
     /// Where each stud stands: a unit cube's own space into world space.
     studs: Vec<Mat4>,
-    /// Studs taken back with Z, for Shift+Z.
+    /// Studs taken back with Ctrl+Z, for Ctrl+Shift+Z.
     undone: Vec<Mat4>,
     size: f32,
     /// The one mesh every stud and the ghost are drawn from.
@@ -107,7 +107,7 @@ impl Studs {
             Ok(mesh) => {
                 let count = self.studs.len();
                 cx.commit("Make Studs", vec![Command::Add(NewObject::new("Studs", mesh))]);
-                cx.status(format!("Made \"Studs\" from {count} studs. Undo (Z) removes it."), true);
+                cx.status(format!("Made \"Studs\" from {count} studs. Undo (Ctrl+Z) removes it."), true);
                 self.studs.clear();
                 self.undone.clear();
                 cx.finish();
@@ -168,7 +168,7 @@ impl Tool for Studs {
             }
             // A handle of the gizmo on the last stud is being dragged: the
             // stud goes where the gizmo says. It is the same stud, so it
-            // stays one step of this tool's history: Z takes it back whole.
+            // stays one step of this tool's history: Ctrl+Z takes it back whole.
             Event::Gizmo(placement, _) => {
                 if let Some(stud) = self.studs.last_mut() {
                     *stud = placement.matrix();
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(made.name, "Studs");
         assert_eq!(made.triangles % 12, 0);
         assert!(made.triangles > 0 && bench.finished);
-        // With the tool's own history empty, Z reaches the scene's.
+        // With the tool's own history empty, Ctrl+Z reaches the scene's.
         assert!(bench.undo(&mut tool));
         assert_eq!(bench.doc.objects().len(), 1);
     }
@@ -369,7 +369,7 @@ mod tests {
         bench.click(&mut tool, bench.px(Vec3::new(-0.1, 0.1, 0.5)), Button::Left);
         assert_eq!(tool.scaffold_at_risk(Loss::Closing), Some("2 studs (Make Studs first)".to_owned()));
         assert_eq!(tool.scaffold_at_risk(Loss::SceneReplaced), None, "they stand in the world: a new scene keeps them");
-        // Z takes one back; made into an object, they are the scene's and nothing is at risk.
+        // Ctrl+Z takes one back; made into an object, they are the scene's and nothing is at risk.
         assert!(bench.undo(&mut tool));
         assert_eq!(tool.scaffold_at_risk(Loss::Closing), Some("1 stud (Make Studs first)".to_owned()));
         assert!(bench.key(&mut tool, Key::Enter));

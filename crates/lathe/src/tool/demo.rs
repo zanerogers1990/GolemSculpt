@@ -45,7 +45,7 @@ impl Lathe {
             self.drag_point(&view, a.lerp(b, step as f32 / 6.0), false);
         }
         self.end_drag();
-        cx.status("Move Point: the shoulder is pulled out. Z puts it back.", true);
+        cx.status("Move Point: the shoulder is pulled out. Ctrl+Z puts it back.", true);
     }
 
     /// A goblet drawn as one Ctrl-stroke: simplified to a handful of points, ends snapped to the axis.

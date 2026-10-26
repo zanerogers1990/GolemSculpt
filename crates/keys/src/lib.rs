@@ -20,7 +20,7 @@
 //! | Wheel over a joint | Turn it 15 degrees (Shift: 5); R turns it 90 |
 //! | V | Show the half with the pegs, the half with the sockets, or both |
 //! | Enter | Build the joints into both pieces: one undo step |
-//! | Z / Shift + Z | Undo / redo a joint edit |
+//! | Ctrl + Z / Ctrl + Shift + Z | Undo / redo a joint edit |
 //! | Esc | Let go of a joint, else stop a build, else put the tool away |
 //!
 //! J brings the tool up and puts it away. A drag off the cut face orbits.

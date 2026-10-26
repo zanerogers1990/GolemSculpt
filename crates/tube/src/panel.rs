@@ -122,7 +122,7 @@ impl TubeTool {
                     ("S + move sideways", size.as_str()),
                     ("Delete", delete.as_str()),
                     ("Enter", "Merge"),
-                    ("Z / Shift + Z", history.as_str()),
+                    ("Ctrl + Z / Ctrl + Shift + Z", history.as_str()),
                     ("Esc", "Cancel, deselect, leave"),
                     ("Drag on background", "Orbit"),
                 ],
@@ -144,7 +144,7 @@ impl TubeTool {
                 let style = ButtonStyle { active: Some(ACCENT()), badge: "Enter", ..Default::default() };
                 let help = format!(
                     "Fuses every live {one} into the object it was drawn on: one solid surface with a smooth join. The \
-                     object is rebuilt at its current density. Undo (Z) gives the {many} back."
+                     object is rebuilt at its current density. Undo (Ctrl+Z) gives the {many} back."
                 );
                 if theme::tip(theme::button(ui, w, "Merge", style), cx.tips, &help).clicked() {
                     self.merge_all(cx);
@@ -152,7 +152,7 @@ impl TubeTool {
             });
             ui.add_enabled_ui(count > 0 && !merging, |ui| {
                 let help = format!(
-                    "Makes each live {one} its own sculptable object, placed with the object it was drawn on. Undo (Z) \
+                    "Makes each live {one} its own sculptable object, placed with the object it was drawn on. Undo (Ctrl+Z) \
                      gives the {many} back."
                 );
                 if theme::tip(theme::button(ui, w, "Keep Separate", ButtonStyle::default()), cx.tips, &help).clicked() {
@@ -399,19 +399,19 @@ impl TubeTool {
                 }
             });
             ui.add_enabled_ui(self.can_undo(), |ui| {
-                let help = format!("Undoes the last {} edit (Z).", kind.one());
+                let help = format!("Undoes the last {} edit (Ctrl+Z).", kind.one());
                 if theme::tip(theme::button(ui, w, "Undo", small()), cx.tips, &help).clicked() {
                     self.undo();
                 }
             });
             ui.add_enabled_ui(self.can_redo(), |ui| {
-                if theme::tip(theme::button(ui, w, "Redo", small()), cx.tips, "Redoes it (Shift + Z).").clicked() {
+                if theme::tip(theme::button(ui, w, "Redo", small()), cx.tips, "Redoes it (Ctrl + Shift + Z).").clicked() {
                     self.redo();
                 }
             });
         });
         match self.next_undo_label() {
-            Some(label) => theme::hint(ui, &format!("Undo (Z): {label}")),
+            Some(label) => theme::hint(ui, &format!("Undo (Ctrl+Z): {label}")),
             None => theme::hint(ui, &format!("{} history empty.", kind.title())),
         }
     }

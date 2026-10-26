@@ -118,7 +118,7 @@ pub fn hint(ui: &mut Ui, doc: &Doc, what: Rebuild, all: bool) {
     }
 }
 
-/// "Drops the subdivision levels and clears the mask. Undo (Z) brings them
+/// "Drops the subdivision levels and clears the mask. Undo (Ctrl+Z) brings them
 /// back.", or `None` when nothing would be lost.
 fn words(what: Rebuild, has: &Held) -> Option<String> {
     let mut lost: Vec<&str> = Vec::new();
@@ -138,7 +138,7 @@ fn words(what: Rebuild, has: &Held) -> Option<String> {
     let list = if rest.is_empty() { (*last).to_owned() } else { format!("{} and {last}", rest.join(", ")) };
     let mut text = list;
     text[..1].make_ascii_uppercase();
-    Some(format!("{text}. Undo (Z) brings it all back."))
+    Some(format!("{text}. Undo (Ctrl+Z) brings it all back."))
 }
 
 /// "About 1.2M triangles." under a remesh resolution slider, for the
@@ -231,18 +231,18 @@ mod tests {
         assert_eq!(
             words(Rebuild::Surface, &has(true, true, true, true)).unwrap(),
             "Drops the subdivision levels, merges the sculpt layers into the model, clears the mask and shows the \
-             hidden parts again. Undo (Z) brings it all back."
+             hidden parts again. Undo (Ctrl+Z) brings it all back."
         );
         // Decimate keeps the mask and what is hidden.
         assert_eq!(words(Rebuild::Decimate, &has(false, false, true, true)), None);
         assert_eq!(
             words(Rebuild::Decimate, &has(true, false, true, true)).unwrap(),
-            "Drops the subdivision levels. Undo (Z) brings it all back."
+            "Drops the subdivision levels. Undo (Ctrl+Z) brings it all back."
         );
         // A plain Join keeps each mask, and shows what was hidden.
         assert_eq!(
             words(Rebuild::Join, &has(false, false, true, true)).unwrap(),
-            "Shows the hidden parts again. Undo (Z) brings it all back."
+            "Shows the hidden parts again. Undo (Ctrl+Z) brings it all back."
         );
     }
 

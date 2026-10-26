@@ -833,7 +833,7 @@ enum Step {
     Open,
     /// New Scene, answered "New Scene Without Saving" if it would ask.
     NewScene,
-    /// Undo, as the Z key.
+    /// Undo, as Ctrl+Z.
     Undo,
     /// Redo.
     Redo,

@@ -353,7 +353,7 @@ fn settings_resize_the_joints_where_they_stand() {
     tool.settings.size = mm(9.0);
     tool.settings_changed();
     assert_eq!(tool.invalid_count(), 2);
-    // Auto Place plans afresh, as one step that Z takes back.
+    // Auto Place plans afresh, as one step that Ctrl+Z takes back.
     bench.call(|cx| tool.auto_place(cx));
     assert!(tool.key_count() >= 1 && tool.invalid_count() == 0);
     assert!(bench.undo(&mut tool));
@@ -404,7 +404,7 @@ fn apply_changes_both_pieces_in_one_undo_step_and_undo_hands_the_joints_back() {
     assert!(bench.finished, "the tool puts itself away once the keys are in");
     assert!(!tool.can_undo(false), "the joints' own history ends with the build");
 
-    // The scene's Z takes the keys off both pieces at once...
+    // The scene's Ctrl+Z takes the keys off both pieces at once...
     assert!(bench.undo(&mut tool));
     assert_eq!((mesh_of(&bench, far), mesh_of(&bench, near)), (plain_far, plain_near));
     assert_eq!(bench.doc.undo_steps(), 0);
@@ -424,7 +424,7 @@ fn apply_changes_both_pieces_in_one_undo_step_and_undo_hands_the_joints_back() {
     assert!(said(&bench).0.contains("already have their keys"), "{}", said(&bench).0);
     assert!(!bench.press(&mut tool, from, Button::Left));
     bench.release(&mut tool);
-    // Z with the tool up and nothing of its own to step is the scene's, and
+    // Ctrl+Z with the tool up and nothing of its own to step is the scene's, and
     // the joints come straight back under the pointer.
     assert!(bench.undo(&mut tool));
     bench.frame(&mut tool);
@@ -601,7 +601,7 @@ fn joints_the_tool_planned_by_itself_are_not_work_and_joints_changed_by_hand_are
     bench.enter(&mut tool);
     assert_eq!(at_risk(&tool), two);
 
-    // Z takes the move back: the joints are the tool's own again. Shift + Z: the user's.
+    // Ctrl+Z takes the move back: the joints are the tool's own again. Ctrl + Shift + Z: the user's.
     assert!(bench.undo(&mut tool));
     assert_eq!(at_risk(&tool), None);
     assert!(bench.redo(&mut tool));
@@ -618,7 +618,7 @@ fn joints_the_tool_planned_by_itself_are_not_work_and_joints_changed_by_hand_are
     assert!(bench.key(&mut tool, Key::Enter));
     wait_for_build(&mut bench, &mut tool);
     assert_eq!(at_risk(&tool), None, "built keys are part of the pieces");
-    // The scene's Z takes the keys off and hands the joints back, hand edits and all.
+    // The scene's Ctrl+Z takes the keys off and hands the joints back, hand edits and all.
     assert!(bench.undo(&mut tool));
     bench.frame(&mut tool);
     assert_eq!(at_risk(&tool), one);

@@ -67,7 +67,7 @@ fn rebuilt_note(levels: Vec<String>, layers: Vec<String>, can_undo: bool) -> Str
     let many = |names: &[String]| names.len() > 1;
     let rebuilt = |names: &[String]| if many(names) { "their meshes were rebuilt" } else { "its mesh was rebuilt" };
     let whose = |names: &[String]| if many(names) { "their" } else { "its" };
-    let undo = if can_undo { " Undo (Z) brings them back." } else { "" };
+    let undo = if can_undo { " Undo (Ctrl+Z) brings them back." } else { "" };
     let (same, both) = (levels == layers, !levels.is_empty() && !layers.is_empty());
     let dropped = |names: Vec<String>| {
         format!("The subdivision levels of {} were dropped: {}.", listed(names.clone()), rebuilt(&names))
@@ -322,7 +322,7 @@ impl Running {
         let levels = if gone == 1 { "level" } else { "levels" };
         self.toast(if lower { "Delete Lower" } else { "Delete Higher" });
         self.status(
-            format!("Deleted the {gone} {which} {levels} of \"{name}\". {left} Undo (Z) brings them back."),
+            format!("Deleted the {gone} {which} {levels} of \"{name}\". {left} Undo (Ctrl+Z) brings them back."),
             true,
         );
     }

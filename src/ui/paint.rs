@@ -127,7 +127,7 @@ fn commands(ui: &mut Ui, rows: &[PaintRow], active: Option<u32>, tips: bool, act
         let w = theme::row_width(ui, 2, 6.0);
         ui.add_enabled_ui(!full, |ui| {
             let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
-            let help = "Adds an empty paint layer above the one you paint on, and paints on it from now on. Undo (Z) \
+            let help = "Adds an empty paint layer above the one you paint on, and paints on it from now on. Undo (Ctrl+Z) \
                         removes it.";
             if tip(theme::button(ui, w, "New Layer", style), tips, help).clicked() {
                 actions.push(Action::Paint(PaintAction::New));
@@ -148,7 +148,7 @@ fn commands(ui: &mut Ui, rows: &[PaintRow], active: Option<u32>, tips: bool, act
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 2, 6.0);
         ui.add_enabled_ui(below, |ui| {
-            let help = "Folds the layer you paint on into the one under it, as the two show together. Undo (Z) splits \
+            let help = "Folds the layer you paint on into the one under it, as the two show together. Undo (Ctrl+Z) splits \
                         them again.";
             if tip(theme::button(ui, w, "Merge Down", ButtonStyle::default()), tips, help).clicked() {
                 if let Some(id) = active {
@@ -157,7 +157,7 @@ fn commands(ui: &mut Ui, rows: &[PaintRow], active: Option<u32>, tips: bool, act
             }
         });
         ui.add_enabled_ui(rows.len() > 1, |ui| {
-            let help = "Folds every layer that shows into one, as they show; hidden layers are dropped. Undo (Z) \
+            let help = "Folds every layer that shows into one, as they show; hidden layers are dropped. Undo (Ctrl+Z) \
                         brings them back.";
             if tip(theme::button(ui, w, "Flatten All", ButtonStyle::default()), tips, help).clicked() {
                 actions.push(Action::Paint(PaintAction::FlattenAll));
@@ -227,7 +227,7 @@ fn layer(
 
     let response = ui.interact(bin, Id::new(("paint_bin", row.id)), Sense::click());
     let hovered = response.hovered();
-    if tip(response, tips, "Deletes this layer and its paint. Undo (Z) brings it back.").clicked() {
+    if tip(response, tips, "Deletes this layer and its paint. Undo (Ctrl+Z) brings it back.").clicked() {
         actions.push(Action::Paint(PaintAction::Delete(row.id)));
     }
     ui.painter().rect_filled(bin, 5.0, theme::CONTROL());
@@ -546,7 +546,7 @@ fn fill(ui: &mut Ui, row: &PaintRow, paint: &PaintSettings, scene: &ScenePaint, 
             if tip(theme::button(ui, w, "Fill Picked Group", ButtonStyle::default()), tips, help).clicked() {
                 actions.push(Action::Paint(PaintAction::FillPickedGroup { colour, material }));
             }
-            let help = "Empties this layer of its paint. Undo (Z) brings it back.";
+            let help = "Empties this layer of its paint. Undo (Ctrl+Z) brings it back.";
             if tip(theme::button(ui, w, "Clear Layer", ButtonStyle::default()), tips, help).clicked() {
                 actions.push(Action::Paint(PaintAction::Clear(row.id)));
             }

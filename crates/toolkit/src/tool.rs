@@ -75,7 +75,7 @@ pub enum Event {
     /// Z. Return true if the tool stepped its own history back; false sends
     /// the press on to the scene's history.
     Undo,
-    /// Shift+Z, likewise.
+    /// Ctrl+Shift+Z, likewise.
     Redo,
     /// Tile `index` of [`Tool::radial`] was picked on the hold-Space wheel.
     Radial(usize),
@@ -201,7 +201,7 @@ pub trait Tool {
         Vec::new()
     }
 
-    /// Whether Z (or with `redo`, Shift+Z) would step the tool's own
+    /// Whether Ctrl+Z (or with `redo`, Ctrl+Shift+Z) would step the tool's own
     /// history, for the Undo and Redo buttons.
     fn can_undo(&self, _redo: bool) -> bool {
         false

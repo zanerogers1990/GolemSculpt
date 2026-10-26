@@ -120,7 +120,7 @@ fn opening_a_file_ends_the_tools_history_but_keeps_the_arrays_for_undo_to_bring_
     );
     assert_eq!(tool.state(new[0]), before[2]);
 
-    // The first Z undoes the Open itself, not an array edit of an object that is not there.
+    // The first Ctrl+Z undoes the Open itself, not an array edit of an object that is not there.
     assert!(bench.undo(&mut tool));
     assert_eq!(bench.doc.objects(), old);
     let back: Vec<ArrayState> = old.iter().map(|&id| tool.state(id)).collect();
@@ -259,7 +259,7 @@ fn every_edit_shows_in_what_the_file_would_keep_and_nothing_else_does() {
         assert_ne!(now, kept, "{label} does not show in what the file would keep");
         kept = now;
     }
-    // Z takes the last edit back, and what the file would keep goes back with it.
+    // Ctrl+Z takes the last edit back, and what the file would keep goes back with it.
     let with_the_point = kept.clone();
     assert!(bench.undo(&mut tool));
     bench.frame(&mut tool);

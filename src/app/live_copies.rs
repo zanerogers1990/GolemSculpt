@@ -87,7 +87,7 @@ impl Running {
         self.act(crate::doc::Action::Undo);
         self.tools_frame();
         let back = last(self).is_some_and(|p| p.distance(before) < 1e-6);
-        say("one Z puts the copies back exactly", back);
+        say("one Ctrl+Z puts the copies back exactly", back);
         self.input.inside = false;
         self.sync_view();
     }

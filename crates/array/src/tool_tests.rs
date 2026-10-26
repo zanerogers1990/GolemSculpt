@@ -230,7 +230,7 @@ fn dragging_the_start_point_moves_the_object_and_its_array_as_one_scene_step() {
     assert!(draw.hidden().is_empty());
     assert_eq!(copies(&draw, object).len(), 7);
 
-    // Z steps the tool's own history first (the circle), then the scene's, which
+    // Ctrl+Z steps the tool's own history first (the circle), then the scene's, which
     // puts the object back; the array follows it home.
     assert!(bench.undo(&mut tool));
     assert!(tool.state(object).is_none());
@@ -249,7 +249,7 @@ fn escape_during_a_drag_puts_the_point_back() {
     bench.release(&mut tool);
     assert_eq!(point(&tool, object, 1), before);
     assert!(!tool.is_dragging());
-    // The drag left no step behind: the next Z takes back the circle itself.
+    // The drag left no step behind: the next Ctrl+Z takes back the circle itself.
     assert!(bench.undo(&mut tool));
     assert!(tool.state(object).is_none());
 }
@@ -450,7 +450,7 @@ fn a_run_of_slider_ticks_is_one_step() {
         bench.frame(&mut tool);
     }
     assert_eq!(tool.state(object).settings.count, 12);
-    // Z while the run is still open closes it first, then takes it all back.
+    // Ctrl+Z while the run is still open closes it first, then takes it all back.
     assert!(tool.can_undo(false));
     settle(&mut bench, &mut tool);
     assert!(bench.undo(&mut tool));
@@ -632,7 +632,7 @@ fn making_it_real_as_one_object_is_one_undo_step_that_swaps_in_every_copy() {
     let expected = layout[4].offset;
     assert!(bounds.center().distance(expected) < 1e-4, "copy 4 sits at {expected:?}, found {:?}", bounds.center());
 
-    // Z gives the object back and hands the live array back with it.
+    // Ctrl+Z gives the object back and hands the live array back with it.
     assert!(bench.undo(&mut tool));
     assert_eq!(bench.doc.info(object).unwrap().mesh, before);
     assert!(!tool.has_array(object), "until the tool next looks");
@@ -640,7 +640,7 @@ fn making_it_real_as_one_object_is_one_undo_step_that_swaps_in_every_copy() {
     assert_eq!(tool.state(object), made);
     assert_eq!(copies(&bench.frame(&mut tool), object).len(), 7);
 
-    // Shift+Z does it again, and the array is spent again.
+    // Ctrl+Shift+Z does it again, and the array is spent again.
     assert!(bench.redo(&mut tool));
     bench.frame(&mut tool);
     assert!(!tool.has_array(object));
@@ -1021,7 +1021,7 @@ fn the_panels_make_buttons_make_arrays_and_mark_the_one_there_is() {
     assert!(tool.is_armed());
     panel.click(&mut bench, &mut tool, "Draw Curve");
     assert!(!tool.is_armed(), "the button toggles");
-    // Each of those is a step the tool's own Z takes back, newest first.
+    // Each of those is a step the tool's own Ctrl+Z takes back, newest first.
     assert!(bench.undo(&mut tool));
     assert_eq!(tool.state(object).settings.kind, ArrayKind::Radial, "the circle came back");
 }

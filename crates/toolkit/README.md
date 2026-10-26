@@ -54,7 +54,7 @@ pub trait Tool {
 | `Click(Button)` | A press you passed on came up without moving | say it meant something (otherwise two of them select the object under the pointer, or frame the model) |
 | `Wheel(notches)` | Wheel over the viewport | use it; false zooms |
 | `KeyDown(Key)` / `KeyUp(Key)` | A key, no Ctrl. `Key` is `egui::Key` | keep it from the app. Esc you do not take puts the tool away |
-| `Undo` / `Redo` | Z / Shift+Z | step your own history; false goes to the scene's |
+| `Undo` / `Redo` | Ctrl+Z / Ctrl+Shift+Z | step your own history; false goes to the scene's |
 | `Radial(index)` | A wheel tile was picked | (ignored) |
 | `Gizmo(Placement, GizmoPhase)` | A handle of the gizmo on your target is being dragged (see "The transform gizmo" below) | (ignored) |
 
@@ -122,7 +122,7 @@ let piece = receipt.added[0];
 
 `Add`, `Replace`, `Place`, `Mirror`, `Show`, `Rename`, `Delete`, `Select`. They
 run in order, at once; the scene read on the next line is the changed one.
-However many are in one commit, **Z takes them all back together**. `Select`
+However many are in one commit, **Ctrl + Z takes them all back together**. `Select`
 alone leaves no undo step. `Mask { object, mask }` is the exception: a mask is
 undone like a brush stroke, so each is a step of its own, applied after the
 rest. So are the three commands for hidden faces, below.
@@ -178,7 +178,7 @@ A new object starts with no symmetry unless the tool says `.with_symmetry_of`
 (the Unity app's rule: a split part and a tube kept separate take the
 settings of the object they came from). `cx.set_mirror` and `cx.set_radial`
 change the selected object's, are not undo steps (ticking an axis never was),
-and no undo step holds a symmetry: an object that Z takes away and Shift + Z
+and no undo step holds a symmetry: an object that Ctrl + Z takes away and Ctrl + Shift + Z
 brings back has the symmetry it was left with.
 
 **Copies a tool keeps (an array's).** A tool can keep copies of an object on
@@ -361,7 +361,7 @@ fn scaffold_at_risk(&self, loss: Loss) -> Option<String> {
   for what one gesture brings back (Measure says nothing of its rulers: a
   question with no way to keep them would only be in the way), or once the work
   has been made part of the scene (merged, built, created) for as long as it is
-  there: if Z takes the object away again, the scaffold is the only place the
+  there: if Ctrl + Z takes the object away again, the scaffold is the only place the
   work is, and it counts again.
 - What `save_object` keeps needs none of this: it is in the file, and the app
   counts a change to it as a change to save by itself (it compares what
@@ -648,7 +648,7 @@ impl Tool for Dropper {
 - **Previews in the scene's own material.** Preview meshes are lit clay or a
   shell; only `draw.copies` of a real object uses the scene material.
 - **A tool's state in the scene's undo history.** A scaffold lives in the tool
-  and has its own Z while the tool is up (it can be saved in the file: see
+  and has its own Ctrl + Z while the tool is up (it can be saved in the file: see
   "Keeping something in the scene's file"; what is not saved can at least be
   named before it is lost: see "Work that is in no file"), and the two histories are not
   interleaved: the scene's Z answers when the tool's is empty or the tool is away.

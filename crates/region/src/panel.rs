@@ -162,6 +162,6 @@ fn shortcuts(tool: &Region) -> Vec<(&'static str, &'static str)> {
     rows.push(("Space (hold)", "Shape wheel"));
     rows.push(("1 - 9", "Back to sculpting"));
     rows.push(("Alt + drag", "Orbit"));
-    rows.push(("Z", "Undo"));
+    rows.push(("Ctrl + Z", "Undo"));
     rows
 }

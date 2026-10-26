@@ -181,7 +181,7 @@ impl Landed {
 ///
 /// A trim replaces the object's geometry. A split replaces it with the side
 /// the shape did not cover and adds the covered side as a new object in the
-/// same place, so one Z brings the whole object back. The cut object stays
+/// same place, so one Ctrl+Z brings the whole object back. The cut object stays
 /// selected, ready for the next cut.
 pub fn land(cx: &mut Ctx, outcome: Outcome) -> Landed {
     let Outcome { object, mesh, placement, kept, piece, note, clean } = outcome;
@@ -205,7 +205,7 @@ pub fn land(cx: &mut Ctx, outcome: Outcome) -> Landed {
     let added = receipt.added.first().copied();
     let part_name = added.and_then(|id| cx.scene().info(id)).map(|info| info.name.to_owned());
     let Some(part_name) = part_name.filter(|_| receipt.failed == 0) else {
-        return Landed::failed("The split could not be put in the scene. Undo (Z) takes back what was.");
+        return Landed::failed("The split could not be put in the scene. Undo (Ctrl+Z) takes back what was.");
     };
     let mut message = format!("Split into {name} and {part_name}.");
     if let Some(note) = note {

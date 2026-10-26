@@ -345,7 +345,7 @@ pub fn card(ui: &mut Ui, doc: &mut Doc, assets: &Assets, actions: &mut Vec<Actio
                 if theme::tip(
                     theme::button(ui, w, "Apply", style),
                     tips,
-                    "Keep the deformation. Undo (Z) takes it back.",
+                    "Keep the deformation. Undo (Ctrl+Z) takes it back.",
                 )
                 .clicked()
                 {
