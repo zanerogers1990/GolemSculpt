@@ -55,6 +55,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "tool_lathe",
     "tool_array",
     "tool_keys",
+    "tool_hands",
     "bool_union",
     "bool_subtract",
     "bool_intersect",

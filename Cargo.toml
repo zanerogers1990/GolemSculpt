@@ -24,6 +24,7 @@ rfd = "0.17.2"
 sculpt-array = { path = "crates/array" }
 sculpt-cut = { path = "crates/cut" }
 sculpt-geom = { path = "crates/geom" }
+sculpt-hands = { path = "crates/hands" }
 sculpt-keys = { path = "crates/keys" }
 sculpt-lathe = { path = "crates/lathe" }
 sculpt-measure = { path = "crates/measure" }
@@ -83,6 +84,7 @@ members = [
     "crates/keys",
     "crates/region",
     "crates/multires",
+    "crates/hands",
 ]
 
 [workspace.dependencies]

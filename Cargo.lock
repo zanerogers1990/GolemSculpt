@@ -2469,6 +2469,7 @@ dependencies = [
  "sculpt-array",
  "sculpt-cut",
  "sculpt-geom",
+ "sculpt-hands",
  "sculpt-keys",
  "sculpt-lathe",
  "sculpt-measure",
@@ -2510,6 +2511,18 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "rayon",
+]
+
+[[package]]
+name = "sculpt-hands"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "glam",
+ "rayon",
+ "sculpt-geom",
+ "sculpt-toolkit",
+ "sculpt-volume",
 ]
 
 [[package]]

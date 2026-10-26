@@ -1,0 +1,13 @@
+[package]
+name = "sculpt-hands"
+version = "0.1.0"
+edition = "2024"
+description = "The Hand & Foot tool: hands and feet built from sliders, as a base to sculpt on."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+egui = { workspace = true }
+sculpt-geom = { path = "../geom" }
+sculpt-toolkit = { path = "../toolkit" }
+sculpt-volume = { path = "../volume" }

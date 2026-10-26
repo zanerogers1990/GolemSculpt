@@ -39,6 +39,7 @@ fn registry() -> Vec<Box<dyn kit::Tool>> {
         sculpt_tube::muscle(),
         sculpt_array::tool(),
         sculpt_lathe::tool(),
+        sculpt_hands::tool(),
         sculpt_region::mask(),
         sculpt_region::hide(),
         sculpt_region::trim(),

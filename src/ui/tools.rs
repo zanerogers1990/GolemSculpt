@@ -18,7 +18,7 @@ const PER_ROW: usize = 3;
 /// each under a heading that folds it away. A tool in none of them (one
 /// added later, say) goes under the last.
 const GROUPS: [(&str, &[&str]); 3] = [
-    ("Make", &["tube", "muscle", "lathe", "array", "extract"]),
+    ("Make", &["tube", "muscle", "lathe", "hands", "array", "extract"]),
     ("Mask, Hide & Cut", &["mask", "hide", "trim", "split"]),
     ("Print & Measure", &["measure", "keys"]),
 ];
