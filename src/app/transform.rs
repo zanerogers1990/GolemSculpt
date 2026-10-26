@@ -38,6 +38,9 @@ enum Dragged {
     Tool { index: usize },
     /// The selected sphere of the SSphere rig, and its branch.
     Spheres,
+    /// The active object's pivot (Edit Pivot, app/pivot.rs). Nothing moves
+    /// until it is let go: the gizmo goes with the drag on its own.
+    Pivot,
 }
 
 /// A handle drag under way.
@@ -56,12 +59,17 @@ pub(super) struct State {
     /// tool is told the pointer is not free (`Env::hovering`) and keeps its
     /// ghosts and highlights back.
     pub(super) on_tool_handle: bool,
+    /// With Edit Pivot on, where a press landed on the active object, in
+    /// the window and in the world: let go there, it places the pivot.
+    pub(super) pivot_click: Option<(Vec2, Vec3)>,
 }
 
 /// What the gizmo is on.
 enum Subject {
     /// These scene objects, in the order of the targets.
     Objects(Vec<u64>),
+    /// The active object's pivot (Edit Pivot).
+    Pivot,
     /// The target this hosted tool offers.
     Tool(usize),
     /// The selected sphere of the SSphere rig.
@@ -133,7 +141,7 @@ pub(super) fn tool_event(drag: &gizmo::Drag, phase: kit::GizmoPhase) -> kit::Eve
 /// Points along the green (Y) ring of a gizmo for a scripted drag: `sweep`
 /// radians round it, starting half way between the blue and red arms, where
 /// no arrow or cube shares the pixel with the ring.
-fn green_ring(frame: &Frame, sweep: f32) -> Vec<Vec3> {
+pub(super) fn green_ring(frame: &Frame, sweep: f32) -> Vec<Vec3> {
     let (u, v) = (frame.axis(2) * frame.arm * 0.63, frame.axis(0) * frame.arm * 0.63);
     (0..=8)
         .map(|k| {
@@ -164,6 +172,11 @@ impl Running {
             if self.deform_on() {
                 return None;
             }
+            if self.doc.opts.edit_pivot {
+                let (target, handles) = self.pivot_target()?;
+                let orientation = self.doc.opts.gizmo_axes;
+                return Some(Setup { subject: Subject::Pivot, targets: vec![target], handles, orientation });
+            }
             let (ids, targets) = selection_targets(&self.doc.scene, &self.doc.mesh);
             let orientation = self.doc.opts.gizmo_axes;
             return (!targets.is_empty()).then(|| Setup {
@@ -192,7 +205,7 @@ impl Running {
         Some(match setup.subject {
             // The middle of a tool's own target stays the tool's to press.
             Subject::Tool(_) | Subject::Spheres => frame.keeping_clear(setup.targets[0].radius, &self.view, ppp),
-            Subject::Objects(_) => frame,
+            Subject::Objects(_) | Subject::Pivot => frame,
         })
     }
 
@@ -248,6 +261,7 @@ impl Running {
                 }
                 Dragged::Spheres
             }
+            Subject::Pivot => Dragged::Pivot,
         };
         self.transform.dragging = Some(Dragging { drag, what });
         true
@@ -276,6 +290,11 @@ impl Running {
         if self.gizmo_pressed() {
             return Drag::Gizmo;
         }
+        // With Edit Pivot on, a click on the object puts the pivot there
+        // when it is let go (app/pivot.rs); a drag still orbits.
+        if self.pivot_on() && self.pivot_pressed(self.input.pointer) {
+            return Drag::Orbit;
+        }
         // Off the handles a click on another object selects it (with Shift or
         // Ctrl it joins or leaves the selection); a click on nothing leaves
         // the selection alone, since that is far more often a missed handle
@@ -302,6 +321,7 @@ impl Running {
             Dragged::Surface { stale, .. } => *stale = true,
             Dragged::Tool { index } => self.tools_gizmo_event(*index, tool_event(&d.drag, kit::GizmoPhase::Move)),
             Dragged::Spheres => self.doc.spheres.gizmo_drag_to(d.drag.placements()[0].position),
+            Dragged::Pivot => {}
         }
         self.transform.dragging = Some(d);
         true
@@ -323,6 +343,7 @@ impl Running {
 
     /// Ends a handle drag, leaving one undo step if it changed anything.
     pub(super) fn transform_released(&mut self) {
+        self.pivot_released();
         if self.deform_released() || !self.transform_dragging() {
             return;
         }
@@ -363,6 +384,11 @@ impl Running {
             Dragged::Tool { index } => self.tools_gizmo_event(index, tool_event(&d.drag, kit::GizmoPhase::End)),
             // The spheres keep their own history: the drag is one step there.
             Dragged::Spheres => self.doc.spheres.end_gizmo_drag(),
+            Dragged::Pivot => {
+                let to = d.drag.placements()[0];
+                let turned = to.rotation.angle_between(self.doc.scene.active().rotation) > 1e-5;
+                self.place_pivot(to.position, to.rotation, if turned { "Turn Pivot" } else { "Move Pivot" });
+            }
         }
         self.doc.history.name_next(None);
         self.redraw = true;
@@ -376,7 +402,7 @@ impl Running {
     pub(super) fn transform_escape(&mut self) -> bool {
         let ours = matches!(
             &self.transform.dragging,
-            Some(Dragging { what: Dragged::Objects { .. } | Dragged::Surface { .. }, .. })
+            Some(Dragging { what: Dragged::Objects { .. } | Dragged::Surface { .. } | Dragged::Pivot, .. })
         );
         if !ours {
             return false;
@@ -395,7 +421,8 @@ impl Running {
                 }
                 doc.sculptor.last_hit = None;
             }
-            Dragged::Tool { .. } | Dragged::Spheres => {}
+            // Nothing has moved yet: the gizmo goes back to the pivot on its own.
+            Dragged::Tool { .. } | Dragged::Spheres | Dragged::Pivot => {}
         }
         self.toast("Move Cancelled");
         self.redraw = true;
@@ -417,6 +444,9 @@ impl Running {
         // A deformation on the model is kept, as any other command would keep it.
         self.deform_commit();
         self.transform.on_tool_handle = false;
+        // The gizmo moves the object again next time, as the card says.
+        self.transform.pivot_click = None;
+        self.doc.opts.edit_pivot = false;
         self.ui.gizmo.clear();
     }
 
@@ -492,6 +522,7 @@ impl Running {
     ///   part of the way through a pull out on the red arrow: both sides go out
     /// - `play`: works all of the above through the real pointer routines
     ///   and prints what came of each step
+    /// - `pivot`: the same for Edit Pivot and its buttons (app/pivot.rs)
     pub(super) fn transform_demo(&mut self) {
         let what = std::env::var("SCULPT_DEMO_GIZMO").unwrap_or_default();
         self.input.inside = true;
@@ -524,6 +555,7 @@ impl Running {
                 }
             }
             "play" => self.transform_play(),
+            "pivot" => self.pivot_play(),
             _ => {
                 self.demo_turned();
                 self.doc.opts.gizmo_axes = match what.as_str() {
@@ -547,7 +579,7 @@ impl Running {
 
     /// Three objects set round an empty middle, all selected, with the gizmo
     /// up: it sits in the gap between them, on none of the three.
-    fn demo_three(&mut self) -> [u64; 3] {
+    pub(super) fn demo_three(&mut self) -> [u64; 3] {
         let first = self.doc.scene.active_id();
         let mut ids = [first; 3];
         self.doc.scene.active_mut().position = Vec3::new(-0.1, 1.2, 0.0);

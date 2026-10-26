@@ -46,7 +46,7 @@
 //! The mask, the hidden faces, the quads of a quad remesh and the shape Reset
 //! Shape goes back to all come across.
 
-use glam::{DVec3, Vec3};
+use glam::{DVec3, Mat3, Quat, Vec3};
 use sculpt_symmetry::Placement;
 
 use super::{Baseline, Scene, duplicate_placed};
@@ -56,6 +56,10 @@ use crate::mesh::Mesh;
 /// mesh's longest side, is on it: moving it would change nothing that can be
 /// seen and cost an undo step.
 const ALREADY_THERE: f64 = 1e-6;
+
+/// A size whose longest side is more than this fraction longer than its
+/// shortest is stretched unevenly, and its centre is not turned.
+const UNEVEN: f32 = 1e-4;
 
 /// What [`Scene::move_origin_to_mesh`] did.
 #[derive(Clone, Debug, PartialEq)]
@@ -107,8 +111,49 @@ impl Scene {
     /// [`Self::move_origin_to_mesh`] does once it has measured how far; the
     /// scripted check also stands a centre far from its mesh with it.
     pub(crate) fn move_origin_by(&mut self, shift: Vec3, slot: &mut Mesh) -> OriginMoved {
-        let positions: Vec<Vec3> = slot.positions.iter().map(|&p| p - shift).collect();
-        let (moved, places) = duplicate_placed(slot, positions);
+        self.reorigin(shift, Quat::IDENTITY, slot)
+    }
+
+    /// The shift and the turn, in the active object's mesh space, that
+    /// [`Self::reorigin`] takes for the object to stand at `position`, turned
+    /// by `rotation`, its size as it is, with nothing moving in the world:
+    /// where Edit Pivot's gizmo was let go, a point clicked on the surface,
+    /// the world's own axes.
+    pub fn origin_for(&self, position: Vec3, rotation: Quat) -> (Vec3, Quat) {
+        let object = self.active();
+        let back = object.rotation.inverse();
+        let shift = back * (position - object.position) / object.scale;
+        (shift, (back * rotation).normalize())
+    }
+
+    /// The objects showing the active object's mesh that are stretched more
+    /// one way than another, by name: turning the centre would have to shear
+    /// them, which an object's turn and size cannot say, so a turn waits
+    /// until they are even. Empty when there are none.
+    pub fn stretched_unevenly(&self) -> Vec<String> {
+        let mesh = self.active_mesh();
+        let uneven = |s: Vec3| s.max_element() > s.min_element() * (1.0 + UNEVEN);
+        self.objects.iter().filter(|o| o.mesh == mesh && uneven(o.scale.abs())).map(|o| o.name.clone()).collect()
+    }
+
+    /// Moves the active object's centre by `shift` and turns its axes by
+    /// `turn`, both in its mesh's own space, and leaves the object and its
+    /// instances where they are in the world: inside each the mesh goes the
+    /// other way, `turn^-1 * (p - shift)`, and the object's position and turn
+    /// take up the difference. A turn is only for objects stretched the same
+    /// every way (see [`Self::stretched_unevenly`]): through an uneven size it
+    /// would shear. With no turn the vertices are only shifted, to the bit as
+    /// [`Self::move_origin_by`] always has.
+    pub(crate) fn reorigin(&mut self, shift: Vec3, turn: Quat, slot: &mut Mesh) -> OriginMoved {
+        let turned = turn != Quat::IDENTITY;
+        let back = turn.inverse();
+        let carry = |p: Vec3| if turned { back * (p - shift) } else { p - shift };
+        let positions: Vec<Vec3> = slot.positions.iter().map(|&p| carry(p)).collect();
+        let (mut moved, places) = duplicate_placed(slot, positions);
+        // A layer's offsets are directions in the mesh's space, and turn with it.
+        if turned {
+            moved.turn_layers(Mat3::from_quat(back));
+        }
 
         let (old, new) = (self.active_mesh(), self.fresh_id());
         // The shape Reset Shape goes back to, for the new mesh's vertices.
@@ -116,7 +161,7 @@ impl Scene {
             let rest = slot.rest_shape(&rest.positions)?;
             let mut positions = moved.positions.clone();
             for (from, &to) in places.iter().enumerate().filter(|(_, to)| **to != u32::MAX) {
-                positions[to as usize] = rest[from] - shift;
+                positions[to as usize] = carry(rest[from]);
             }
             Some(Baseline { uid: moved.uid, positions })
         });
@@ -130,6 +175,9 @@ impl Scene {
             let from = object.placement();
             object.mesh = new;
             object.position += object.rotation * (object.scale * shift);
+            if turned {
+                object.rotation = (object.rotation * turn).normalize();
+            }
             let entry = (object.id, from, object.placement());
             // The active object first: it is the one the status line names.
             if object.id == active { objects.insert(0, entry) } else { objects.push(entry) }
@@ -419,5 +467,87 @@ mod tests {
         let mut ball = primitives::build(Primitive::Sphere, 2_000, 0.5);
         let mut scene = Scene::new("Sphere");
         assert!(scene.move_origin_to_mesh(&mut ball).is_none());
+    }
+
+    #[test]
+    fn a_pivot_moved_and_turned_leaves_the_object_and_its_instances_where_they_are() {
+        let mut mesh = cube_off(Vec3::new(3.0, -1.5, 0.25));
+        let mut scene = Scene::new("Piece");
+        let first = scene.active_id();
+        placed(&mut scene, first, Vec3::new(0.4, 2.0, -1.0), Quat::from_rotation_y(0.6), Vec3::splat(1.5));
+        let twin = scene.instance_active();
+        placed(&mut scene, twin, Vec3::new(-6.0, 2.0, 1.0), Quat::from_rotation_x(-1.2), Vec3::splat(0.5));
+        scene.select(first, &mut mesh);
+        let model = |scene: &Scene, id: u64| scene.get(id).unwrap().matrix();
+        let before = [first, twin].map(|id| world_points(&scene, &mesh, id, model(&scene, id)));
+
+        // Where Edit Pivot's gizmo was let go: off to one side, tipped over.
+        let (to, turned) = (Vec3::new(5.0, -1.0, 2.0), Quat::from_euler(glam::EulerRot::XYZ, 0.9, -0.3, 2.1));
+        let (shift, turn) = scene.origin_for(to, turned);
+        let moved = scene.reorigin(shift, turn, &mut mesh);
+        assert_eq!(moved.objects.len(), 2, "the object and its instance");
+
+        let object = scene.active();
+        assert!(object.position.distance(to) < 1e-5, "the pivot is where it was let go");
+        assert!(object.rotation.angle_between(turned) < 1e-5, "and turned as it was let go");
+        assert_eq!(object.scale, Vec3::splat(1.5), "its size is its own");
+        for (id, before) in [first, twin].into_iter().zip(&before) {
+            let now = world_points(&scene, &mesh, id, model(&scene, id));
+            assert!(same_places(&now, before, NEAR * 10.0), "object {id} stayed where it was");
+        }
+        // Lined up with the world again, the pivot where it is: still nothing moves.
+        let (shift, turn) = scene.origin_for(to, Quat::IDENTITY);
+        assert!(shift.length() < 1e-5, "only a turn");
+        scene.reorigin(Vec3::ZERO, turn, &mut mesh);
+        assert!(scene.active().rotation.angle_between(Quat::IDENTITY) < 1e-5);
+        let now = world_points(&scene, &mesh, first, model(&scene, first));
+        assert!(same_places(&now, &before[0], NEAR * 10.0));
+    }
+
+    #[test]
+    fn a_pivot_is_not_turned_through_an_uneven_stretch() {
+        let mut mesh = cube_off(Vec3::ZERO);
+        let mut scene = Scene::new("Piece");
+        let first = scene.active_id();
+        assert!(scene.stretched_unevenly().is_empty());
+        let twin = scene.instance_active();
+        placed(&mut scene, twin, Vec3::X * 4.0, Quat::IDENTITY, Vec3::new(1.0, 2.0, 1.0));
+        scene.select(first, &mut mesh);
+        assert_eq!(scene.stretched_unevenly(), [scene.get(twin).unwrap().name.clone()]);
+        // An object with a mesh of its own is no part of it.
+        let other = scene.add("Other", cube_off(Vec3::X * 9.0), &mut mesh);
+        placed(&mut scene, other, Vec3::ZERO, Quat::IDENTITY, Vec3::new(3.0, 1.0, 1.0));
+        scene.select(first, &mut mesh);
+        assert_eq!(scene.stretched_unevenly().len(), 1);
+    }
+
+    #[test]
+    fn the_layers_turn_with_the_pivot_and_the_model_underneath_stays_put() {
+        let mut mesh = primitives::build(Primitive::Sphere, 4_000, 0.5);
+        mesh.add_layer(None);
+        // A bump on the front, recorded on the layer.
+        let leaves: Vec<u32> = (0..mesh.bvh.leaves.len() as u32).collect();
+        mesh.begin_stroke();
+        mesh.move_vertices(&leaves, |_, vertex| {
+            let d = vertex.pos.distance(Vec3::Z * 0.5) / 0.3;
+            (d < 1.0).then(|| vertex.pos + vertex.pos.normalize() * 0.1 * (1.0 - d * d).powi(2))
+        });
+        mesh.positions_changed(&leaves);
+        mesh.end_stroke(false);
+
+        let mut scene = Scene::new("Head");
+        let id = scene.active_id();
+        placed(&mut scene, id, Vec3::new(1.0, 0.5, -2.0), Quat::from_rotation_z(0.3), Vec3::splat(2.0));
+        let underneath = |scene: &Scene, mesh: &Mesh| {
+            let model = scene.active().matrix();
+            mesh.model_underneath().into_iter().map(|p| model.transform_point3(p)).collect::<Vec<_>>()
+        };
+        let (shape, bare) = (world_points(&scene, &mesh, id, scene.active().matrix()), underneath(&scene, &mesh));
+        assert!(!same_places(&shape, &bare, NEAR), "the layer holds the bump");
+
+        let (shift, turn) = scene.origin_for(Vec3::new(1.2, 0.4, -2.0), Quat::from_euler(glam::EulerRot::XYZ, 1.1, 0.4, -0.7));
+        scene.reorigin(shift, turn, &mut mesh);
+        assert!(same_places(&world_points(&scene, &mesh, id, scene.active().matrix()), &shape, NEAR * 10.0));
+        assert!(same_places(&underneath(&scene, &mesh), &bare, NEAR * 10.0), "the layer's offsets turned with the mesh");
     }
 }

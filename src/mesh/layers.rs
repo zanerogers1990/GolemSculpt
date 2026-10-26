@@ -783,6 +783,26 @@ impl Mesh {
         Layers::restored(layers.saved(None), kept, Some(place))
     }
 
+    /// Turns every layer's offsets by `turn`, as the whole mesh was turned to
+    /// stand in a centre turned the other way (scene/origin.rs): nothing
+    /// moves in the world. What has carried the offsets is said again in the
+    /// new axes, so Reset Shape still carries each back as it was built.
+    pub fn turn_layers(&mut self, turn: Mat3) {
+        let Some(layers) = self.layers.as_mut() else { return };
+        for layer in &mut layers.list {
+            layer.offsets.par_iter_mut().with_min_len(PER_TASK).for_each(|offset| *offset = turn * *offset);
+        }
+        if let Some(frame) = layers.frame.as_mut() {
+            let back = turn.transpose();
+            let [x, y, z] = &mut **frame;
+            let columns = x.par_iter_mut().zip(y.par_iter_mut()).zip(z.par_iter_mut());
+            columns.with_min_len(PER_TASK).for_each(|((x, y), z)| {
+                let carried = turn * Mat3::from_cols(*x, *y, *z) * back;
+                (*x, *y, *z) = (carried.x_axis, carried.y_axis, carried.z_axis);
+            });
+        }
+    }
+
     /// Whether the mesh is on a subdivision level below its finest, where the
     /// mesh's layers are only the first entries of the layers.
     fn below_finest(&self) -> bool {

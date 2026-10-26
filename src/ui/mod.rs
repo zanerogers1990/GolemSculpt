@@ -263,7 +263,8 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
                 "Drag an arrow to move, a ring to turn, a cube on an arm to stretch that way, or the white cube to resize.\n\n\
                  Click another object to select it; Shift or Ctrl + click adds it to the selection or takes it out. Several \
                  selected objects go together, about their shared centre. Drag anywhere else to orbit.\n\n\
-                 If part of the object is masked, the gizmo reshapes the rest and leaves the masked part where it is.",
+                 If part of the object is masked, the gizmo reshapes the rest and leaves the masked part where it is.\n\n\
+                 Edit Pivot moves and turns the gizmo itself (the object's pivot) and leaves the object where it is.",
             );
             // Which way the arrows and rings point.
             theme::hint(ui, "Gizmo axes (arrows and rings)");
@@ -277,6 +278,7 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
                     }
                 }
             });
+            pivot_rows(ui, doc, actions);
             let badge = doc.opts.keys.badge("transform");
             let style = ButtonStyle { badge: &badge, ..Default::default() };
             if tip(theme::button(ui, ui.available_width(), "Back to Sculpt", style), doc.opts.tooltips, "Put the gizmo away and sculpt (G).").clicked() {
@@ -299,6 +301,42 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
         showing = tabs::Sculpt::Tools;
     }
     doc.opts.tabs.sculpt = showing;
+}
+
+/// The Transform card's pivot: Edit Pivot, and the two buttons that put it
+/// right in one go (app/pivot.rs). Each leaves the object where it is.
+fn pivot_rows(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
+    let tips = doc.opts.tooltips;
+    theme::hint(ui, "Pivot (where the gizmo sits, and its axes)");
+    let on = doc.opts.edit_pivot;
+    let style = ButtonStyle { active: on.then_some(ACCENT()), ..Default::default() };
+    let help = "While this is on, the gizmo moves and turns the object's pivot instead of the object: drag an arrow to \
+                move it, a ring to turn its axes, or click on the object to put the pivot on the surface there. The \
+                object stays where it is. The pivot is what the object turns and resizes about, and where its own \
+                (Local) symmetry planes pass, so those come with it. Each change is one undo step.";
+    if tip(theme::button(ui, ui.available_width(), "Edit Pivot", style), tips, help).clicked() {
+        doc.opts.edit_pivot = !on;
+    }
+    if on {
+        theme::hint(ui, "Drag an arrow or a ring to move or turn the pivot, or click on the object to put it there. The object stays put.");
+    }
+    let off_centre = doc.scene.origin_off_mesh(&doc.mesh).is_some();
+    let turned = doc.scene.active().rotation.angle_between(glam::Quat::IDENTITY) > 1e-5;
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 2, 6.0);
+        ui.add_enabled_ui(off_centre, |ui| {
+            let help = "Puts the pivot in the middle of the object, for a model that came in with it far away. The object stays where it is.";
+            if tip(theme::button(ui, w, "Pivot to Centre", ButtonStyle::default()), tips, help).clicked() {
+                actions.push(Action::SetOriginToMesh);
+            }
+        });
+        ui.add_enabled_ui(turned, |ui| {
+            let help = "Turns the pivot's axes back to line up with the world's, for when they have got tipped over. The object stays where it is.";
+            if tip(theme::button(ui, w, "Align to World", ButtonStyle::default()), tips, help).clicked() {
+                actions.push(Action::AlignPivot);
+            }
+        });
+    });
 }
 
 /// Whether the Sculpt panel shows its tabs: while sculpting or with the

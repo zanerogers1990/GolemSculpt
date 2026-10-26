@@ -68,6 +68,7 @@ mod new_scene;
 mod older;
 mod origin;
 mod pen;
+mod pivot;
 mod pose;
 mod print_check;
 pub(crate) mod project;
@@ -1574,6 +1575,7 @@ impl Running {
             Action::Tool(tool) => self.set_tool(tool),
             Action::ResetTransform => self.reset_transform(),
             Action::SetOriginToMesh => self.set_origin_to_mesh(),
+            Action::AlignPivot => self.align_pivot(),
             Action::MakeSkin => self.spheres_make_skin(),
             Action::Mirror(command) => self.mirror_command(command),
             Action::NewRig => self.spheres_new_rig(),

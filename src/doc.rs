@@ -87,6 +87,10 @@ pub struct Options {
     pub theme: usize,
     /// Which way the transform gizmo's arrows and rings point.
     pub gizmo_axes: crate::gizmo::Orientation,
+    /// Edit Pivot: the gizmo moves and turns the active object's pivot, not
+    /// the object (app/pivot.rs). Not kept between runs, and off again when
+    /// the Transform tool is put away.
+    pub edit_pivot: bool,
     /// Finishes, lighting, environment and post effects.
     pub look: Look,
     /// How hard the renderer works (see render/quality.rs). Kept in the
@@ -145,6 +149,7 @@ impl Default for Options {
             bake: Default::default(),
             theme: 0,
             gizmo_axes: Default::default(),
+            edit_pivot: false,
             look: Look::default(),
             quality: Default::default(),
             groups: Default::default(),
@@ -521,6 +526,9 @@ pub enum Action {
     /// Move the active object's centre to the middle of its mesh, leaving
     /// the object where it is (see app/origin.rs).
     SetOriginToMesh,
+    /// Turn the active object's pivot back to the world's axes, leaving the
+    /// object where it is (see app/pivot.rs).
+    AlignPivot,
     /// Turn the SSphere rig's skin into a new object.
     MakeSkin,
     /// A command of the Mirror section of the Objects card: live copies of the

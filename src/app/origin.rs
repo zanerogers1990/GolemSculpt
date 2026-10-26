@@ -104,13 +104,7 @@ impl Running {
             };
             return self.status(text, true);
         }
-        // What would be left behind, or land in the wrong place.
-        let jobs = doc.tools.jobs.running();
-        let scaffolds = doc.tools.scaffolds_at_risk(Loss::SceneReplaced);
-        let mesh = doc.scene.active_mesh();
-        let rig = doc.spheres.attached_to().filter(|_| !doc.spheres.rig.is_empty());
-        let rig_on = rig.and_then(|id| doc.scene.get(id)).filter(|o| o.mesh == mesh).map(|o| o.name.as_str());
-        if let Some(why) = refusal(jobs.first().map(|job| job.label.as_str()), &scaffolds, rig_on) {
+        if let Some(why) = self.origin_refusal() {
             return self.status(why, false);
         }
 
@@ -122,10 +116,23 @@ impl Running {
         self.status(moved_line(&name, &moved, symmetry), true);
     }
 
+    /// Why the active object's centre cannot be moved just now, if it cannot:
+    /// what would be left behind, or land in the wrong place (see the top of
+    /// this file). Set Origin to Mesh and Edit Pivot (app/pivot.rs) both ask.
+    pub(super) fn origin_refusal(&self) -> Option<String> {
+        let doc = &self.doc;
+        let jobs = doc.tools.jobs.running();
+        let scaffolds = doc.tools.scaffolds_at_risk(Loss::SceneReplaced);
+        let mesh = doc.scene.active_mesh();
+        let rig = doc.spheres.attached_to().filter(|_| !doc.spheres.rig.is_empty());
+        let rig_on = rig.and_then(|id| doc.scene.get(id)).filter(|o| o.mesh == mesh).map(|o| o.name.as_str());
+        refusal(jobs.first().map(|job| job.label.as_str()), &scaffolds, rig_on)
+    }
+
     /// After the scene moved a centre: the renderer has a new mesh to draw,
     /// and the tools are told, each object in turn (the Array tool carries a
     /// path the other way).
-    fn origin_was_moved(&mut self, moved: &OriginMoved) {
+    pub(super) fn origin_was_moved(&mut self, moved: &OriginMoved) {
         let doc = &mut self.doc;
         doc.mesh_replaced = true;
         for &(id, from, to) in &moved.objects {
