@@ -1014,6 +1014,7 @@ impl Running {
                 let own = own.or_else(|| self.groups_command(other, args));
                 let own = own.or_else(|| self.materials_command(other, args));
                 let own = own.or_else(|| self.paint_command(other, args));
+                let own = own.or_else(|| self.references_command(other, args));
                 // A scripted run's stroke drawn by hand answers for its two (app/ui_demo/hand.rs).
                 let own = own.or_else(|| self.hand_demo_command(other));
                 return own.unwrap_or_else(|| Err(format!("There is no command \"{name}\".")));
@@ -1088,8 +1089,9 @@ impl Running {
     }
 
     /// [`Self::path`] for a path under another name: the brush files
-    /// `set_brush` imports and exports are held to the same rule.
-    fn path_named(args: &Value, name: &str) -> Result<(PathBuf, String), String> {
+    /// `set_brush` imports and exports, and the pictures `add_picture` adds
+    /// (app/references.rs), are held to the same rule.
+    pub(super) fn path_named(args: &Value, name: &str) -> Result<(PathBuf, String), String> {
         let given = text(args, name).ok_or("A path is needed.")?;
         if let Some(why) = guard::off_limits(given) {
             return Err(why.into());

@@ -236,6 +236,9 @@ impl Running {
         opts.subdivide_flat = kept.subdivide_flat;
         opts.new_shape_tris = kept.starting_detail();
         opts.quality = kept.render_quality.sanitized();
+        // The view the app starts on takes the lens; a file opened with it brings its own (`apply_details`).
+        opts.lens = kept.lens();
+        self.doc.camera.set_lens(opts.lens);
         self.doc.sculptor.dyntopo.enabled = kept.dynamic_topology;
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
         self.doc.sculptor.dyntopo.method = kept.dynamic_topology_method;
@@ -286,6 +289,7 @@ impl Running {
             render_quality: opts.quality,
             pen_seen: self.doc.sculptor.pen_meter.known || self.doc.sculptor.pen_meter.seen,
             recent_brushes: self.ui.recent_brushes.clone(),
+            lens: opts.lens,
         }
     }
 
@@ -606,6 +610,9 @@ impl Running {
         let selected = self.doc.scene.active_symmetry();
         let [x, y, z] = selected.mirror;
         details.set(io::slot::MIRROR, &io::Mirror { x, y, z, guides: opts.symmetry_guides, radial: selected.radial });
+        // The reference pictures, images and all: what the scene is seen
+        // against, so across an Open they go with the look (app/references.rs).
+        self.doc.scene.references.keep(&mut details);
         details
     }
 
@@ -661,6 +668,9 @@ impl Running {
         if !view.is_some_and(|view| self.doc.camera.restore_view(&view)) {
             self.frame_view();
         }
+        // Unlike the parts above, pictures a file lacks are none: another
+        // scene's are not left standing in this one.
+        self.references_see(details);
         self.sync_view();
         self.redraw = true;
     }
@@ -809,6 +819,7 @@ impl Running {
         self.renderer.flash.show(&self.gpu, &globals.view_proj, &[]);
         self.renderer.spheres.hide();
         self.renderer.previews.show(&self.gpu, &view, &[]);
+        self.renderer.references.hide();
         let wireframe = std::mem::replace(&mut self.renderer.wire.enabled, false);
 
         let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -1020,6 +1031,7 @@ impl Running {
         });
         // Only the objects are added: their arrays come with them, and the scene's own are not touched.
         self.doc.tools.restore_from_file(&rows, &details, Arrival::Added);
+        self.references_add_from(&details);
         self.doc.mesh_replaced = true;
         self.frame_view();
         self.status(format!("Added {} from {}{note}", how_many(count), file_name(&path)), true);

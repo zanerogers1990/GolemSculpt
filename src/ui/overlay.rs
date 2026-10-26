@@ -235,6 +235,33 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
                 actions.push(Action::ToggleOrtho);
             }
         });
+        // Under it, the lens: a few named ones and a slider between, in the
+        // millimetres a camera's lenses are named by (camera.rs).
+        ui.horizontal(|ui| {
+            ui.add_space(2.0 + view_handles::SIZE + ui.spacing().item_spacing.x);
+            let mm = crate::camera::lens_mm(doc.camera.fov_y);
+            let shown = format!("Lens {mm:.0} mm");
+            let menu = egui::ComboBox::from_id_salt("lens").selected_text(shown).width(76.0).show_ui(ui, |ui| {
+                for lens in crate::camera::LENSES {
+                    let picked = (lens - mm).abs() < 0.5;
+                    if ui.selectable_label(picked, format!("{lens:.0} mm")).clicked() {
+                        actions.push(Action::Lens(crate::camera::fov_of_lens(lens)));
+                    }
+                }
+                let mut wanted = mm.clamp(*crate::camera::LENS_RANGE.start(), *crate::camera::LENS_RANGE.end());
+                let slider = egui::Slider::new(&mut wanted, crate::camera::LENS_RANGE).logarithmic(true).suffix(" mm");
+                if ui.add(slider).changed() {
+                    actions.push(Action::Lens(crate::camera::fov_of_lens(wanted)));
+                }
+            });
+            if tips {
+                menu.response.on_hover_text(
+                    "The lens the view is seen through. Wide (18-24 mm) bends the model toward you, as a camera held \
+                     close does; 50 mm is about what the eye sees; 85 mm and up flatten it, as portraits are taken. \
+                     The model stays the size it is on screen.",
+                );
+            }
+        });
         ui.horizontal(|ui| {
             ui.add_space(2.0);
             view_handles::handle(ui, Handle::Zoom, tips, actions);

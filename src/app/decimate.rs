@@ -163,6 +163,7 @@ fn only_the_view(action: &Action) -> bool {
             | Action::Frame
             | Action::Snap(..)
             | Action::ToggleOrtho
+            | Action::Lens(_)
             | Action::PanView(_)
             | Action::ZoomView(_)
             | Action::HomeView

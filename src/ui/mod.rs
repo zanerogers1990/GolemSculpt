@@ -29,6 +29,7 @@ mod panels;
 mod pose;
 mod project;
 pub mod question;
+mod references;
 mod scene_graph;
 mod settings;
 mod shortcuts;
@@ -738,6 +739,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
         scene_graph::show(ui, doc, state, actions);
         // Cards the hosted tools keep here whichever tool is up (Measure & Size).
         tools::cards(ui, doc, state);
+        references::card(ui, doc, &state.assets, actions);
     });
     let look = tabs::page(ui, showing == Scene::Look, "look", |ui| look_page(ui, doc, state, actions));
     let file = tabs::page(ui, showing == Scene::File, "file", |ui| file_page(ui, doc, state, actions));

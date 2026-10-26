@@ -18,8 +18,9 @@
 //! **Unsaved** is told by the scene's [`Mark`]. Most of what a file keeps
 //! changes as a step of the undo history, and the history's own count tells
 //! those. Some of it does not, on purpose: an object's symmetry, what Local
-//! View shows and hides, and what a tool keeps for an object
-//! (a live array's count, sizes, ticks and path) are saved with the scene
+//! View shows and hides, what a tool keeps for an object
+//! (a live array's count, sizes, ticks and path) and the scene's reference
+//! pictures (references.rs) are saved with the scene
 //! but are not undo steps. So the mark also carries a fingerprint of that
 //! part of the file, [`kept_print`], worked out from the scene as it stands.
 //! Being a fingerprint of the state and not a count of changes, it comes
@@ -124,6 +125,8 @@ pub(super) fn kept_print(scene: &Scene, tools: &Tools) -> u64 {
         hash_symmetry(scene.symmetry(*id), &mut hasher);
         tools.hash_kept(*id, &mut hasher);
     }
+    // The reference pictures, which are saved but are not undo steps either.
+    scene.references.hash_kept(&mut hasher);
     hasher.finish()
 }
 

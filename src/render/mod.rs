@@ -33,6 +33,7 @@ pub mod post;
 pub mod preview;
 pub mod quality;
 mod ray;
+pub mod references;
 mod refine;
 pub mod spheres;
 pub mod wire;
@@ -464,6 +465,8 @@ pub struct Renderer {
     pub wire: wire::Layer,
     /// The face group colours.
     pub groups: groups::Layer,
+    /// The scene's reference pictures, drawn behind the model or over it.
+    pub references: references::Layer,
     /// Off, the pulses and the tools' previews are left out: the clean view,
     /// and pictures drawn for a recording.
     pub overlays: bool,
@@ -847,6 +850,7 @@ impl Renderer {
             flash: flash::Layer::new(gpu),
             wire: wire::Layer::new(gpu),
             groups: groups::Layer::new(gpu),
+            references: references::Layer::new(gpu),
             overlays: true,
             scene_dirty: false,
             forced: 0,
@@ -1648,10 +1652,13 @@ impl Renderer {
         // straight into the one kept when nothing goes over it, otherwise
         // into a multisampled copy the overlays are drawn on.
         let bloom = settings.bloom && settings.bloom_intensity > 0.0;
+        // The reference pictures are a view aid: never in a picture made to keep.
+        let references = self.references.active() && !self.picture;
         let overlaid = (self.overlays && (self.flash.active() || self.previews.active()))
             || self.groups.active()
             || self.wire.active()
-            || self.spheres.active();
+            || self.spheres.active()
+            || references;
         if !overlaid {
             self.post.finish(encoder, &targets.finished, bloom, true, &self.lut);
             self.blit.draw(encoder, &targets.blit_finished, target);
@@ -1677,6 +1684,10 @@ impl Renderer {
             }),
             ..Default::default()
         });
+        // The reference pictures first, as the backdrop the rest is seen against.
+        if references {
+            self.references.draw(&mut pass);
+        }
         // The pulse tints the surface, so the wireframe and the SSpheres go over it.
         if self.overlays {
             self.flash.draw(&mut pass, &self.meshes, opts.show_backfaces);
@@ -1776,6 +1787,7 @@ impl Renderer {
             if self.overlays { self.previews.stamp.count() } else { 0 },
             self.wire.stamp.count(),
             self.groups.stamp.count(),
+            if self.picture { 0 } else { self.references.stamp.count() },
             self.painted.stamp.count(),
         ]);
         key

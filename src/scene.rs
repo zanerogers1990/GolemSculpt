@@ -152,6 +152,10 @@ pub struct Scene {
     /// without an entry has none set. An entry outlives its object, because
     /// undo can bring the object back and it is a few bytes.
     symmetry: HashMap<u64, Symmetry>,
+    /// The reference pictures standing in the scene (see `references.rs`):
+    /// saved with it, but not objects, so nothing here that reads the
+    /// objects (bounds, picking, the rebuilds) ever meets them.
+    pub references: crate::references::References,
 }
 
 /// An independent copy of a mesh with everything the user can see of it: its
@@ -243,6 +247,7 @@ impl Scene {
             spawned: HashMap::from([(name.to_owned(), 1)]),
             baselines: HashMap::new(),
             symmetry: HashMap::new(),
+            references: Default::default(),
         }
     }
 

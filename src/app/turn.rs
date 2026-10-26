@@ -175,6 +175,22 @@ impl Running {
         camera.ortho = !camera.ortho;
         camera.ortho_from_axis = false;
     }
+
+    /// The Lens menu: the view takes a lens of `fov_y` degrees, keeping the
+    /// model the size it is on screen (`Camera::set_lens`), and goes into
+    /// perspective, the only view a lens shows in. New scenes and the next
+    /// start keep it (`Options::lens`).
+    pub(super) fn lens_to(&mut self, fov_y: f32) {
+        self.turn_begin(None, false);
+        let camera = &mut self.doc.camera;
+        camera.set_lens(fov_y);
+        camera.ortho = false;
+        camera.ortho_from_axis = false;
+        let fov_y = camera.fov_y;
+        self.doc.opts.lens = fov_y;
+        self.toast(&format!("Lens {:.0} mm", crate::camera::lens_mm(fov_y)));
+        self.redraw = true;
+    }
 }
 
 impl Running {

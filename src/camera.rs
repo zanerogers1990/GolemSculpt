@@ -13,6 +13,31 @@ pub const DRAG_ZOOM_PER_PX: f32 = 0.004;
 const SNAP_SECONDS: f32 = 0.3;
 const GLIDE_SECONDS: f32 = 0.35;
 
+/// The lens a view starts with, as its angle of view from top to bottom in
+/// degrees: wide, about a 21 mm lens (see [`lens_mm`]).
+pub const DEFAULT_FOV: f32 = 60.0;
+/// The narrowest and widest angles of view a camera takes.
+pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 10.0..=120.0;
+/// The lenses the view offers by name, in millimetres: wide, normal, the
+/// portrait lenses and a long one.
+pub const LENSES: [f32; 6] = [18.0, 24.0, 35.0, 50.0, 85.0, 135.0];
+/// The range of the Lens slider, in millimetres.
+pub const LENS_RANGE: std::ops::RangeInclusive<f32> = 12.0..=135.0;
+/// The height of the frame a lens's millimetres are counted against: a 35 mm
+/// camera's, 24 mm tall, so a 50 mm lens here frames what it frames there.
+const FRAME_HEIGHT_MM: f32 = 24.0;
+
+/// The focal length, in millimetres, that gives an angle of view of `fov_y`
+/// degrees from top to bottom.
+pub fn lens_mm(fov_y: f32) -> f32 {
+    FRAME_HEIGHT_MM * 0.5 / (fov_y.to_radians() * 0.5).tan()
+}
+
+/// The angle of view, in degrees from top to bottom, of a lens of `mm`.
+pub fn fov_of_lens(mm: f32) -> f32 {
+    2.0 * (FRAME_HEIGHT_MM * 0.5 / mm.max(1e-3)).atan().to_degrees()
+}
+
 fn smoothstep(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -205,7 +230,7 @@ impl Default for Camera {
             pitch: 0.0,
             distance: 3.0,
             pivot: Vec3::ZERO,
-            fov_y: 60.0,
+            fov_y: DEFAULT_FOV,
             ortho: false,
             ortho_from_axis: false,
             snap: None,
@@ -225,6 +250,25 @@ impl Camera {
 
     pub fn tan_half_fov(&self) -> f32 {
         (self.fov_y.to_radians() * 0.5).tan()
+    }
+
+    /// Changes the lens to an angle of view of `fov_y` degrees (brought into
+    /// [`FOV_RANGE`]) and moves the camera in or out so that what is at the
+    /// pivot stays the same size on screen: only the strength of the
+    /// perspective changes, as when a photographer steps back and zooms in.
+    /// An orthographic view, whose size follows the same product, does not
+    /// change at all. A glide under way keeps going, to a distance moved the
+    /// same way.
+    pub fn set_lens(&mut self, fov_y: f32) {
+        let fov_y = if fov_y.is_finite() { fov_y.clamp(*FOV_RANGE.start(), *FOV_RANGE.end()) } else { DEFAULT_FOV };
+        let before = self.tan_half_fov();
+        self.fov_y = fov_y;
+        let ratio = before / self.tan_half_fov();
+        self.distance *= ratio;
+        if let Some(glide) = &mut self.glide {
+            glide.from.1 *= ratio;
+            glide.to.1 *= ratio;
+        }
     }
 
     pub fn is_animating(&self) -> bool {
@@ -512,7 +556,10 @@ impl Camera {
         self.pivot = pivot;
         self.ortho = saved.ortho;
         self.ortho_from_axis = false;
-        self.fov_y = saved.fov_y.clamp(10.0, 120.0);
+        self.fov_y = saved.fov_y.clamp(*FOV_RANGE.start(), *FOV_RANGE.end());
         true
     }
 }
+
+#[cfg(test)]
+mod tests;

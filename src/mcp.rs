@@ -536,7 +536,7 @@ fn tools() -> Value {
         "fill_material": boolean("For paint_layer fill: fill with the material painted with, if one is picked. Default true."),
         "colour": json!({ "type": ["array", "string"], "description": "For paint_settings: the colour to paint, [red, green, blue] each 0 to 255, or \"#rrggbb\"." }),
         "mode": choice(&["Paint", "Erase", "Blur", "Smear", "Sample"], "For paint_settings: what the Paint brush does. Sample makes a stroke pick up the paint at its first point instead."),
-        "opacity": number("For paint_settings: 1 to 100, the most one stroke lays."),
+        "opacity": number("For paint_settings: 1 to 100, the most one stroke lays. For add_picture and edit_picture: 0 to 100, how solid the picture is."),
         "channels": json!({ "type": "object", "description": "For paint_settings: which channels the brush writes, { rgb, material, roughness, metallic }, each true or false. For paint_layer channels: which the layer shows, { colour, material, roughness, metallic }." }),
         "roughness": number("For paint_settings: 0 to 100, the roughness laid where roughness is painted."),
         "metallic": number("For paint_settings: 0 to 100, the metallic laid where metallic is painted."),
@@ -759,6 +759,7 @@ fn tools() -> Value {
                         "materials", "paint_material",
                         "paint_settings", "paint_layer", "pick_paint", "mask_by_colour", "mask_by_material",
                         "mask_by_layer",
+                        "add_picture", "list_pictures", "edit_picture", "delete_picture",
                     ],
                     "remesh rebuilds the mesh from voxels, evening out the triangles. clone adds an independent \
                      copy; instance adds a linked copy that shares the mesh; make_unique unlinks an instance. \
@@ -808,7 +809,13 @@ fn tools() -> Value {
                      pick_paint is the eyedropper at x and y: the paint's colour and material there become the ones \
                      painted with; mask_by_colour masks where the paint is the brush's colour (within tolerance), \
                      mask_by_material where the material painted with is, mask_by_layer where the layer painted on \
-                     has paint.",
+                     has paint. \
+                     Reference pictures (photos or drawings standing in the scene to sculpt against; not objects, \
+                     never in renders or exports, saved in the scene): add_picture stands the .png or .jpg at path \
+                     in the scene, facing the axis view the camera is in (or facing), as tall as the scene and just \
+                     behind it; list_pictures lists them with their settings; edit_picture changes the settings of \
+                     picture; delete_picture takes picture out of the scene, for good. add_picture and \
+                     edit_picture take facing, size, across, up, depth, opacity, flip, in_front and show.",
                 ),
                 "resolution": number("For remesh: voxels along the longest side, 4 to 4096 (past about 3000 a compact model makes more than the 80 million triangles allowed). Default: the app's setting."),
                 "smooth": number("For remesh: how much it irons out, 0 (off: the old surface copied exactly, sharpest and quickest) to 10. A little takes out jagged groove edges and the old mesh's facets after a step up in resolution; more softens the finest lines. Default: the app's setting (2 unless changed)."),
@@ -829,6 +836,16 @@ fn tools() -> Value {
                 "angle": number("For groups_by_angle: degrees, 1 to 180. Edges where the surface turns by more than this split the groups. Default: the card's setting (35)."),
                 "keep_mask": boolean("For group_masked: true leaves the mask as it is; false (the default) clears it."),
                 "on": boolean("For show_group_colours: true shows them, false hides them. Default true."),
+                "path": string("For add_picture: the full path of a .png or .jpg on this computer's own drives."),
+                "picture": json!({ "type": ["integer", "string"], "description": "For edit_picture and delete_picture: the picture's number in list_pictures (1 for the first) or its name." }),
+                "facing": choice(&["front", "back", "left", "right", "top", "bottom"], "For add_picture and edit_picture: the view that sees the picture straight on. add_picture fits it to the scene from there; edit_picture turns it, keeping across, up and depth."),
+                "size": number("For add_picture and edit_picture: how tall the picture stands, in the scene's units (as get_state gives positions). Its width follows from its image."),
+                "across": number("For add_picture and edit_picture: how far right of the scene's middle the picture's middle is, as its own view sees it, in the scene's units."),
+                "up": number("For add_picture and edit_picture: how far up the picture's middle is, in the scene's units."),
+                "depth": number("For add_picture and edit_picture: how far behind the scene's middle the picture stands, seen from its view, in the scene's units; negative brings it in front."),
+                "flip": boolean("For add_picture and edit_picture: mirror the image left to right."),
+                "in_front": boolean("For add_picture and edit_picture: draw the picture over the model, see-through by its opacity, to trace an outline; false lets the model hide it."),
+                "show": boolean("For add_picture and edit_picture: show the picture, or hide it (it stays in the scene)."),
             })),
             &["name"],
         ),

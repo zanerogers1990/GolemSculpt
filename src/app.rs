@@ -70,6 +70,7 @@ mod pose;
 mod print_check;
 pub(crate) mod project;
 mod recovery;
+mod references;
 mod remesh_job;
 mod selection;
 mod spheres;
@@ -212,6 +213,10 @@ pub struct Args {
     /// `no-materials`, `no-polypaint`, `card`, `custom`, `broken` (for
     /// visual checks; see app/paint_demo.rs).
     pub demo_paint: Option<String>,
+    /// A reference picture added by the routine under Add Picture..., with no
+    /// file box, after the camera is turned to the view named, or `play` to
+    /// work the pictures and print a line per check (see app/references.rs).
+    pub demo_references: Option<String>,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -763,6 +768,10 @@ impl Running {
             (camera.yaw, camera.pitch) = (yaw, pitch.clamp(-89.0, 89.0));
             camera.frame(running.doc.scene.bounds(&running.doc.mesh), aspect, false);
             running.sync_view();
+        }
+        // After the view, so a picture faces the view it was turned to.
+        if let Some(what) = running.args.demo_references.clone() {
+            running.references_demo(&what);
         }
         // Whatever the setup above selected or undid must not pulse in the
         // first frames (a screenshot is taken in them).
@@ -1612,6 +1621,7 @@ impl Running {
             Action::Frame => self.frame_view(),
             Action::Snap(yaw, pitch) => self.snap_view(yaw, pitch),
             Action::ToggleOrtho => self.toggle_ortho(),
+            Action::Lens(fov_y) => self.lens_to(fov_y),
             // The view gizmo's hand, magnifier and Home (app/view_moves.rs).
             Action::PanView(by) => self.pan_from_gizmo(Vec2::from_array(by)),
             Action::ZoomView(dy) => self.zoom_from_gizmo(dy),
@@ -1625,6 +1635,7 @@ impl Running {
             Action::Mirror(command) => self.mirror_command(command),
             Action::NewRig => self.spheres_new_rig(),
             Action::Deform(ask) => self.deform_act(ask),
+            Action::References(ask) => self.references_act(ask),
             // A new scene is in app/new_scene.rs.
             Action::NewScene => self.new_scene_action(),
             Action::NewSceneAs { save } => self.new_scene_as(save),
@@ -2149,6 +2160,7 @@ impl Running {
 
         self.spheres_frame();
         self.transform_frame();
+        self.references_frame();
         self.recording_before_draw();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let mut globals = self.globals();

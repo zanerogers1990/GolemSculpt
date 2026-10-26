@@ -16,7 +16,9 @@
 //! `--option` (`--screenshot`, the `--demo` family, `--size`...) is a scripted
 //! one: it neither reads nor writes the user's file, since a visual check
 //! must not depend on how the app was last left, and must not leave its own
-//! scripted brush settings behind for the person who uses the app next.
+//! scripted brush settings behind for the person who uses the app next. The
+//! one exception is `--monitor`, which a person puts on a shortcut to choose
+//! the screen (see `PERSONAL`).
 //! `SCULPT_SETTINGS_DIR` points a run at a folder of its own instead (tests
 //! and visual checks use it); a `--screenshot` run reads from there but still
 //! writes nothing.
@@ -139,7 +141,26 @@ fn scratch_in(given: Option<&Path>, temp: &Path, name: &str) -> PathBuf {
 /// Whether this run was started with any `--option`: a scripted one, which
 /// keeps out of the user's own folder (see the top of this file).
 pub fn scripted() -> bool {
-    std::env::args().skip(1).any(|arg| is_option(&arg))
+    scripted_by(std::env::args().skip(1))
+}
+
+/// Options a person starts the app with themselves, from a shortcut or
+/// `Sculpt.bat`, which only say where the window goes: the run stays theirs,
+/// with their settings, recovery copies and the rest. Each takes a value.
+const PERSONAL: &[&str] = &["--monitor"];
+
+/// [`scripted`], for the arguments `args`: any option but a [`PERSONAL`] one
+/// (whose value is passed over with it).
+fn scripted_by(args: impl IntoIterator<Item = String>) -> bool {
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if PERSONAL.contains(&arg.as_str()) {
+            args.next();
+        } else if is_option(&arg) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether an argument the program was started with is an option. Anything
@@ -736,6 +757,9 @@ pub struct Prefs {
     /// The brushes taken up lately, newest first, by name: the Brushes
     /// card's Recent row.
     pub recent_brushes: Vec<String>,
+    /// The lens last chosen in the Lens menu, as its angle of view in degrees
+    /// (from 2026-10-25; a file from before takes the default).
+    pub lens: f32,
 }
 
 impl Default for Prefs {
@@ -769,6 +793,7 @@ impl Default for Prefs {
             render_quality: opts.quality,
             pen_seen: false,
             recent_brushes: Vec::new(),
+            lens: opts.lens,
         }
     }
 }
@@ -822,6 +847,10 @@ impl Prefs {
 
     pub fn remesh_resolution(&self) -> f32 {
         fit(self.remesh_resolution, 4.0, crate::remesh::HIGHEST, crate::doc::Options::default().remesh_resolution).round()
+    }
+
+    pub fn lens(&self) -> f32 {
+        fit(self.lens, *crate::camera::FOV_RANGE.start(), *crate::camera::FOV_RANGE.end(), crate::camera::DEFAULT_FOV)
     }
 
     pub fn remesh_smooth(&self) -> f32 {
@@ -961,6 +990,32 @@ mod tests {
         // Nothing is left beside it from the write.
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(left, vec![std::ffi::OsString::from(FILE_NAME)]);
+    }
+
+    #[test]
+    fn choosing_the_monitor_leaves_a_run_the_persons_own_and_any_other_option_makes_it_scripted() {
+        let run = |args: &[&str]| scripted_by(args.iter().map(|a| a.to_string()));
+        assert!(!run(&[]));
+        assert!(!run(&["D:/Sculpts/head.sclp"]));
+        assert!(!run(&["--monitor", "2"]));
+        assert!(!run(&["--monitor", "2", "D:/Sculpts/head.sclp"]));
+        assert!(run(&["--monitor", "2", "--demo"]));
+        assert!(run(&["--screenshot", "out.png"]));
+    }
+
+    #[test]
+    fn the_lens_is_kept_and_one_out_of_range_or_missing_takes_the_default() {
+        let (home, _) = settings_in("lens");
+        let mut prefs = Prefs::default();
+        prefs.lens = crate::camera::fov_of_lens(85.0);
+        home.save(&prefs).unwrap();
+        assert_eq!(home.load().lens(), prefs.lens);
+        prefs.lens = 400.0;
+        assert_eq!(prefs.lens(), *crate::camera::FOV_RANGE.end());
+        prefs.lens = f32::NAN;
+        assert_eq!(prefs.lens(), crate::camera::DEFAULT_FOV);
+        // A file from before there was a lens.
+        assert_eq!(Prefs::parse("{}").lens(), crate::camera::DEFAULT_FOV);
     }
 
     #[test]

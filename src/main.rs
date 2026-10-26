@@ -30,6 +30,7 @@ mod project;
 mod quadremesh;
 mod recent;
 mod recovery;
+mod references;
 mod remesh;
 mod render;
 mod scene;
@@ -264,6 +265,9 @@ fn window_options(args: &[String]) -> app::Args {
             // A sphere painted with materials and colour: lit | matcap | no-materials | no-polypaint | card |
             // custom | broken; the Paint brush: play | brush | layers (see app/paint_demo.rs, app/paint_play.rs).
             "--demo-paint" => opts.demo_paint = it.next().cloned(),
+            // A reference picture added without the file box: <picture>[,front|back|left|right|top|bottom]
+            // [,ortho][,in-front][,<opacity %>][,orbit=<yaw>:<pitch>]; or play (worked and checked: see app/references.rs).
+            "--demo-references" => opts.demo_references = it.next().cloned(),
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

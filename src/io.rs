@@ -61,6 +61,7 @@ mod polygons;
 pub(crate) mod painted;
 mod ply;
 mod ply_read;
+mod references;
 mod tool_data;
 mod repair;
 #[cfg(test)]
@@ -679,6 +680,9 @@ pub fn place_imports(objects: &mut [RawMesh], first_half_size: Option<Vec3>) -> 
 //         then what `io/groups.rs` sets out: the group of every triangle.
 //   PNTL  after its mesh, if it has paint layers: the mesh's number (u32),
 //         then what `io/paint.rs` sets out.
+//   PICT  after the meshes, one per image the scene's reference pictures
+//         show: the image's number (u32), then the bytes of the image file
+//         it came from (see `io/references.rs`).
 //   INFO  last, once: everything else, as JSON (see `Details`). What a hosted
 //         tool keeps for an object (an array) is a field of that object's
 //         entry named by the tool's id: see `io/tool_data.rs`.
@@ -717,6 +721,7 @@ const LVLS: &[u8; 4] = b"LVLS";
 const LAYR: &[u8; 4] = b"LAYR";
 const GRPS: &[u8; 4] = b"GRPS";
 const PNTL: &[u8; 4] = b"PNTL";
+const PICT: &[u8; 4] = b"PICT";
 const INFO: &[u8; 4] = b"INFO";
 
 /// The format the files written today are in (see above).
@@ -870,6 +875,10 @@ pub mod slot {
     /// `mesh::paint::palette::ScenePaint`: the scene's material palette for
     /// painting, and whether painted colour and materials show.
     pub const PAINT: &str = "paint";
+    /// `references::Saved`, one for each reference picture: its name, the
+    /// number of its image among the file's `PICT` blocks, and its placement
+    /// (src/references.rs).
+    pub const REFERENCES: &str = "references";
 
     // Per object, under its row of the object list. `SYMMETRY` is written and
     // read by `scene/symmetry.rs` and `MIRROR_COPIES` by `scene/mirror.rs`.
@@ -915,6 +924,9 @@ pub struct Details {
     scene: Map<String, Value>,
     /// In the order of the object list. May be shorter than it.
     objects: Vec<Map<String, Value>>,
+    /// The image files the reference pictures show, too big for the JSON:
+    /// each is a block of its own (`io/references.rs`).
+    pictures: references::Pictures,
 }
 
 impl Details {
@@ -1267,13 +1279,18 @@ pub fn save_scene_with(
     crate::unity_import::refuse_to_overwrite(path)?;
     let info = details.document(objects, active);
     let mended = meshes.iter().map(|m| repair::damaged_points(m)).sum();
-    replace_file(path, |w| write_scene(w, meshes, &info))?;
+    replace_file(path, |w| write_scene(w, meshes, details.pictures(), &info))?;
     Ok(mended)
 }
 
-/// The bytes of a scene file: the magic, each mesh's blocks, then `info`,
-/// the JSON section.
-fn write_scene(w: &mut impl Write, meshes: &[&Mesh], info: &[u8]) -> std::io::Result<()> {
+/// The bytes of a scene file: the magic, each mesh's blocks, the reference
+/// pictures' images, then `info`, the JSON section.
+fn write_scene(
+    w: &mut impl Write,
+    meshes: &[&Mesh],
+    pictures: &[std::sync::Arc<[u8]>],
+    info: &[u8],
+) -> std::io::Result<()> {
     w.write_all(SCENE_MAGIC)?;
     for (number, mesh) in meshes.iter().enumerate() {
         let number = (number as u32).to_le_bytes();
@@ -1329,6 +1346,10 @@ fn write_scene(w: &mut impl Write, meshes: &[&Mesh], info: &[u8]) -> std::io::Re
             block(w, PNTL, paint::length(&stack))?;
             paint::write(w, u32::from_le_bytes(number), &stack)?;
         }
+    }
+    for (number, image) in pictures.iter().enumerate() {
+        block(w, PICT, references::length(image))?;
+        references::write(w, number as u32, image)?;
     }
     block(w, INFO, info.len())?;
     w.write_all(info)
@@ -1538,6 +1559,7 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
     let mut r = BufReader::with_capacity(1 << 16, file);
     let mut at = SCENE_MAGIC.len() as u64;
     let mut meshes: Vec<LoadedMesh> = Vec::new();
+    let mut pictures = Vec::new();
     let mut info = None;
     while at < total {
         let mut head = [0u8; 12];
@@ -1595,6 +1617,12 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
                 }
             }
             std::io::copy(&mut body, &mut std::io::sink()).map_err(|_| bad())?;
+        } else if tag == PICT {
+            // A reference picture's image (io/references.rs), through a
+            // counter too: one that does not read costs that picture alone.
+            let mut body = (&mut r).take(length);
+            pictures.push(references::read(&mut body, length));
+            std::io::copy(&mut body, &mut std::io::sink()).map_err(|_| bad())?;
         } else if tag == INFO {
             let mut bytes = vec![0u8; length as usize];
             r.read_exact(&mut bytes).map_err(|_| bad())?;
@@ -1623,7 +1651,8 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
     let active = root.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
     let active = active.clamp(0, objects.len() - 1);
     root.retain(|key, _| !SCENE_FIELDS.contains(&key.as_str()));
-    Ok(Loaded { meshes, objects, active, details: Details { scene: root, objects: kept } })
+    let details = Details { scene: root, objects: kept, pictures: references::placed(pictures) };
+    Ok(Loaded { meshes, objects, active, details })
 }
 
 /// Opens a native file of any version. A file from before scenes existed
@@ -2867,7 +2896,7 @@ f -3 -2 -1
         // old one's place (the power went, the app was killed): the old file
         // has not been touched.
         let info = Details::default().document(&[object("Block", 0, 0.0)], 0);
-        let waiting = write_beside(&path, |w| write_scene(w, &[&block], &info)).unwrap();
+        let waiting = write_beside(&path, |w| write_scene(w, &[&block], &[], &info)).unwrap();
         assert_eq!(waiting, beside);
         assert!(beside.is_file());
         assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -2884,7 +2913,7 @@ f -3 -2 -1
         assert!(!beside.exists());
 
         // A save that does finish replaces the old file, in one step.
-        let waiting = write_beside(&path, |w| write_scene(w, &[&block], &info)).unwrap();
+        let waiting = write_beside(&path, |w| write_scene(w, &[&block], &[], &info)).unwrap();
         commit(&waiting, &path).unwrap();
         assert!(!beside.exists());
         let back = load_scene(&path).unwrap();

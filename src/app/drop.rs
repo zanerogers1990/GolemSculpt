@@ -2,8 +2,9 @@
 //! `.sculpt` from the Unity app) is opened exactly as Open opens one: in place
 //! of the scene, asking first only when that would put unsaved work aside
 //! (`open_chosen`). A model (any of `io::MODEL_EXTENSIONS`) is added to the scene as Import
-//! adds it. Either is one undo step. Anything else is turned away with a line
-//! saying what can be dropped.
+//! adds it. Either is one undo step. A picture (`.png`, `.jpg`) becomes a
+//! reference picture, as Add Picture... in the Reference Images card makes
+//! one. Anything else is turned away with a line saying what can be dropped.
 //!
 //! The drop arrives as `Action::DropFile`, so it waits, as every command does,
 //! while a stroke or a gizmo drag holds the scene. While the file is still
@@ -21,6 +22,8 @@ pub(super) enum Dropped {
     Sculpt,
     /// Added to the scene.
     Model,
+    /// Stood in the scene as a reference picture (app/references.rs).
+    Picture,
     /// Not a file the app reads.
     Other,
 }
@@ -31,6 +34,7 @@ pub(super) fn kind(path: &Path) -> Dropped {
         "sclp" => Dropped::Sculpt,
         e if e == unity_import::EXTENSION => Dropped::Sculpt,
         e if crate::io::MODEL_EXTENSIONS.contains(&e) => Dropped::Model,
+        e if crate::references::EXTENSIONS.contains(&e) => Dropped::Picture,
         _ => Dropped::Other,
     }
 }
@@ -45,6 +49,7 @@ impl Running {
         self.toast(match kind(path) {
             Dropped::Sculpt => "Drop to Open",
             Dropped::Model => "Drop to Import",
+            Dropped::Picture => "Drop to Add as a Reference Picture",
             Dropped::Other => "Not a Sculpt or Model",
         });
     }
@@ -61,8 +66,12 @@ impl Running {
         match kind(&path) {
             Dropped::Sculpt => self.open_chosen(path),
             Dropped::Model => self.load(path, false),
+            Dropped::Picture => match self.add_reference(&path) {
+                Ok(said) => self.status(said, true),
+                Err(e) => self.status(e, false),
+            },
             Dropped::Other => self.status(
-                format!("{} is not a file GolemSculpt opens. Drop a sculpt (.sclp, .sculpt) or a model ({}).", name(&path), crate::io::model_types()),
+                format!("{} is not a file GolemSculpt opens. Drop a sculpt (.sclp, .sculpt), a model ({}) or a picture (.png, .jpg).", name(&path), crate::io::model_types()),
                 false,
             ),
         }
@@ -79,7 +88,9 @@ mod tests {
         assert_eq!(kind(Path::new("old.SCULPT")), Dropped::Sculpt);
         assert_eq!(kind(Path::new("print.STL")), Dropped::Model);
         assert_eq!(kind(Path::new("scan.obj")), Dropped::Model);
-        assert_eq!(kind(Path::new("photo.png")), Dropped::Other);
+        assert_eq!(kind(Path::new("photo.png")), Dropped::Picture);
+        assert_eq!(kind(Path::new("Side View.JPG")), Dropped::Picture);
+        assert_eq!(kind(Path::new("notes.txt")), Dropped::Other);
         assert_eq!(kind(Path::new("no extension")), Dropped::Other);
     }
 }

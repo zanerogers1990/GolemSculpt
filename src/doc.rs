@@ -54,6 +54,10 @@ pub struct Options {
     /// Subdivide only cuts faces up, moving nothing, instead of smoothing.
     /// Not kept between runs: smooth is what is nearly always wanted.
     pub subdivide_flat: bool,
+    /// The lens last chosen in the Lens menu, as its angle of view in
+    /// degrees: what a new scene and the next start are seen through. A
+    /// file opens with the lens it was saved with.
+    pub lens: f32,
     /// The object Project Detail takes detail from; `None` (or one that has
     /// gone) for the one overlapping the active object most (app/project.rs).
     /// Not kept between runs.
@@ -121,6 +125,7 @@ impl Default for Options {
             decimate_target: 200_000.0,
             decimate_preview: Default::default(),
             subdivide_flat: false,
+            lens: crate::camera::DEFAULT_FOV,
             new_shape_tris: 200_000.0,
             clean_view: false,
             folded: [false; 2],
@@ -475,6 +480,9 @@ pub enum Action {
     /// The Ortho / Persp button: switch between the two, keeping the model
     /// the size it is on screen (see app/turn.rs).
     ToggleOrtho,
+    /// The Lens menu: this angle of view, in degrees from top to bottom,
+    /// keeping the model the size it is on screen (see app/turn.rs).
+    Lens(f32),
     /// A drag on the view gizmo's hand, in pixels: pan the view.
     PanView([f32; 2]),
     /// A drag on the view gizmo's magnifier, pixels down: zoom the view.
@@ -507,4 +515,7 @@ pub enum Action {
     /// A command of the Deform card: Bend, Twist and the other deformers the
     /// gizmo drives (see app/deform.rs).
     Deform(crate::ui::deform::Ask),
+    /// A command of the Reference Images card: add a picture, or delete one
+    /// (see app/references.rs).
+    References(crate::references::Ask),
 }

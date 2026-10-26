@@ -34,7 +34,9 @@ impl Running {
         if bounds.is_empty() {
             return;
         }
-        let home = starting_view(bounds, aspect);
+        let mut home = starting_view(bounds, aspect);
+        // Framed for the lens in use.
+        home.set_lens(self.doc.camera.fov_y);
         let camera = &mut self.doc.camera;
         camera.ortho = false;
         camera.ortho_from_axis = false;

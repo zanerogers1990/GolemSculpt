@@ -69,7 +69,7 @@ sculpts at full strength and full size).
 | J | Keys tool on / off |
 | Z, Shift + Z (also Ctrl + Z, Ctrl + Y) | Undo, redo |
 | Ctrl + S, Ctrl + Shift + S, Ctrl + O | Save, save as, open |
-| (Drag a file onto the window) | A sculpt (.sclp, .sculpt) opens as Open opens one; a model (.obj, .stl, .ply, .fbx, .glb, .gltf) is imported |
+| (Drag a file onto the window) | A sculpt (.sclp, .sculpt) opens as Open opens one; a model (.obj, .stl, .ply, .fbx, .glb, .gltf) is imported; a picture (.png, .jpg) becomes a reference picture |
 | Ctrl + N | New scene (asks first if anything would be lost) |
 | Ctrl + Q | Quit (asks first if anything would be lost) |
 | Enter | Finish what the tool that is up is doing: fuse the tubes or muscles, accept an Extract, create a lathe's mesh, build the keys |
@@ -1396,6 +1396,17 @@ turns. Either switch keeps the model the size it is on screen: the button
 used to make it jump when a pan or zoom had left the camera's pivot in front
 of the model or behind it.
 
+**Lens**, under the Ortho / Persp button, is the lens the view is seen
+through, named in millimetres as a camera's lenses are (18, 24, 35, 50, 85
+and 135 mm, and a slider for anything between 12 and 135). Wide lenses bend
+the model toward you, as a camera held close does; 50 mm is about what the
+eye sees; 85 mm and up flatten it, the way portraits are taken, which shows
+the proportions of a face or figure truest. The model stays the size it is
+on screen: the camera steps back as the lens gets longer. Picking a lens
+goes into perspective, the only view a lens shows in. The view starts at
+about 21 mm. New scenes and the next start keep the lens last picked; a
+saved sculpt opens with the lens it was saved with.
+
 Down the left of the gizmo's three buttons are three round handles, so the
 view can be moved every way with the pen alone, no keyboard or middle
 button in reach: drag the **hand** (beside Persp) to pan, the model following
@@ -2173,9 +2184,12 @@ pair; after that they can be moved apart and the joints stay on them.
   `.sculpt` from the Unity app) opens as Open opens one, asking first only
   if unsaved work would be put aside; a model (`.obj`, `.stl`, `.ply`,
   `.fbx`, `.glb`, `.gltf`) is added to
-  the scene as Import adds it. While the file is over the window a toast says
-  which ("Drop to Open", "Drop to Import"). Anything else is turned away with
-  a line saying what can be dropped. Either is one undo step.
+  the scene as Import adds it; a picture (`.png`, `.jpg`) becomes a
+  reference picture, as Add Picture... makes one (see Reference images).
+  While the file is over the window a toast says which ("Drop to Open",
+  "Drop to Import", "Drop to Add as a Reference Picture"). Anything else is
+  turned away with a line saying what can be dropped. Opening and importing
+  are each one undo step.
 - **Import** adds a model (`.obj`, `.stl`, `.ply`, `.fbx`, `.glb` or `.gltf`) to the scene, centred, or the
   objects of another `.sclp` where they were saved, with their live arrays. An STL comes
   in at its real size (millimetres, Z up; one unit is 10 mm, so a 10 mm ball is
@@ -2750,6 +2764,53 @@ red dot marks its row, and the status line says which line of the file is
 wrong ("Custom material "Copper" did not compile (line 12: expected `;`)").
 The app never closes over one. **Reload Custom Materials** reads the folder
 again.
+
+## Reference images
+
+Photos or drawings of your subject can stand in the scene as flat pictures to
+sculpt against, as in ZBrush, Blender and Nomad: match the model's outline to
+the front photo in the front view and to the side photo in the side view. They
+are in the **Reference Images** card at the bottom of the Scene panel's
+Objects tab (closed until you open it).
+
+- **Add Picture...** takes a .png or a .jpg (or drop one onto the window
+  from Explorer). The new picture faces the view
+  you are in: turn to Front, Right, Top and so on with the view gizmo first
+  (else it faces the front). It comes in as tall as the model, its middle on
+  the model's, and just behind it, so you see the model against it. A
+  phone's photo is turned the way the phone was held, and one larger than
+  4096 pixels on its longest side is shown at that size (the file you chose
+  is kept as it was).
+- The list shows each picture small, with its eye to show or hide it. Tap a
+  picture to see its settings:
+  - **Facing**: Front, Back, Left, Right, Top or Bottom, the view that sees it
+    straight on and the right way round. **Fit to Model** sizes and places it
+    again for the model as it is now, from the view it faces.
+  - **Size** (how tall it stands; the width follows from the image), **Left
+    / Right** and **Up / Down** (slide it in its own plane), and **Depth**
+    (how far behind the middle of the scene it stands, seen from its view;
+    below nothing brings it in front). Lengths are in millimetres.
+  - **Opacity**, **Flip** (mirror it left to right, so one photo of a side
+    serves for both sides), **In Front** (drawn over the model, see-through,
+    for tracing an outline; ticking it on a solid picture brings it to 50%)
+    and **Show**.
+  - **Delete** asks first: the picture's image is kept in the scene and
+    nowhere else, and Undo does not bring it back.
+- A picture shows only from the side it faces, so the front photo never
+  stands between you and the model when you orbit round to the back. Behind
+  the model it is hidden wherever the model is in front of it.
+- Pictures are a view aid, not objects. Brushes go through them, and Frame,
+  Remesh, Join, the booleans, exports, Send to Blender, Render Picture, the
+  turntable loop, timelapses and the recent files' tiles leave them out.
+  Their colours are the photo's own, whatever the lighting and the Look.
+- They are saved in the `.sclp`, image and all (the photo file itself, a
+  second picture of the same photo costing nothing more), so the scene opens
+  with them on any computer; recovery copies and earlier versions carry them
+  too. Opening a sculpt replaces the scene's pictures with its own, and Undo
+  of the Open brings the old ones back; Import adds a sculpt's pictures to
+  the scene's. Adding, changing and deleting pictures are not undo steps,
+  like a symmetry setting, but Save and Exit know they are unsaved changes.
+  An older version of the app opens such a file without its pictures.
 
 ## Objects
 
@@ -3359,6 +3420,8 @@ sculpt.exe --screenshot out.png --demo-layers play          # works the Layers c
 sculpt.exe --screenshot out.png --demo-groups play          # works the Face Groups card, the click on the model, Stay in Group for each kind of brush, everything that rebuilds a mesh, levels, saving, a damaged file, OBJ and the bridge, and prints a line per check and some timings; or a picture: parts | figure | figure-wire | figure-flat | figure-lit | isolate | stay | stay-off | quads | card (add --demo-ui "float=Face Groups@370:60" to see the card)
 sculpt.exe --screenshot out.png --demo-deform play          # works the Deform card's deformers through the pointer, the keys and undo: Esc and Undo to the bit, handles dragged, a mirrored model warned of, a hidden layer refusing, the bridge, three objects as one; prints a line per check; or a picture: bend | arc | twist | taper | flatten | inflate | stretch | lattice | masked | three (add --demo-ui "size=0.75,float=Deform@1240:40" to see the card)
 sculpt.exe --bench-deform 1000000 5000000 10000000         # one preview frame of each deformer (the pass over the mesh, its normals and the ranges to send), best of six, at each size
+sculpt.exe --screenshot out.png --demo-references photo.jpg,front,ortho   # a reference picture added by the routine under Add Picture..., with no file box, after the camera turns to that view (front | back | left | right | top | bottom; ortho for orthographic); in-front and a number (opacity in percent) set those, orbit=35:-15 then turns round the model in perspective (orbit=180:0 looks from behind, where the picture is not drawn); add --demo-ui "float=Reference Images@560:20" to see the card
+sculpt.exe --screenshot out.png --demo-references play     # works the pictures through the facing a view gives, fitting, the unsaved mark, Save, Delete, Open, Undo and Redo of the Open, Import and the bridge's commands, and prints a line per check
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --nocapture                 # quad remesh on six closed models at seven sizes, a line a run: every result must be closed
@@ -3509,6 +3572,16 @@ painted on; it answers with the layers. `pick_paint` (with `x` and `y`) is the
 eyedropper, and `mask_by_colour`, `mask_by_material` and `mask_by_layer` are
 the Masking card's. `get_state` gives each object's `paint_layers`, top
 first, and the brush's `paint` settings.
+
+And reference pictures (see Reference images): `add_picture` stands the
+`.png` or `.jpg` at `path` (a full path, held to the same rule as
+`open_file`; the bridge never opens a file box) in the scene, facing the axis
+view the camera is in or the `facing` given, fitted to the scene;
+`list_pictures` gives each with its settings; `edit_picture` changes those of
+`picture` (its number in the list, 1 for the first, or its name); and
+`delete_picture` takes it out of the scene, for good. `add_picture` and
+`edit_picture` take `facing`, `size`, `across`, `up` and `depth` (in the
+scene's units), `opacity` (percent), `flip`, `in_front` and `show`.
 
 There are two halves. The app listens on `127.0.0.1:47823` (`src/app/bridge.rs`;
 this machine only, and only the first copy of the app if several are open).
