@@ -705,3 +705,13 @@ fn raycast_never_leaks_through_the_surface() {
     }
     assert_eq!(leaks, 0, "{leaks} rays passed through the front of the sphere");
 }
+
+#[test]
+fn the_monitor_to_open_on_is_read_with_its_number_and_the_file_after_it_still_opens() {
+    let read = |args: &[&str]| crate::window_options(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+    assert_eq!(read(&["--monitor", "2"]).monitor, Some(2));
+    let both = read(&["--monitor", "2", "D:/Sculpts/head.sclp"]);
+    assert_eq!((both.monitor, both.open), (Some(2), Some(std::path::PathBuf::from("D:/Sculpts/head.sclp"))));
+    assert_eq!(read(&["--monitor", "two"]).monitor, None, "a monitor that is not a number is none");
+    assert_eq!(read(&[]).monitor, None);
+}

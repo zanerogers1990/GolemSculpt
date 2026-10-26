@@ -214,6 +214,8 @@ fn window_options(args: &[String]) -> app::Args {
                     Some((w.parse().ok()?, h.parse().ok()?))
                 });
             }
+            // The monitor to open on, as Windows numbers them: --monitor 2.
+            "--monitor" => opts.monitor = it.next().and_then(|n| n.parse().ok()),
             "--demo" => opts.demo = true,
             "--demo-scene" => opts.demo_scene = true,
             // The demo scene with three of its objects selected.

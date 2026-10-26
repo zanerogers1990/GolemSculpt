@@ -9,6 +9,12 @@ Double-click `Sculpt.bat`. The first run builds the app (a minute or two);
 after that it starts instantly. The program itself is
 `target\release\sculpt.exe`.
 
+To open on a particular monitor, give its number as Windows numbers them in
+Display settings: `sculpt.exe --monitor 2` (or `Sculpt.bat --monitor 2`, or
+add it to a shortcut's Target). Without it the window opens where Windows
+puts it, usually the main monitor. Test builds made while working on the app
+open on whichever monitor the Claude window is on.
+
 For pen pressure, tick **Enable Windows Ink** in the Huion driver. The
 **Stroke** card (Brush tab) shows whether pressure is arriving: a live bar
 while the pen is down, and a line saying so if none has been seen since the

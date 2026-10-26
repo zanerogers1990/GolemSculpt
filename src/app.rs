@@ -102,6 +102,9 @@ pub struct Args {
     pub screenshot: Option<PathBuf>,
     pub size: Option<(u32, u32)>,
     /// Sculpt a scripted set of strokes first (for visual checks).
+    /// The monitor to open on, as Windows numbers them (1 is DISPLAY1); the
+    /// one Windows picks when not given (see `monitor_numbered`).
+    pub monitor: Option<u32>,
     pub demo: bool,
     /// Voxel-remesh at this resolution after the demo strokes.
     pub remesh: Option<u32>,
@@ -493,6 +496,10 @@ impl Running {
                 .with_maximized(args.screenshot.is_none()),
         };
         // A screenshot run opens for a frame while the user may be typing
+        // Opened at the top left of the monitor asked for, it maximises there.
+        if let Some(monitor) = args.monitor.and_then(|n| monitor_numbered(event_loop, n)) {
+            attrs = attrs.with_position(monitor.position());
+        }
         // somewhere else: it must not take the keyboard from them.
         if args.screenshot.is_some() || args.records() || recovery::checking() {
             attrs = attrs.with_active(false);
@@ -2396,6 +2403,16 @@ fn install(scene: &mut Scene, slot: &mut Mesh, saved: io::SavedScene) -> io::Det
 
 /// Windows shows a "press and hold for right-click" ring under a resting pen
 /// and treats quick strokes as flick gestures. Both get in the way of
+/// Monitor `number` as Windows numbers them in Display settings: the one
+/// named `\\.\DISPLAY<number>`, or elsewhere the `number`th the system
+/// lists. `None` if there is no such monitor, and the window opens where the
+/// system puts it.
+fn monitor_numbered(event_loop: &ActiveEventLoop, number: u32) -> Option<winit::monitor::MonitorHandle> {
+    let named = format!("DISPLAY{number}");
+    let by_name = event_loop.available_monitors().find(|m| m.name().is_some_and(|name| name.ends_with(&named)));
+    by_name.or_else(|| event_loop.available_monitors().nth((number as usize).checked_sub(1)?))
+}
+
 /// sculpting, so they are switched off for this window.
 #[cfg(windows)]
 fn disable_pen_gestures(window: &Window) {
