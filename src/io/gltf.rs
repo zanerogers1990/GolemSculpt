@@ -18,8 +18,11 @@
 //! its one object. Triangles, strips and fans are read; points and lines have
 //! no surface and are left out. Beside the points, the first vertex colours
 //! (`COLOR_0`) are read. glTF keeps them as linear light and the paint here is
-//! sRGB, so they are converted. Textures, materials, cameras, lights and
-//! animations are not read.
+//! sRGB, so they are converted. So are the first UVs (`TEXCOORD_0`, floats or
+//! normalized bytes or shorts), whose V runs down the picture where the app's
+//! (as OBJ's and FBX's) runs up, so each is read as (u, 1 - v); a primitive
+//! without them has none on its corners (see `polygons.rs`). Textures,
+//! materials, cameras, lights and animations are not read.
 //!
 //! A skinned mesh is read as stored, in its bind pose, under its node's own
 //! placement: the bones are not applied. Morph targets are not applied either.
@@ -38,7 +41,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
-use glam::{Mat3, Mat4, Quat, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 use rayon::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
@@ -386,6 +389,12 @@ impl Source<'_> {
         }
     }
 
+    /// Element `n` of a UV accessor, turned over to V up.
+    fn uv(&self, n: usize) -> Vec2 {
+        let (at, size) = (n * self.stride, self.component.size());
+        Vec2::new(self.number(at), 1.0 - self.number(at + size))
+    }
+
     /// Element `n` of a colour accessor, as sRGB bytes.
     fn colour(&self, n: usize) -> Rgba8 {
         let (at, size) = (n * self.stride, self.component.size());
@@ -526,6 +535,8 @@ fn object(root: &Root, buffers: &mut Buffers, name: String, mesh: &MeshDef, worl
     let mut positions: Vec<Vec3> = Vec::new();
     let mut colours: Vec<Rgba8> = Vec::new();
     let mut any_colour = false;
+    // Each point's UV, once some primitive has given UVs; none (NaN) on the points of those that have not.
+    let mut uvs: Vec<Vec2> = Vec::new();
     let mut corners: Vec<u32> = Vec::new();
 
     for primitive in &mesh.primitives {
@@ -546,6 +557,10 @@ fn object(root: &Root, buffers: &mut Buffers, name: String, mesh: &MeshDef, worl
         if let Some(c) = at_colours {
             prepare(root, buffers, c)?;
         }
+        // UVs that cannot be read (sparse, compressed, their data missing) are
+        // passed over, as UVs of a form not expected are below: the model is
+        // whole without them, and opened before they were read at all.
+        let at_uvs = primitive.attributes.get("TEXCOORD_0").copied().filter(|&t| prepare(root, buffers, t).is_ok());
 
         let points = source(root, buffers, at_points)?;
         if points.columns != 3 || points.component == Component::U32 {
@@ -574,6 +589,16 @@ fn object(root: &Root, buffers: &mut Buffers, name: String, mesh: &MeshDef, worl
             fill(&mut colours[base..], |i| c.colour(i));
         } else if any_colour {
             colours.resize(base + n, Rgba8([255; 4]));
+        }
+
+        let texcoords = at_uvs.and_then(|t| source(root, buffers, t).ok()).filter(|t| {
+            t.columns == 2 && t.count >= n && matches!(t.component, Component::F32 | Component::U8 | Component::U16)
+        });
+        if let Some(t) = texcoords {
+            // Bytes and shorts are always normalized, as the format has it.
+            let t = Source { normalized: true, ..t };
+            uvs.resize(base + n, Vec2::NAN);
+            fill(&mut uvs[base..], |i| t.uv(i));
         }
 
         let listed = match primitive.indices {
@@ -618,6 +643,11 @@ fn object(root: &Root, buffers: &mut Buffers, name: String, mesh: &MeshDef, worl
     let mut faces = Faces::default();
     if !corners.is_empty() {
         faces.start = (0..=corners.len() as u32 / 3).map(|t| t * 3).collect();
+        if !uvs.is_empty() {
+            // Each corner the UV of its point; a point past the last that had one has none.
+            uvs.resize(positions.len(), Vec2::NAN);
+            faces.uvs = corners.par_iter().with_min_len(4096).map(|&c| uvs[c as usize]).collect();
+        }
         faces.corners = corners;
     }
     Ok(raw_mesh(name, positions, &faces, true, if any_colour { colours } else { Vec::new() }))

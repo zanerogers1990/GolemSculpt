@@ -9,8 +9,13 @@
 //! its triangles has to go (a corner that is not a number, two corners at one
 //! place) the whole polygon goes, so the polygons and the triangles always
 //! describe the same surface.
+//!
+//! UVs come with the faces, one for each corner (`Faces::uvs`), and go to
+//! the triangles with the corners they belong to; the weld, which joins
+//! vertices, leaves them as they are, so a seam stays a seam in the UVs while
+//! the surface is one piece (see `mesh/uvs.rs`).
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 
 use super::{RawMesh, sound_triangle, weld_exact_mapped};
 use crate::mesh::Polys;
@@ -25,9 +30,61 @@ pub(super) struct Faces {
     pub start: Vec<u32>,
     pub corners: Vec<u32>,
     pub groups: Vec<u16>,
+    /// The UV of each corner, as `corners`, once the file has given any
+    /// (empty before that, and for a file without UVs); a corner the file
+    /// gave none for is `Vec2::NAN`.
+    pub uvs: Vec<Vec2>,
 }
 
 impl Faces {
+    /// [`Self::push`] with the UV of each corner, if the file gave them.
+    pub fn push_uvs(&mut self, corners: &[u32], group: Option<u16>, uvs: Option<&[Vec2]>) {
+        if corners.len() < 3 {
+            return;
+        }
+        match uvs.filter(|uvs| uvs.len() == corners.len()) {
+            Some(uvs) => {
+                // The polygons before this one had none.
+                self.uvs.resize(self.corners.len(), Vec2::NAN);
+                self.uvs.extend_from_slice(uvs);
+            }
+            None if !self.uvs.is_empty() => self.uvs.resize(self.corners.len() + corners.len(), Vec2::NAN),
+            None => {}
+        }
+        self.push(corners, group);
+    }
+
+    /// The UVs of polygon `f`'s corners, if the file has given any UVs.
+    pub fn face_uvs(&self, f: usize) -> Option<&[Vec2]> {
+        (self.uvs.len() == self.corners.len()).then(|| &self.uvs[self.start[f] as usize..self.start[f + 1] as usize])
+    }
+
+    /// The UVs of the triangles the polygons `kept` are cut into, three to a
+    /// triangle, as `raw_mesh` cuts them; a corner given none is at (0, 0).
+    /// Empty when the file gave none for these polygons, or one and the same
+    /// UV for every corner, which says nothing (what a program writes that
+    /// must write some).
+    fn fan_uvs(&self, kept: &[usize]) -> Vec<Vec2> {
+        if self.uvs.len() != self.corners.len() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for &f in kept {
+            let uv = &self.uvs[self.start[f] as usize..self.start[f + 1] as usize];
+            for k in 1..uv.len() - 1 {
+                out.extend_from_slice(&[uv[0], uv[k], uv[k + 1]]);
+            }
+        }
+        if out.iter().all(|uv| uv.x.is_nan()) {
+            return Vec::new();
+        }
+        out.iter_mut().filter(|uv| uv.x.is_nan() || uv.y.is_nan()).for_each(|uv| *uv = Vec2::ZERO);
+        if out.iter().all(|uv| *uv == out[0]) {
+            return Vec::new();
+        }
+        out
+    }
+
     /// Adds one polygon. Corners past the vertex count are the caller's to
     /// leave out; a polygon of fewer than three is not added.
     pub fn push(&mut self, corners: &[u32], group: Option<u16>) {
@@ -39,6 +96,10 @@ impl Faces {
         }
         self.corners.extend_from_slice(corners);
         self.start.push(self.corners.len() as u32);
+        if !self.uvs.is_empty() {
+            // A polygon added without UVs, after others with them.
+            self.uvs.resize(self.corners.len(), Vec2::NAN);
+        }
         if let Some(group) = group {
             self.groups.push(group);
         }
@@ -124,7 +185,8 @@ pub(super) fn raw_mesh(name: String, positions: Vec<Vec3>, faces: &Faces, real_s
             groups.clear();
         }
     }
-    RawMesh { name, positions: out, indices, real_size, groups, colours: out_colours, polys }
+    let uvs = faces.fan_uvs(&kept_faces);
+    RawMesh { name, positions: out, indices, real_size, groups, colours: out_colours, polys, uvs }
 }
 
 #[cfg(test)]
@@ -199,5 +261,37 @@ mod tests {
         let raw = raw_mesh(String::new(), positions, &faces, false, colours);
         // Vertex 4 welded onto vertex 1 and 7 onto 2: each keeps the first colour of its place.
         assert_eq!(raw.colours.iter().map(|c| c.0[0]).collect::<Vec<_>>(), vec![0, 1, 2, 3, 5, 6]);
+    }
+
+    #[test]
+    fn uvs_follow_the_fan_cut_and_the_seam_keeps_both_sides() {
+        let (positions, _) = square_pair();
+        let uv = |u: f32, v: f32| Vec2::new(u, v);
+        let mut faces = Faces::default();
+        // The left quad has no UVs given, the right one does; a broken quad is
+        // left out, and its UVs with it.
+        faces.push_uvs(&[0, 1, 2, 3], None, None);
+        faces.push_uvs(&[4, 5, 5, 6], None, Some(&[uv(9.0, 9.0); 4]));
+        let right = [uv(0.5, 0.0), uv(1.0, 0.0), uv(1.0, 1.0), uv(0.5, 1.0)];
+        faces.push_uvs(&[4, 5, 6, 7], None, Some(&right));
+        let raw = raw_mesh(String::new(), positions, &faces, false, Vec::new());
+        assert_eq!(raw.positions.len(), 6, "the seam is welded");
+        assert_eq!(raw.uvs.len(), raw.indices.len(), "one UV to a corner");
+        // The left quad's corners, given none, are at (0, 0); the right one's fan from its first corner.
+        assert_eq!(raw.uvs[..6], [Vec2::ZERO; 6]);
+        assert_eq!(raw.uvs[6..], [right[0], right[1], right[2], right[0], right[2], right[3]]);
+        // The shared edge's vertices are one vertex each, with a UV on each side.
+        assert_eq!(raw.indices[1], raw.indices[6]);
+        assert_ne!(raw.uvs[1], raw.uvs[6]);
+    }
+
+    #[test]
+    fn uvs_that_say_nothing_are_no_uvs() {
+        let (positions, faces) = square_pair();
+        assert!(raw_mesh(String::new(), positions.clone(), &faces, false, Vec::new()).uvs.is_empty(), "none given");
+        let mut same = Faces::default();
+        same.push_uvs(&[0, 1, 2, 3], None, Some(&[Vec2::ZERO; 4]));
+        same.push_uvs(&[4, 5, 6, 7], None, Some(&[Vec2::ZERO; 4]));
+        assert!(raw_mesh(String::new(), positions, &same, false, Vec::new()).uvs.is_empty(), "all (0, 0)");
     }
 }

@@ -461,6 +461,48 @@ fn colours_are_read_with_alpha_as_cover_and_a_layer_that_says_nothing_is_no_pain
     assert_eq!(coloured(vec![0.0, 0.0, 0.0, 1.0], vec![0; 4]).colours, [Rgba8([0, 0, 0, 255]); 4]);
 }
 
+#[test]
+fn uvs_are_read_per_corner_or_per_point_straight_or_through_an_index() {
+    let square: [[f64; 3]; 4] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+    let read = |mapping: &str, reference: &str, uv: Vec<f64>, index: Option<Vec<i32>>, mirrored: bool| {
+        let mut mesh = geometry(20, "Square", &square, &[&[0, 1, 2, 3]]);
+        let mut layer = vec![
+            n("MappingInformationType", vec![s(mapping)], Vec::new()),
+            n("ReferenceInformationType", vec![s(reference)], Vec::new()),
+            n("UV", vec![V::Doubles(uv)], Vec::new()),
+        ];
+        layer.extend(index.map(|index| n("UVIndex", vec![V::Ints(index)], Vec::new())));
+        mesh.children.push(n("LayerElementUV", vec![V::I(0)], layer));
+        let scale = if mirrored { -1.0 } else { 1.0 };
+        let objects = vec![model(10, "Square", vec![p3("Lcl Scaling", [scale, 1.0, 1.0])]), mesh];
+        parse(&file(7400, false, &scene(y_up(), objects, vec![link(10, 0), link(20, 10)]))).unwrap().remove(0)
+    };
+    let uv = |u: f32, v: f32| Vec2::new(u, v);
+    let corners = [uv(0.0, 0.0), uv(0.5, 0.0), uv(0.5, 0.5), uv(0.0, 0.5)];
+    // The quad is cut 0 1 2, 0 2 3.
+    let fan = |c: [Vec2; 4]| vec![c[0], c[1], c[2], c[0], c[2], c[3]];
+
+    let table = vec![0.0, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5];
+    let raw = read("ByPolygonVertex", "IndexToDirect", table.clone(), Some(vec![0, 1, 2, 3]), false);
+    assert_eq!(raw.uvs, fan(corners));
+    assert!(raw.polys.is_some());
+    let raw = read("ByPolygonVertex", "Direct", table.clone(), None, false);
+    assert_eq!(raw.uvs, fan(corners));
+    // Per point: each corner takes its point's; here point 2 and 3 are given in turned order.
+    let raw = read("ByVertice", "IndexToDirect", table.clone(), Some(vec![0, 1, 3, 2]), false);
+    assert_eq!(raw.uvs, fan([corners[0], corners[1], corners[3], corners[2]]));
+    // An index of -1 or past the list gives that corner none, at (0, 0).
+    let raw = read("ByPolygonVertex", "IndexToDirect", table.clone(), Some(vec![-1, 1, 2, 9]), false);
+    assert_eq!(raw.uvs, fan([Vec2::ZERO, corners[1], corners[2], Vec2::ZERO]));
+    // A mirroring place turns the polygon round, and its corners' UVs with it.
+    let raw = read("ByPolygonVertex", "IndexToDirect", table.clone(), Some(vec![0, 1, 2, 3]), true);
+    assert_eq!(raw.uvs, fan([corners[3], corners[2], corners[1], corners[0]]));
+    // A kind of mapping not read, or an index list that is missing, is no UVs; the model is whole.
+    assert!(read("ByPolygon", "Direct", table.clone(), None, false).uvs.is_empty());
+    let raw = read("ByPolygonVertex", "IndexToDirect", table, None, false);
+    assert!(raw.uvs.is_empty() && raw.indices.len() == 6);
+}
+
 // ---------------------------------------------------------------- files it turns away
 
 #[test]

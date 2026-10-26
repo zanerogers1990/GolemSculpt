@@ -15,6 +15,7 @@ mod normals_tests;
 #[allow(dead_code, unused_imports)]
 pub mod paint;
 pub mod primitives;
+pub mod uvs;
 pub mod visibility;
 
 #[cfg(test)]
@@ -111,6 +112,10 @@ pub struct Mesh {
 
     /// The mesh's paint layers, when it has any (see paint.rs).
     pub paint: Option<Box<paint::Paint>>,
+
+    /// The UV of every triangle corner, in the order of `indices`; empty
+    /// while the mesh has none (see uvs.rs).
+    uvs: Vec<glam::Vec2>,
 }
 
 /// Polygon faces over a mesh's own vertices: face `f`'s corners are
@@ -386,6 +391,7 @@ impl Mesh {
             layer_ride: layers::Ride::default(),
             groups: groups::Groups::default(),
             paint: None,
+            uvs: Vec::new(),
         }
     }
 
@@ -1360,5 +1366,6 @@ impl Mesh {
             + self.layers.as_ref().map_or(0, |layers| layers.bytes())
             + self.groups.bytes()
             + self.paint.as_ref().map_or(0, |paint| paint.bytes())
+            + self.uvs.len() * 8
     }
 }

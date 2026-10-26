@@ -64,6 +64,7 @@ mod ply_read;
 mod references;
 mod tool_data;
 mod repair;
+mod uvs;
 #[cfg(test)]
 mod damage_tests;
 
@@ -105,6 +106,10 @@ pub struct RawMesh {
     /// `positions`; `indices` are each cut as a fan from its first corner
     /// (`io/polygons.rs`). `None` for a model of triangles.
     pub polys: Option<Polys>,
+    /// The UV of each triangle corner, as `indices`, where the file gave UVs
+    /// (an OBJ's `vt`, an FBX's `LayerElementUV`, a glTF's `TEXCOORD_0`: see
+    /// `mesh/uvs.rs`); empty otherwise.
+    pub uvs: Vec<glam::Vec2>,
 }
 
 /// The model file types Import reads, for the file dialog and drag and drop.
@@ -156,8 +161,15 @@ pub fn model_types() -> String {
 
 impl RawMesh {
     /// Adds `other` to this model, as one mesh. Polygons are kept only if
-    /// both had them, groups only if both had them, and colours likewise.
+    /// both had them, groups only if both had them, and colours and UVs
+    /// likewise.
     fn join(&mut self, other: RawMesh) {
+        let has_uvs = |raw: &RawMesh| !raw.uvs.is_empty() && raw.uvs.len() == raw.indices.len();
+        if has_uvs(self) && has_uvs(&other) {
+            self.uvs.extend_from_slice(&other.uvs);
+        } else {
+            self.uvs.clear();
+        }
         let base = self.positions.len() as u32;
         let (tris, other_tris) = (self.indices.len() / 3, other.indices.len() / 3);
         self.polys = match (self.polys.take(), other.polys) {
@@ -189,7 +201,7 @@ impl RawMesh {
 
 /// An OBJ: an object for each `o` line (faces before the first are an object
 /// of their own, named by nothing), its faces kept as the polygons they are,
-/// and its `g` groups as face groups.
+/// its `g` groups as face groups, and its `vt` lines as UVs (`io/uvs.rs`).
 fn parse_obj(bytes: &[u8]) -> Result<Vec<RawMesh>> {
     let text = String::from_utf8_lossy(bytes);
     let mut positions: Vec<Vec3> = Vec::new();
@@ -199,6 +211,7 @@ fn parse_obj(bytes: &[u8]) -> Result<Vec<RawMesh>> {
     let mut face: Vec<u32> = Vec::new();
     let mut named = groups::ObjGroups::default();
     let mut colours = painted::ObjColours::default();
+    let mut uvs = uvs::ObjUvs::default();
     for line in text.lines() {
         let mut parts = line.split_ascii_whitespace();
         match parts.next() {
@@ -220,20 +233,24 @@ fn parse_obj(bytes: &[u8]) -> Result<Vec<RawMesh>> {
                 // `v x y z r g b`: the vertex's colour, which many programs write.
                 colours.vertex(parts);
             }
+            Some("vt") => uvs.vt(parts),
             Some("f") => {
                 face.clear();
+                uvs.begin();
                 for token in parts {
                     // "v", "v/vt", "v//vn" or "v/vt/vn"; negative is relative.
-                    let Some(Ok(i)) = token.split('/').next().map(str::parse::<i64>) else {
+                    let mut fields = token.split('/');
+                    let Some(Ok(i)) = fields.next().map(str::parse::<i64>) else {
                         continue;
                     };
                     let index = if i < 0 { positions.len() as i64 + i } else { i - 1 };
                     if index >= 0 && (index as usize) < positions.len() {
                         face.push(index as u32);
+                        uvs.corner(fields.next());
                     }
                 }
                 if face.len() >= 3 {
-                    faces.push(&face, None);
+                    faces.push_uvs(&face, None, uvs.face());
                     named.triangle();
                 }
             }
@@ -259,7 +276,7 @@ fn parse_obj(bytes: &[u8]) -> Result<Vec<RawMesh>> {
                     used[c as usize] = 0;
                     corners.push(c);
                 }
-                own.push(&corners, groups.get(f).copied());
+                own.push_uvs(&corners, groups.get(f).copied(), faces.face_uvs(f));
             }
             let mut points = Vec::new();
             let mut tints = Vec::new();
@@ -680,6 +697,9 @@ pub fn place_imports(objects: &mut [RawMesh], first_half_size: Option<Vec3>) -> 
 //         then what `io/groups.rs` sets out: the group of every triangle.
 //   PNTL  after its mesh, if it has paint layers: the mesh's number (u32),
 //         then what `io/paint.rs` sets out.
+//   UVCO  after its mesh, if it has UVs: the mesh's number (u32), the
+//         corner count (u64), then a UV (two f32) for every triangle corner
+//         (see `io/uvs.rs`).
 //   PICT  after the meshes, one per image the scene's reference pictures
 //         show: the image's number (u32), then the bytes of the image file
 //         it came from (see `io/references.rs`).
@@ -699,11 +719,12 @@ pub fn place_imports(objects: &mut [RawMesh], first_half_size: Option<Vec3>) -> 
 // to grow) are still read, never written.
 //
 // The JSON section's `format` says which additions the writer knew of
-// (`FORMAT`): 5 is paint. Nothing reads it to decide anything, since every
-// addition is a block or a field an older reader steps over; it is there for
-// a person, or a later version, wondering what wrote a file. The magic stays
-// "SCLP0004": a new magic would make every older app refuse a file it can
-// open perfectly well, model and all, without the parts it does not know.
+// (`FORMAT`): 5 is paint, 6 is UVs. Nothing reads it to decide anything,
+// since every addition is a block or a field an older reader steps over; it
+// is there for a person, or a later version, wondering what wrote a file.
+// The magic stays "SCLP0004": a new magic would make every older app refuse
+// a file it can open perfectly well, model and all, without the parts it
+// does not know.
 
 const NATIVE_MAGIC: &[u8; 8] = b"SCLP0001";
 /// Scenes from before objects could be turned or scaled.
@@ -721,11 +742,12 @@ const LVLS: &[u8; 4] = b"LVLS";
 const LAYR: &[u8; 4] = b"LAYR";
 const GRPS: &[u8; 4] = b"GRPS";
 const PNTL: &[u8; 4] = b"PNTL";
+const UVCO: &[u8; 4] = b"UVCO";
 const PICT: &[u8; 4] = b"PICT";
 const INFO: &[u8; 4] = b"INFO";
 
 /// The format the files written today are in (see above).
-pub const FORMAT: u32 = 5;
+pub const FORMAT: u32 = 6;
 
 // ---- writing a file without harming the one already there
 
@@ -1346,6 +1368,10 @@ fn write_scene(
             block(w, PNTL, paint::length(&stack))?;
             paint::write(w, u32::from_le_bytes(number), &stack)?;
         }
+        if mesh.has_uvs() {
+            block(w, UVCO, uvs::length(mesh))?;
+            uvs::write(w, u32::from_le_bytes(number), mesh)?;
+        }
     }
     for (number, image) in pictures.iter().enumerate() {
         block(w, PICT, references::length(image))?;
@@ -1373,9 +1399,11 @@ struct LoadedMesh {
     groups: Option<groups::SavedGroups>,
     /// The mesh's paint layers, if it was saved with any.
     paint: Option<crate::mesh::paint::PaintStack>,
-    /// Whether the file had levels, layers, face groups, and paint, for this
-    /// mesh that could not be read.
-    lost: [bool; 4],
+    /// The UV of each corner of `indices`, if it was saved with UVs.
+    uvs: Option<Vec<glam::Vec2>>,
+    /// Whether the file had levels, layers, face groups, paint, and UVs, for
+    /// this mesh that could not be read.
+    lost: [bool; 5],
 }
 
 impl LoadedMesh {
@@ -1389,8 +1417,8 @@ impl LoadedMesh {
     }
 
     /// [`Self::build`], also saying whether the mesh's levels, its layers,
-    /// its face groups and its paint were lost on the way.
-    fn build_noting(mut self) -> (Mesh, usize, usize, [bool; 4]) {
+    /// its face groups, its paint and its UVs were lost on the way.
+    fn build_noting(mut self) -> (Mesh, usize, usize, [bool; 5]) {
         let mut no_mask = Vec::new();
         let repaired = repair::repair_points(
             &mut self.positions,
@@ -1398,7 +1426,8 @@ impl LoadedMesh {
             self.mask.as_deref_mut().unwrap_or(&mut no_mask),
         );
         let left_out = stray_triangles(&self.indices, self.positions.len());
-        if self.levels.is_some() || self.layers.is_some() || self.groups.is_some() || self.paint.is_some() {
+        let more = self.paint.is_some() || self.uvs.is_some();
+        if self.levels.is_some() || self.layers.is_some() || self.groups.is_some() || more {
             let (mesh, lost) = levels::build(self);
             return (mesh, repaired, left_out, lost);
         }
@@ -1465,7 +1494,7 @@ impl Loaded {
         let repaired = built.iter().map(|(_, points, ..)| points).sum();
         let left_out = built.iter().map(|(_, _, triangles, _)| triangles).sum();
         let count = |which: usize| built.iter().filter(|(.., lost)| lost[which]).count();
-        let lost = Lost { levels: count(0), layers: count(1), groups: count(2), paint: count(3) };
+        let lost = Lost { levels: count(0), layers: count(1), groups: count(2), paint: count(3), uvs: count(4) };
         let meshes = built.into_iter().map(|(mesh, ..)| mesh).collect();
         let (objects, active, details) = (self.objects, self.active, self.details);
         SavedScene { meshes, objects, active, details, repaired, left_out, lost }
@@ -1504,8 +1533,8 @@ fn read_mesh(r: &mut impl Read, length: u64) -> Option<LoadedMesh> {
     }
     let positions = read_array::<Vec3>(r, verts as usize).ok()?;
     let indices = read_array::<u32>(r, indices as usize).ok()?;
-    let (levels, layers, groups, paint, lost) = (None, None, None, None, [false; 4]);
-    Some(LoadedMesh { positions, indices, mask: None, polys: None, hidden: None, levels, layers, groups, paint, lost })
+    let (levels, layers, groups, paint, uvs, lost) = (None, None, None, None, None, [false; 5]);
+    Some(LoadedMesh { positions, indices, mask: None, polys: None, hidden: None, levels, layers, groups, paint, uvs, lost })
 }
 
 /// The body of a `QUAD` block, and the mesh it belongs to.
@@ -1593,7 +1622,7 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
             }
             let flags: Vec<u8> = read_array(&mut r, triangles).map_err(|_| bad())?;
             mesh.hidden = Some(flags.iter().map(|&flag| flag != 0).collect());
-        } else if tag == LVLS || tag == LAYR || tag == GRPS || tag == PNTL {
+        } else if tag == LVLS || tag == LAYR || tag == GRPS || tag == PNTL || tag == UVCO {
             // Read through a counter, so that a block this version cannot
             // make sense of is stepped over like any unknown one: the mesh
             // opens without its levels (or with its layers part of its
@@ -1611,6 +1640,9 @@ fn read_blocks(file: File, path: &Path) -> Result<Loaded> {
                 } else if tag == PNTL {
                     mesh.paint = paint::read(&mut body, length, mesh.positions.len());
                     mesh.lost[3] = mesh.paint.is_none();
+                } else if tag == UVCO {
+                    mesh.uvs = uvs::read(&mut body, length, mesh.indices.len());
+                    mesh.lost[4] = mesh.uvs.is_none();
                 } else {
                     mesh.groups = groups::read(&mut body, length, mesh.indices.len() / 3);
                     mesh.lost[2] = mesh.groups.is_none();
@@ -1790,17 +1822,20 @@ pub fn export_obj_painted(mesh: &Mesh, places: &[(&str, Mat4)], paint: &ExportPa
     let (points, mended) = export_points(mesh);
     let painted = painted::Painted::of(mesh, paint);
     let colours = painted.as_ref().map(|p| p.seen.as_slice());
+    let faces = uvs::ObjFaces::of(mesh);
     replace_file(path, |w| {
         writeln!(w, "# Exported from Sculpt")?;
-        // OBJ numbers its vertices through the whole file, so each place carries
-        // on from the last.
-        let mut base = 0;
+        // OBJ numbers its vertices (and its UVs) through the whole file, so
+        // each place carries on from the last.
+        let (mut base, mut uv_base) = (0, 0);
         for &(name, model) in places {
             if places.len() > 1 {
                 writeln!(w, "o {name}")?;
             }
-            write_object_of(w, mesh, &points, colours, model, base)?;
+            let with_uvs = faces.as_ref().map(|faces| (faces, uv_base));
+            write_object_of(w, mesh, &points, colours, with_uvs, model, base)?;
             base += mesh.positions.len() as u32;
+            uv_base += faces.as_ref().map_or(0, uvs::ObjFaces::count);
         }
         Ok(())
     })?;
@@ -1845,16 +1880,19 @@ fn vertex_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
 /// [`write_object_of`] for a mesh whose points are all numbers.
 #[cfg(test)]
 fn write_object(w: &mut impl Write, mesh: &Mesh, model: Mat4, base: u32) -> std::io::Result<()> {
-    write_object_of(w, mesh, &export_points(mesh).0, None, model, base)
+    write_object_of(w, mesh, &export_points(mesh).0, None, None, model, base)
 }
 
 /// The vertices, normals and faces of `mesh` placed by `model`, numbered
-/// from `base`, with each vertex's colour after its place when there are `colours`.
+/// from `base`, with each vertex's colour after its place when there are
+/// `colours`, and the UVs and the faces with them when there are `uvs` (the
+/// faces, and where this place's `vt` numbers start).
 fn write_object_of(
     w: &mut impl Write,
     mesh: &Mesh,
     points: &Points,
     colours: Option<&[[u8; 3]]>,
+    uvs: Option<(&uvs::ObjFaces, u32)>,
     model: Mat4,
     base: u32,
 ) -> std::io::Result<()> {
@@ -1883,6 +1921,10 @@ fn write_object_of(
     }
     // A negative scale mirrors the model and turns every face inside out.
     let mirrored = determinant < 0.0;
+    // A mesh with UVs: its `vt` lines, and every face with them (`io/uvs.rs`).
+    if let Some((faces, uv_base)) = uvs {
+        return faces.write(w, mesh, mirrored, with_normals, base, uv_base);
+    }
     // A mesh with face groups: each group's faces under a `g` line of its own.
     if groups::write_obj_faces(w, mesh, mirrored, with_normals, base)? {
         return Ok(());

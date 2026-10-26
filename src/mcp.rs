@@ -580,9 +580,10 @@ fn tools() -> Value {
         tool(
             "get_state",
             "Everything about the app right now, as JSON: window size, the objects (id, name, size, triangle \
-             count, each one's own symmetry, and the on_screen box [left, top, right, bottom] each covers, as \
-             fractions of the window), the brush and its settings (with the active object's symmetry, which is \
-             the one strokes are made under), the camera, undo steps, the status line and the display options.",
+             count, whether it has UVs, each one's own symmetry, and the on_screen box [left, top, right, \
+             bottom] each covers, as fractions of the window), the brush and its settings (with the active \
+             object's symmetry, which is the one strokes are made under), the camera, undo steps, the status \
+             line and the display options.",
             json!({}),
             &[],
         ),
@@ -750,7 +751,7 @@ fn tools() -> Value {
                         "mask_grow", "mask_shrink", "mask_recesses", "mask_peaks", "clone", "instance", "make_unique",
                         "set_origin_to_mesh",
                         "subdivide", "level", "level_up", "level_down", "delete_lower_levels", "delete_higher_levels",
-                        "reconstruct_subdiv", "project_detail",
+                        "reconstruct_subdiv", "project_detail", "unwrap_uvs", "bake_maps",
                         "layer_new", "layer_record", "layer_strength", "layer_show", "layer_hide", "layer_rename",
                         "layer_delete", "layer_bake", "layer_bake_all",
                         "group_masked", "group_visible", "auto_groups", "groups_by_angle", "clear_groups",
@@ -776,6 +777,11 @@ fn tools() -> Value {
                      project_detail puts the detail of another object onto the active one along its normals \
                      (optional from: that object's name, else the one overlapping it most; reach: how far a point \
                      may move, as a share of the object's size, default 0.02). \
+                     unwrap_uvs gives the active object UVs (seams_on_groups: cut along face group borders, default \
+                     true). bake_maps bakes maps from another object onto the active one, which needs UVs, into a \
+                     folder (folder: a full path; from: the object's name, else the one overlapping it most; size: \
+                     512 to 8192; reach as for project_detail; maps: any of 'normal', 'displacement', 'ao', \
+                     'colour'); it runs in the background and the status line says where the files went. \
                      Sculpt layers (get_state gives each object's layers): layer_new adds an empty layer and \
                      starts recording on it, so strokes go into the layer and leave the model underneath alone; \
                      layer_record makes the named layer the one that records, or with no layer stops recording, \

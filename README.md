@@ -977,6 +977,50 @@ does. Its main use is giving a sculpt clean topology:
   a stroke on that level would: the finer levels follow when you step up.
 - Five million points take about half a second.
 
+## UVs and maps
+
+The **UVs & Maps** card, under Project Detail on the Mesh tab, gets a model
+ready for a game engine or a renderer: UVs (the surface laid out flat in a
+square) and maps (pictures of the sculpt's detail laid out by them). The
+usual way through, after Project Detail's:
+
+1. **Clone** the sculpt and **Quad Remesh** the copy (or Import a low model
+   with UVs from Blender or another program, where the sculpt is).
+2. **Unwrap UVs** on the copy. **Seams on Face Groups** cuts along the face
+   groups' borders, so the seams go where you drew them; without groups the
+   unwrap places them. Each quad stays whole in one piece. The model does
+   not move, and it is one undo step.
+3. **Bake Maps** from the sculpt: pick the maps, their size (1K to 8K) and
+   Reach (as Project Detail's), press the button and choose a folder. The
+   bake runs in the background, with its progress and a Cancel at the
+   bottom of the view, and the status line says where the files went.
+4. **Export** the copy as OBJ or FBX: its UVs go with it.
+
+- **From** names the sculpt the detail comes from; it starts as the object
+  overlapping the selected one most, as Project Detail's does.
+- The maps, each named after the selected object:
+  - **Normal** (`_normal.png`): the sculpt's detail as a tangent-space
+    normal map, in the MikkTSpace frame Blender, Unity, Unreal and Godot
+    read normal maps in, green up (OpenGL; Unreal and DirectX tools want
+    the green channel flipped).
+  - **Displacement** (`_displacement.exr`, 32-bit, in scene units; and
+    `_displacement.png`, 16-bit, with `_displacement.txt` saying what black
+    and white stand for, and the Midlevel and Scale for Blender's
+    Displacement node).
+  - **Ambient Occlusion** (`_ao.png`): how much light reaches each place.
+    The slow one: seconds for a 2K map.
+  - **Colour** (`_colour.png`): the sculpt's paint, as an export colours
+    it.
+- Each island is padded out by a few pixels so that a seam never shows the
+  empty background; outside the islands a normal map is flat.
+- Where the sculpt is further from the low model than Reach, nothing is
+  found and the map is left flat there; the status line says how much of
+  the surface that was when it is more than a little.
+- UVs are kept in the `.sclp` with the model. Sculpting keeps them; anything
+  that builds the model again (Remesh, Decimate, dynamic topology's first
+  split, Subdivide, a boolean) leaves them behind, as it does face groups.
+  Unwrap again after.
+
 ## Sculpt layers
 
 The **Layers** card, under Subdivision on the Sculpt panel's Mesh tab, keeps
@@ -2266,8 +2310,9 @@ pair; after that they can be moved apart and the joints stay on them.
     points with no faces says it has no surface to sculpt.
   - A file that states its size but states it wrongly (smaller than half a
     millimetre or bigger than fifty metres across) is fitted to the scene
-    instead. UVs, materials, normals and animation are not read: the app
-    has nowhere to keep them yet.
+    instead. **UVs** come in with the model (an OBJ's `vt`, an FBX's first
+    UV set, a glTF's `TEXCOORD_0`), and OBJ and FBX exports write them back
+    out (see UVs and maps). Materials, normals and animation are not read.
 - **Sculpts from the Unity app** (`.sculpt`) open with **Open** and
   **Import** just as a `.sclp` does, and show in Recent. They arrive the same
   way round and the same size: every object with its mesh, mask, hidden
@@ -2334,7 +2379,8 @@ pair; after that they can be moved apart and the joints stay on them.
     slots. With **FBX: material weights in UVs** ticked on the File tab
     (off unless ticked, and not remembered between runs), the FBX also holds
     how much of each material is at each point, for a game shader of one's
-    own that blends textures: UV set 0 is all zero (a sculpt has no UVs),
+    own that blends textures: UV set 0 is the model's own UVs, or all zero
+    for a model that has none;
     UV sets 1 to 4 hold the weights two materials a set (U the first, V the
     second, in the order the set's name says: "Weights Metal - Rust + Clay").
     In Unity those are `uv2` to `uv5`.
@@ -3485,6 +3531,7 @@ sculpt.exe --screenshot out.png --demo-deform play          # works the Deform c
 sculpt.exe --bench-deform 1000000 5000000 10000000         # one preview frame of each deformer (the pass over the mesh, its normals and the ranges to send), best of six, at each size
 sculpt.exe --screenshot out.png --demo-references photo.jpg,front,ortho   # a reference picture added by the routine under Add Picture..., with no file box, after the camera turns to that view (front | back | left | right | top | bottom; ortho for orthographic); in-front and a number (opacity in percent) set those, orbit=35:-15 then turns round the model in perspective (orbit=180:0 looks from behind, where the picture is not drawn); add --demo-ui "float=Reference Images@560:20" to see the card
 sculpt.exe --screenshot out.png --demo-references play     # works the pictures through the facing a view gives, fitting, the unsaved mark, Save, Delete, Open, Undo and Redo of the Open, Import and the bridge's commands, and prints a line per check
+sculpt.exe --screenshot out.png --demo-bake                 # Bake Maps refused on a model without UVs, Unwrap UVs on a quad remesh of a rippled ball, a bake of all four maps into a scratch folder (the files there, the normal map tilted where the ripples are and flat outside the islands), and Undo; prints a line per check
 sculpt.exe --screenshot out.png --demo-print check          # the sphere with two holes cut in it and a face doubled, and Check for Printing pressed; or closed | export (the question) | remesh | quads | damaged (the damage alone, for --demo-tool trim to work on) | play (prints a line per check)
 cargo test -p sculpt-geom --release timing_of_the_census -- --ignored --nocapture   # what the printing check costs at 1M / 10M / 40M triangles
 cargo test --release a_closed_model_comes_out_closed -- --nocapture                 # quad remesh on six closed models at seven sizes, a line a run: every result must be closed
@@ -3645,6 +3692,14 @@ view the camera is in or the `facing` given, fitted to the scene;
 `delete_picture` takes it out of the scene, for good. `add_picture` and
 `edit_picture` take `facing`, `size`, `across`, `up` and `depth` (in the
 scene's units), `opacity` (percent), `flip`, `in_front` and `show`.
+
+And UVs and maps (see UVs and maps): `command` `unwrap_uvs` unwraps the
+active object (with `seams_on_groups`), and `bake_maps` bakes onto it into
+`folder` (a full path, held to the same rule as `open_file`), with `from`
+(an object's name), `size`, `reach` and `maps` (any of `normal`,
+`displacement`, `ao` and `colour`). The bake runs in the background, as the
+button's does; the status line says where the files went. `get_state` gives
+each object's `uvs`.
 
 There are two halves. The app listens on `127.0.0.1:47823` (`src/app/bridge.rs`;
 this machine only, and only the first copy of the app if several are open).

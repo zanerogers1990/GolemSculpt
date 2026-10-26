@@ -30,6 +30,7 @@ use crate::ui::{self, Cursor, UiState, theme};
 use crate::io;
 
 mod alpha;
+pub(crate) mod bake;
 mod blender;
 mod bridge;
 mod brush_keys;
@@ -220,6 +221,8 @@ pub struct Args {
     pub demo_references: Option<String>,
     /// Work the keyboard shortcuts and print a line per check (see app/keys/play.rs).
     pub demo_keys: bool,
+    /// Unwrap and bake a lumpy sculpt and print a line per check (see app/bake/play.rs).
+    pub demo_bake: bool,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -332,6 +335,8 @@ struct Running {
     decimate: decimate::State,
     /// A Remesh at work in the background (see app/remesh_job.rs).
     remesh: remesh_job::State,
+    /// A Bake Maps at work in the background (see app/bake.rs).
+    bake: Option<bake::Pending>,
     /// A screenshot the Claude bridge is waiting for.
     capture: Option<bridge::Capture>,
     transform: transform::State,
@@ -652,6 +657,7 @@ impl Running {
             print_watch: Default::default(),
             decimate: Default::default(),
             remesh: Default::default(),
+            bake: None,
             capture: None,
             transform: Default::default(),
             flash: Default::default(),
@@ -778,6 +784,9 @@ impl Running {
         }
         if running.args.demo_keys {
             running.keys_play();
+        }
+        if running.args.demo_bake {
+            running.bake_play();
         }
         // Whatever the setup above selected or undid must not pulse in the
         // first frames (a screenshot is taken in them).
@@ -1451,6 +1460,9 @@ impl Running {
             Action::Level(level) => self.level_to(level),
             // Project Detail is in app/project.rs.
             Action::ProjectDetail => self.project_detail(),
+            // UVs & Maps are in app/bake.rs.
+            Action::UnwrapUvs => self.unwrap_uvs(),
+            Action::BakeMaps => self.bake_maps_asking(),
             Action::LevelBy(by) => self.level_by(by),
             Action::DeleteLevels { lower } => self.delete_levels(lower),
             Action::Layer(action) => self.layer_act(action),
@@ -1968,6 +1980,8 @@ impl Running {
         // A Decimate or a Remesh that has finished in the background takes the model's place.
         self.decimate_frame();
         self.remesh_frame();
+        // A Bake Maps that has finished says where its files went (app/bake.rs).
+        self.bake_frame();
 
         // The hosted tools' frame: before the interface, which draws their overlay.
         self.tools_frame();

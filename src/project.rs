@@ -57,8 +57,9 @@ fn normal_matrix(m: Mat4) -> Mat3 {
     Mat3::from_mat4(m).inverse().transpose()
 }
 
-/// A source made ready to be asked: its inverse, its normal matrix, and
-/// whether its placement turns it inside out.
+/// A source made ready to be asked: its inverse and its normal matrix. A
+/// placement that is a reflection needs nothing more: the inverse transpose
+/// carries an outward normal to an outward normal, mirror or not.
 struct Ready<'a> {
     mesh: &'a Mesh,
     to_world: Mat4,
@@ -67,7 +68,6 @@ struct Ready<'a> {
     /// The most the placement shrinks a length: what turns a reach in the
     /// scene into a reach in the mesh's own space that is surely long enough.
     least_scale: f32,
-    flipped: bool,
 }
 
 impl<'a> Ready<'a> {
@@ -79,14 +79,12 @@ impl<'a> Ready<'a> {
             to_local: source.to_world.inverse(),
             normals: normal_matrix(source.to_world),
             least_scale: scale.abs().min_element().max(1e-12),
-            flipped: source.to_world.determinant() < 0.0,
         }
     }
 
     /// The source's outward normal at `hit`, in the scene.
     fn outward(&self, normal: Vec3) -> Vec3 {
-        let n = (self.normals * normal).normalize_or_zero();
-        if self.flipped { -n } else { n }
+        (self.normals * normal).normalize_or_zero()
     }
 
     /// The nearest point of this source to `p` (in the scene) along `normal`
@@ -129,7 +127,6 @@ pub fn project(target: &Mesh, target_to_world: Mat4, sources: &[Source], reach: 
     let ready: Vec<Ready> = sources.iter().map(Ready::new).collect();
     let to_local = target_to_world.inverse();
     let normals = normal_matrix(target_to_world);
-    let flipped = target_to_world.determinant() < 0.0;
     let found: Vec<Option<Option<Vec3>>> = (0..target.vertex_count())
         .into_par_iter()
         .map(|v| {
@@ -139,7 +136,6 @@ pub fn project(target: &Mesh, target_to_world: Mat4, sources: &[Source], reach: 
             }
             let p = target_to_world.transform_point3(target.positions[v]);
             let n = (normals * target.normals[v]).normalize_or_zero();
-            let n = if flipped { -n } else { n };
             if n == Vec3::ZERO {
                 return Some(None);
             }

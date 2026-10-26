@@ -265,14 +265,14 @@ pub(super) fn read(r: &mut impl Read, length: u64) -> Option<SavedLevels> {
     Some(SavedLevels { parts, vertex, triangle, hidden, finest, groups: Vec::new() })
 }
 
-/// Builds a mesh that was saved with levels, sculpt layers or face groups,
-/// and puts them back on it. The build renumbers the mesh, and the levels'
-/// lists, the layers' offsets, the groups, the quads' corners and the hidden
-/// flags all follow the same renumbering. Levels, layers or groups that turn
-/// out not to be this mesh's are left off, and the second value says which
-/// were: the shape is whole without any of them.
-pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 4]) {
-    let LoadedMesh { positions, indices, mask, polys, hidden, levels, layers, groups, paint, lost } = loaded;
+/// Builds a mesh that was saved with levels, sculpt layers, face groups,
+/// paint or UVs, and puts them back on it. The build renumbers the mesh, and
+/// the levels' lists, the layers' offsets, the groups, the UVs, the quads'
+/// corners and the hidden flags all follow the same renumbering. Any of them
+/// that turn out not to be this mesh's are left off, and the second value
+/// says which were: the shape is whole without any of them.
+pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 5]) {
+    let LoadedMesh { positions, indices, mask, polys, hidden, levels, layers, groups, paint, uvs, lost } = loaded;
     let verts = positions.len();
     let (mut mesh, numbering) = Mesh::new_numbered(positions, indices, mask, &hidden.unwrap_or_default());
     let went = |v: u32| numbering.vertex.get(v as usize).copied().unwrap_or(u32::MAX);
@@ -288,7 +288,12 @@ pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 4]) {
             mesh.polys = Some(Polys { start: polys.start, indices: corners });
         }
     }
-    let [mut lost_levels, mut lost_layers, lost_groups, mut lost_paint] = lost;
+    let [mut lost_levels, mut lost_layers, lost_groups, mut lost_paint, mut lost_uvs] = lost;
+    if let Some(uvs) = uvs {
+        // Each triangle's three, as they were: a build never turns a triangle round (`mesh/uvs.rs`).
+        let carried = crate::mesh::uvs::renumbered(&uvs, &numbering.triangle);
+        lost_uvs |= carried.is_empty() || mesh.set_uvs(carried).is_err();
+    }
     // The groups go on first: the levels keep the other levels' groups, and
     // those are good only for the groups this mesh has.
     let mut level_groups = Vec::new();
@@ -321,7 +326,10 @@ pub(super) fn build(loaded: LoadedMesh) -> (Mesh, [bool; 4]) {
     if lost_groups {
         log::warn!("the face groups saved with a mesh could not be read, and it opened without them");
     }
-    (mesh, [lost_levels, lost_layers, lost_groups, lost_paint])
+    if lost_uvs {
+        log::warn!("the UVs saved with a mesh could not be read, and it opened without them");
+    }
+    (mesh, [lost_levels, lost_layers, lost_groups, lost_paint, lost_uvs])
 }
 
 #[cfg(test)]

@@ -630,6 +630,7 @@ impl Running {
                     "layers": super::layers::state_of(mesh),
                     "paint_layers": super::paint::state_of(mesh),
                     "groups": super::groups::state_of(&doc.scene, &doc.opts.groups, o, mesh),
+                    "uvs": mesh.is_some_and(|m| m.has_uvs()),
                     "on_screen": if o.visible { self.on_screen(bounds) } else { Value::Null },
                 })
             })

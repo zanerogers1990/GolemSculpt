@@ -63,8 +63,11 @@
 //!   (Blender's default white, 3D-Coat's grey at alpha 0) is what an
 //!   unpainted model carries, and is left out; one plain colour all over is
 //!   kept, as game models often colour each part so.
+//! - **UVs**: UV set 0, its `LayerElementUV`, one for each polygon corner
+//!   (`fbx_read/uvs.rs`), turned round with the corners where a place
+//!   mirrors.
 //!
-//! Everything else (materials, UVs, normals, which the app works out again,
+//! Everything else (materials, normals, which the app works out again,
 //! animation, skins, blend shapes, NURBS, cameras, lights) is passed over.
 //! The polygons go to `polygons.rs`, which keeps quads as quads, so a ZBrush
 //! model's subdivision levels work on them.
@@ -72,7 +75,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use glam::{DMat3, DMat4, DVec3, Vec3};
+use glam::{DMat3, DMat4, DVec3, Vec2, Vec3};
 use miniz_oxide::inflate::TINFLStatus;
 use miniz_oxide::inflate::core::{DecompressorOxide, decompress, inflate_flags};
 use rayon::prelude::*;
@@ -84,6 +87,7 @@ use crate::mesh::paint::Rgba8;
 
 #[cfg(test)]
 mod tests;
+mod uvs;
 
 const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
 /// Where the records begin: after the heading and the version.
@@ -628,32 +632,40 @@ fn mesh_of(geometry: &Record, name: String, place: DMat4) -> Result<Option<RawMe
     let positions = points.points(place)?;
     let corner_bytes = corners.bytes()?;
     let mirrored = DMat3::from_mat4(place).determinant() < 0.0;
-    let faces = faces_of(ints_of(corners.kind, &corner_bytes)?, corners.count, mirrored);
+    let uvs = uvs::uvs_of(geometry, ints_of(corners.kind, &corner_bytes)?);
+    let faces = faces_of(ints_of(corners.kind, &corner_bytes)?, corners.count, mirrored, &uvs);
     let colours = colours_of(geometry, positions.len(), || ints_of(corners.kind, &corner_bytes))?;
     Ok(Some(raw_mesh(name, positions, &faces, true, colours)))
 }
 
 /// The polygons of a `PolygonVertexIndex` list, each turned round when the
-/// place mirrors. A last polygon left open is closed.
-fn faces_of(corners: impl Iterator<Item = i32>, count: usize, mirrored: bool) -> Faces {
+/// place mirrors, with their corners' UVs if `uvs` has one for every corner.
+/// A last polygon left open is closed.
+fn faces_of(corners: impl Iterator<Item = i32>, count: usize, mirrored: bool, uvs: &[Vec2]) -> Faces {
     let mut faces = Faces::default();
     faces.corners.reserve(count);
-    let mut polygon = Vec::new();
-    let mut close = |polygon: &mut Vec<u32>| {
+    let given = !uvs.is_empty() && uvs.len() == count;
+    let (mut polygon, mut polygon_uvs) = (Vec::new(), Vec::new());
+    let mut close = |polygon: &mut Vec<u32>, polygon_uvs: &mut Vec<Vec2>| {
         if mirrored {
             polygon.reverse();
+            polygon_uvs.reverse();
         }
-        faces.push(polygon, None);
+        faces.push_uvs(polygon, None, given.then_some(&polygon_uvs[..]));
         polygon.clear();
+        polygon_uvs.clear();
     };
-    for corner in corners {
+    for (k, corner) in corners.enumerate() {
         polygon.push(if corner < 0 { !corner } else { corner } as u32);
+        if given {
+            polygon_uvs.push(uvs.get(k).copied().unwrap_or(Vec2::NAN));
+        }
         if corner < 0 {
-            close(&mut polygon);
+            close(&mut polygon, &mut polygon_uvs);
         }
     }
     if !polygon.is_empty() {
-        close(&mut polygon);
+        close(&mut polygon, &mut polygon_uvs);
     }
     faces
 }

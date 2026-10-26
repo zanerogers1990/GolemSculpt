@@ -22,8 +22,9 @@
 //!   A model painted with colour alone has no materials, as before.
 //! - **Weights in UV sets** (the File tab's option, off unless asked for): a
 //!   game engine has no idea of our materials, but a shader of one's own can
-//!   blend between textures by numbers it is given. UV set 0 is all zero (the
-//!   sculpt has no UVs), and UV sets 1, 2, 3, 4 hold the weights of the
+//!   blend between textures by numbers it is given. UV set 0 is the model's
+//!   own UVs (`uvs.rs`), or all zero for a model without, and UV sets 1, 2,
+//!   3, 4 hold the weights of the
 //!   model's materials two at a time (U the first, V the second), in the
 //!   order the UV sets' names give ("Weights <first> + <second>"). Unity
 //!   reads them as `uv2` to `uv5` (Mesh.uv2...), Blender as UV maps.
@@ -153,7 +154,8 @@ pub(super) fn elements<'a>(
     out
 }
 
-/// UV set 0, all zero, then the weights two materials to a set (see the module notes).
+/// UV set 0, all zero, unless the model has UVs of its own to be set 0
+/// (`uvs.rs`), then the weights two materials to a set (see the module notes).
 fn weight_sets<'a>(shading: &'a Shading<'a>, mesh: &'a Mesh, mirrored: bool, corner_count: usize) -> Vec<(Node<'a>, &'static str, i32)> {
     let painted = shading.painted;
     let uv = |index: i32, name: &str, count: usize, uv: Fill<'a>, uv_index: Fill<'a>| {
@@ -169,7 +171,7 @@ fn weight_sets<'a>(shading: &'a Shading<'a>, mesh: &'a Mesh, mirrored: bool, cor
     // Every corner names the one point (0, 0).
     let zero: Fill = Box::new(|w| w.write_all(&[0u8; 16]));
     let to_zero: Fill = Box::new(move |w| (0..corner_count).try_for_each(|_| w.write_all(&0i32.to_le_bytes())));
-    let mut out = vec![(uv(0, "UVMap", 2, zero, to_zero), "LayerElementUV", 0)];
+    let mut out = if mesh.has_uvs() { Vec::new() } else { vec![(uv(0, "UVMap", 2, zero, to_zero), "LayerElementUV", 0)] };
     for (set, pair) in painted.materials.chunks(2).enumerate() {
         let pair: Vec<usize> = pair.to_vec();
         let names: Vec<&str> = (0..pair.len()).map(|i| shading.weight_names[set * 2 + i].as_str()).collect();

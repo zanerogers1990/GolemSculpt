@@ -279,6 +279,42 @@ fn a_seam_split_vertex_is_welded() {
 }
 
 #[test]
+fn texcoords_are_read_turned_up_and_a_seam_keeps_both_sides_through_the_weld() {
+    // Two triangles with their shared edge's points given twice, each side with UVs of its own.
+    let mut pack = Pack::new();
+    let p = pack.points(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
+    let t = pack.add(&floats(&[0.0, 0.0, 0.5, 0.0, 0.5, 0.25, 0.75, 1.0, 1.0, 1.0, 0.75, 0.5]), 5126, 6, "VEC2", None, false);
+    let rest = format!("{},{ONE_NODE}", mesh_json(&format!(r#""POSITION":{p},"TEXCOORD_0":{t}"#), ""));
+    let raw = &open(&pack.glb(&rest)).unwrap()[0];
+    assert_eq!(raw.positions.len(), 4, "the seam is welded");
+    let uv = |u: f32, v: f32| Vec2::new(u, v);
+    // V runs down a glTF picture and up the app's.
+    assert_eq!(raw.uvs, [uv(0.0, 1.0), uv(0.5, 1.0), uv(0.5, 0.75), uv(0.75, 0.0), uv(1.0, 0.0), uv(0.75, 0.5)]);
+    assert_eq!(raw.indices[1], raw.indices[3], "one vertex, with a UV on each side");
+}
+
+#[test]
+fn normalized_texcoords_are_read_and_a_primitive_without_any_has_none() {
+    let mut pack = Pack::new();
+    let a = pack.points(&TRIANGLE);
+    let b = pack.points(&[0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0]);
+    let t = pack.add(&shorts(&[0, 0, 65535, 0, 0, 65535]), 5123, 3, "VEC2", None, true);
+    let rest = format!(
+        r#""meshes":[{{"primitives":[{{"attributes":{{"POSITION":{b}}}}},{{"attributes":{{"POSITION":{a},"TEXCOORD_0":{t}}}}}]}}],{ONE_NODE}"#
+    );
+    let raw = &open(&pack.glb(&rest)).unwrap()[0];
+    let uv = |u: f32, v: f32| Vec2::new(u, v);
+    assert_eq!(raw.uvs, [Vec2::ZERO, Vec2::ZERO, Vec2::ZERO, uv(0.0, 1.0), uv(1.0, 1.0), uv(0.0, 0.0)]);
+    // UVs of a kind not read (three numbers each) are passed over, and the model still opens.
+    let mut pack = Pack::new();
+    let p = pack.points(&TRIANGLE);
+    let t = pack.add(&floats(&[0.0; 9]), 5126, 3, "VEC3", None, false);
+    let rest = format!("{},{ONE_NODE}", mesh_json(&format!(r#""POSITION":{p},"TEXCOORD_0":{t}"#), ""));
+    let raw = &open(&pack.glb(&rest)).unwrap()[0];
+    assert!(raw.uvs.is_empty() && raw.indices.len() == 3);
+}
+
+#[test]
 fn colours_as_normalized_bytes_become_srgb_paint() {
     let mut pack = Pack::new();
     let p = pack.points(&TRIANGLE);

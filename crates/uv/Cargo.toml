@@ -1,0 +1,19 @@
+[package]
+name = "sculpt-uv"
+version = "0.1.0"
+edition = "2024"
+description = "UVs made for a mesh that has none: charts cut, laid flat and packed into the square."
+
+[dependencies]
+glam = { workspace = true }
+# The unwrapper itself (charts, LSCM + ARAP, shape packing), read through
+# before it was taken on: no unsafe code, no build script, no files, network
+# or processes. Pinned so its output, which tests elsewhere compare, cannot
+# change under us. `direct-solver` brings in the `faer` linear-algebra crate,
+# ten to twenty times faster on the big charts of smooth models; the header
+# of src/lib.rs has the measurements and what it costs.
+uvunwrap = { version = "=0.3.0", default-features = false, features = ["parallel", "direct-solver"] }
+
+[dev-dependencies]
+# Only to check the answer is the same on one thread as on many.
+rayon = { workspace = true }

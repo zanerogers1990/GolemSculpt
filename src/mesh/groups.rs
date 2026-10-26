@@ -184,7 +184,7 @@ fn count_of(ids: &[u16]) -> usize {
 
 /// For each triangle of a mesh with polygon faces, the face it is part of
 /// (`u32::MAX` for one that is part of none); `None` for a triangle mesh.
-fn faces_of_triangles(mesh: &Mesh) -> Option<Vec<u32>> {
+pub(super) fn faces_of_triangles(mesh: &Mesh) -> Option<Vec<u32>> {
     use std::sync::atomic::{AtomicU32, Ordering};
     let polys = mesh.polys.as_ref()?;
     let face_of: Vec<AtomicU32> = (0..mesh.triangle_count()).map(|_| AtomicU32::new(u32::MAX)).collect();

@@ -6,6 +6,7 @@
 //! `status`). The colours are a theme the user picks (see `settings`).
 
 mod alpha;
+mod bake;
 pub mod alpha_preview;
 pub mod assets;
 mod brush_size;
@@ -671,6 +672,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     });
     levels::card(ui, doc, actions);
     project::card(ui, doc, actions);
+    bake::card(ui, doc, actions);
     layers::card(ui, doc, &state.assets, actions);
     paint::card(ui, doc, &state.assets, actions);
     groups::card(ui, doc, actions);

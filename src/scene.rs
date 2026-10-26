@@ -160,10 +160,16 @@ pub struct Scene {
 
 /// An independent copy of a mesh with everything the user can see of it: its
 /// mask, the faces hidden with the box or lasso, the quads a quad remesh
-/// left, and its subdivision levels. (Building a mesh reorders its vertices
-/// and triangles, so the hidden flags, the quads' corners and the levels are
-/// carried over through the same renumbering.)
+/// left, its subdivision levels and its UVs. (Building a mesh reorders its
+/// vertices and triangles, so the hidden flags, the quads' corners, the
+/// levels and the UVs are carried over through the same renumbering.)
 fn duplicate(mesh: &Mesh) -> Mesh {
+    copy_of(mesh)
+}
+
+/// [`duplicate`], for the app: a copy of `mesh`, numbered afresh, with
+/// everything on it (app/bake.rs unwraps one and puts it in the model's place).
+pub(crate) fn copy_of(mesh: &Mesh) -> Mesh {
     duplicate_placed(mesh, mesh.positions.clone()).0
 }
 
@@ -205,6 +211,8 @@ fn duplicate_placed(mesh: &Mesh, positions: Vec<Vec3>) -> (Mesh, Vec<u32>) {
     copy.layers = mesh.layers_renumbered(&numbering.vertex);
     // And its face groups, each face in the group it was in.
     copy.set_group_ids(crate::mesh::groups::renumbered(mesh.group_ids(), &numbering.triangle));
+    // And its UVs, each triangle's three with it (one for each corner, so never refused).
+    let _ = copy.set_uvs(crate::mesh::uvs::renumbered(mesh.uvs(), &numbering.triangle));
     // And its paint, each vertex's texels with it.
     copy.paint = mesh.paint_renumbered(&numbering.vertex, copy.vertex_count());
     let moved = numbering.vertex;

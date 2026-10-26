@@ -190,8 +190,8 @@ impl LinkObject {
         // Colour from Blender comes in as a layer of its own, which is renumbered with the points.
         let points = self.positions.len();
         let paint = self.paint.filter(|p| p.composite.len() == points).map(|p| from_blender(&p.composite));
-        let (levels, layers, groups, lost) = (None, None, None, [false; 4]);
-        let loaded = LoadedMesh { positions, indices, mask: None, polys, hidden: None, levels, layers, groups, paint, lost };
+        let (levels, layers, groups, uvs, lost) = (None, None, None, None, [false; 5]);
+        let loaded = LoadedMesh { positions, indices, mask: None, polys, hidden: None, levels, layers, groups, paint, uvs, lost };
         let (mesh, repaired, _) = loaded.build();
         (mesh, repaired)
     }

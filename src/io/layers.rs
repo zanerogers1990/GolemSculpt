@@ -42,13 +42,14 @@ const ROW: usize = 4 + 1 + 1 + 2;
 
 /// What a file held for its meshes that could not be put back on them: how
 /// many meshes lost their subdivision levels, how many their layers, how
-/// many their face groups and how many their paint.
+/// many their face groups, how many their paint and how many their UVs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Lost {
     pub levels: usize,
     pub layers: usize,
     pub groups: usize,
     pub paint: usize,
+    pub uvs: usize,
 }
 
 impl Lost {
@@ -84,7 +85,14 @@ impl Lost {
                 objects(self.paint)
             )
         });
-        let notes: Vec<String> = levels.into_iter().chain(layers).chain(groups).chain(paint).collect();
+        let uvs = (self.uvs > 0).then(|| {
+            format!(
+                "The UVs saved with {} could not be read (the file is damaged there): the model is as it was saved, \
+                 without its UVs.",
+                objects(self.uvs)
+            )
+        });
+        let notes: Vec<String> = levels.into_iter().chain(layers).chain(groups).chain(paint).chain(uvs).collect();
         (!notes.is_empty()).then(|| notes.join(" "))
     }
 }

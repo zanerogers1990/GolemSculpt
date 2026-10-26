@@ -3,6 +3,7 @@
 
 mod app;
 mod backups;
+mod bake;
 mod bench;
 mod bench_levels;
 mod bench_matched;
@@ -271,6 +272,8 @@ fn window_options(args: &[String]) -> app::Args {
             "--demo-references" => opts.demo_references = it.next().cloned(),
             // The keyboard shortcuts worked, changed and checked (see app/keys/play.rs).
             "--demo-keys" => opts.demo_keys = true,
+            // UVs & Maps worked through and checked: unwrap, bake into a scratch folder (see app/bake/play.rs).
+            "--demo-bake" => opts.demo_bake = true,
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

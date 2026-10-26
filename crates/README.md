@@ -20,6 +20,7 @@ else's build.
 | `hands` | `sculpt-hands` | The Hand & Foot tool: hands and feet built from sliders and poses, accepted as a base to sculpt. |
 | `keys` | `sculpt-keys` | The Keys tool: joints that register the pieces of a split model. |
 | `region` | `sculpt-region` | The region tools: box and lasso select, hide, mask, trim and split, and mask extract. |
+| `uv` | `sculpt-uv` | UVs made for a mesh that has none: charts cut along normals and face groups, laid flat (LSCM, then ARAP, by the `uvunwrap` crate) and packed into the square, each polygon kept whole. |
 | `multires` | `sculpt-multires` | Subdivision levels: Loop and Catmull-Clark subdivision, and a mesh held at several levels with the finer detail carried through edits of the coarser ones. Also carries the app's own per-vertex vectors (sculpt layers) through a new level and up from an edited one, and reads how a surface turned at a point off the faces round it. |
 
 The Unity app these are ported from is `D:\Unity\sculptingapplication`

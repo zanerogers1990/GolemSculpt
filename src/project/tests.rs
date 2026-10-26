@@ -44,6 +44,25 @@ fn both_objects_are_taken_where_they_stand() {
 }
 
 #[test]
+fn a_source_or_target_placed_as_a_mirror_image_is_still_found() {
+    // A live mirror copy's placement is a reflection; its normals still point out.
+    let target = sphere(2_000);
+    let fine = sphere(40_000);
+    let mirror = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+    let r = target.positions[0].length();
+    let mirrored = Source { mesh: &fine, to_world: mirror * Mat4::from_scale(Vec3::splat(1.02)) };
+    let done = project(&target, Mat4::IDENTITY, &[mirrored], 0.1);
+    assert_eq!(done.indices.len(), target.vertex_count(), "{} points missed a mirrored source", done.missed);
+    for got in radii(&done) {
+        assert!((got - r * 1.02).abs() < r * 0.003);
+    }
+    // And a mirrored target onto a plain source.
+    let plain = Source { mesh: &fine, to_world: Mat4::from_scale(Vec3::splat(1.02)) };
+    let done = project(&target, mirror, &[plain], 0.1);
+    assert_eq!(done.indices.len(), target.vertex_count(), "{} points of a mirrored target missed", done.missed);
+}
+
+#[test]
 fn the_mask_protects_and_a_half_mask_goes_half_way() {
     let mut target = sphere(2_000);
     for (v, p) in target.positions.clone().iter().enumerate() {

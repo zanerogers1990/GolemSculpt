@@ -112,7 +112,7 @@ pub(super) fn read(r: &mut impl Read, length: u64, triangles: usize) -> Option<S
 // read as having none.
 
 /// The name a group is written under in an OBJ file.
-fn obj_name(group: u16) -> String {
+pub(super) fn obj_name(group: u16) -> String {
     if group == 0 { "Ungrouped".to_owned() } else { format!("Group_{group}") }
 }
 
@@ -213,15 +213,17 @@ impl ObjGroups {
 }
 
 /// The mesh of a model read from a file, with the groups the file gave it,
-/// its colours as a paint layer if it gave colours (`io/painted.rs`), and its
-/// polygons if it was made of quads.
+/// its colours as a paint layer if it gave colours (`io/painted.rs`), its
+/// polygons if it was made of quads, and its UVs if it had any.
 pub fn imported_mesh(raw: RawMesh) -> Mesh {
-    if raw.polys.is_some() {
+    let with_uvs = !raw.uvs.is_empty() && raw.uvs.len() == raw.indices.len();
+    if raw.polys.is_some() || with_uvs {
         // The way a saved mesh with quads is built, which carries everything else along too.
         let painted = !raw.colours.is_empty() && raw.colours.len() == raw.positions.len();
         let loaded = super::LoadedMesh {
             groups: (!raw.groups.is_empty()).then(|| SavedGroups { ids: raw.groups, levels: Vec::new() }),
             paint: painted.then(|| super::painted::imported_stack(raw.colours)),
+            uvs: with_uvs.then_some(raw.uvs),
             positions: raw.positions,
             indices: raw.indices,
             mask: None,
@@ -229,7 +231,7 @@ pub fn imported_mesh(raw: RawMesh) -> Mesh {
             hidden: None,
             levels: None,
             layers: None,
-            lost: [false; 4],
+            lost: [false; 5],
         };
         return loaded.build().0;
     }

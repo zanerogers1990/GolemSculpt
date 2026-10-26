@@ -19,7 +19,8 @@
 //! As the OBJ does, an export bakes each place's position, rotation and scale
 //! into its points, one mesh for the object and one for each live copy, and
 //! keeps a quad-remeshed mesh's quads. A painted mesh also takes its colour
-//! and its materials, as `fbx/paint.rs` sets out.
+//! and its materials, as `fbx/paint.rs` sets out, and a mesh with UVs its
+//! UVs, as `fbx/uvs.rs` does.
 
 use std::io::Write;
 use std::path::Path;
@@ -32,6 +33,7 @@ use super::{Points, Result, export_points, nothing_to_export, replace_file, time
 use crate::mesh::Mesh;
 
 mod paint;
+mod uvs;
 
 const VERSION: u32 = 7400;
 const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
@@ -418,9 +420,12 @@ fn created<'a>() -> Node<'a> {
 }
 
 /// The faces of a mesh as an export writes them: a quad-remeshed mesh's
-/// quads, not their halves, and otherwise its triangles.
+/// quads, not their halves, and otherwise its triangles. With UVs, a quad
+/// whose triangles disagree on a UV is written as its triangles
+/// (`Mesh::faces_with_uvs`, which `fbx/uvs.rs` writes the UVs of).
 fn faces(mesh: &Mesh) -> Box<dyn Iterator<Item = &[u32]> + '_> {
     match &mesh.polys {
+        Some(_) if mesh.has_uvs() => Box::new(mesh.faces_with_uvs().map_or(Vec::new(), |f| f.faces).into_iter()),
         Some(polys) => Box::new(polys.start.windows(2).map(|f| &polys.indices[f[0] as usize..f[1] as usize])),
         None => Box::new(mesh.indices.chunks_exact(3)),
     }
@@ -480,6 +485,11 @@ fn geometry<'a>(id: i64, name: &str, piece: &Piece<'a>, model: Mat4, weights_in_
             leaf("Normals", Value::Doubles(3 * point_count, normals)),
         ]));
         layers[0].push(("LayerElementNormal", 0));
+    }
+    // Its UVs, UV set 0, before any set of material weights (`fbx/uvs.rs`).
+    if let Some(record) = uvs::element(mesh, mirrored) {
+        children.push(record);
+        layers[0].push(("LayerElementUV", 0));
     }
     if let Some(shading) = piece.shading {
         for (record, kind, index) in paint::elements(shading, mesh, mirrored, weights_in_uvs) {

@@ -156,7 +156,7 @@ fn a_levels_block_that_does_not_fit_costs_the_levels_and_nothing_else() {
         let opened = load_scene(&damaged).unwrap_or_else(|why| panic!("{what}: the file still opens ({why})"));
         let back = &opened.meshes[0];
         assert!(back.levels.is_none(), "{what}: the levels are left off");
-        assert_eq!(opened.lost, crate::io::Lost { levels: 1, layers: 0, groups: 0, paint: 0 }, "{what}: and the status line is told");
+        assert_eq!(opened.lost, crate::io::Lost { levels: 1, layers: 0, groups: 0, paint: 0, uvs: 0 }, "{what}: and the status line is told");
         // The mesh is the one that was saved: its vertices, mask and hidden faces.
         assert_eq!(
             (back.vertex_count(), back.triangle_count()),
@@ -165,7 +165,7 @@ fn a_levels_block_that_does_not_fit_costs_the_levels_and_nothing_else() {
         );
         assert_eq!(back.hidden_triangle_count(), mesh.hidden_triangle_count(), "{what}");
     }
-    let said = crate::io::Lost { levels: 1, layers: 0, groups: 0, paint: 0 }.note().unwrap();
+    let said = crate::io::Lost { levels: 1, layers: 0, groups: 0, paint: 0, uvs: 0 }.note().unwrap();
     assert!(said.starts_with("The subdivision levels saved with 1 object could not be read"), "{said}");
     // Untouched, it opens with its levels: the damage above is what cost them.
     let sound = load_scene(&file).unwrap();

@@ -71,6 +71,8 @@ pub struct Options {
     /// How far Project Detail may move a point, as a share of the active
     /// object's size. Not kept between runs.
     pub project_reach: f32,
+    /// The UVs & Maps card's settings (app/bake.rs). Not kept between runs.
+    pub bake: crate::app::bake::Choices,
     /// Triangle count for new shapes.
     pub new_shape_tris: f32,
     /// Tab: hide every panel.
@@ -140,6 +142,7 @@ impl Default for Options {
             tabs: Default::default(),
             project_from: None,
             project_reach: crate::project::DEFAULT_REACH,
+            bake: Default::default(),
             theme: 0,
             gizmo_axes: Default::default(),
             look: Look::default(),
@@ -419,6 +422,11 @@ pub enum Action {
     /// Put the detail of another object onto the active one (see
     /// app/project.rs).
     ProjectDetail,
+    /// Give the active object UVs made for it (see app/bake.rs).
+    UnwrapUvs,
+    /// Bake maps from another object onto the active one, into a folder asked
+    /// for (see app/bake.rs).
+    BakeMaps,
     /// Go to this subdivision level of the active object; 0 is the coarsest.
     Level(usize),
     /// Go this many levels finer, or coarser if negative.

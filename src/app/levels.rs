@@ -369,6 +369,37 @@ impl Running {
             "deletelowerlevels" => Action::DeleteLevels { lower: true },
             "deletehigherlevels" => Action::DeleteLevels { lower: false },
             "reconstructsubdiv" => Action::ReconstructSubdiv,
+            "bakemaps" => {
+                let folder = match super::Running::path_named(args, "folder") {
+                    Ok((folder, _)) => folder,
+                    Err(why) => return Some(Err(why)),
+                };
+                let c = &mut self.doc.opts.bake;
+                if let Some(from) = args.get("from").and_then(Value::as_str) {
+                    match self.doc.scene.objects.iter().find(|o| o.name == from) {
+                        Some(o) => c.from = Some(o.id),
+                        None => return Some(Err(format!("There is no object named \"{from}\"."))),
+                    }
+                }
+                if let Some(size) = args.get("size").and_then(Value::as_u64) {
+                    c.size = (size as u32).clamp(*crate::bake::SIZES.start(), *crate::bake::SIZES.end());
+                }
+                if let Some(reach) = args.get("reach").and_then(Value::as_f64) {
+                    c.reach = reach as f32;
+                }
+                if let Some(maps) = args.get("maps").and_then(Value::as_array) {
+                    let has = |name: &str| maps.iter().any(|m| m.as_str() == Some(name));
+                    (c.normal, c.displacement, c.ao, c.colour) =
+                        (has("normal"), has("displacement"), has("ao"), has("colour"));
+                }
+                return Some(self.said(|app| app.bake_maps(folder)));
+            }
+            "unwrapuvs" => {
+                if let Some(seams) = args.get("seams_on_groups").and_then(Value::as_bool) {
+                    self.doc.opts.bake.seams_on_groups = seams;
+                }
+                Action::UnwrapUvs
+            }
             "projectdetail" => {
                 if let Some(from) = args.get("from").and_then(Value::as_str) {
                     match self.doc.scene.objects.iter().find(|o| o.name == from) {

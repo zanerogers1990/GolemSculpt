@@ -268,6 +268,9 @@ struct StrokeRecord {
     before: Vec<[u32; 3]>,
     /// The quads the stroke retired.
     polys: Option<Polys>,
+    /// The UVs the stroke retired, as the quads (see `uvs.rs`); empty for a
+    /// mesh that had none.
+    uvs: Vec<glam::Vec2>,
     /// The vertices from before the stroke that its splits took back (see
     /// `take_vertex`), each with what it was until then.
     reused: Vec<(u32, VertexKept)>,
@@ -315,6 +318,8 @@ pub struct TopologyDelta {
     tail_before: LeafRuns,
     leaves_after: Vec<LeafRuns>,
     polys: Option<Polys>,
+    /// The UVs the stroke retired, which undo puts back; empty for none.
+    uvs: Vec<glam::Vec2>,
     /// The vertices from before the stroke its splits took back.
     reused: Vec<Reused>,
     /// The places from before the stroke its splits took back: each one's
@@ -336,6 +341,7 @@ impl TopologyDelta {
             + self.new_groups.len() * 2
             + self.leaves_after.len() * 16
             + self.polys.as_ref().map_or(0, |p| (p.start.len() + p.indices.len()) * 4)
+            + self.uvs.len() * 8
             + self.reused.len() * std::mem::size_of::<Reused>()
             + self.reused_groups.len() * 8
     }
@@ -1261,6 +1267,7 @@ impl Mesh {
             slots: Vec::new(),
             before: Vec::new(),
             polys: None,
+            uvs: Vec::new(),
             reused: Vec::new(),
             reused_groups: Vec::new(),
         });
@@ -1742,6 +1749,13 @@ impl Mesh {
                 record.polys = Some(polys);
             }
         }
+        // So do UVs (uvs.rs), kept the same way.
+        if self.has_uvs() {
+            let uvs = self.clear_uvs();
+            if let Some(record) = &mut self.topo.stroke {
+                record.uvs = uvs;
+            }
+        }
 
         self.bvh.loosen();
         let housed = self.house_appended(region.radius);
@@ -2014,6 +2028,7 @@ impl Mesh {
             tail_before: record.tail,
             leaves_after: self.bvh.leaves[record.leaves as usize - 1..].iter().map(Leaf::runs).collect(),
             polys: record.polys,
+            uvs: record.uvs,
             reused: record
                 .reused
                 .iter()
@@ -2045,6 +2060,7 @@ impl Mesh {
         let slots = if undo { &delta.slots_before } else { &delta.slots_after };
         if undo {
             self.polys = delta.polys.clone();
+            self.uvs = delta.uvs.clone();
         } else {
             self.positions.extend_from_slice(&delta.new_positions);
             self.mask.extend_from_slice(&delta.new_mask);
@@ -2054,6 +2070,7 @@ impl Mesh {
             }
             self.topo.parents.extend_from_slice(&delta.new_parents);
             self.polys = None;
+            self.uvs = Vec::new();
         }
         for (&t, corners) in delta.slots.iter().zip(slots) {
             self.indices[t as usize * 3..t as usize * 3 + 3].copy_from_slice(corners);

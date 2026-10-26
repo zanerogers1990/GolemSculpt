@@ -12,6 +12,8 @@ env_logger = "0.11.11"
 glam = { version = "0.34", features = ["bytemuck"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "hdr", "exr"] }
 log = "0.4.34"
+# MikkTSpace tangents, the frame game engines read normal maps in (src/bake).
+bevy_mikktspace = "1.0"
 # Inflates the zlib-packed arrays of a binary FBX on import (src/io/fbx_read.rs);
 # already built for the PNG reader.
 miniz_oxide = "0.8"
@@ -33,6 +35,7 @@ sculpt-region = { path = "crates/region" }
 sculpt-symmetry = { path = "crates/symmetry" }
 sculpt-toolkit = { path = "crates/toolkit" }
 sculpt-tube = { path = "crates/tube" }
+sculpt-uv = { path = "crates/uv" }
 sculpt-volume = { path = "crates/volume" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -98,6 +101,7 @@ members = [
     "crates/region",
     "crates/multires",
     "crates/hands",
+    "crates/uv",
 ]
 
 [workspace.dependencies]

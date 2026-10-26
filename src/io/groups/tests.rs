@@ -208,7 +208,7 @@ fn a_groups_block_that_cannot_be_read_costs_the_groups_and_nothing_else() {
         let mut opened = load_scene(&damaged).unwrap_or_else(|why| panic!("{what}: the file still opens ({why})"));
         let back = opened.meshes.remove(0);
         assert!(!back.has_groups(), "{what}: the groups are left off");
-        assert_eq!(opened.lost, Lost { levels: 0, layers: 0, groups: 1, paint: 0 }, "{what}");
+        assert_eq!(opened.lost, Lost { levels: 0, layers: 0, groups: 1, paint: 0, uvs: 0 }, "{what}");
         assert_eq!(shape(&back), shape(&mesh), "{what}: the shape is the one saved");
         assert!(back.levels.is_some() && back.layers.is_some(), "{what}: levels and layers are other blocks");
         // The mesh is whole and works: it steps up, and takes groups again.
@@ -217,7 +217,7 @@ fn a_groups_block_that_cannot_be_read_costs_the_groups_and_nothing_else() {
         up.set_group_ids(vec![4; up.triangle_count()]);
         assert_eq!(stepped(&up, 0).unwrap().0.group_count(), 1);
     }
-    let said = Lost { levels: 0, layers: 0, groups: 2, paint: 0 }.note().unwrap();
+    let said = Lost { levels: 0, layers: 0, groups: 2, paint: 0, uvs: 0 }.note().unwrap();
     assert!(
         said.starts_with("The face groups saved with 2 objects could not be read")
             && said.contains("without its groups")
