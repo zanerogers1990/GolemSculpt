@@ -893,7 +893,6 @@ one level is kept on the others.
   a fine level that is not the finest, or the first step up after a file is
   opened, still rebuilds.
 
-## Sculpt layers
 ## Project Detail
 
 The **Project Detail** card, under Subdivision on the Mesh tab, puts the
@@ -931,6 +930,7 @@ does. Its main use is giving a sculpt clean topology:
   a stroke on that level would: the finer levels follow when you step up.
 - Five million points take about half a second.
 
+## Sculpt layers
 
 The **Layers** card, under Subdivision on the Sculpt panel's Mesh tab, keeps
 passes of sculpting apart from the model: a layer of pores, a layer of

@@ -403,14 +403,14 @@ pub enum Action {
     /// subdivided elsewhere, and keep it on the finest (see
     /// app/levels/reconstruct.rs).
     ReconstructSubdiv,
+    /// Put the detail of another object onto the active one (see
+    /// app/project.rs).
+    ProjectDetail,
     /// Go to this subdivision level of the active object; 0 is the coarsest.
     Level(usize),
     /// Go this many levels finer, or coarser if negative.
     LevelBy(i32),
     /// Delete the active object's subdivision levels below the one it is on
-    /// Put the detail of another object onto the active one (see
-    /// app/project.rs).
-    ProjectDetail,
     /// (`lower`), or above it.
     DeleteLevels { lower: bool },
     /// A command of the Layers card, for the active object's sculpt layers

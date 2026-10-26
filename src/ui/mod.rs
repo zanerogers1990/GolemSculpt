@@ -655,6 +655,7 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         decimate::card(ui, doc, tips, actions);
     });
     levels::card(ui, doc, actions);
+    project::card(ui, doc, actions);
     layers::card(ui, doc, &state.assets, actions);
     paint::card(ui, doc, &state.assets, actions);
     groups::card(ui, doc, actions);
@@ -693,7 +694,6 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
     let hidden = doc.mesh.hidden_triangle_count();
     let summary = if hidden == 0 { String::new() } else { format!("{} hidden", fmt_count(hidden)) };
     theme::category(ui, "Hidden Parts", Color32::from_rgb(120, 190, 235), &summary, false, |ui| {
-    project::card(ui, doc, actions);
         theme::about(ui, "A hidden part is not drawn, and brushes pass over it. Remesh, Join and Export still use the whole model.");
         ui.add_enabled_ui(hidden > 0, |ui| {
             ui.horizontal(|ui| {
