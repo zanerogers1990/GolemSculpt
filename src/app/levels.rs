@@ -369,6 +369,18 @@ impl Running {
             "deletelowerlevels" => Action::DeleteLevels { lower: true },
             "deletehigherlevels" => Action::DeleteLevels { lower: false },
             "reconstructsubdiv" => Action::ReconstructSubdiv,
+            "projectdetail" => {
+                if let Some(from) = args.get("from").and_then(Value::as_str) {
+                    match self.doc.scene.objects.iter().find(|o| o.name == from) {
+                        Some(o) => self.doc.opts.project_from = Some(o.id),
+                        None => return Some(Err(format!("There is no object named \"{from}\"."))),
+                    }
+                }
+                if let Some(reach) = args.get("reach").and_then(Value::as_f64) {
+                    self.doc.opts.project_reach = reach as f32;
+                }
+                Action::ProjectDetail
+            }
             _ => return None,
         };
         Some(self.said(|app| app.act(action)))

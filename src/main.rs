@@ -26,6 +26,7 @@ mod mcp;
 mod mesh;
 mod prefs;
 mod printable;
+mod project;
 mod quadremesh;
 mod recent;
 mod recovery;

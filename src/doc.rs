@@ -54,6 +54,13 @@ pub struct Options {
     /// Subdivide only cuts faces up, moving nothing, instead of smoothing.
     /// Not kept between runs: smooth is what is nearly always wanted.
     pub subdivide_flat: bool,
+    /// The object Project Detail takes detail from; `None` (or one that has
+    /// gone) for the one overlapping the active object most (app/project.rs).
+    /// Not kept between runs.
+    pub project_from: Option<u64>,
+    /// How far Project Detail may move a point, as a share of the active
+    /// object's size. Not kept between runs.
+    pub project_reach: f32,
     /// Triangle count for new shapes.
     pub new_shape_tris: f32,
     /// Tab: hide every panel.
@@ -118,6 +125,8 @@ impl Default for Options {
             clean_view: false,
             folded: [false; 2],
             tabs: Default::default(),
+            project_from: None,
+            project_reach: crate::project::DEFAULT_REACH,
             theme: 0,
             gizmo_axes: Default::default(),
             look: Look::default(),
@@ -399,6 +408,9 @@ pub enum Action {
     /// Go this many levels finer, or coarser if negative.
     LevelBy(i32),
     /// Delete the active object's subdivision levels below the one it is on
+    /// Put the detail of another object onto the active one (see
+    /// app/project.rs).
+    ProjectDetail,
     /// (`lower`), or above it.
     DeleteLevels { lower: bool },
     /// A command of the Layers card, for the active object's sculpt layers

@@ -888,6 +888,43 @@ one level is kept on the others.
   opened, still rebuilds.
 
 ## Sculpt layers
+## Project Detail
+
+The **Project Detail** card, under Subdivision on the Mesh tab, puts the
+detail of one object onto another of the same form, as ZBrush's Project All
+does. Its main use is giving a sculpt clean topology:
+
+1. **Clone** the sculpt (the copy sits exactly on the original).
+2. **Quad Remesh** the copy: even quads that follow the form, but the fine
+   detail is gone.
+3. **Subdivide** (Ctrl + D), then **Project**. Repeat until the copy holds
+   as much detail as the original. Projecting after each Subdivide, rather
+   than once at the end, lets every level take the forms it can hold.
+4. Hide or delete the original. The copy has the sculpt's detail on even
+   quads, with levels to step down to.
+
+- **From** names the object the detail comes from. It starts as the one that
+  overlaps the selected object most, which after Clone is the original; pick
+  another from the list and it holds until the app closes. An instance of the
+  selected object cannot be picked: it is the same surface.
+- **Reach** is how far a point may move, shown in millimetres (it is a share
+  of the object's size, 2% to start). Too little and the deepest detail is
+  missed; too much and a point may jump to a part it does not belong to, a
+  finger to the next finger.
+- Each point looks along its own direction, out and in, for the other
+  surface, and goes to the nearer hit. A surface facing the other way is
+  never taken, so the far side of a thin ear or the inside of a lip is left
+  alone. A point that finds nothing along its direction goes to the nearest
+  point facing its way, if that is within reach, and otherwise stays; the
+  status line says how many stayed.
+- The **mask** protects as it does from a brush: a fully masked point stays,
+  a half-masked one goes half way. Hidden parts stay where they are.
+- Both objects are taken where they stand, each with its own position,
+  rotation and scale.
+- It is **one undo step** (Ctrl + Z). On a level below the finest it works as
+  a stroke on that level would: the finer levels follow when you step up.
+- Five million points take about half a second.
+
 
 The **Layers** card, under Subdivision on the Sculpt panel's Mesh tab, keeps
 passes of sculpting apart from the model: a layer of pores, a layer of

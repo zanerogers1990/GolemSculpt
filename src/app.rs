@@ -68,6 +68,7 @@ mod origin;
 mod pen;
 mod pose;
 mod print_check;
+pub(crate) mod project;
 mod recovery;
 mod remesh_job;
 mod selection;
@@ -1501,6 +1502,8 @@ impl Running {
             Action::Subdivide => self.subdivide(),
             Action::ReconstructSubdiv => self.reconstruct_subdiv(),
             Action::Level(level) => self.level_to(level),
+            // Project Detail is in app/project.rs.
+            Action::ProjectDetail => self.project_detail(),
             Action::LevelBy(by) => self.level_by(by),
             Action::DeleteLevels { lower } => self.delete_levels(lower),
             Action::Layer(action) => self.layer_act(action),
