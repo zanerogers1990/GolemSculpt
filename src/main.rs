@@ -20,6 +20,7 @@ mod doc;
 mod gizmo;
 mod history;
 mod io;
+mod keymap;
 mod look;
 mod materials;
 mod mcp;
@@ -268,6 +269,8 @@ fn window_options(args: &[String]) -> app::Args {
             // A reference picture added without the file box: <picture>[,front|back|left|right|top|bottom]
             // [,ortho][,in-front][,<opacity %>][,orbit=<yaw>:<pitch>]; or play (worked and checked: see app/references.rs).
             "--demo-references" => opts.demo_references = it.next().cloned(),
+            // The keyboard shortcuts worked, changed and checked (see app/keys/play.rs).
+            "--demo-keys" => opts.demo_keys = true,
             "--flat" => opts.flat = true,
             // The clean view (Tab) from the start, with its hint.
             "--clean-view" => opts.clean_view = true,

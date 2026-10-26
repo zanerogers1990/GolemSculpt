@@ -29,11 +29,11 @@ pub fn apply_theme(ctx: &egui::Context, o: &mut Options) {
 }
 
 /// The tab's cards.
-pub fn page(ui: &mut egui::Ui, doc: &mut Doc) {
+pub fn page(ui: &mut egui::Ui, doc: &mut Doc, capture: &mut Option<String>) {
     let tips = doc.opts.tooltips;
     theme_card(ui, &mut doc.opts, tips);
     interface(ui, &mut doc.opts, tips);
-    shortcuts(ui);
+    super::shortcuts::card(ui, doc, capture);
     performance(ui, doc);
 }
 
@@ -105,12 +105,6 @@ fn interface(ui: &mut egui::Ui, o: &mut Options, tips: bool) {
         let label = if o.tooltips { "Tooltips: On" } else { "Tooltips: Off" };
         tip(theme::checkbox(ui, &mut o.tooltips, label, ACCENT()), tips, "Say what a button does when the pointer rests on it.");
     });
-}
-
-/// Drawn from the one table of shortcuts (shortcuts.rs), which a test holds
-/// to the README's.
-fn shortcuts(ui: &mut egui::Ui) {
-    theme::category(ui, "Keyboard Shortcuts", super::shortcuts::COLOR, "", false, super::shortcuts::list);
 }
 
 fn performance(ui: &mut egui::Ui, doc: &Doc) {

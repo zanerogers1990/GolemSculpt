@@ -11,6 +11,7 @@ use egui::{Align2, Color32, Id, Rect, Sense, TextureId, Ui, pos2, vec2};
 use super::dyntopo::WARNING;
 use super::theme::{self, ACCENT, ButtonStyle};
 use crate::doc::Action;
+use crate::keymap::{self, Keymap};
 use crate::mesh::Mesh;
 use crate::sculpt::erase;
 use crate::sculpt::library::{self, Ask, Library, Origin};
@@ -227,18 +228,15 @@ fn find_row(ui: &mut Ui, library: &Library, in_hand: usize, tips: bool, actions:
 }
 
 /// What a row of the list, or a tile of the wheel, says when pointed at.
-pub fn tip_of(library: &Library, i: usize) -> String {
+/// `key` is the brush's shortcut, empty for none (keymap.rs).
+pub fn tip_of(library: &Library, i: usize, key: &str) -> String {
     let entry = &library.entries()[i];
     let kernel = entry.kernel.name();
+    let name = if key.is_empty() { entry.name.clone() } else { format!("{} ({key})", entry.name) };
     match entry.origin {
-        Origin::Base => match entry.kernel.hotkey() {
-            Some(key) => format!("{} ({key})\n{}", entry.name, entry.kernel.description()),
-            None => format!("{}\n{}", entry.name, entry.kernel.description()),
-        },
-        Origin::Shipped => {
-            format!("{}\n{}\nA {kernel} brush.", entry.name, library::about(&entry.name).unwrap_or_default())
-        }
-        Origin::User => format!("{}\nOne of your own. A {kernel} brush.", entry.name),
+        Origin::Base => format!("{name}\n{}", entry.kernel.description()),
+        Origin::Shipped => format!("{name}\n{}\nA {kernel} brush.", library::about(&entry.name).unwrap_or_default()),
+        Origin::User => format!("{name}\nOne of your own. A {kernel} brush."),
     }
 }
 
@@ -290,7 +288,7 @@ fn row(
     icon: Option<TextureId>,
     name: &str,
     lit: bool,
-    (pinned, shift, key): (bool, bool, Option<char>),
+    (pinned, shift, key): (bool, bool, Option<String>),
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(width, ROW), Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -317,11 +315,12 @@ fn row(
         let at = pos2(right - if pinned { 6.0 } else { 0.0 }, rect.top() + 1.0);
         p.text(at, Align2::RIGHT_TOP, "S", theme::bold(8.0), gold);
     }
-    if let Some(key) = key {
-        p.text(pos2(right, rect.bottom() - 1.0), Align2::RIGHT_BOTTOM, key.to_string(), theme::bold(9.0), gold);
-    }
+    let key_width = key.as_ref().map_or(0.0, |key| {
+        p.text(pos2(right, rect.bottom() - 1.0), Align2::RIGHT_BOTTOM, key, theme::bold(9.0), gold).width()
+    });
     if shift || key.is_some() {
-        right -= 8.0;
+        // A key longer than one figure ("Shift+T") takes the room it needs.
+        right -= key_width.max(6.0) + 2.0;
     }
     let left = rect.left() + 26.0;
     let fits = |text: &str, size: f32| p.layout_no_wrap(text.to_owned(), theme::font(size), ink).size().x <= right - left;
@@ -337,7 +336,7 @@ fn row(
 /// The rows for `brushes` (places in the library), in columns.
 fn rows(
     ui: &mut Ui,
-    (library, s): (&Library, &Settings),
+    (library, s, keys): (&Library, &Settings, &Keymap),
     brushes: &[usize],
     icon: &dyn Fn(&str) -> Option<TextureId>,
     tips: bool,
@@ -349,11 +348,12 @@ fn rows(
         ui.horizontal(|ui| {
             for &i in line {
                 let entry = &library.entries()[i];
-                let key = if entry.origin == Origin::Base { entry.kernel.hotkey() } else { None };
-                let marks = (entry.pinned, library.shift() == i && i != Library::base(Brush::Smooth), key);
+                let key = keys.badge(&keymap::brush_id(&entry.name));
+                let shift = library.shift() == i && i != Library::base(Brush::Smooth);
+                let marks = (entry.pinned, shift, (!key.is_empty()).then(|| key.clone()));
                 let r = row(ui, width, icon(entry.kernel.icon()), &entry.name, in_hand == Some(i), marks);
                 let r = noted(r, &format!("row:{}", entry.name));
-                let r = theme::tip(r, tips, &format!("{}\n{}", tip_of(library, i), menu_tip(library, i)));
+                let r = theme::tip(r, tips, &format!("{}\n{}", tip_of(library, i, &key), menu_tip(library, i)));
                 if r.clicked() {
                     actions.push(Action::Brush(Ask::Select(i)));
                 }
@@ -382,7 +382,7 @@ fn group(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
 /// in hand; its right-click menu does the rest.
 pub fn card(
     ui: &mut Ui,
-    (library, s): (&Library, &Settings),
+    (library, s, keys): (&Library, &Settings, &Keymap),
     recent: &[String],
     icon: &dyn Fn(&str) -> Option<TextureId>,
     tips: bool,
@@ -402,7 +402,7 @@ pub fn card(
             if matches.is_empty() {
                 theme::hint(ui, "No brush has that in its name.");
             }
-            rows(ui, (library, s), &matches, icon, tips, actions);
+            rows(ui, (library, s, keys), &matches, icon, tips, actions);
         } else {
             // One line, always: brushes appearing in it must never push the
             // list down under a pen that is about to tap it.
@@ -413,14 +413,14 @@ pub fn card(
                     let words = "The brushes you take up show here.";
                     ui.painter().text(rect.left_center() + vec2(4.0, 0.0), Align2::LEFT_CENTER, words, theme::font(11.0), theme::HINT());
                 } else {
-                    rows(ui, (library, s), &lately[..lately.len().min(COLUMNS)], icon, tips, actions);
+                    rows(ui, (library, s, keys), &lately[..lately.len().min(COLUMNS)], icon, tips, actions);
                 }
             });
             for (title, kernels) in GROUPS {
-                group(ui, title, |ui| rows(ui, (library, s), &of_group(library, kernels), icon, tips, actions));
+                group(ui, title, |ui| rows(ui, (library, s, keys), &of_group(library, kernels), icon, tips, actions));
             }
             if !yours.is_empty() {
-                group(ui, "Yours", |ui| rows(ui, (library, s), &yours, icon, tips, actions));
+                group(ui, "Yours", |ui| rows(ui, (library, s, keys), &yours, icon, tips, actions));
             }
         }
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
@@ -593,10 +593,12 @@ mod tests {
     fn every_brush_says_what_it_is_when_pointed_at() {
         let mut library = Library::default();
         let mut s = Settings::default();
-        assert!(tip_of(&library, Library::base(Brush::Clay)).starts_with("Clay (2)\n"));
-        let trim = tip_of(&library, library.named("Trim").unwrap());
+        assert!(tip_of(&library, Library::base(Brush::Clay), "2").starts_with("Clay (2)\n"));
+        let trim = tip_of(&library, library.named("Trim").unwrap(), "");
         assert!(trim.starts_with("Trim\n") && trim.ends_with("A Flatten brush."), "{trim}");
         let mine = library.duplicate(library.named("Trim").unwrap(), &mut s);
-        assert!(tip_of(&library, mine).contains("your own"));
+        assert!(tip_of(&library, mine, "").contains("your own"));
+        // A brush of one's own can have a key too, and says so.
+        assert!(tip_of(&library, mine, "Shift+T").contains("(Shift+T)\n"));
     }
 }

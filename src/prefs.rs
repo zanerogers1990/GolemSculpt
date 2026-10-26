@@ -760,6 +760,10 @@ pub struct Prefs {
     /// The lens last chosen in the Lens menu, as its angle of view in degrees
     /// (from 2026-10-25; a file from before takes the default).
     pub lens: f32,
+    /// The keyboard shortcuts changed on the Keyboard Shortcuts card: for each
+    /// command changed, by its id, the keys it has now (none for no key). The
+    /// rest are as the app ships them (keymap.rs).
+    pub shortcuts: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Prefs {
@@ -794,6 +798,7 @@ impl Default for Prefs {
             pen_seen: false,
             recent_brushes: Vec::new(),
             lens: opts.lens,
+            shortcuts: BTreeMap::new(),
         }
     }
 }

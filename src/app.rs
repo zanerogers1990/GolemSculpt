@@ -15,7 +15,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::window::{Window, WindowId};
 
 use crate::camera::{self, View};
 use crate::doc::{Action, Doc, MaskOp, Options, Stats, Tool};
@@ -52,6 +52,7 @@ mod files;
 mod focus;
 mod groups;
 mod hover;
+pub(crate) mod keys;
 mod layers;
 mod levels;
 mod live_copies;
@@ -217,6 +218,8 @@ pub struct Args {
     /// file box, after the camera is turned to the view named, or `play` to
     /// work the pictures and print a line per check (see app/references.rs).
     pub demo_references: Option<String>,
+    /// Work the keyboard shortcuts and print a line per check (see app/keys/play.rs).
+    pub demo_keys: bool,
     /// Look at the whole scene from this yaw and pitch, in degrees, whatever
     /// view a file that was opened had (for visual checks): 0,0 is the front.
     pub view: Option<(f32, f32)>,
@@ -773,6 +776,9 @@ impl Running {
         if let Some(what) = running.args.demo_references.clone() {
             running.references_demo(&what);
         }
+        if running.args.demo_keys {
+            running.keys_play();
+        }
         // Whatever the setup above selected or undid must not pulse in the
         // first frames (a screenshot is taken in them).
         running.flash.startup(running.args.demo_flash.then(|| running.doc.scene.active_id()));
@@ -1103,10 +1109,13 @@ impl Running {
     }
 
     fn key_pressed(&mut self, event_loop: &ActiveEventLoop, code: KeyCode) {
-        let mods = self.input.mods;
-        let ctrl = mods.control_key();
-        let shift = mods.shift_key();
+        let ctrl = self.input.mods.control_key();
+        let only_ctrl = ctrl && !self.input.mods.shift_key() && !self.input.mods.alt_key();
         let idle = self.input.drag == Drag::None;
+        // The Keyboard Shortcuts card waiting for a key takes it (app/keys.rs).
+        if self.shortcut_capture(code) {
+            return;
+        }
         // A question on screen (the Delete key's) takes every key until answered.
         if self.confirm_key(code) {
             return;
@@ -1125,85 +1134,14 @@ impl Running {
         if self.brush_step_key(code) {
             return;
         }
-        if let Some(&b) = Brush::ALL.iter().find(|&&b| brush_key(b) == Some(code)) {
-            if idle && !ctrl {
-                // The number keys are the base brushes' (the first ten of them: `Brush::hotkey`).
-                let sculptor = &mut self.doc.sculptor;
-                sculptor.library.select(crate::sculpt::library::Library::base(b), &mut sculptor.settings);
-                // With the Transform tool up, the brush is picked to sculpt with.
-                self.back_to_sculpting();
-                self.toast(b.name());
-            }
+        // Everything a person can put on another key: the Keyboard Shortcuts card's (app/keys.rs).
+        if self.run_key_command(code) {
             return;
         }
-        let anchor = self.input.pointer;
-        let gauge = move |kind, start| Gauge { kind, anchor, start };
+        // The keys kept for the app (keymap::reserved).
         match code {
-            KeyCode::KeyZ if ctrl && shift => self.act(Action::Redo),
-            KeyCode::KeyZ if shift => self.act(Action::Redo),
-            KeyCode::KeyZ => self.act(Action::Undo),
-            KeyCode::KeyY if ctrl => self.act(Action::Redo),
-            KeyCode::KeyS if ctrl && shift => self.act(Action::SaveAs),
-            KeyCode::KeyS if ctrl => self.act(Action::Save),
-            KeyCode::KeyO if ctrl => self.act(Action::Open),
-            // Not in the middle of a drag: it would take the scene from under it.
-            KeyCode::KeyN if ctrl => {
-                if idle {
-                    self.act(Action::NewScene);
-                }
-            }
-            KeyCode::Equal if ctrl => self.doc.opts.ui_scale = (self.doc.opts.ui_scale + 0.1).min(3.0),
-            KeyCode::Minus if ctrl => self.doc.opts.ui_scale = (self.doc.opts.ui_scale - 0.1).max(0.75),
-            KeyCode::KeyS if idle => {
-                self.input.gauge = Some(gauge(GaugeKind::Size, self.doc.sculptor.settings.size()));
-            }
-            KeyCode::KeyF if idle => {
-                // F F frames the model; a lone F held and dragged is strength.
-                let now = Instant::now();
-                if self.input.last_f.is_some_and(|t| now - t < DOUBLE_CLICK) {
-                    self.input.last_f = None;
-                    self.frame_view();
-                } else {
-                    self.input.last_f = Some(now);
-                    self.input.gauge =
-                        Some(gauge(GaugeKind::Strength, self.doc.sculptor.settings.current().strength));
-                }
-            }
-            // Subdivision levels (app/levels.rs). Ctrl + D before plain D, which is the focal shift.
-            KeyCode::KeyD if ctrl => {
-                if idle {
-                    self.act(Action::Subdivide);
-                }
-            }
-            KeyCode::PageUp if idle => self.act(Action::LevelBy(1)),
-            KeyCode::PageDown if idle => self.act(Action::LevelBy(-1)),
-            KeyCode::KeyD if idle => {
-                self.input.gauge =
-                    Some(gauge(GaugeKind::Focal, self.doc.sculptor.settings.current().focal_shift));
-            }
-            // P: the Paint brush, and again the brush before it. I: the eyedropper, at the pointer (app/paint.rs).
-            KeyCode::KeyP if idle && !ctrl => self.paint_key(),
-            KeyCode::KeyI if idle && !ctrl => self.act(Action::Paint(crate::doc::PaintAction::PickAt(self.input.pointer))),
-            KeyCode::KeyM if idle => {
-                let s = &mut self.doc.sculptor.settings;
-                s.mask_mode = !s.mask_mode;
-                let on = s.mask_mode;
-                self.toast(if on { "Mask" } else { "Mask Off" });
-            }
-            KeyCode::KeyX if idle => {
-                // The selected object's own Mirror X, as in the Unity app.
-                self.doc.edit_symmetry(|symmetry| symmetry.mirror[0] = !symmetry.mirror[0]);
-                let on = self.doc.scene.active_symmetry().mirror[0];
-                self.toast(if on { "Mirror X" } else { "Mirror Off" });
-            }
-            KeyCode::KeyR if idle => self.act(Action::Remesh),
-            // G, not T: T is the Tube tool's key, as in the Unity app.
-            KeyCode::KeyG if idle => {
-                self.set_tool(if self.transform_active() { Tool::Sculpt } else { Tool::Transform });
-            }
-            KeyCode::Delete if idle => self.delete_key(),
-            KeyCode::KeyH if idle && !ctrl => self.hide_key(),
-            KeyCode::Slash | KeyCode::NumpadDivide if idle && !ctrl => self.local_view_key(),
+            KeyCode::Equal if only_ctrl => self.doc.opts.ui_scale = (self.doc.opts.ui_scale + 0.1).min(3.0),
+            KeyCode::Minus if only_ctrl => self.doc.opts.ui_scale = (self.doc.opts.ui_scale - 0.1).max(0.75),
             KeyCode::Space if idle && (self.ui.radial.is_none() || self.ui.radial_closing) => {
                 let ppp = self.egui_ctx.pixels_per_point();
                 self.ui.radial = Some(egui::pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp));
@@ -1217,36 +1155,29 @@ impl Running {
                 self.ui.radial = None;
                 self.doc.opts.clean_view = false;
             }
-            // Orthographic or perspective, as Blender's Numpad 5 (app/turn.rs).
-            KeyCode::Numpad5 if idle => self.act(Action::ToggleOrtho),
-            KeyCode::F11 => {
-                let full = self.window.fullscreen().is_some();
-                self.window.set_fullscreen((!full).then_some(Fullscreen::Borderless(None)));
-            }
-            KeyCode::KeyQ if ctrl => self.close_requested(event_loop),
-            // A key nothing above uses may be a hosted tool's (L is Measure).
-            _ => {
-                self.tools_hotkey(code);
-            }
+            KeyCode::KeyQ if only_ctrl => self.close_requested(event_loop),
+            _ => {}
         }
     }
 
     fn key_released(&mut self, code: KeyCode) {
         self.spheres_key_released(code);
         self.tools_key_released(code);
-        match code {
-            KeyCode::KeyS | KeyCode::KeyF | KeyCode::KeyD => {
-                // F held and dragged set the strength: it is not the first F of F F.
-                let moved = self.input.gauge.is_some_and(|g| g.anchor.distance(self.input.pointer) > DOUBLE_CLICK_PX);
-                if code == KeyCode::KeyF && moved {
-                    self.input.last_f = None;
-                }
-                self.input.gauge = None;
-            }
+        if code == KeyCode::Space {
             // Not closed here: a tap on a tile may have come in with the
             // release, and the wheel has not seen it yet (ui/overlay.rs).
-            KeyCode::Space => self.ui.radial_closing = self.ui.radial.is_some(),
-            _ => {}
+            self.ui.radial_closing = self.ui.radial.is_some();
+            return;
+        }
+        // A hold key let go ends its drag, whatever was held with it.
+        let strength = self.is_key_of("hold_strength", code);
+        if strength || self.is_key_of("hold_size", code) || self.is_key_of("hold_focal", code) {
+            // The strength key held and dragged set the strength: it was not the first tap of two.
+            let moved = self.input.gauge.is_some_and(|g| g.anchor.distance(self.input.pointer) > DOUBLE_CLICK_PX);
+            if strength && moved {
+                self.input.last_f = None;
+            }
+            self.input.gauge = None;
         }
     }
 
@@ -2345,6 +2276,7 @@ impl Running {
 }
 
 /// The number key that picks a brush, for the brushes that have one.
+#[cfg(test)]
 fn brush_key(brush: Brush) -> Option<KeyCode> {
     Some(match brush.hotkey()? {
         '1' => KeyCode::Digit1,

@@ -689,12 +689,24 @@ fn key_of(code: KeyCode) -> Option<kit::Key> {
     })
 }
 
-/// Keys that stay the app's while a hosted tool is up, if the tool does not
-/// want them: undo and redo, the transform gizmo, hide the panels,
-/// fullscreen.
-fn stays_with_app(code: KeyCode) -> bool {
-    matches!(code, KeyCode::KeyZ | KeyCode::KeyG | KeyCode::Tab | KeyCode::F11 | KeyCode::Numpad5)
+/// The key a tool asks for (`kit::Info::hotkey`) as a shortcut: the letter
+/// or number key itself, with nothing held (keymap.rs).
+pub(super) fn chord_of(key: Option<kit::Key>) -> Option<crate::keymap::Chord> {
+    let key = key?;
+    // The main keyboard's key: the keypad's digits read as the same `kit::Key`.
+    let code = TOOL_KEYS.iter().copied().find(|&code| key_of(code) == Some(key))?;
+    crate::keymap::Chord::new(code, false, false, false)
 }
+
+/// The keys a tool may ask for, main keyboard before keypad.
+const TOOL_KEYS: &[KeyCode] = &[
+    KeyCode::KeyA, KeyCode::KeyB, KeyCode::KeyC, KeyCode::KeyD, KeyCode::KeyE, KeyCode::KeyF, KeyCode::KeyG,
+    KeyCode::KeyH, KeyCode::KeyI, KeyCode::KeyJ, KeyCode::KeyK, KeyCode::KeyL, KeyCode::KeyM, KeyCode::KeyN,
+    KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyQ, KeyCode::KeyR, KeyCode::KeyS, KeyCode::KeyT, KeyCode::KeyU,
+    KeyCode::KeyV, KeyCode::KeyW, KeyCode::KeyX, KeyCode::KeyY, KeyCode::KeyZ, KeyCode::Digit0, KeyCode::Digit1,
+    KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7,
+    KeyCode::Digit8, KeyCode::Digit9,
+];
 
 impl Running {
     /// Whether a hosted tool has the viewport.
@@ -1004,8 +1016,8 @@ impl Running {
                 }
                 return true;
             }
-            // F F frames, as when sculpting; a lone F has no meaning here.
-            KeyCode::KeyF if idle => {
+            // The strength key tapped twice frames, as when sculpting; alone it has no meaning here.
+            _ if idle && self.is_key_of("hold_strength", code) => {
                 let now = Instant::now();
                 if self.input.last_f.is_some_and(|t| now - t < DOUBLE_CLICK) {
                     self.input.last_f = None;
@@ -1015,7 +1027,7 @@ impl Running {
                 }
                 return true;
             }
-            _ if stays_with_app(code) => return false,
+            _ if self.key_stays_with_app(code) => return false,
             _ => {}
         }
         // Another tool's key goes straight to it; this tool's own key puts
@@ -1027,14 +1039,15 @@ impl Running {
         true
     }
 
-    /// Brings up (or puts away) the hosted tool whose key this is. The app
-    /// calls it for keys nothing else uses, so its own keys always win.
+    /// Brings up (or puts away) the hosted tool whose key this is, as the
+    /// Keyboard Shortcuts card has it (keymap.rs).
     pub(super) fn tools_hotkey(&mut self, code: KeyCode) -> bool {
-        if self.input.mods.control_key() || self.input.drag != Drag::None || self.doc.tool == Tool::SSpheres {
+        if self.input.drag != Drag::None || self.doc.tool == Tool::SSpheres {
             return false;
         }
-        let Some(key) = key_of(code) else { return false };
-        let Some(index) = self.doc.tools.infos.iter().position(|info| info.hotkey == Some(key)) else { return false };
+        let Some(command) = self.key_command(code) else { return false };
+        let Some(id) = command.strip_prefix("tool:") else { return false };
+        let Some(index) = self.doc.tools.info_index(id) else { return false };
         if self.doc.tools.active(self.doc.tool) == Some(index) {
             self.tools_leave();
         } else {

@@ -103,6 +103,9 @@ pub struct UiState {
     /// Whether the size and strength plate is pinned at the top of the
     /// Sculpt panel this frame (`sculpt_head`), so the Brush tab leaves it out.
     pub plate_pinned: bool,
+    /// The command the Keyboard Shortcuts card is waiting for a key for, by
+    /// its id (keymap.rs): the next key pressed goes to it (app/keys.rs).
+    pub shortcut_capture: Option<String>,
 }
 
 impl UiState {
@@ -124,6 +127,7 @@ impl UiState {
             recent_brushes: Vec::new(),
             plate_pinned: false,
             older: Default::default(),
+            shortcut_capture: None,
         }
     }
 }
@@ -270,7 +274,8 @@ fn sculpt_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: 
                     }
                 }
             });
-            let style = ButtonStyle { badge: "G", ..Default::default() };
+            let badge = doc.opts.keys.badge("transform");
+            let style = ButtonStyle { badge: &badge, ..Default::default() };
             if tip(theme::button(ui, ui.available_width(), "Back to Sculpt", style), doc.opts.tooltips, "Put the gizmo away and sculpt (G).").clicked() {
                 actions.push(Action::Tool(Tool::Sculpt));
             }
@@ -327,17 +332,21 @@ fn sculpt_head(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
         theme::HINT(),
     );
 
+    // Their keys as the Keyboard Shortcuts card has them.
+    let keys = |id: &str| doc.opts.keys.keys(id).iter().map(|k| k.badge()).collect::<Vec<_>>().join(" or ");
+    let (undo_key, redo_key) = (doc.opts.keys.badge("undo"), doc.opts.keys.badge("redo"));
+    let (undo_tip, redo_tip) = (format!("Step back ({})", keys("undo")), format!("Step forward ({})", keys("redo")));
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 2, 6.0);
         ui.add_enabled_ui(doc.can_undo(), |ui| {
-            let style = ButtonStyle { icon: icon("undo"), badge: "Z", ..Default::default() };
-            if tip(theme::button(ui, w, "Undo", style), tips, "Step back (Z or Ctrl+Z)").clicked() {
+            let style = ButtonStyle { icon: icon("undo"), badge: &undo_key, ..Default::default() };
+            if tip(theme::button(ui, w, "Undo", style), tips, &undo_tip).clicked() {
                 actions.push(Action::Undo);
             }
         });
         ui.add_enabled_ui(doc.can_redo(), |ui| {
-            let style = ButtonStyle { icon: icon("redo"), badge: "Shift+Z", ..Default::default() };
-            if tip(theme::button(ui, w, "Redo", style), tips, "Step forward (Shift+Z or Ctrl+Y)").clicked() {
+            let style = ButtonStyle { icon: icon("redo"), badge: &redo_key, ..Default::default() };
+            if tip(theme::button(ui, w, "Redo", style), tips, &redo_tip).clicked() {
                 actions.push(Action::Redo);
             }
         });
@@ -356,7 +365,8 @@ fn sculpt_head(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
             let plate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(330.0);
             if ui.available_height() - plate >= ROOM_FOR_CARDS {
                 let top = ui.cursor().top();
-                brush_plate(ui, &mut doc.sculptor.settings, &icon, tips);
+                let mask_key = doc.opts.keys.badge("mask_mode");
+                brush_plate(ui, &mut doc.sculptor.settings, &mask_key, &icon, tips);
                 let height = ui.cursor().top() - top;
                 ui.data_mut(|d| d.insert_temp(id, height));
                 pinned = true;
@@ -376,7 +386,8 @@ fn tools_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState) {
 /// What every brush has: which way it works, its size, strength and focal
 /// shift. Pinned at the top of the Sculpt panel on the Brush tab when the
 /// panel has room for it (`sculpt_head`), else at the top of the tab.
-fn brush_plate(ui: &mut egui::Ui, s: &mut crate::sculpt::Settings, icon: &dyn Fn(&str) -> Option<egui::TextureId>, tips: bool) {
+/// `mask_key` is Mask painting's key, as the Keyboard Shortcuts card has it.
+fn brush_plate(ui: &mut egui::Ui, s: &mut crate::sculpt::Settings, mask_key: &str, icon: &dyn Fn(&str) -> Option<egui::TextureId>, tips: bool) {
     let brush = s.brush;
     theme::plate(ui, |ui| {
         ui.horizontal(|ui| {
@@ -404,7 +415,7 @@ fn brush_plate(ui: &mut egui::Ui, s: &mut crate::sculpt::Settings, icon: &dyn Fn
             let mask = ButtonStyle {
                 icon: icon("brush_mask"),
                 active: s.mask_mode.then_some(theme::MASK),
-                badge: "M",
+                badge: mask_key,
                 ..Default::default()
             };
             if tip(theme::button(ui, w, "Mask", mask), tips, "Paint a mask that protects the surface from brushes (M). Ctrl erases.").clicked() {
@@ -460,7 +471,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
     // Size, strength and focal shift: pinned at the top of the panel when it
     // has room (`sculpt_head`), else here at the top of the tab.
     if !state.plate_pinned {
-        brush_plate(ui, s, &icon, tips);
+        brush_plate(ui, s, &doc.opts.keys.badge("mask_mode"), &icon, tips);
     }
 
     // Lazy Mouse and the pen's curve, right under Size and Strength: they change how every stroke feels.
@@ -468,7 +479,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
     let pen = &doc.sculptor.pen_meter;
     theme::category(ui, "Stroke", Color32::from_rgb(168, 133, 255), &summary, false, |ui| stroke::card(ui, s, pen, tips));
 
-    brushes::card(ui, (library, s), &state.recent_brushes, &icon, tips, actions);
+    brushes::card(ui, (library, s, &doc.opts.keys), &state.recent_brushes, &icon, tips, actions);
 
     // A name of the user's own can be longer than the header has room for beside its buttons.
     let title = if s.mask_mode { "Mask Settings".to_owned() } else { format!("{} Settings", brushes::shortened(&name, 16)) };
@@ -617,7 +628,8 @@ fn mesh_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &mu
         }
         rebuild_notes::remesh_estimate(ui, doc, doc.opts.remesh_resolution);
         remesh_smooth::slider(ui, &mut doc.opts, tips);
-        let style = ButtonStyle { badge: "R", active: Some(ACCENT()), ..Default::default() };
+        let badge = doc.opts.keys.badge("remesh");
+        let style = ButtonStyle { badge: &badge, active: Some(ACCENT()), ..Default::default() };
         if tip(
             theme::button(ui, ui.available_width(), "Remesh", style),
             tips,
@@ -743,7 +755,7 @@ fn scene_panel(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &
     });
     let look = tabs::page(ui, showing == Scene::Look, "look", |ui| look_page(ui, doc, state, actions));
     let file = tabs::page(ui, showing == Scene::File, "file", |ui| file_page(ui, doc, state, actions));
-    let settings = tabs::page(ui, showing == Scene::Settings, "settings", |ui| settings::page(ui, doc));
+    let settings = tabs::page(ui, showing == Scene::Settings, "settings", |ui| settings::page(ui, doc, &mut state.shortcut_capture));
     for (tab, back) in [(Scene::Objects, objects), (Scene::Look, look), (Scene::File, file), (Scene::Settings, settings)] {
         if back {
             put_back = Some(tab);

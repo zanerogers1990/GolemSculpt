@@ -58,6 +58,9 @@ pub struct Options {
     /// degrees: what a new scene and the next start are seen through. A
     /// file opens with the lens it was saved with.
     pub lens: f32,
+    /// The keyboard shortcuts in force, as the Keyboard Shortcuts card has
+    /// them (keymap.rs, app/keys.rs). Kept in the settings file.
+    pub keys: crate::keymap::Keymap,
     /// The object Project Detail takes detail from; `None` (or one that has
     /// gone) for the one overlapping the active object most (app/project.rs).
     /// Not kept between runs.
@@ -126,6 +129,7 @@ impl Default for Options {
             decimate_preview: Default::default(),
             subdivide_flat: false,
             lens: crate::camera::DEFAULT_FOV,
+            keys: Default::default(),
             new_shape_tris: 200_000.0,
             clean_view: false,
             folded: [false; 2],

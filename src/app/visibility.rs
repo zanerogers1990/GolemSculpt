@@ -96,25 +96,30 @@ impl Running {
         if mods.alt_key() {
             self.show_everything();
         } else if mods.shift_key() {
-            let was = self.doc.scene.active_id();
-            let mut hidden = 0;
-            self.doc.history.name_next(Some("Hide Others".to_owned()));
-            self.edit_scene(|scene, _| {
-                hidden = scene.hide_unselected();
-                hidden > 0
-            });
-            self.doc.history.name_next(None);
-            if hidden > 0 {
-                self.toast("Hide Unselected");
-                let what = if hidden == 1 { "the 1 object".to_owned() } else { format!("the {hidden} objects") };
-                self.after_hiding(format!("{what} not selected"), was);
-            }
+            self.hide_others();
         } else {
             self.hide_selection();
         }
     }
 
     /// Alt + H: every hidden object shows again. One undo step.
+    /// Shift + H: hides every object that is not selected, as one step.
+    pub(super) fn hide_others(&mut self) {
+        let was = self.doc.scene.active_id();
+        let mut hidden = 0;
+        self.doc.history.name_next(Some("Hide Others".to_owned()));
+        self.edit_scene(|scene, _| {
+            hidden = scene.hide_unselected();
+            hidden > 0
+        });
+        self.doc.history.name_next(None);
+        if hidden > 0 {
+            self.toast("Hide Unselected");
+            let what = if hidden == 1 { "the 1 object".to_owned() } else { format!("the {hidden} objects") };
+            self.after_hiding(format!("{what} not selected"), was);
+        }
+    }
+
     pub(super) fn show_everything(&mut self) {
         let mut shown = 0;
         self.doc.history.name_next(Some("Show All".to_owned()));

@@ -35,6 +35,8 @@ sculpts at full strength and full size).
 | Middle drag, or Alt + Shift + drag | Pan |
 | Ctrl + Alt + drag | Zoom |
 | Numpad 5 | Orthographic / perspective, as in Blender (also the Ortho / Persp button) |
+| Numpad 1 / Numpad 3 / Numpad 7 | Front / right / top view, as in Blender |
+| Ctrl + Numpad 1 / Ctrl + Numpad 3 / Ctrl + Numpad 7 | Back / left / bottom view |
 | (Hand, magnifier and house beside the view gizmo's buttons) | Drag the hand to pan, the magnifier up or down to zoom; tap the house for Home, the view a scene starts with |
 | Scroll over the model | Brush size |
 | [ / ] | Brush size a step smaller / bigger (a tenth each step; hold the key to keep going) |
@@ -44,9 +46,9 @@ sculpts at full strength and full size).
 | Double-click another object | Select it |
 | Ctrl + click a row of the object list | Add that object to the selection |
 | H / Shift + H / Alt + H | Hide the selection / hide everything else / show everything (each an undo step, as the eye buttons are) |
-| / | Local View: only the selection, framed; again to bring the rest and the view back |
+| / or Numpad / | Local View: only the selection, framed; again to bring the rest and the view back |
 | Delete | Delete the selected object (asks first) |
-| 1 2 3 4 5 6 7 8 9 0 | The base brushes Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook (Pinch, Nudge and Erase Layer have no key, nor has any other brush of the library: pick them in the panel or on the wheel) |
+| 1 2 3 4 5 6 7 8 9 0 | The base brushes Move, Clay, Smooth, Crease, Inflate, Flatten, Pose, Standard, Layer, Snake Hook (Pinch, Nudge and Erase Layer have no key, nor has any other brush of the library until you give it one on the Keyboard Shortcuts card) |
 | P | The Paint brush; again, the brush you had before it (see Polypaint) |
 | I | Eyedropper: pick up the colour and material of the paint under the pointer |
 | Ctrl + drag / Shift + drag with the Paint brush | Erase the paint / blur the paint (it never smooths the clay) |
@@ -67,7 +69,8 @@ sculpts at full strength and full size).
 | (Hide button) | Hide tool: a box or lasso hides part of the selected object; it has no key, as H hides whole objects |
 | K | Split tool: on (line), again for lasso, box, then off |
 | J | Keys tool on / off |
-| Z, Shift + Z (also Ctrl + Z, Ctrl + Y) | Undo, redo |
+| Ctrl + Z | Undo |
+| Ctrl + Y, Ctrl + Shift + Z | Redo |
 | Ctrl + S, Ctrl + Shift + S, Ctrl + O | Save, save as, open |
 | (Drag a file onto the window) | A sculpt (.sclp, .sculpt) opens as Open opens one; a model (.obj, .stl, .ply, .fbx, .glb, .gltf) is imported; a picture (.png, .jpg) becomes a reference picture |
 | Ctrl + N | New scene (asks first if anything would be lost) |
@@ -83,9 +86,43 @@ sculpts at full strength and full size).
 | (Tabs at the top of the Scene panel, and under the tools in the Sculpt panel) | Show that tab's cards: Brush or Mesh; Scene, Look, File or Settings |
 
 Dragging on the background to orbit is the one addition to the Unity app's
-controls; everything else matches it. The **Keyboard Shortcuts** card (Scene
-panel, Settings tab) lists the same keys, from one table in the code that a
-test holds to this one.
+controls; everything else matches it. These are the keys as the app ships
+them: almost every key can be changed (see Keyboard shortcuts, below), and
+the keys on the buttons follow.
+
+### Keyboard shortcuts
+
+The **Keyboard Shortcuts** card (Scene panel, Settings tab) lists every
+command a key can be put on, grouped as the panels are, with the key each is
+on now.
+
+- **Click a command's key, then press the new one**, with Ctrl, Shift or
+  Alt held if you like. Esc leaves it as it was; Backspace (or Delete) takes
+  its key away. A key that another command had is taken from it, and the
+  status line says which.
+- **Any brush** can have a key, not only the ten base brushes on the number
+  keys: type part of its name in the box at the top to find it (the card
+  lists only the brushes that have a key until you do). The key shows in the
+  brush's corner in the list and in its tooltip.
+- Commands that ship with no key can have one too: Quad Remesh, Decimate,
+  Reconstruct Subdiv, Project Detail, the mask's Invert, Clear, Grow, Shrink,
+  Blur and Sharpen, Home view, Wireframe, Mirror Y and Z, Clone, Instance,
+  Import. The hosted tools (Measure, Tube, Muscle...) are there under Tools.
+- **S, F and D**, the keys held to drag the size, strength and focal shift,
+  can move too; the strength key tapped twice frames the model, whichever
+  key it is.
+- A changed command gets a **↺** beside it, which puts it back on the key
+  the app ships with; **Reset All Shortcuts** (press it twice) puts them all
+  back. The header says how many are changed.
+- Kept for the app, and refused with a word why: Space (the brush wheel),
+  Esc, Enter, Tab, [ and ], O (the turntable), Backspace, Ctrl + Q and
+  Ctrl + = / Ctrl + -. What the pen and mouse do with a key held (Alt to
+  orbit, Ctrl to invert the brush, Shift to smooth) is how sculpting works,
+  not a command; the card lists those last, as they are.
+- The keys are kept in the settings file with the rest, and only the ones
+  you changed: a key the app adds later reaches you if you never moved it.
+- While a hosted tool is up it has its own keys first; the view's keys and
+  the Transform gizmo's still work.
 
 A double-click is two clicks within half a second and 20 pixels of each
 other, which leaves room for a pen tip, which never lands twice on the same

@@ -58,12 +58,14 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
              A big change made on a low level comes back up with the fine detail riding on it. One point pulled out by \
              itself on a low level comes back up as a softer, lower swelling: the finer levels round it off.",
         );
-        subdivide(ui, mesh, &mut doc.opts.subdivide_flat, tips, actions);
+        let keys = &doc.opts.keys;
+        let badges = [keys.badge("subdivide"), keys.badge("level_down"), keys.badge("level_up")];
+        subdivide(ui, mesh, &mut doc.opts.subdivide_flat, &badges[0], tips, actions);
         reconstruct::button(ui, mesh, tips, actions);
         let Some((level, count)) = place else { return };
         ui.add_space(6.0);
         rows(ui, mesh, level, count, tips, actions);
-        steppers(ui, level, count, tips, actions);
+        steppers(ui, level, count, [&badges[1], &badges[2]], tips, actions);
         deleters(ui, level, count, tips, actions);
         if mesh.levels.as_ref().is_some_and(|l| l.scheme() == sculpt_multires::Scheme::CatmullClark) {
             theme::hint(ui, "This model is quads on every level, and export writes the quads of the level it is on.");
@@ -74,10 +76,11 @@ pub fn card(ui: &mut egui::Ui, doc: &mut Doc, actions: &mut Vec<Action>) {
 }
 
 /// The Subdivide button, what it would make, and the Flat tick.
-fn subdivide(ui: &mut egui::Ui, mesh: &Mesh, flat: &mut bool, tips: bool, actions: &mut Vec<Action>) {
+/// `badge` is Subdivide's key, as the Keyboard Shortcuts card has it.
+fn subdivide(ui: &mut egui::Ui, mesh: &Mesh, flat: &mut bool, badge: &str, tips: bool, actions: &mut Vec<Action>) {
     let refusal = levels::subdivide_refusal(mesh);
     ui.add_enabled_ui(refusal.is_none(), |ui| {
-        let style = ButtonStyle { badge: "Ctrl+D", active: Some(ACCENT()), ..Default::default() };
+        let style = ButtonStyle { badge, active: Some(ACCENT()), ..Default::default() };
         let help = "Adds a level with four times the triangles above the finest one and moves to it (Ctrl + D). The \
                     model is rounded a little as it is divided, as clay is when it is smoothed; tick Flat to keep every \
                     point where it is. A quad remesh divides into quads. Undo (Z) takes the level away again.";
@@ -118,12 +121,12 @@ fn rows(ui: &mut egui::Ui, mesh: &Mesh, level: usize, count: usize, tips: bool, 
     }
 }
 
-/// Lower and Higher: one level at a time, with their keys.
-fn steppers(ui: &mut egui::Ui, level: usize, count: usize, tips: bool, actions: &mut Vec<Action>) {
+/// Lower and Higher: one level at a time, with their keys (`badges`, lower then higher).
+fn steppers(ui: &mut egui::Ui, level: usize, count: usize, badges: [&str; 2], tips: bool, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, 2, 6.0);
         ui.add_enabled_ui(level > 0, |ui| {
-            let style = ButtonStyle { badge: "PgDn", ..Default::default() };
+            let style = ButtonStyle { badge: badges[0], ..Default::default() };
             let help = "One level coarser (Page Down): fewer, bigger triangles, for changing the big forms. The detail \
                         of the finer levels is kept and comes back when you go up again.";
             if tip(theme::button(ui, w, "Lower", style), tips, help).clicked() {
@@ -131,7 +134,7 @@ fn steppers(ui: &mut egui::Ui, level: usize, count: usize, tips: bool, actions: 
             }
         });
         ui.add_enabled_ui(level + 1 < count, |ui| {
-            let style = ButtonStyle { badge: "PgUp", ..Default::default() };
+            let style = ButtonStyle { badge: badges[1], ..Default::default() };
             let help = "One level finer (Page Up). What you changed on this level is carried up: the finer detail moves \
                         and turns with the surface under it.";
             if tip(theme::button(ui, w, "Higher", style), tips, help).clicked() {

@@ -239,6 +239,9 @@ impl Running {
         // The view the app starts on takes the lens; a file opened with it brings its own (`apply_details`).
         opts.lens = kept.lens();
         self.doc.camera.set_lens(opts.lens);
+        // The shortcuts: the library's brushes and the tools first, then the changes on top.
+        super::keys::refresh(&mut self.doc);
+        self.doc.opts.keys.take_changes(&kept.shortcuts);
         self.doc.sculptor.dyntopo.enabled = kept.dynamic_topology;
         self.doc.sculptor.dyntopo.detail = kept.dynamic_topology_detail();
         self.doc.sculptor.dyntopo.method = kept.dynamic_topology_method;
@@ -290,6 +293,7 @@ impl Running {
             pen_seen: self.doc.sculptor.pen_meter.known || self.doc.sculptor.pen_meter.seen,
             recent_brushes: self.ui.recent_brushes.clone(),
             lens: opts.lens,
+            shortcuts: opts.keys.changes(),
         }
     }
 

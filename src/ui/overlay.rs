@@ -278,9 +278,16 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
         ui.horizontal(|ui| {
             ui.add_space(2.0);
             view_handles::handle(ui, Handle::Home, tips, actions);
-            let style = theme::ButtonStyle { height: 22.0, badge: "F F", ..Default::default() };
+            // Frame's own key if it has one, else the strength key tapped twice (app/keys.rs).
+            let keys = &doc.opts.keys;
+            let (badge, said) = match (keys.keys("frame").first(), keys.keys("hold_strength").first()) {
+                (Some(own), _) => (own.badge(), format!("press {}", own.text())),
+                (None, Some(twice)) => (format!("{0} {0}", twice.badge()), format!("press {} twice", twice.text())),
+                (None, None) => (String::new(), "give it a key on the Settings tab".to_owned()),
+            };
+            let style = theme::ButtonStyle { height: 22.0, badge: &badge, ..Default::default() };
             let r = theme::button(ui, 76.0, "Frame", style);
-            if r.on_hover_text("Fit the model in view (press F twice, or double-click the background).").clicked() {
+            if r.on_hover_text(format!("Fit the model in view ({said}, or double-click the background).")).clicked() {
                 actions.push(Action::Frame);
             }
         });
