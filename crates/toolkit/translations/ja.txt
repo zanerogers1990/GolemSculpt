@@ -79,6 +79,51 @@ ja: HDRI が読み込まれていません。
 en: {name} ({0} x {0} x {0})
 ja: {name} ({0} x {0} x {0})
 
+en: The bake was stopped.
+ja: ベイクを中止しました。
+
+en: There is no paint on the sculpt to bake a colour map from.
+ja: スカルプトにペイントがないため、カラーマップをベイクできません。
+
+en: Pick at least one map to bake.
+ja: ベイクするマップを 1 つ以上選んでください。
+
+en: The model's UVs cover none of the picture: they are all outside the square from 0 to 1, or have no area.
+ja: モデルの UV が画像のどこにも重なっていません。すべて 0 から 1 の正方形の外にあるか、面積がありません。
+
+en: Nothing on the sculpt was found from the model: the two objects are not in the same place, or Reach is too small.
+ja: モデルから見て、スカルプト上に何も見つかりませんでした。2 つのオブジェクトが同じ位置にないか、Reach が小さすぎます。
+
+en: The model has no UVs to bake onto: unwrap it first.
+ja: ベイク先のモデルに UV がありません。先に UV 展開してください。
+
+en: The model has no faces to bake onto.
+ja: ベイク先のモデルに面がありません。
+
+en: The model's UVs do not match its faces: {0} UVs for {1} triangle corners.
+ja: モデルの UV が面と一致しません: 三角形のコーナー {1} 個に対して UV が {0} 個あります。
+
+en: The model's normals do not match its points.
+ja: モデルの法線の数が頂点の数と合っていません。
+
+en: The model has a face whose corner is not one of its points.
+ja: モデルに、コーナーがモデルの頂点のどれでもない面があります。
+
+en: The picture size must be from {0} to {1} texels; {2} was asked for.
+ja: 画像サイズは {0}~{1} テクセルでなければなりません({2} が指定されました)。
+
+en: Reach must be more than nothing.
+ja: Reach は 0 より大きくしてください。
+
+en: There is no sculpt to bake from.
+ja: ベイク元のスカルプトがありません。
+
+en: The sculpt's paint does not match its points.
+ja: スカルプトのペイントが頂点の数と合っていません。
+
+en: The bake failed.
+ja: ベイクに失敗しました。
+
 en: {0} uses an alpha called {alpha}, which is not on this computer, so it has no alpha.
 ja: {0} は {alpha} というアルファを使っていますが、このコンピューターにないため、アルファなしになっています。
 
@@ -193,9 +238,6 @@ ja: Tab はクリーンビュー用に確保されています。
 en: Backspace takes a key away while you choose one.
 ja: キーを選んでいる間、Backspace でキーの割り当てを外せます。
 
-en: O is kept for spinning the view (the turntable).
-ja: O はビューの回転(ターンテーブル)用に確保されています。
-
 en: Ctrl + Q is kept for quitting.
 ja: Ctrl + Q は終了用に確保されています。
 
@@ -210,6 +252,9 @@ ja: 強さ(押したままドラッグ。2 回タップで画面に収める)
 
 en: Focal shift (hold and drag)
 ja: フォーカルシフト(押したままドラッグ)
+
+en: Spin the view (turntable)
+ja: ビューを回転(ターンテーブル)
 
 en: Delete the object (asks)
 ja: オブジェクトを削除(確認あり)
@@ -531,6 +576,27 @@ ja: SharedMut: {i} の読み取りが末尾({0})を超えています
 
 en: SharedMut stretch {range} past the end ({0})
 ja: SharedMut: 範囲 {range} が末尾({0})を超えています
+
+en: Bake Maps is still working. Wait for it, or press its Cancel.
+ja: Bake Maps を実行中です。終わるまで待つか、Cancel を押してください。
+
+en: {0} is still working. Wait for it, or press its Cancel, then bake.
+ja: {0} を実行中です。終わるまで待つか、Cancel を押してから、ベイクしてください。
+
+en: This object has no UVs to bake onto. Press Unwrap UVs first.
+ja: このオブジェクトにはベイク先の UV がありません。先に Unwrap UVs を押してください。
+
+en: Tick at least one map to bake.
+ja: ベイクするマップを 1 つ以上チェックしてください。
+
+en: Bake Maps needs the sculpt to bake from where this object is: no other object overlaps it.
+ja: Bake Maps には、このオブジェクトと同じ位置にベイク元のスカルプトが必要です。重なっている他のオブジェクトがありません。
+
+en: {0}% of the surface found nothing of "{high}" within reach and is left flat: raise Reach if that is too much.
+ja: サーフェスの {0}% では、Reach 内に「{high}」が見つからず、フラットのままです。多すぎる場合は Reach を上げてください。
+
+en: Unwrapped "{name}": {charts} pieces in the square{along} ({0} ms). Export it as OBJ or FBX to take the UVs with it, or bake maps onto it.
+ja: 「{name}」を UV 展開しました: 正方形の中に {charts} 個のパーツ{along} ({0} ms)。OBJ または FBX でエクスポートすれば UV も一緒に持ち出せます。あるいは、マップをベイクすることもできます。
 
 en: This run of GolemSculpt keeps no settings folder, so it has no link to Blender.
 ja: 今回の GolemSculpt は設定フォルダーを持たないため、Blender とのリンクがありません。
@@ -1444,6 +1510,12 @@ ja: 「{name}」の下位 {0} {lower} を再構築しました: レベル 1 は 
 en: {what}: {0} (the newest {1} stay)
 ja: {what}: {0}(最新の {1} 個が残る)
 
+en: In Blender's Displacement node: Midlevel 0, Scale 1.
+ja: Blender の Displacement ノード: Midlevel 0、Scale 1。
+
+en: In Blender's Displacement node: Midlevel {mid}, Scale {height}.
+ja: Blender の Displacement ノード: Midlevel {mid}、Scale {height}。
+
 en: The video encoder did not respond.
 ja: 動画エンコーダーが応答しませんでした。
 
@@ -1602,6 +1674,9 @@ ja: {0} と一緒に保存されたフェイスグループを読み込めませ
 
 en: The paint saved with {0} could not be read (the file is damaged there): the model is as it was                  saved, without its paint.
 ja: {0} と一緒に保存されたペイントを読み込めませんでした(その部分でファイルが破損しています)。モデルは保存時のままで、ペイントはありません。
+
+en: The UVs saved with {0} could not be read (the file is damaged there): the model is as it was saved, without its UVs.
+ja: {0} に保存されていた UV を読み込めませんでした(ファイルのその部分が破損しています)。モデルは保存されたとおりですが、UV はありません。
 
 en: What Blender sent is damaged or cut short, so nothing was taken from it.
 ja: Blender から送られたデータが破損しているか途中で切れているため、何も取り込めませんでした。
@@ -2139,6 +2214,57 @@ ja: マットキャップ {count} 個{change}。matcap フォルダーはまだ�
 
 en: Could not find where to keep matcaps.
 ja: マットキャップの保存場所が見つかりませんでした。
+
+en: UVs lay a model's surface out flat in a square, so pictures (maps) can be painted on it. For a game or a render: Clone the sculpt, Quad Remesh the copy, Unwrap UVs on it, then Bake Maps from the sculpt and export the copy with the maps.
+ja: UV は、モデルのサーフェスを正方形の中に平らに広げ、そこに画像(マップ)を描き込めるようにするものです。ゲームやレンダリング用の手順: スカルプトを Clone し、コピーに Quad Remesh をかけ、コピーで Unwrap UVs を実行してから、スカルプトから Bake Maps して、コピーをマップと一緒にエクスポートします。
+
+en: This object has UVs. Unwrapping again makes new ones.
+ja: このオブジェクトには UV があります。もう一度展開すると、新しい UV が作られます。
+
+en: This object has no UVs.
+ja: このオブジェクトには UV がありません。
+
+en: Cut the UVs along the face groups' borders, so the seams go where you drew them. Without face groups the unwrap places the seams itself.
+ja: フェイスグループの境界に沿って UV を切り分けるので、シームは自分で描いた場所に入ります。フェイスグループがない場合は、展開時にシームが自動で配置されます。
+
+en: Lays the selected object out flat in the square: UVs for baking and painting maps, kept when it is exported as OBJ or FBX. The model does not move. One undo step (Ctrl+Z).
+ja: 選択中のオブジェクトを正方形の中に平らに広げます。マップのベイクとペイントに使う UV で、OBJ や FBX でエクスポートしても保持されます。モデルは動きません。元に戻す操作は 1 回分です(Ctrl+Z)。
+
+en: Needs the sculpt to bake from as a second object, where this one is.
+ja: ベイク元のスカルプトが、このオブジェクトと同じ位置に 2 つ目のオブジェクトとして必要です。
+
+en: Maps {size} pixels square.
+ja: マップは一辺 {size} ピクセルの正方形です。
+
+en: How far from this object's surface to look for the sculpt's: as Project Detail's Reach.
+ja: このオブジェクトのサーフェスから、どこまでスカルプトのサーフェスを探すか。Project Detail の Reach と同じです。
+
+en: The sculpt's detail as a tangent-space normal map (OpenGL, Y up), as Blender, Unity and Godot read it.
+ja: スカルプトのディテールを、タンジェントスペースのノーマルマップ(OpenGL、Y up)にしたもの。Blender、Unity、Godot が読み込むのと同じ形式です。
+
+en: How far the sculpt stands off this surface: a 32-bit EXR, a 16-bit PNG and a note of the range.
+ja: スカルプトがこのサーフェスからどれだけ離れているか。32-bit の EXR、16-bit の PNG、および値の範囲を記したメモです。
+
+en: How much light reaches each place on the sculpt. The slow one: seconds for a 2K map.
+ja: スカルプトの各部分にどれだけ光が届くか。時間のかかるマップで、2K のマップで数秒かかります。
+
+en: The sculpt's paint, as a colour map.
+ja: スカルプトのペイントを、カラーマップにしたもの。
+
+en: Bake Maps...
+ja: Bake Maps...
+
+en: Bake Maps from {name}...
+ja: Bake Maps from {name}...
+
+en: Asks for a folder, then bakes the ticked maps in the background and writes them there, named after this object. Export this object as OBJ or FBX to go with them.
+ja: まずフォルダーを選ぶよう求め、続いて、チェックしたマップをバックグラウンドでベイクし、このオブジェクトの名前を付けてそのフォルダーに書き出します。マップと一緒に使えるよう、このオブジェクトを OBJ または FBX でエクスポートしてください。
+
+en: Unwrap UVs first: the maps are laid out by them.
+ja: 先に Unwrap UVs を実行してください。マップは UV に沿って配置されます。
+
+en: No other object overlaps this one. Put the low model where the sculpt is.
+ja: このオブジェクトと重なっている他のオブジェクトがありません。ローポリモデルを、スカルプトのある位置に置いてください。
 
 en: Brush radius: on screen, or on the model with Screen-Space Size off. Hold S and drag, or scroll over the model.
 ja: ブラシの半径。画面上の大きさ、または Screen-Space Size をオフにするとモデル上の大きさです。S を押したままドラッグするか、モデル上でスクロールして変更します。
@@ -3481,9 +3607,6 @@ ja: ボタンにポインターを置いたときに、そのボタンの働き�
 en: Space (hold)
 ja: Space(押したまま)
 
-en: Spin the view (turntable)
-ja: ビューを回転(ターンテーブル)
-
 en: Quit (asks first)
 ja: 終了(先に確認)
 
@@ -3501,6 +3624,12 @@ ja: {0}: クリックしてから、割り当てたいキーを押します。Es
 
 en: Back to {0}, as the app ships it.
 ja: {0} を、アプリ出荷時の状態に戻します。
+
+en: Every key as the app ships it.
+ja: すべてのキーを、アプリの初期設定のままにします。
+
+en: ZBrush's keys where this app has the command: W gizmo, D / Shift + D levels, F frame, Shift + F wireframe, P perspective, C colour pick, U and O held for strength and focal shift, Ctrl + I and Ctrl + Shift + A for the mask. ZBrush's Alt to subtract and Ctrl to mask are the pen's, not keys: here Ctrl inverts the brush and the Mask button paints the mask.
+ja: このアプリにコマンドがあるものについて、ZBrush と同じキーを使います。W でギズモ、D / Shift + D でレベル、F で画面に収める、Shift + F でワイヤーフレーム、P でパース、C でカラーピック、U と O は押したままで Strength と Focal Shift、Ctrl + I と Ctrl + Shift + A でマスク。ZBrush の Alt(減算)と Ctrl(マスク)はペンでの操作で、キーではありません。このアプリでは Ctrl でブラシを反転し、Mask ボタンでマスクを描きます。
 
 en: Puts every command back on the key the app ships with. Press twice: it cannot be undone.
 ja: すべてのコマンドを、アプリ出荷時のキーに戻します。2 回押してください。元に戻せません。
@@ -5112,6 +5241,36 @@ ja: {0} を削除しました。
 
 en: Click a {0} to select it first.
 ja: 先に {0} をクリックして選択してください。
+
+en: The model has no surface to lay flat: every triangle is squashed to a line or a point.
+ja: モデルには平らに広げられる面がありません: すべての三角形が線または点につぶれています。
+
+en: The model breaks into too many pieces ({0} charts) to fit one square with this padding. Lower the padding, or smooth or remesh the model first.
+ja: モデルが分かれるパーツが多すぎて({0} 個のチャート)、この余白では 1 つの正方形に収まりません。余白を小さくするか、先にモデルをスムーズにするかリメッシュしてください。
+
+en: The model could not be unwrapped: {e}.
+ja: モデルを UV 展開できませんでした: {e}。
+
+en: There is nothing to unwrap: the model has no triangles.
+ja: 展開するものがありません: モデルに三角形がありません。
+
+en: The model's triangle list is broken: it holds {0} corners, which is not a whole number of triangles.
+ja: モデルの三角形リストが壊れています: コーナーが {0} 個あり、三角形の整数個分になっていません。
+
+en: The model has {count} triangles; UVs can be made for at most {MAX_TRIANGLES}. Bring it lower first, with Decimate or Quad Remesh.
+ja: モデルには三角形が {count} 個あり、UV を作れるのは最大 {MAX_TRIANGLES} 個までです。先に Decimate または Quad Remesh で減らしてください。
+
+en: Triangle {0} uses point {1}, but the model has only {2} points.
+ja: 三角形 {0} が頂点 {1} を使っていますが、モデルには頂点が {2} 個しかありません。
+
+en: Point {at} of the model is not a number.
+ja: モデルの頂点 {at} が数値ではありません。
+
+en: The model's polygon faces do not match its triangles: {why}.
+ja: モデルのポリゴン面が三角形と一致しません: {why}。
+
+en: There are face groups for {0} triangles, but the model has {count}.
+ja: フェイスグループは三角形 {0} 個分ありますが、モデルの三角形は {count} 個です。
 
 en: The objects are too far apart to unite mirrored at this resolution: the grid has to reach across all of them and their mirror images. Move them closer together, or turn the {0} off for this{lower}.
 ja: この解像度では、オブジェクト同士が離れすぎていて、ミラーしたまま統合できません。グリッドが、すべてのオブジェクトとそのミラー像にまで届く必要があります。オブジェクトを近づけるか、この操作では {0} をオフにしてください{lower}。

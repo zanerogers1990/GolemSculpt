@@ -79,6 +79,51 @@ tr: HDRI yüklenmedi.
 en: {name} ({0} x {0} x {0})
 tr: {name} ({0} x {0} x {0})
 
+en: The bake was stopped.
+tr: Bake işlemi durduruldu.
+
+en: There is no paint on the sculpt to bake a colour map from.
+tr: Heykelde renk haritasının Bake edileceği boya yok.
+
+en: Pick at least one map to bake.
+tr: Bake edilecek en az bir harita seç.
+
+en: The model's UVs cover none of the picture: they are all outside the square from 0 to 1, or have no area.
+tr: Modelin UV'leri resmin hiçbir yerini kaplamıyor: hepsi 0 ile 1 arasındaki karenin dışında kalıyor ya da alanları yok.
+
+en: Nothing on the sculpt was found from the model: the two objects are not in the same place, or Reach is too small.
+tr: Modelden bakınca heykelde hiçbir şey bulunamadı: iki nesne aynı yerde değil ya da Reach çok küçük.
+
+en: The model has no UVs to bake onto: unwrap it first.
+tr: Modelin Bake edilecek UV'si yok: önce UV açılımını yap.
+
+en: The model has no faces to bake onto.
+tr: Modelin Bake edilecek yüzü yok.
+
+en: The model's UVs do not match its faces: {0} UVs for {1} triangle corners.
+tr: Modelin UV'leri yüzleriyle uyuşmuyor: {1} üçgen köşesi için {0} UV var.
+
+en: The model's normals do not match its points.
+tr: Modelin normalleri noktalarıyla uyuşmuyor.
+
+en: The model has a face whose corner is not one of its points.
+tr: Modelde, köşesi kendi noktalarından biri olmayan bir yüz var.
+
+en: The picture size must be from {0} to {1} texels; {2} was asked for.
+tr: Resim boyutu {0} ile {1} texel arasında olmalı; {2} istendi.
+
+en: Reach must be more than nothing.
+tr: Reach sıfırdan büyük olmalı.
+
+en: There is no sculpt to bake from.
+tr: Bake edilecek bir heykel yok.
+
+en: The sculpt's paint does not match its points.
+tr: Heykelin boyası noktalarıyla uyuşmuyor.
+
+en: The bake failed.
+tr: Bake işlemi başarısız oldu.
+
 en: {0} uses an alpha called {alpha}, which is not on this computer, so it has no alpha.
 tr: {0}, {alpha} adlı bir alfa kullanıyor; o bu bilgisayarda yok, bu yüzden alfası yok.
 
@@ -193,9 +238,6 @@ tr: Tab, temiz görünüm için ayrılmış.
 en: Backspace takes a key away while you choose one.
 tr: Bir tuş seçerken Backspace tuşu kaldırır.
 
-en: O is kept for spinning the view (the turntable).
-tr: O, görünümü döndürmek için ayrılmış (döner tabla).
-
 en: Ctrl + Q is kept for quitting.
 tr: Ctrl + Q, çıkmak için ayrılmış.
 
@@ -210,6 +252,9 @@ tr: Strength (hold and drag; tap twice to frame)
 
 en: Focal shift (hold and drag)
 tr: Focal shift (hold and drag)
+
+en: Spin the view (turntable)
+tr: Spin the view (turntable)
 
 en: Delete the object (asks)
 tr: Delete the object (asks)
@@ -531,6 +576,27 @@ tr: SharedMut okuma, {i} konumunda, sonun ötesinde ({0})
 
 en: SharedMut stretch {range} past the end ({0})
 tr: SharedMut {range} aralığı sonun ötesinde ({0})
+
+en: Bake Maps is still working. Wait for it, or press its Cancel.
+tr: Bake Maps hâlâ çalışıyor. Bitmesini bekle veya Cancel düğmesine bas.
+
+en: {0} is still working. Wait for it, or press its Cancel, then bake.
+tr: {0} hâlâ çalışıyor. Bitmesini bekle veya Cancel düğmesine bas, sonra Bake et.
+
+en: This object has no UVs to bake onto. Press Unwrap UVs first.
+tr: Bu nesnenin Bake edilecek UV'si yok. Önce Unwrap UVs düğmesine bas.
+
+en: Tick at least one map to bake.
+tr: Bake edilecek en az bir haritayı işaretle.
+
+en: Bake Maps needs the sculpt to bake from where this object is: no other object overlaps it.
+tr: Bake Maps, Bake edilecek heykelin bu nesnenin bulunduğu yerde olmasını gerektirir: başka hiçbir nesne onunla çakışmıyor.
+
+en: {0}% of the surface found nothing of "{high}" within reach and is left flat: raise Reach if that is too much.
+tr: Yüzeyin %{0} kadarı menzil içinde “{high}” nesnesinden hiçbir şey bulamadı ve düz kaldı: bu çok fazlaysa Reach değerini yükselt.
+
+en: Unwrapped "{name}": {charts} pieces in the square{along} ({0} ms). Export it as OBJ or FBX to take the UVs with it, or bake maps onto it.
+tr: “{name}” için UV açılımı yapıldı: karede {charts} parça{along} ({0} ms). UV'leri de götürmek için OBJ ya da FBX olarak dışa aktar veya üzerine harita Bake et.
 
 en: This run of GolemSculpt keeps no settings folder, so it has no link to Blender.
 tr: GolemSculpt'un bu oturumunda ayar klasörü yok, bu yüzden Blender bağlantısı da yok.
@@ -1444,6 +1510,12 @@ tr: “{name}” nesnesinin {0} alt {lower} yeniden oluşturuldu: 1. seviyede {1
 en: {what}: {0} (the newest {1} stay)
 tr: {what}: {0} (en yeni {1} kalır)
 
+en: In Blender's Displacement node: Midlevel 0, Scale 1.
+tr: Blender'in Displacement düğümünde: Midlevel 0, Scale 1.
+
+en: In Blender's Displacement node: Midlevel {mid}, Scale {height}.
+tr: Blender'in Displacement düğümünde: Midlevel {mid}, Scale {height}.
+
 en: The video encoder did not respond.
 tr: Video kodlayıcı yanıt vermedi.
 
@@ -1602,6 +1674,9 @@ tr: {0} ile kaydedilen yüz grupları okunamadı (dosya orada hasarlı): model k
 
 en: The paint saved with {0} could not be read (the file is damaged there): the model is as it was                  saved, without its paint.
 tr: {0} ile kaydedilen boya okunamadı (dosya orada hasarlı): model kaydedildiği gibi, boyası olmadan.
+
+en: The UVs saved with {0} could not be read (the file is damaged there): the model is as it was saved, without its UVs.
+tr: {0} ile kaydedilen UV'ler okunamadı (dosya orada hasarlı): model kaydedildiği gibi duruyor, UV'leri yok.
 
 en: What Blender sent is damaged or cut short, so nothing was taken from it.
 tr: Blender'in gönderdiği hasarlı veya yarım kalmış, bu yüzden ondan hiçbir şey alınmadı.
@@ -2139,6 +2214,57 @@ tr: {count} matcap{change}. Henüz matcap klasörü yok; Import Matcap bir tane 
 
 en: Could not find where to keep matcaps.
 tr: Matcap'lerin nereye kaydedileceği bulunamadı.
+
+en: UVs lay a model's surface out flat in a square, so pictures (maps) can be painted on it. For a game or a render: Clone the sculpt, Quad Remesh the copy, Unwrap UVs on it, then Bake Maps from the sculpt and export the copy with the maps.
+tr: UV'ler bir modelin yüzeyini bir kare içine düz serer; böylece üzerine resimler (haritalar) boyanabilir. Oyun ya da render için: heykele Clone uygula, kopyaya Quad Remesh uygula, kopyada Unwrap UVs yap, sonra heykelden Bake Maps ile haritaları Bake et ve kopyayı haritalarla birlikte dışa aktar.
+
+en: This object has UVs. Unwrapping again makes new ones.
+tr: Bu nesnenin UV'leri var. Yeniden açmak yenilerini oluşturur.
+
+en: This object has no UVs.
+tr: Bu nesnenin UV'si yok.
+
+en: Cut the UVs along the face groups' borders, so the seams go where you drew them. Without face groups the unwrap places the seams itself.
+tr: UV'leri yüz gruplarının sınırları boyunca kes; böylece dikişler çizdiğin yerlere gelir. Yüz grubu yoksa açılım dikişleri kendisi yerleştirir.
+
+en: Lays the selected object out flat in the square: UVs for baking and painting maps, kept when it is exported as OBJ or FBX. The model does not move. One undo step (Ctrl+Z).
+tr: Seçili nesneyi kare içine düz serer: haritaları Bake etmek ve boyamak için UV'ler; OBJ ya da FBX olarak dışa aktarıldığında korunur. Model yerinden oynamaz. Bir geri alma adımı (Ctrl+Z).
+
+en: Needs the sculpt to bake from as a second object, where this one is.
+tr: Bake edilecek heykelin, bunun bulunduğu yerde ikinci bir nesne olarak bulunmasını gerektirir.
+
+en: Maps {size} pixels square.
+tr: Kenarı {size} piksel olan kare haritalar.
+
+en: How far from this object's surface to look for the sculpt's: as Project Detail's Reach.
+tr: Heykelin yüzeyini aramak için bu nesnenin yüzeyinden ne kadar uzağa bakılacağı: Project Detail'deki Reach gibi.
+
+en: The sculpt's detail as a tangent-space normal map (OpenGL, Y up), as Blender, Unity and Godot read it.
+tr: Heykelin detayı, teğet uzayında bir normal haritası olarak (OpenGL, Y up); Blender, Unity ve Godot'un okuduğu biçimde.
+
+en: How far the sculpt stands off this surface: a 32-bit EXR, a 16-bit PNG and a note of the range.
+tr: Heykelin bu yüzeyden ne kadar dışarı çıktığı: 32-bit EXR, 16-bit PNG ve aralık için bir not.
+
+en: How much light reaches each place on the sculpt. The slow one: seconds for a 2K map.
+tr: Heykelin her noktasına ne kadar ışık ulaştığı. Yavaş olan bu: 2K bir harita için saniyeler sürer.
+
+en: The sculpt's paint, as a colour map.
+tr: Heykelin boyası, bir renk haritası olarak.
+
+en: Bake Maps...
+tr: Bake Maps...
+
+en: Bake Maps from {name}...
+tr: Bake Maps from {name}...
+
+en: Asks for a folder, then bakes the ticked maps in the background and writes them there, named after this object. Export this object as OBJ or FBX to go with them.
+tr: Bir klasör sorar, sonra işaretli haritaları arka planda Bake eder ve bu nesnenin adıyla oraya yazar. Bunlarla birlikte kullanmak için bu nesneyi OBJ ya da FBX olarak dışa aktar.
+
+en: Unwrap UVs first: the maps are laid out by them.
+tr: Önce Unwrap UVs: haritalar UV'lere göre yerleştirilir.
+
+en: No other object overlaps this one. Put the low model where the sculpt is.
+tr: Başka hiçbir nesne bununla çakışmıyor. Düşük poligonlu modeli heykelin bulunduğu yere koy.
 
 en: Brush radius: on screen, or on the model with Screen-Space Size off. Hold S and drag, or scroll over the model.
 tr: Fırça yarıçapı: ekranda ya da Screen-Space Size kapalıyken model üzerinde. S tuşunu basılı tutup sürükle veya modelin üzerinde fare tekerleğini çevir.
@@ -3481,9 +3607,6 @@ tr: İmleç bir düğmenin üzerinde durduğunda düğmenin ne yaptığını sö
 en: Space (hold)
 tr: Space (hold)
 
-en: Spin the view (turntable)
-tr: Spin the view (turntable)
-
 en: Quit (asks first)
 tr: Quit (asks first)
 
@@ -3501,6 +3624,12 @@ tr: {0}: tıkla, sonra onu atamak için tuşa bas. Esc onu olduğu gibi bırakı
 
 en: Back to {0}, as the app ships it.
 tr: Uygulamanın geldiği haline, {0} tuşuna dön.
+
+en: Every key as the app ships it.
+tr: Her tuş, uygulamanın kendi sunduğu hâliyle.
+
+en: ZBrush's keys where this app has the command: W gizmo, D / Shift + D levels, F frame, Shift + F wireframe, P perspective, C colour pick, U and O held for strength and focal shift, Ctrl + I and Ctrl + Shift + A for the mask. ZBrush's Alt to subtract and Ctrl to mask are the pen's, not keys: here Ctrl inverts the brush and the Mask button paints the mask.
+tr: ZBrush'ın tuşları, bu uygulamada karşılığı olan komutlar için: W gizmo, D / Shift + D seviyeler, F kadraja alma, Shift + F wireframe, P perspektif, C renk seçme, U ve O basılı tutulunca güç ve odak kayması, Ctrl + I ve Ctrl + Shift + A maske için. ZBrush'ta çıkarmak için Alt ve maskelemek için Ctrl kalemin işidir, tuş değildir: burada Ctrl fırçayı tersine çevirir, Mask düğmesi ise maskeyi boyar.
 
 en: Puts every command back on the key the app ships with. Press twice: it cannot be undone.
 tr: Her komutu uygulamanın geldiği tuşa geri koyar. İki kez bas: geri alınamaz.
@@ -5112,6 +5241,36 @@ tr: {0} silindi.
 
 en: Click a {0} to select it first.
 tr: Önce seçmek için bir {0} öğesine tıkla.
+
+en: The model has no surface to lay flat: every triangle is squashed to a line or a point.
+tr: Modelde düzleştirilecek yüzey yok: her üçgen bir çizgiye ya da noktaya ezilmiş.
+
+en: The model breaks into too many pieces ({0} charts) to fit one square with this padding. Lower the padding, or smooth or remesh the model first.
+tr: Model, bu kenar boşluğuyla tek bir kareye sığamayacak kadar çok parçaya ({0} UV adası) bölünüyor. Kenar boşluğunu azalt ya da önce modeli yumuşat veya Remesh uygula.
+
+en: The model could not be unwrapped: {e}.
+tr: Modelin UV açılımı yapılamadı: {e}.
+
+en: There is nothing to unwrap: the model has no triangles.
+tr: Açılacak bir şey yok: modelde üçgen yok.
+
+en: The model's triangle list is broken: it holds {0} corners, which is not a whole number of triangles.
+tr: Modelin üçgen listesi bozuk: {0} köşe içeriyor, bu da tam sayıda üçgen etmiyor.
+
+en: The model has {count} triangles; UVs can be made for at most {MAX_TRIANGLES}. Bring it lower first, with Decimate or Quad Remesh.
+tr: Modelde {count} üçgen var; en fazla {MAX_TRIANGLES} üçgen için UV oluşturulabilir. Önce Decimate veya Quad Remesh ile sayıyı düşür.
+
+en: Triangle {0} uses point {1}, but the model has only {2} points.
+tr: {0}. üçgen {1}. noktayı kullanıyor, ama modelde yalnızca {2} nokta var.
+
+en: Point {at} of the model is not a number.
+tr: Modelin {at}. noktası bir sayı değil.
+
+en: The model's polygon faces do not match its triangles: {why}.
+tr: Modelin çokgen yüzleri üçgenleriyle uyuşmuyor: {why}.
+
+en: There are face groups for {0} triangles, but the model has {count}.
+tr: {0} üçgen için yüz grupları var, ama modelde {count} üçgen var.
 
 en: The objects are too far apart to unite mirrored at this resolution: the grid has to reach across all of them and their mirror images. Move them closer together, or turn the {0} off for this{lower}.
 tr: Nesneler bu çözünürlükte yansıtılmış olarak birleştirilemeyecek kadar birbirinden uzak: ızgaranın hepsini ve ayna görüntülerini kapsaması gerekir. Onları birbirine yaklaştır veya bunun için {0} seçeneğini kapat{lower}.

@@ -79,6 +79,51 @@ ru: HDRI не загружен.
 en: {name} ({0} x {0} x {0})
 ru: {name} ({0} x {0} x {0})
 
+en: The bake was stopped.
+ru: Запекание остановлено.
+
+en: There is no paint on the sculpt to bake a colour map from.
+ru: На скульпте нет краски, из которой можно запечь карту цвета.
+
+en: Pick at least one map to bake.
+ru: Выберите хотя бы одну карту для запекания.
+
+en: The model's UVs cover none of the picture: they are all outside the square from 0 to 1, or have no area.
+ru: UV модели не покрывают изображение: все они лежат вне квадрата от 0 до 1 или не имеют площади.
+
+en: Nothing on the sculpt was found from the model: the two objects are not in the same place, or Reach is too small.
+ru: От модели на скульпте ничего не найдено: два объекта находятся не в одном месте, либо значение Reach слишком мало.
+
+en: The model has no UVs to bake onto: unwrap it first.
+ru: У модели нет UV, на которые можно запекать: сначала сделайте развёртку.
+
+en: The model has no faces to bake onto.
+ru: У модели нет полигонов, на которые можно запекать.
+
+en: The model's UVs do not match its faces: {0} UVs for {1} triangle corners.
+ru: UV модели не соответствуют её полигонам: {0} UV на {1} углов треугольников.
+
+en: The model's normals do not match its points.
+ru: Нормали модели не соответствуют её точкам.
+
+en: The model has a face whose corner is not one of its points.
+ru: У модели есть полигон, угол которого не является одной из её точек.
+
+en: The picture size must be from {0} to {1} texels; {2} was asked for.
+ru: Размер изображения должен быть от {0} до {1} текселей; запрошено {2}.
+
+en: Reach must be more than nothing.
+ru: Значение Reach должно быть больше нуля.
+
+en: There is no sculpt to bake from.
+ru: Нет скульпта, с которого можно запекать.
+
+en: The sculpt's paint does not match its points.
+ru: Краска скульпта не соответствует его точкам.
+
+en: The bake failed.
+ru: Запекание не удалось.
+
 en: {0} uses an alpha called {alpha}, which is not on this computer, so it has no alpha.
 ru: Кисть {0} использует альфу «{alpha}», которой нет на этом компьютере, поэтому работает без альфы.
 
@@ -193,9 +238,6 @@ ru: Tab зарезервирован для чистого вида.
 en: Backspace takes a key away while you choose one.
 ru: При выборе клавиши Backspace убирает назначенную.
 
-en: O is kept for spinning the view (the turntable).
-ru: O зарезервирована для вращения вида (поворотный стол).
-
 en: Ctrl + Q is kept for quitting.
 ru: Ctrl + Q зарезервировано для выхода.
 
@@ -210,6 +252,9 @@ ru: Сила (удерживайте и тяните; нажмите дважд�
 
 en: Focal shift (hold and drag)
 ru: Фокальный сдвиг (удерживайте и тяните)
+
+en: Spin the view (turntable)
+ru: Вращать вид (поворотный стол)
 
 en: Delete the object (asks)
 ru: Удалить объект (с запросом подтверждения)
@@ -531,6 +576,27 @@ ru: SharedMut: чтение в {i}, за концом ({0})
 
 en: SharedMut stretch {range} past the end ({0})
 ru: SharedMut: отрезок {range} за концом ({0})
+
+en: Bake Maps is still working. Wait for it, or press its Cancel.
+ru: Bake Maps ещё работает. Дождитесь его или нажмите его Cancel.
+
+en: {0} is still working. Wait for it, or press its Cancel, then bake.
+ru: {0} ещё работает. Дождитесь его или нажмите его Cancel, затем запекайте.
+
+en: This object has no UVs to bake onto. Press Unwrap UVs first.
+ru: У этого объекта нет UV, на которые можно запекать. Сначала нажмите Unwrap UVs.
+
+en: Tick at least one map to bake.
+ru: Отметьте хотя бы одну карту для запекания.
+
+en: Bake Maps needs the sculpt to bake from where this object is: no other object overlaps it.
+ru: Bake Maps нужен скульпт, с которого запекать, на месте этого объекта: ни один другой объект его не перекрывает.
+
+en: {0}% of the surface found nothing of "{high}" within reach and is left flat: raise Reach if that is too much.
+ru: Для {0}% поверхности в зоне досягаемости не нашлось ничего от «{high}», и она осталась плоской: увеличьте Reach, если это слишком много.
+
+en: Unwrapped "{name}": {charts} pieces in the square{along} ({0} ms). Export it as OBJ or FBX to take the UVs with it, or bake maps onto it.
+ru: Выполнена развёртка «{name}»: частей в квадрате — {charts}{along} ({0} ms). Экспортируйте объект как OBJ или FBX, чтобы забрать UV с собой, или запеките на него карты.
 
 en: This run of GolemSculpt keeps no settings folder, so it has no link to Blender.
 ru: В этом запуске GolemSculpt нет папки настроек, поэтому нет связи с Blender.
@@ -1444,6 +1510,12 @@ ru: Перестроены нижние уровни у «{name}» ({0} {lower})
 en: {what}: {0} (the newest {1} stay)
 ru: {what}: {0} (самые новые, {1}, остаются)
 
+en: In Blender's Displacement node: Midlevel 0, Scale 1.
+ru: В ноде Displacement в Blender: Midlevel 0, Scale 1.
+
+en: In Blender's Displacement node: Midlevel {mid}, Scale {height}.
+ru: В ноде Displacement в Blender: Midlevel {mid}, Scale {height}.
+
 en: The video encoder did not respond.
 ru: Видеокодер не ответил.
 
@@ -1602,6 +1674,9 @@ ru: Группы полигонов, сохранённые вместе с {0},
 
 en: The paint saved with {0} could not be read (the file is damaged there): the model is as it was                  saved, without its paint.
 ru: Краску, сохранённую вместе с {0}, прочитать не удалось (файл повреждён в этом месте): модель такая, как при сохранении, но без краски.
+
+en: The UVs saved with {0} could not be read (the file is damaged there): the model is as it was saved, without its UVs.
+ru: UV, сохранённые вместе с {0}, прочитать не удалось (файл в этом месте повреждён): модель такая, какой была сохранена, но без UV.
 
 en: What Blender sent is damaged or cut short, so nothing was taken from it.
 ru: То, что прислал Blender, повреждено или обрезано, поэтому ничего не взято.
@@ -2139,6 +2214,57 @@ ru: Matcap: {count}{change}. Папки matcap пока нет; Import Matcap с
 
 en: Could not find where to keep matcaps.
 ru: Не удалось найти, где хранить файлы matcap.
+
+en: UVs lay a model's surface out flat in a square, so pictures (maps) can be painted on it. For a game or a render: Clone the sculpt, Quad Remesh the copy, Unwrap UVs on it, then Bake Maps from the sculpt and export the copy with the maps.
+ru: UV раскладывают поверхность модели плоско на квадрате, чтобы на ней можно было рисовать изображения (карты). Для игры или рендера: Clone скульпта, Quad Remesh копии, Unwrap UVs на ней, затем Bake Maps со скульпта и экспорт копии вместе с картами.
+
+en: This object has UVs. Unwrapping again makes new ones.
+ru: У этого объекта есть UV. Повторная развёртка создаст новые.
+
+en: This object has no UVs.
+ru: У этого объекта нет UV.
+
+en: Cut the UVs along the face groups' borders, so the seams go where you drew them. Without face groups the unwrap places the seams itself.
+ru: Режьте UV по границам групп полигонов, чтобы швы проходили там, где вы их нарисовали. Без групп полигонов развёртка сама расставляет швы.
+
+en: Lays the selected object out flat in the square: UVs for baking and painting maps, kept when it is exported as OBJ or FBX. The model does not move. One undo step (Ctrl+Z).
+ru: Раскладывает выбранный объект плоско на квадрате: UV для запекания и рисования карт, они сохраняются при экспорте в OBJ или FBX. Модель не сдвигается. Один шаг отмены (Ctrl+Z).
+
+en: Needs the sculpt to bake from as a second object, where this one is.
+ru: Нужен скульпт, с которого запекать, как второй объект — на месте этого.
+
+en: Maps {size} pixels square.
+ru: Карты квадратные, {size} пикселей по каждой стороне.
+
+en: How far from this object's surface to look for the sculpt's: as Project Detail's Reach.
+ru: Как далеко от поверхности этого объекта искать поверхность скульпта: как Reach в Project Detail.
+
+en: The sculpt's detail as a tangent-space normal map (OpenGL, Y up), as Blender, Unity and Godot read it.
+ru: Детали скульпта в виде карты нормалей в касательном пространстве (OpenGL, Y up), как её читают Blender, Unity и Godot.
+
+en: How far the sculpt stands off this surface: a 32-bit EXR, a 16-bit PNG and a note of the range.
+ru: Насколько скульпт выступает над этой поверхностью: 32-bit EXR, 16-bit PNG и заметка о диапазоне.
+
+en: How much light reaches each place on the sculpt. The slow one: seconds for a 2K map.
+ru: Сколько света попадает в каждое место скульпта. Самая медленная: секунды для карты 2K.
+
+en: The sculpt's paint, as a colour map.
+ru: Краска скульпта в виде карты цвета.
+
+en: Bake Maps...
+ru: Bake Maps...
+
+en: Bake Maps from {name}...
+ru: Bake Maps from {name}...
+
+en: Asks for a folder, then bakes the ticked maps in the background and writes them there, named after this object. Export this object as OBJ or FBX to go with them.
+ru: Запрашивает папку, затем в фоне запекает отмеченные карты и записывает их туда под именем этого объекта. Экспортируйте этот объект как OBJ или FBX, чтобы он шёл вместе с ними.
+
+en: Unwrap UVs first: the maps are laid out by them.
+ru: Сначала Unwrap UVs: карты раскладываются по ним.
+
+en: No other object overlaps this one. Put the low model where the sculpt is.
+ru: Ни один другой объект не перекрывает этот. Поместите низкополигональную модель туда, где находится скульпт.
 
 en: Brush radius: on screen, or on the model with Screen-Space Size off. Hold S and drag, or scroll over the model.
 ru: Радиус кисти: на экране или на модели, если Screen-Space Size выключен. Удерживайте S и тяните либо прокрутите колесо над моделью.
@@ -3481,9 +3607,6 @@ ru: Подсказывать, что делает кнопка, когда на 
 en: Space (hold)
 ru: Space (удерживать)
 
-en: Spin the view (turntable)
-ru: Вращать вид (поворотный стол)
-
 en: Quit (asks first)
 ru: Выйти (сначала спросит)
 
@@ -3501,6 +3624,12 @@ ru: {0}: кликните, затем нажмите клавишу, чтобы 
 
 en: Back to {0}, as the app ships it.
 ru: Вернуть {0}, как в поставке приложения.
+
+en: Every key as the app ships it.
+ru: Все клавиши — так, как их поставляет приложение.
+
+en: ZBrush's keys where this app has the command: W gizmo, D / Shift + D levels, F frame, Shift + F wireframe, P perspective, C colour pick, U and O held for strength and focal shift, Ctrl + I and Ctrl + Shift + A for the mask. ZBrush's Alt to subtract and Ctrl to mask are the pen's, not keys: here Ctrl inverts the brush and the Mask button paints the mask.
+ru: Клавиши ZBrush там, где в приложении есть такая команда: W — гизмо, D / Shift + D — уровни, F — показать модель целиком, Shift + F — wireframe, P — перспектива, C — пипетка цвета, U и O (удерживать) — сила и фокальный сдвиг, Ctrl + I и Ctrl + Shift + A — маска. Alt для вычитания и Ctrl для маскирования в ZBrush относятся к перу, а не к клавишам: здесь Ctrl инвертирует кисть, а кнопка Mask рисует маску.
 
 en: Puts every command back on the key the app ships with. Press twice: it cannot be undone.
 ru: Возвращает каждой команде клавишу, с которой поставляется приложение. Нажмите дважды: это нельзя отменить.
@@ -5112,6 +5241,36 @@ ru: Удалено: {0}.
 
 en: Click a {0} to select it first.
 ru: Сначала кликните по объекту ({0}), чтобы выбрать его.
+
+en: The model has no surface to lay flat: every triangle is squashed to a line or a point.
+ru: У модели нет поверхности, которую можно раскладывать плоско: каждый треугольник сплющен в линию или точку.
+
+en: The model breaks into too many pieces ({0} charts) to fit one square with this padding. Lower the padding, or smooth or remesh the model first.
+ru: Модель распадается на слишком много частей (островов: {0}), чтобы поместиться в один квадрат с таким отступом. Уменьшите отступ или сначала сгладьте модель либо сделайте Remesh.
+
+en: The model could not be unwrapped: {e}.
+ru: Не удалось сделать развёртку модели: {e}.
+
+en: There is nothing to unwrap: the model has no triangles.
+ru: Развёртывать нечего: в модели нет треугольников.
+
+en: The model's triangle list is broken: it holds {0} corners, which is not a whole number of triangles.
+ru: Список треугольников модели повреждён: в нём {0} углов, а это не целое число треугольников.
+
+en: The model has {count} triangles; UVs can be made for at most {MAX_TRIANGLES}. Bring it lower first, with Decimate or Quad Remesh.
+ru: В модели {count} треугольников; UV можно создать не более чем для {MAX_TRIANGLES}. Сначала уменьшите число через Decimate или Quad Remesh.
+
+en: Triangle {0} uses point {1}, but the model has only {2} points.
+ru: Треугольник {0} использует точку {1}, но в модели всего {2} точек.
+
+en: Point {at} of the model is not a number.
+ru: Точка {at} модели не является числом.
+
+en: The model's polygon faces do not match its triangles: {why}.
+ru: Полигоны модели не соответствуют её треугольникам: {why}.
+
+en: There are face groups for {0} triangles, but the model has {count}.
+ru: Есть группы полигонов для {0} треугольников, а в модели их {count}.
 
 en: The objects are too far apart to unite mirrored at this resolution: the grid has to reach across all of them and their mirror images. Move them closer together, or turn the {0} off for this{lower}.
 ru: Объекты слишком далеко друг от друга, чтобы объединить их с зеркалом при этом разрешении: сетка должна охватить их все и их зеркальные отражения. Сдвиньте их ближе друг к другу или выключите {0} для этого{lower}.

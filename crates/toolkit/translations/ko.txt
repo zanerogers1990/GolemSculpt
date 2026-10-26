@@ -77,6 +77,51 @@ ko: 불러온 HDRI가 없습니다.
 en: {name} ({0} x {0} x {0})
 ko: {name} ({0} x {0} x {0})
 
+en: The bake was stopped.
+ko: 베이크가 중단되었습니다.
+
+en: There is no paint on the sculpt to bake a colour map from.
+ko: 스컬프트에 칠한 페인트가 없어서 컬러 맵을 베이크할 수 없습니다.
+
+en: Pick at least one map to bake.
+ko: 베이크할 맵을 하나 이상 선택하세요.
+
+en: The model's UVs cover none of the picture: they are all outside the square from 0 to 1, or have no area.
+ko: 모델의 UV가 이미지의 어느 부분도 덮지 않습니다. 모두 0에서 1 사이의 정사각형 밖에 있거나 면적이 없습니다.
+
+en: Nothing on the sculpt was found from the model: the two objects are not in the same place, or Reach is too small.
+ko: 모델에서 스컬프트의 어느 부분도 찾지 못했습니다. 두 오브젝트가 같은 위치에 있지 않거나 Reach가 너무 작습니다.
+
+en: The model has no UVs to bake onto: unwrap it first.
+ko: 베이크할 대상 모델에 UV가 없습니다. 먼저 언랩하세요.
+
+en: The model has no faces to bake onto.
+ko: 베이크할 대상 모델에 면이 없습니다.
+
+en: The model's UVs do not match its faces: {0} UVs for {1} triangle corners.
+ko: 모델의 UV가 면과 맞지 않습니다: 삼각형 코너 {1}개에 UV가 {0}개입니다.
+
+en: The model's normals do not match its points.
+ko: 모델의 노멀이 점과 맞지 않습니다.
+
+en: The model has a face whose corner is not one of its points.
+ko: 모델에 코너가 모델의 어떤 점도 아닌 면이 있습니다.
+
+en: The picture size must be from {0} to {1} texels; {2} was asked for.
+ko: 이미지 크기는 {0}~{1} 텍셀이어야 합니다. 요청된 값은 {2}입니다.
+
+en: Reach must be more than nothing.
+ko: Reach는 0보다 커야 합니다.
+
+en: There is no sculpt to bake from.
+ko: 베이크할 원본 스컬프트가 없습니다.
+
+en: The sculpt's paint does not match its points.
+ko: 스컬프트의 페인트가 점과 맞지 않습니다.
+
+en: The bake failed.
+ko: 베이크에 실패했습니다.
+
 en: {0} uses an alpha called {alpha}, which is not on this computer, so it has no alpha.
 ko: {0}: 이 컴퓨터에 없는 알파를 사용합니다 ({alpha}). 그래서 알파가 없습니다.
 
@@ -191,9 +236,6 @@ ko: Tab은 클린 뷰용으로 예약되어 있습니다.
 en: Backspace takes a key away while you choose one.
 ko: 키를 고르는 동안 Backspace를 누르면 지정된 키가 해제됩니다.
 
-en: O is kept for spinning the view (the turntable).
-ko: O는 뷰 회전(턴테이블)용으로 예약되어 있습니다.
-
 en: Ctrl + Q is kept for quitting.
 ko: Ctrl + Q는 종료용으로 예약되어 있습니다.
 
@@ -208,6 +250,9 @@ ko: 강도(길게 누른 채 드래그, 두 번 누르면 화면에 맞춤)
 
 en: Focal shift (hold and drag)
 ko: 포컬 시프트(길게 누른 채 드래그)
+
+en: Spin the view (turntable)
+ko: 뷰 회전(턴테이블)
 
 en: Delete the object (asks)
 ko: 오브젝트 삭제(먼저 확인)
@@ -529,6 +574,27 @@ ko: SharedMut 읽기 위치 {i}, 끝({0})을 넘음
 
 en: SharedMut stretch {range} past the end ({0})
 ko: SharedMut 구간 {range}, 끝({0})을 넘음
+
+en: Bake Maps is still working. Wait for it, or press its Cancel.
+ko: Bake Maps가 아직 작업 중입니다. 끝날 때까지 기다리거나 Cancel을 누르세요.
+
+en: {0} is still working. Wait for it, or press its Cancel, then bake.
+ko: {0}: 아직 작업 중입니다. 끝날 때까지 기다리거나 Cancel을 누른 뒤 베이크하세요.
+
+en: This object has no UVs to bake onto. Press Unwrap UVs first.
+ko: 이 오브젝트에는 베이크할 UV가 없습니다. 먼저 Unwrap UVs를 누르세요.
+
+en: Tick at least one map to bake.
+ko: 베이크할 맵을 하나 이상 체크하세요.
+
+en: Bake Maps needs the sculpt to bake from where this object is: no other object overlaps it.
+ko: Bake Maps를 하려면 이 오브젝트와 같은 위치에 베이크 원본이 될 스컬프트가 있어야 합니다. 겹치는 다른 오브젝트가 없습니다.
+
+en: {0}% of the surface found nothing of "{high}" within reach and is left flat: raise Reach if that is too much.
+ko: 표면의 {0}%에서 Reach 안에 "{high}"의 어떤 부분도 찾지 못해 평평하게 남았습니다. 너무 많다면 Reach를 올리세요.
+
+en: Unwrapped "{name}": {charts} pieces in the square{along} ({0} ms). Export it as OBJ or FBX to take the UVs with it, or bake maps onto it.
+ko: "{name}" 언랩 완료: 정사각형 안에 조각 {charts}개{along} ({0} ms). OBJ나 FBX로 내보내면 UV도 함께 가져갈 수 있습니다. 또는 이 오브젝트에 맵을 베이크할 수도 있습니다.
 
 en: This run of GolemSculpt keeps no settings folder, so it has no link to Blender.
 ko: 이번 GolemSculpt 실행에는 설정 폴더가 없어서 Blender와 연결되어 있지 않습니다.
@@ -1442,6 +1508,12 @@ ko: "{name}"의 낮은 레벨을 다시 만들었습니다: {0} lower {lower}. �
 en: {what}: {0} (the newest {1} stay)
 ko: {what}: {0} (최신 {1}개는 남음)
 
+en: In Blender's Displacement node: Midlevel 0, Scale 1.
+ko: Blender의 Displacement 노드에서: Midlevel 0, Scale 1.
+
+en: In Blender's Displacement node: Midlevel {mid}, Scale {height}.
+ko: Blender의 Displacement 노드에서: Midlevel {mid}, Scale {height}.
+
 en: The video encoder did not respond.
 ko: 동영상 인코더가 응답하지 않았습니다.
 
@@ -1600,6 +1672,9 @@ ko: {0}에 저장된 페이스 그룹을 읽을 수 없습니다(파일의 해�
 
 en: The paint saved with {0} could not be read (the file is damaged there): the model is as it was                  saved, without its paint.
 ko: {0}에 저장된 페인트를 읽을 수 없습니다(파일의 해당 부분이 손상됨). 모델은 저장된 그대로이며 페인트는 없습니다.
+
+en: The UVs saved with {0} could not be read (the file is damaged there): the model is as it was saved, without its UVs.
+ko: {0}에 저장된 UV를 읽을 수 없습니다(해당 부분에서 파일이 손상됨). 모델은 저장된 그대로이며 UV는 없습니다.
 
 en: What Blender sent is damaged or cut short, so nothing was taken from it.
 ko: Blender가 보낸 내용이 손상되었거나 중간에 잘려서 아무것도 가져오지 않았습니다.
@@ -2137,6 +2212,57 @@ ko: 매트캡 {count}개{change}. 아직 매트캡 폴더가 없습니다. Impor
 
 en: Could not find where to keep matcaps.
 ko: 매트캡을 보관할 위치를 찾지 못했습니다.
+
+en: UVs lay a model's surface out flat in a square, so pictures (maps) can be painted on it. For a game or a render: Clone the sculpt, Quad Remesh the copy, Unwrap UVs on it, then Bake Maps from the sculpt and export the copy with the maps.
+ko: UV는 모델의 표면을 정사각형 안에 평평하게 펼쳐서 그 위에 이미지(맵)를 칠할 수 있게 해 줍니다. 게임이나 렌더용 작업 순서: 스컬프트를 Clone하고, 복사본을 Quad Remesh한 뒤, 복사본에 Unwrap UVs를 하고, 스컬프트에서 Bake Maps를 한 다음, 복사본을 맵과 함께 내보내세요.
+
+en: This object has UVs. Unwrapping again makes new ones.
+ko: 이 오브젝트에는 UV가 있습니다. 다시 언랩하면 새 UV가 만들어집니다.
+
+en: This object has no UVs.
+ko: 이 오브젝트에는 UV가 없습니다.
+
+en: Cut the UVs along the face groups' borders, so the seams go where you drew them. Without face groups the unwrap places the seams itself.
+ko: 페이스 그룹의 경계를 따라 UV를 자르므로, 심이 직접 나눠 둔 위치에 생깁니다. 페이스 그룹이 없으면 언랩이 심 위치를 스스로 정합니다.
+
+en: Lays the selected object out flat in the square: UVs for baking and painting maps, kept when it is exported as OBJ or FBX. The model does not move. One undo step (Ctrl+Z).
+ko: 선택한 오브젝트를 정사각형 안에 평평하게 펼칩니다. 맵을 베이크하고 칠하는 데 쓰는 UV이며, OBJ나 FBX로 내보낼 때도 유지됩니다. 모델은 움직이지 않습니다. 실행 취소 한 단계(Ctrl+Z)입니다.
+
+en: Needs the sculpt to bake from as a second object, where this one is.
+ko: 베이크 원본이 될 스컬프트가 이 오브젝트와 같은 위치에 두 번째 오브젝트로 있어야 합니다.
+
+en: Maps {size} pixels square.
+ko: 맵은 한 변이 {size}픽셀인 정사각형입니다.
+
+en: How far from this object's surface to look for the sculpt's: as Project Detail's Reach.
+ko: 이 오브젝트의 표면에서 얼마나 멀리까지 스컬프트의 표면을 찾을지 정합니다. Project Detail의 Reach와 같습니다.
+
+en: The sculpt's detail as a tangent-space normal map (OpenGL, Y up), as Blender, Unity and Godot read it.
+ko: 스컬프트의 디테일을 탄젠트 스페이스 노멀 맵(OpenGL, Y up)으로 만든 것으로, Blender, Unity, Godot에서 읽는 형식과 같습니다.
+
+en: How far the sculpt stands off this surface: a 32-bit EXR, a 16-bit PNG and a note of the range.
+ko: 스컬프트가 이 표면에서 얼마나 떨어져 있는지를 나타냅니다. 32-bit EXR, 16-bit PNG, 그리고 값의 범위를 적은 메모입니다.
+
+en: How much light reaches each place on the sculpt. The slow one: seconds for a 2K map.
+ko: 스컬프트의 각 위치에 빛이 얼마나 닿는지를 나타냅니다. 가장 오래 걸리는 맵으로, 2K 맵에 몇 초가 걸립니다.
+
+en: The sculpt's paint, as a colour map.
+ko: 스컬프트의 페인트를 컬러 맵으로 만든 것입니다.
+
+en: Bake Maps...
+ko: Bake Maps...
+
+en: Bake Maps from {name}...
+ko: Bake Maps from {name}...
+
+en: Asks for a folder, then bakes the ticked maps in the background and writes them there, named after this object. Export this object as OBJ or FBX to go with them.
+ko: 먼저 폴더를 고르게 한 다음, 체크한 맵을 백그라운드에서 베이크해 이 오브젝트의 이름을 붙여 그 폴더에 저장합니다. 맵과 함께 쓸 수 있도록 이 오브젝트도 OBJ나 FBX로 내보내세요.
+
+en: Unwrap UVs first: the maps are laid out by them.
+ko: 먼저 Unwrap UVs를 하세요. 맵은 UV에 따라 배치됩니다.
+
+en: No other object overlaps this one. Put the low model where the sculpt is.
+ko: 이 오브젝트와 겹치는 다른 오브젝트가 없습니다. 로우폴리 모델을 스컬프트가 있는 위치에 놓으세요.
 
 en: Brush radius: on screen, or on the model with Screen-Space Size off. Hold S and drag, or scroll over the model.
 ko: 브러시 반경: 화면 기준이며, Screen-Space Size를 끄면 모델 기준입니다. S를 누른 채 드래그하거나 모델 위에서 스크롤하세요.
@@ -3479,9 +3605,6 @@ ko: 포인터를 올려 두면 버튼이 하는 일을 알려 줍니다.
 en: Space (hold)
 ko: Space (길게 누르기)
 
-en: Spin the view (turntable)
-ko: 뷰 회전(턴테이블)
-
 en: Quit (asks first)
 ko: 종료(먼저 확인)
 
@@ -3499,6 +3622,12 @@ ko: {0}: 클릭한 뒤 지정할 키를 누르세요. Esc를 누르면 그대로
 
 en: Back to {0}, as the app ships it.
 ko: 앱 기본값으로 되돌립니다: {0}.
+
+en: Every key as the app ships it.
+ko: 모든 키가 앱의 기본 설정 그대로입니다.
+
+en: ZBrush's keys where this app has the command: W gizmo, D / Shift + D levels, F frame, Shift + F wireframe, P perspective, C colour pick, U and O held for strength and focal shift, Ctrl + I and Ctrl + Shift + A for the mask. ZBrush's Alt to subtract and Ctrl to mask are the pen's, not keys: here Ctrl inverts the brush and the Mask button paints the mask.
+ko: ZBrush의 키 중 이 앱에 같은 명령이 있는 것들입니다: W 기즈모, D / Shift + D 레벨, F 화면에 맞춤, Shift + F 와이어프레임, P 원근, C 색상 추출, U와 O는 누르고 있는 동안 Strength와 Focal Shift, 마스크는 Ctrl + I와 Ctrl + Shift + A. ZBrush의 Alt(빼기)와 Ctrl(마스크)은 펜으로 하는 조작이지 키가 아닙니다. 이 앱에서는 Ctrl이 브러시를 반전시키고, Mask 버튼이 마스크를 칠합니다.
 
 en: Puts every command back on the key the app ships with. Press twice: it cannot be undone.
 ko: 모든 명령을 앱 기본 키로 되돌립니다. 두 번 눌러야 하며, 되돌릴 수 없습니다.
@@ -5110,6 +5239,36 @@ ko: {0} 삭제됨.
 
 en: Click a {0} to select it first.
 ko: 먼저 클릭해 선택하세요 ({0}).
+
+en: The model has no surface to lay flat: every triangle is squashed to a line or a point.
+ko: 모델에는 평평하게 펼칠 표면이 없습니다: 모든 삼각형이 선이나 점으로 찌그러져 있습니다.
+
+en: The model breaks into too many pieces ({0} charts) to fit one square with this padding. Lower the padding, or smooth or remesh the model first.
+ko: 모델이 너무 많은 조각({0}개의 차트)으로 나뉘어, 이 패딩으로는 정사각형 하나에 들어가지 않습니다. 패딩을 줄이거나, 먼저 모델을 스무스하게 하거나 리메시하세요.
+
+en: The model could not be unwrapped: {e}.
+ko: 모델을 언랩하지 못했습니다: {e}.
+
+en: There is nothing to unwrap: the model has no triangles.
+ko: 언랩할 것이 없습니다: 모델에 삼각형이 없습니다.
+
+en: The model's triangle list is broken: it holds {0} corners, which is not a whole number of triangles.
+ko: 모델의 삼각형 목록이 손상되었습니다: 코너가 {0}개인데, 삼각형 개수로 딱 나누어떨어지지 않습니다.
+
+en: The model has {count} triangles; UVs can be made for at most {MAX_TRIANGLES}. Bring it lower first, with Decimate or Quad Remesh.
+ko: 모델의 삼각형은 {count}개이며, UV는 최대 {MAX_TRIANGLES}개까지 만들 수 있습니다. 먼저 Decimate나 Quad Remesh로 줄이세요.
+
+en: Triangle {0} uses point {1}, but the model has only {2} points.
+ko: {0}번 삼각형이 {1}번 점을 사용하는데, 모델에는 점이 {2}개뿐입니다.
+
+en: Point {at} of the model is not a number.
+ko: 모델의 {at}번 점이 숫자가 아닙니다.
+
+en: The model's polygon faces do not match its triangles: {why}.
+ko: 모델의 폴리곤 면이 삼각형과 맞지 않습니다: {why}.
+
+en: There are face groups for {0} triangles, but the model has {count}.
+ko: 페이스 그룹은 삼각형 {0}개 분량인데, 모델의 삼각형은 {count}개입니다.
 
 en: The objects are too far apart to unite mirrored at this resolution: the grid has to reach across all of them and their mirror images. Move them closer together, or turn the {0} off for this{lower}.
 ko: 이 해상도에서는 오브젝트들이 너무 멀리 떨어져 있어 미러 상태로 합칠 수 없습니다. 그리드가 모든 오브젝트와 그 거울상을 아우를 수 있어야 합니다. 더 가깝게 옮기거나, 이 작업에서는 미러({0})를 끄세요{lower}.

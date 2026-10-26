@@ -79,6 +79,51 @@ de: Kein HDRI geladen.
 en: {name} ({0} x {0} x {0})
 de: {name} ({0} x {0} x {0})
 
+en: The bake was stopped.
+de: Das Backen wurde abgebrochen.
+
+en: There is no paint on the sculpt to bake a colour map from.
+de: Auf dem Sculpt ist keine Farbe aufgetragen, aus der sich eine Farb-Map backen ließe.
+
+en: Pick at least one map to bake.
+de: Wähle mindestens eine Map zum Backen aus.
+
+en: The model's UVs cover none of the picture: they are all outside the square from 0 to 1, or have no area.
+de: Die UVs des Modells decken nichts vom Bild ab: Alle liegen außerhalb des Quadrats von 0 bis 1 oder haben keinen Flächeninhalt.
+
+en: Nothing on the sculpt was found from the model: the two objects are not in the same place, or Reach is too small.
+de: Vom Modell aus wurde nichts vom Sculpt gefunden: Die beiden Objekte liegen nicht am selben Ort, oder Reach ist zu klein.
+
+en: The model has no UVs to bake onto: unwrap it first.
+de: Das Modell hat keine UVs, auf die gebacken werden könnte: Wickle es zuerst ab.
+
+en: The model has no faces to bake onto.
+de: Das Modell hat keine Flächen, auf die gebacken werden könnte.
+
+en: The model's UVs do not match its faces: {0} UVs for {1} triangle corners.
+de: Die UVs des Modells passen nicht zu seinen Flächen: {0} UVs für {1} Dreiecksecken.
+
+en: The model's normals do not match its points.
+de: Die Normalen des Modells passen nicht zu seinen Punkten.
+
+en: The model has a face whose corner is not one of its points.
+de: Das Modell hat eine Fläche, deren Ecke keiner seiner Punkte ist.
+
+en: The picture size must be from {0} to {1} texels; {2} was asked for.
+de: Die Bildgröße muss zwischen {0} und {1} Texel liegen; angefordert wurden {2}.
+
+en: Reach must be more than nothing.
+de: Reach muss größer als null sein.
+
+en: There is no sculpt to bake from.
+de: Es gibt keinen Sculpt, von dem gebacken werden könnte.
+
+en: The sculpt's paint does not match its points.
+de: Die Farbe des Sculpts passt nicht zu seinen Punkten.
+
+en: The bake failed.
+de: Das Backen ist fehlgeschlagen.
+
 en: {0} uses an alpha called {alpha}, which is not on this computer, so it has no alpha.
 de: {0} verwendet ein Alpha namens {alpha}, das nicht auf diesem Computer liegt, daher hat es kein Alpha.
 
@@ -193,9 +238,6 @@ de: Tab ist für die saubere Ansicht reserviert.
 en: Backspace takes a key away while you choose one.
 de: Backspace entfernt eine Taste, während du eine auswählst.
 
-en: O is kept for spinning the view (the turntable).
-de: O ist zum Drehen der Ansicht reserviert (der Drehteller).
-
 en: Ctrl + Q is kept for quitting.
 de: Ctrl + Q ist zum Beenden reserviert.
 
@@ -210,6 +252,9 @@ de: Strength (halten und ziehen; zweimal tippen zum Einpassen)
 
 en: Focal shift (hold and drag)
 de: Focal Shift (halten und ziehen)
+
+en: Spin the view (turntable)
+de: Ansicht drehen (Drehteller)
 
 en: Delete the object (asks)
 de: Das Objekt löschen (fragt nach)
@@ -531,6 +576,27 @@ de: SharedMut-Lesezugriff bei {i}, hinter dem Ende ({0})
 
 en: SharedMut stretch {range} past the end ({0})
 de: SharedMut-Bereich {range} reicht über das Ende hinaus ({0})
+
+en: Bake Maps is still working. Wait for it, or press its Cancel.
+de: Bake Maps arbeitet noch. Warte darauf oder drücke dessen Cancel.
+
+en: {0} is still working. Wait for it, or press its Cancel, then bake.
+de: {0} arbeitet noch. Warte darauf oder drücke dessen Cancel und backe dann.
+
+en: This object has no UVs to bake onto. Press Unwrap UVs first.
+de: Dieses Objekt hat keine UVs, auf die gebacken werden könnte. Drücke zuerst Unwrap UVs.
+
+en: Tick at least one map to bake.
+de: Hake mindestens eine Map zum Backen an.
+
+en: Bake Maps needs the sculpt to bake from where this object is: no other object overlaps it.
+de: Bake Maps braucht den Sculpt, von dem gebacken wird, dort, wo dieses Objekt liegt: Kein anderes Objekt überlappt es.
+
+en: {0}% of the surface found nothing of "{high}" within reach and is left flat: raise Reach if that is too much.
+de: {0}% der Oberfläche haben nichts von „{high}“ in Reichweite gefunden und bleiben flach: Erhöhe Reach, wenn das zu viel ist.
+
+en: Unwrapped "{name}": {charts} pieces in the square{along} ({0} ms). Export it as OBJ or FBX to take the UVs with it, or bake maps onto it.
+de: „{name}“ abgewickelt: {charts} Teile im Quadrat{along} ({0} ms). Exportiere es als OBJ oder FBX, um die UVs mitzunehmen, oder backe Maps darauf.
 
 en: This run of GolemSculpt keeps no settings folder, so it has no link to Blender.
 de: Dieser Start von GolemSculpt hat keinen Einstellungsordner und daher keine Verbindung zu Blender.
@@ -1444,6 +1510,12 @@ de: {0} niedrigere {lower} von „{name}“ neu aufgebaut: Stufe 1 hat {1} Fläc
 en: {what}: {0} (the newest {1} stay)
 de: {what}: {0} (die neuesten {1} bleiben)
 
+en: In Blender's Displacement node: Midlevel 0, Scale 1.
+de: Im Displacement-Node von Blender: Midlevel 0, Scale 1.
+
+en: In Blender's Displacement node: Midlevel {mid}, Scale {height}.
+de: Im Displacement-Node von Blender: Midlevel {mid}, Scale {height}.
+
 en: The video encoder did not respond.
 de: Der Video-Encoder hat nicht reagiert.
 
@@ -1602,6 +1674,9 @@ de: Die mit {0} gespeicherten Flächengruppen konnten nicht gelesen werden (die 
 
 en: The paint saved with {0} could not be read (the file is damaged there): the model is as it was                  saved, without its paint.
 de: Die mit {0} gespeicherte Farbe konnte nicht gelesen werden (die Datei ist dort beschädigt): Das Modell ist so, wie es gespeichert wurde, aber ohne seine Farbe.
+
+en: The UVs saved with {0} could not be read (the file is damaged there): the model is as it was saved, without its UVs.
+de: Die mit {0} gespeicherten UVs konnten nicht gelesen werden (die Datei ist an dieser Stelle beschädigt): Das Modell ist so, wie es gespeichert wurde, ohne seine UVs.
 
 en: What Blender sent is damaged or cut short, so nothing was taken from it.
 de: Was Blender gesendet hat, ist beschädigt oder abgeschnitten, daher wurde nichts daraus übernommen.
@@ -2139,6 +2214,57 @@ de: {count} Matcaps{change}. Es gibt noch keinen Matcap-Ordner; Import Matcap le
 
 en: Could not find where to keep matcaps.
 de: Der Speicherort für Matcaps konnte nicht gefunden werden.
+
+en: UVs lay a model's surface out flat in a square, so pictures (maps) can be painted on it. For a game or a render: Clone the sculpt, Quad Remesh the copy, Unwrap UVs on it, then Bake Maps from the sculpt and export the copy with the maps.
+de: UVs breiten die Oberfläche eines Modells flach in einem Quadrat aus, damit Bilder (Maps) darauf gemalt werden können. Für ein Spiel oder ein Rendering: Nutze Clone für den Sculpt, Quad Remesh für die Kopie, Unwrap UVs darauf, dann Bake Maps vom Sculpt und exportiere die Kopie mit den Maps.
+
+en: This object has UVs. Unwrapping again makes new ones.
+de: Dieses Objekt hat UVs. Erneutes Abwickeln erzeugt neue.
+
+en: This object has no UVs.
+de: Dieses Objekt hat keine UVs.
+
+en: Cut the UVs along the face groups' borders, so the seams go where you drew them. Without face groups the unwrap places the seams itself.
+de: Schneide die UVs entlang der Grenzen der Flächengruppen auf, damit die Nähte dort verlaufen, wo du sie gezeichnet hast. Ohne Flächengruppen setzt das Abwickeln die Nähte selbst.
+
+en: Lays the selected object out flat in the square: UVs for baking and painting maps, kept when it is exported as OBJ or FBX. The model does not move. One undo step (Ctrl+Z).
+de: Breitet das ausgewählte Objekt flach im Quadrat aus: UVs zum Backen und Bemalen von Maps, die erhalten bleiben, wenn es als OBJ oder FBX exportiert wird. Das Modell bewegt sich nicht. Ein Rückgängig-Schritt (Ctrl+Z).
+
+en: Needs the sculpt to bake from as a second object, where this one is.
+de: Braucht den Sculpt, von dem gebacken wird, als zweites Objekt, dort, wo dieses liegt.
+
+en: Maps {size} pixels square.
+de: Quadratische Maps mit {size} Pixeln Seitenlänge.
+
+en: How far from this object's surface to look for the sculpt's: as Project Detail's Reach.
+de: Wie weit von der Oberfläche dieses Objekts aus nach der des Sculpts gesucht wird: wie das Reach von Project Detail.
+
+en: The sculpt's detail as a tangent-space normal map (OpenGL, Y up), as Blender, Unity and Godot read it.
+de: Das Detail des Sculpts als Tangent-Space-Normal-Map (OpenGL, Y up), so, wie Blender, Unity und Godot sie lesen.
+
+en: How far the sculpt stands off this surface: a 32-bit EXR, a 16-bit PNG and a note of the range.
+de: Wie weit der Sculpt von dieser Oberfläche absteht: als 32-bit-EXR, als 16-bit-PNG und mit einer Notiz zum Wertebereich.
+
+en: How much light reaches each place on the sculpt. The slow one: seconds for a 2K map.
+de: Wie viel Licht jede Stelle des Sculpts erreicht. Die langsame: Sekunden bei einer 2K-Map.
+
+en: The sculpt's paint, as a colour map.
+de: Die Farbe des Sculpts als Farb-Map.
+
+en: Bake Maps...
+de: Bake Maps...
+
+en: Bake Maps from {name}...
+de: Bake Maps from {name}...
+
+en: Asks for a folder, then bakes the ticked maps in the background and writes them there, named after this object. Export this object as OBJ or FBX to go with them.
+de: Fragt nach einem Ordner, backt dann die angehakten Maps im Hintergrund und schreibt sie dorthin, benannt nach diesem Objekt. Exportiere dieses Objekt als OBJ oder FBX, um es zusammen mit den Maps zu verwenden.
+
+en: Unwrap UVs first: the maps are laid out by them.
+de: Zuerst Unwrap UVs: Die Maps werden nach ihnen angeordnet.
+
+en: No other object overlaps this one. Put the low model where the sculpt is.
+de: Kein anderes Objekt überlappt dieses. Platziere das Low-Poly-Modell dort, wo der Sculpt liegt.
 
 en: Brush radius: on screen, or on the model with Screen-Space Size off. Hold S and drag, or scroll over the model.
 de: Pinselradius: auf dem Bildschirm oder, bei ausgeschaltetem Screen-Space Size, auf dem Modell. Halte S gedrückt und ziehe, oder scrolle über dem Modell.
@@ -3481,9 +3607,6 @@ de: Zeige, was eine Schaltfläche tut, wenn der Zeiger darauf ruht.
 en: Space (hold)
 de: Space (gedrückt halten)
 
-en: Spin the view (turntable)
-de: Ansicht drehen (Drehteller)
-
 en: Quit (asks first)
 de: Beenden (fragt vorher nach)
 
@@ -3501,6 +3624,12 @@ de: {0}: Klicke und drücke dann die Taste, die darauf gelegt werden soll. Esc l
 
 en: Back to {0}, as the app ships it.
 de: Zurück zu {0}, wie die App es mitliefert.
+
+en: Every key as the app ships it.
+de: Alle Tasten so, wie die App sie mitliefert.
+
+en: ZBrush's keys where this app has the command: W gizmo, D / Shift + D levels, F frame, Shift + F wireframe, P perspective, C colour pick, U and O held for strength and focal shift, Ctrl + I and Ctrl + Shift + A for the mask. ZBrush's Alt to subtract and Ctrl to mask are the pen's, not keys: here Ctrl inverts the brush and the Mask button paints the mask.
+de: Die Tasten von ZBrush dort, wo diese App den Befehl hat: W Gizmo, D / Shift + D Stufen, F Frame, Shift + F Wireframe, P Perspektive, C Farbe aufnehmen, U und O gehalten für Stärke und Focal Shift, Ctrl + I und Ctrl + Shift + A für die Maske. ZBrushs Alt zum Subtrahieren und Ctrl zum Maskieren gehören dem Stift, nicht den Tasten: Hier invertiert Ctrl den Pinsel, und die Schaltfläche Mask malt die Maske.
 
 en: Puts every command back on the key the app ships with. Press twice: it cannot be undone.
 de: Setzt jeden Befehl auf die Taste zurück, mit der die App ausgeliefert wird. Drücke zweimal: Es lässt sich nicht rückgängig machen.
@@ -5112,6 +5241,36 @@ de: {0} gelöscht.
 
 en: Click a {0} to select it first.
 de: Klicke zuerst auf ein Element ({0}), um es auszuwählen.
+
+en: The model has no surface to lay flat: every triangle is squashed to a line or a point.
+de: Das Modell hat keine Oberfläche, die sich flach ausbreiten ließe: Jedes Dreieck ist zu einer Linie oder einem Punkt zusammengedrückt.
+
+en: The model breaks into too many pieces ({0} charts) to fit one square with this padding. Lower the padding, or smooth or remesh the model first.
+de: Das Modell zerfällt in zu viele Teile ({0} Inseln), um mit diesem Abstand in ein Quadrat zu passen. Verringere den Abstand oder glätte oder vernetze das Modell zuerst neu.
+
+en: The model could not be unwrapped: {e}.
+de: Das Modell konnte nicht abgewickelt werden: {e}.
+
+en: There is nothing to unwrap: the model has no triangles.
+de: Es gibt nichts abzuwickeln: Das Modell hat keine Dreiecke.
+
+en: The model's triangle list is broken: it holds {0} corners, which is not a whole number of triangles.
+de: Die Dreiecksliste des Modells ist defekt: Sie enthält {0} Ecken, das ist keine ganze Zahl von Dreiecken.
+
+en: The model has {count} triangles; UVs can be made for at most {MAX_TRIANGLES}. Bring it lower first, with Decimate or Quad Remesh.
+de: Das Modell hat {count} Dreiecke; UVs lassen sich für höchstens {MAX_TRIANGLES} erstellen. Verringere die Anzahl zuerst, mit Decimate oder Quad Remesh.
+
+en: Triangle {0} uses point {1}, but the model has only {2} points.
+de: Dreieck {0} verwendet Punkt {1}, aber das Modell hat nur {2} Punkte.
+
+en: Point {at} of the model is not a number.
+de: Punkt {at} des Modells ist keine Zahl.
+
+en: The model's polygon faces do not match its triangles: {why}.
+de: Die Polygonflächen des Modells passen nicht zu seinen Dreiecken: {why}.
+
+en: There are face groups for {0} triangles, but the model has {count}.
+de: Es gibt Flächengruppen für {0} Dreiecke, aber das Modell hat {count}.
 
 en: The objects are too far apart to unite mirrored at this resolution: the grid has to reach across all of them and their mirror images. Move them closer together, or turn the {0} off for this{lower}.
 de: Die Objekte sind zu weit auseinander, um sie bei dieser Auflösung gespiegelt zu vereinen: Das Gitter muss alle und ihre Spiegelbilder umspannen. Rücke sie näher zusammen oder schalte {0} dafür aus{lower}.

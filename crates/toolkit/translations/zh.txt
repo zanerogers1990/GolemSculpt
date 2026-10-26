@@ -79,6 +79,51 @@ zh: 未加载 HDRI。
 en: {name} ({0} x {0} x {0})
 zh: {name} ({0} x {0} x {0})
 
+en: The bake was stopped.
+zh: 烘焙已停止。
+
+en: There is no paint on the sculpt to bake a colour map from.
+zh: 雕刻模型上没有颜料，无法烘焙颜色贴图。
+
+en: Pick at least one map to bake.
+zh: 请至少选择一张要烘焙的贴图。
+
+en: The model's UVs cover none of the picture: they are all outside the square from 0 to 1, or have no area.
+zh: 模型的 UV 没有覆盖图片的任何部分：它们要么全在 0 到 1 的方形之外，要么没有面积。
+
+en: Nothing on the sculpt was found from the model: the two objects are not in the same place, or Reach is too small.
+zh: 从模型出发，在雕刻模型上没有找到任何内容：这两个物体不在同一位置，或者 Reach 太小。
+
+en: The model has no UVs to bake onto: unwrap it first.
+zh: 模型没有可供烘焙的 UV：请先展开 UV。
+
+en: The model has no faces to bake onto.
+zh: 模型没有可供烘焙的面。
+
+en: The model's UVs do not match its faces: {0} UVs for {1} triangle corners.
+zh: 模型的 UV 与它的面对不上：{1} 个三角面角点对应的是 {0} 个 UV。
+
+en: The model's normals do not match its points.
+zh: 模型的法线与它的顶点对不上。
+
+en: The model has a face whose corner is not one of its points.
+zh: 模型里有一个面，它的某个角不是模型的任何一个顶点。
+
+en: The picture size must be from {0} to {1} texels; {2} was asked for.
+zh: 图片尺寸必须在 {0} 到 {1} 纹素之间；要求的是 {2}。
+
+en: Reach must be more than nothing.
+zh: Reach 必须大于 0。
+
+en: There is no sculpt to bake from.
+zh: 没有可供烘焙的雕刻模型。
+
+en: The sculpt's paint does not match its points.
+zh: 雕刻模型的颜料与它的顶点对不上。
+
+en: The bake failed.
+zh: 烘焙失败。
+
 en: {0} uses an alpha called {alpha}, which is not on this computer, so it has no alpha.
 zh: {0} 使用了名为 {alpha} 的 Alpha 图，但这台电脑上没有，所以它没有 Alpha。
 
@@ -193,9 +238,6 @@ zh: Tab 键保留给纯净视图。
 en: Backspace takes a key away while you choose one.
 zh: 选择按键时，Backspace 可清除按键。
 
-en: O is kept for spinning the view (the turntable).
-zh: O 键保留给旋转视图（转盘）。
-
 en: Ctrl + Q is kept for quitting.
 zh: Ctrl + Q 保留给退出。
 
@@ -210,6 +252,9 @@ zh: Strength（按住并拖动；连按两次可让模型居中显示）
 
 en: Focal shift (hold and drag)
 zh: Focal Shift（按住并拖动）
+
+en: Spin the view (turntable)
+zh: 旋转视图（转盘）
 
 en: Delete the object (asks)
 zh: 删除物体（会先询问）
@@ -531,6 +576,27 @@ zh: SharedMut 在 {i} 处读取，超出末尾（{0}）
 
 en: SharedMut stretch {range} past the end ({0})
 zh: SharedMut 区段 {range} 超出末尾（{0}）
+
+en: Bake Maps is still working. Wait for it, or press its Cancel.
+zh: Bake Maps 仍在处理。请等它完成，或点击它的 Cancel。
+
+en: {0} is still working. Wait for it, or press its Cancel, then bake.
+zh: {0} 仍在处理。请等它完成，或点击它的 Cancel，然后再烘焙。
+
+en: This object has no UVs to bake onto. Press Unwrap UVs first.
+zh: 这个物体没有可供烘焙的 UV。请先点击 Unwrap UVs。
+
+en: Tick at least one map to bake.
+zh: 请至少勾选一张要烘焙的贴图。
+
+en: Bake Maps needs the sculpt to bake from where this object is: no other object overlaps it.
+zh: Bake Maps 需要在这个物体所在的位置有一个作为烘焙来源的雕刻模型：目前没有其他物体与它重叠。
+
+en: {0}% of the surface found nothing of "{high}" within reach and is left flat: raise Reach if that is too much.
+zh: 表面有 {0}% 在 Reach 范围内没有找到“{high}”的任何内容，保持为平的：如果这太多了，请调高 Reach。
+
+en: Unwrapped "{name}": {charts} pieces in the square{along} ({0} ms). Export it as OBJ or FBX to take the UVs with it, or bake maps onto it.
+zh: 已展开“{name}”的 UV：在方形中分成 {charts} 块{along}（{0} ms）。导出为 OBJ 或 FBX 即可连 UV 一起带走，也可以往它上面烘焙贴图。
 
 en: This run of GolemSculpt keeps no settings folder, so it has no link to Blender.
 zh: 本次运行的 GolemSculpt 没有设置文件夹，因此与 Blender 没有连接。
@@ -1444,6 +1510,12 @@ zh: 已重建“{name}”的 {0} 个更低的 {lower}：级别 1 有 {1} 个面�
 en: {what}: {0} (the newest {1} stay)
 zh: {what}：{0}（保留最新的 {1} 个）
 
+en: In Blender's Displacement node: Midlevel 0, Scale 1.
+zh: 在 Blender 的 Displacement 节点中：Midlevel 0，Scale 1。
+
+en: In Blender's Displacement node: Midlevel {mid}, Scale {height}.
+zh: 在 Blender 的 Displacement 节点中：Midlevel {mid}，Scale {height}。
+
 en: The video encoder did not respond.
 zh: 视频编码器没有响应。
 
@@ -1602,6 +1674,9 @@ zh: 无法读取随 {0} 保存的面组（文件在这部分已损坏）：模�
 
 en: The paint saved with {0} could not be read (the file is damaged there): the model is as it was                  saved, without its paint.
 zh: 无法读取随 {0} 保存的颜料（文件在这部分已损坏）：模型与保存时一致，但没有颜料。
+
+en: The UVs saved with {0} could not be read (the file is damaged there): the model is as it was saved, without its UVs.
+zh: 无法读取与 {0} 一起保存的 UV（文件在这部分已损坏）：模型保持保存时的样子，但没有 UV。
 
 en: What Blender sent is damaged or cut short, so nothing was taken from it.
 zh: Blender 发来的内容已损坏或被截断，所以没有从中取走任何东西。
@@ -2139,6 +2214,57 @@ zh: {count} 个 Matcap{change}。还没有 matcap 文件夹；Import Matcap 会�
 
 en: Could not find where to keep matcaps.
 zh: 找不到存放 Matcap 的位置。
+
+en: UVs lay a model's surface out flat in a square, so pictures (maps) can be painted on it. For a game or a render: Clone the sculpt, Quad Remesh the copy, Unwrap UVs on it, then Bake Maps from the sculpt and export the copy with the maps.
+zh: UV 把模型的表面平铺展开到一个方形里，这样就能在上面绘制图片（贴图）。用于游戏或渲染：先 Clone 雕刻模型，对副本做 Quad Remesh，再对副本执行 Unwrap UVs，然后从雕刻模型 Bake Maps，并把副本连同贴图一起导出。
+
+en: This object has UVs. Unwrapping again makes new ones.
+zh: 这个物体有 UV。再次展开会生成新的 UV。
+
+en: This object has no UVs.
+zh: 这个物体没有 UV。
+
+en: Cut the UVs along the face groups' borders, so the seams go where you drew them. Without face groups the unwrap places the seams itself.
+zh: 沿着面组的边界切开 UV，让接缝落在你画好的位置。没有面组时，展开会自己决定接缝的位置。
+
+en: Lays the selected object out flat in the square: UVs for baking and painting maps, kept when it is exported as OBJ or FBX. The model does not move. One undo step (Ctrl+Z).
+zh: 把所选物体平铺展开到方形里：生成用于烘焙和绘制贴图的 UV，导出为 OBJ 或 FBX 时会一并保留。模型不会移动。占一个撤销步骤（Ctrl+Z）。
+
+en: Needs the sculpt to bake from as a second object, where this one is.
+zh: 需要在这个物体所在的位置有第二个物体，作为烘焙来源的雕刻模型。
+
+en: Maps {size} pixels square.
+zh: 贴图为边长 {size} 像素的方形。
+
+en: How far from this object's surface to look for the sculpt's: as Project Detail's Reach.
+zh: 从这个物体的表面出发，要到多远的地方去寻找雕刻模型的表面：与 Project Detail 的 Reach 相同。
+
+en: The sculpt's detail as a tangent-space normal map (OpenGL, Y up), as Blender, Unity and Godot read it.
+zh: 雕刻模型的细节，生成为切线空间法线贴图（OpenGL，Y up），与 Blender、Unity、Godot 读取的格式一致。
+
+en: How far the sculpt stands off this surface: a 32-bit EXR, a 16-bit PNG and a note of the range.
+zh: 雕刻模型离开这个表面有多远：一个 32-bit EXR、一个 16-bit PNG，以及一份记录数值范围的说明。
+
+en: How much light reaches each place on the sculpt. The slow one: seconds for a 2K map.
+zh: 雕刻模型上每个位置接收到多少光。这个最慢：2K 贴图需要几秒。
+
+en: The sculpt's paint, as a colour map.
+zh: 雕刻模型的颜料，输出为颜色贴图。
+
+en: Bake Maps...
+zh: Bake Maps...
+
+en: Bake Maps from {name}...
+zh: Bake Maps from {name}...
+
+en: Asks for a folder, then bakes the ticked maps in the background and writes them there, named after this object. Export this object as OBJ or FBX to go with them.
+zh: 先让你选择一个文件夹，然后在后台烘焙已勾选的贴图，并以这个物体的名字命名后写入该文件夹。请另外把这个物体导出为 OBJ 或 FBX，与这些贴图配套使用。
+
+en: Unwrap UVs first: the maps are laid out by them.
+zh: 请先 Unwrap UVs：贴图是按 UV 排布的。
+
+en: No other object overlaps this one. Put the low model where the sculpt is.
+zh: 没有其他物体与这个物体重叠。请把低模放在雕刻模型所在的位置。
 
 en: Brush radius: on screen, or on the model with Screen-Space Size off. Hold S and drag, or scroll over the model.
 zh: 笔刷半径：以屏幕为准，关闭 Screen-Space Size 时以模型为准。按住 S 并拖动，或在模型上滚动滚轮。
@@ -3481,9 +3607,6 @@ zh: 指针停在按钮上时，说明这个按钮的作用。
 en: Space (hold)
 zh: Space（按住）
 
-en: Spin the view (turntable)
-zh: 旋转视图（转盘）
-
 en: Quit (asks first)
 zh: 退出（会先询问）
 
@@ -3501,6 +3624,12 @@ zh: {0}：点击后按下要设置的键。按 Esc 保持原样。
 
 en: Back to {0}, as the app ships it.
 zh: 恢复为 {0}，即应用出厂时的设置。
+
+en: Every key as the app ships it.
+zh: 所有按键保持应用出厂时的设置。
+
+en: ZBrush's keys where this app has the command: W gizmo, D / Shift + D levels, F frame, Shift + F wireframe, P perspective, C colour pick, U and O held for strength and focal shift, Ctrl + I and Ctrl + Shift + A for the mask. ZBrush's Alt to subtract and Ctrl to mask are the pen's, not keys: here Ctrl inverts the brush and the Mask button paints the mask.
+zh: 在本应用有对应命令的地方，使用 ZBrush 的按键：W：Gizmo；D / Shift + D：级别；F：居中显示；Shift + F：线框；P：透视；C：拾取颜色；按住 U 和 O：分别调节 Strength 和 Focal Shift；Ctrl + I 和 Ctrl + Shift + A：遮罩。ZBrush 中 Alt 减去、Ctrl 遮罩是手写笔上的操作，不是按键：在这里，Ctrl 用来反转笔刷，Mask 按钮用来绘制遮罩。
 
 en: Puts every command back on the key the app ships with. Press twice: it cannot be undone.
 zh: 把所有命令恢复到应用出厂时的按键。需要点两次：此操作无法撤销。
@@ -5112,6 +5241,36 @@ zh: {0} 已删除。
 
 en: Click a {0} to select it first.
 zh: 请先点击一个 {0} 来选中它。
+
+en: The model has no surface to lay flat: every triangle is squashed to a line or a point.
+zh: 模型没有可以展平的表面：每个三角面都被压成了一条线或一个点。
+
+en: The model breaks into too many pieces ({0} charts) to fit one square with this padding. Lower the padding, or smooth or remesh the model first.
+zh: 模型被分成的块太多（{0} 个图块），在这个间距下一个方形放不下。请减小间距，或先对模型做平滑或重构网格。
+
+en: The model could not be unwrapped: {e}.
+zh: 无法展开这个模型：{e}。
+
+en: There is nothing to unwrap: the model has no triangles.
+zh: 没有可展开的内容：模型没有三角面。
+
+en: The model's triangle list is broken: it holds {0} corners, which is not a whole number of triangles.
+zh: 模型的三角面列表已损坏：它包含 {0} 个角，不是整数个三角面。
+
+en: The model has {count} triangles; UVs can be made for at most {MAX_TRIANGLES}. Bring it lower first, with Decimate or Quad Remesh.
+zh: 模型有 {count} 个三角面；最多只能为 {MAX_TRIANGLES} 个三角面生成 UV。请先用 Decimate 或 Quad Remesh 把数量降下来。
+
+en: Triangle {0} uses point {1}, but the model has only {2} points.
+zh: 三角面 {0} 用到了顶点 {1}，但模型只有 {2} 个顶点。
+
+en: Point {at} of the model is not a number.
+zh: 模型的顶点 {at} 不是有效数字。
+
+en: The model's polygon faces do not match its triangles: {why}.
+zh: 模型的多边形面与它的三角面对不上：{why}。
+
+en: There are face groups for {0} triangles, but the model has {count}.
+zh: 有针对 {0} 个三角面的面组数据，但模型有 {count} 个三角面。
 
 en: The objects are too far apart to unite mirrored at this resolution: the grid has to reach across all of them and their mirror images. Move them closer together, or turn the {0} off for this{lower}.
 zh: 这些物体相距太远，无法在这个分辨率下做镜像合并：网格必须覆盖所有物体及其镜像。请把它们移得更近，或为此关闭 {0}{lower}。
