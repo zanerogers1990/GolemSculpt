@@ -1,4 +1,4 @@
-//! Scripted muscle strokes, for pictures and timings: `--demo-tool muscle:[round][-merged|-selected]`.
+//! Scripted muscle strokes, for pictures and timings: `--demo-tool muscle:[round][-merged|-selected[-edge]]`.
 //!
 //! `MUSCLE_STROKES` is what to draw, in fractions of the viewport from its top-left corner: points
 //! joined by `>`, strokes parted by `;`, and a stroke that starts with `~` drawn floating.
@@ -110,6 +110,15 @@ impl TubeTool {
         } else if what.contains("selected") {
             if let Some(tube) = self.tubes.len().checked_sub(1) {
                 self.select_tube(tube, Some(self.point_count(tube) / 2));
+            }
+            // `selected-edge`: one edge of that point dragged out, as far again as the muscle is wide.
+            self.refresh(cx, false);
+            if let Some(ring) = self.ring_handles(&cx.view).first().copied().filter(|_| what.contains("edge")) {
+                let to = ring.at + (ring.at - ring.centre) * 2.0;
+                self.press(cx, ring.at, false, false);
+                (1..=8).for_each(|step| self.drag_to(cx, ring.at.lerp(to, step as f32 / 8.0)));
+                self.release(cx);
+                println!("muscle: an edge dragged out: {}", self.status);
             }
         } else {
             (self.active, self.selected_point) = (None, None);

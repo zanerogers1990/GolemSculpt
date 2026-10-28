@@ -34,6 +34,12 @@ const SNAP_DIRECTIONS: usize = 16;
 
 const DOUBLE_CLICK_SECONDS: f64 = 0.3;
 const MAX_STROKE_POINTS: usize = 40;
+/// A muscle stroke is simplified to within this much of the muscle's radius of where it was drawn.
+const MUSCLE_TOLERANCE: f32 = 0.5;
+/// The same while it is being drawn: finer, so the muscle keeps close to the pen and does not jump
+/// half a radius each time the stroke bends far enough for another point. It takes on its points as
+/// the pen comes up.
+const LIVE_MUSCLE_TOLERANCE: f32 = 0.15;
 const WHEEL_SIZE_STEP: f32 = 1.1;
 
 /// A point of a copy of a tube.
@@ -54,13 +60,39 @@ pub(crate) struct CurveHit {
     pub world: Vec3,
 }
 
-/// The radius handle of the selected point, on screen.
+/// A radius handle of the selected point, on screen. A tube's point has one, which sizes it evenly. A
+/// muscle's has one on each edge, which moves that edge alone.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RingHandle {
     pub tube: usize,
     pub point: usize,
     pub centre: Vec2,
     pub at: Vec2,
+    /// Which edge of a muscle, 1 or -1 along `across`; 0 for a tube's one handle.
+    pub side: i8,
+    /// The point's handle in the world, and for a muscle the way across it there, its way up and its
+    /// half width.
+    pub world: Vec3,
+    pub across: Vec3,
+    pub up: Vec3,
+    pub half_width: f32,
+}
+
+/// A muscle's edge dragged on its own: the point is moved across as far as it is widened, so the edge
+/// on the other side stays where it was.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EdgeDrag {
+    /// The point as it was, its handle in the world, the way out to the dragged edge and the way up.
+    start: TubePoint,
+    start_world: Vec3,
+    outward: Vec3,
+    up: Vec3,
+    half_width: f32,
+    /// On screen: the edge that stays, the way out from it to the dragged one, and how far out along
+    /// that the press was.
+    fixed: Vec2,
+    toward: Vec2,
+    start_reach: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,8 +124,9 @@ pub(crate) enum Drag {
     Draw,
     /// S held: sideways travel sizes a point, or the tube's radius.
     Resize { tube: Option<usize>, point: Option<usize>, start_value: f32, start_x: f32 },
-    /// The radius handle of a point, dragged away from or toward the point.
-    Ring { tube: usize, point: usize, start_size: f32, centre: Vec2, start_distance: f32 },
+    /// A radius handle of a point, dragged away from or toward the point: evenly, or one edge of a
+    /// muscle (`edge`).
+    Ring { tube: usize, point: usize, start_size: f32, centre: Vec2, start_distance: f32, side: i8, edge: Option<EdgeDrag> },
 }
 
 /// The stroke being drawn, as it came off the pointer.
@@ -126,7 +159,8 @@ pub(crate) struct Pointer {
     pub drag: Drag,
     pub hover_handle: Option<HandleHit>,
     pub hover_curve: Option<CurveHit>,
-    pub hover_ring: bool,
+    /// The radius handle under the pointer, by its side.
+    pub hover_ring: Option<i8>,
     /// The last press on a point, for the double click.
     last_click: Option<(HandleHit, f64)>,
     /// Where the pointer is and the world point under it, for the radius
@@ -143,7 +177,7 @@ impl Pointer {
     pub fn clear_hover(&mut self) {
         self.hover_handle = None;
         self.hover_curve = None;
-        self.hover_ring = false;
+        self.hover_ring = None;
         self.cursor = None;
     }
 }
@@ -219,7 +253,7 @@ impl TubeTool {
     fn pick_handle(&self, view: &View, px: Vec2) -> Option<(HandleHit, f32)> {
         let mut best = None;
         let mut best_score = HANDLE_PICK * view.pixels_per_point;
-        for (t, tube) in self.tubes.iter().enumerate() {
+        for (t, tube) in self.tubes.iter().enumerate().filter(|&(t, _)| self.shows_points(t)) {
             for (k, copy) in tube.copies.iter().enumerate() {
                 for (i, world) in copy.handle_world.iter().enumerate().take(tube.state.points.len()) {
                     let Some(s) = view.project(*world) else { continue };
@@ -276,32 +310,71 @@ impl TubeTool {
         best
     }
 
-    /// Where the radius handle of the selected point is drawn: out from the
-    /// point by the tube's radius there, across the tube as it is seen, so
-    /// it sits on the tube's outline.
-    pub(crate) fn ring_handle(&self, view: &View) -> Option<RingHandle> {
-        let (tube, point) = self.active_tube().zip(self.selected_point())?;
-        let copy = self.tubes[tube].copies.first()?;
-        let world = *copy.handle_world.get(point)?;
-        let centre = view.project(world)?;
-        let radius = pixels_for(view, world, copy.controls.get(point)?.radius);
+    /// Where the radius handles of the selected point are drawn. A tube's is
+    /// out from the point by the tube's radius there, across the tube as it
+    /// is seen, so it sits on the tube's outline. A muscle's are on its two
+    /// edges, where it is widest either side of its line.
+    pub(crate) fn ring_handles(&self, view: &View) -> Vec<RingHandle> {
+        let Some((tube, point)) = self.active_tube().zip(self.selected_point()) else { return Vec::new() };
+        let Some(copy) = self.tubes[tube].copies.first() else { return Vec::new() };
+        let (Some(&world), Some(control)) = (copy.handle_world.get(point), copy.controls.get(point)) else { return Vec::new() };
+        let Some(centre) = view.project(world) else { return Vec::new() };
+        let radius = pixels_for(view, world, control.radius);
+        let least = RING_HANDLE_MIN * view.pixels_per_point;
         let neighbour = |i: Option<usize>| i.and_then(|i| copy.handle_world.get(i)).and_then(|p| view.project(*p));
         let before = neighbour(point.checked_sub(1)).unwrap_or(centre);
         let after = neighbour(Some(point + 1)).unwrap_or(centre);
         let along = (after - before).normalize_or_zero();
-        let mut across = if along == Vec2::ZERO { Vec2::X } else { Vec2::new(-along.y, along.x) };
+        let mut seen = if along == Vec2::ZERO { Vec2::X } else { Vec2::new(-along.y, along.x) };
         // Up the screen (y runs down), or to the right for an upright tube.
-        if across.y > 0.0 || (across.y == 0.0 && across.x < 0.0) {
-            across = -across;
+        if seen.y > 0.0 || (seen.y == 0.0 && seen.x < 0.0) {
+            seen = -seen;
         }
-        let reach = radius.max(RING_HANDLE_MIN * view.pixels_per_point);
-        Some(RingHandle { tube, point, centre, at: centre + across * reach })
+        let handle = |side: i8, at: Vec2, (across, up): (Vec3, Vec3)| RingHandle {
+            tube,
+            point,
+            centre,
+            at,
+            side,
+            world,
+            across,
+            up,
+            half_width: control.radius,
+        };
+        let edges = self.across_at(tube, point).filter(|_| self.kind() == Kind::Muscle);
+        let Some((across, up)) = edges else { return vec![handle(0, centre + seen * radius.max(least), (Vec3::ZERO, Vec3::ZERO))] };
+        [1i8, -1]
+            .into_iter()
+            .map(|side| {
+                let s = f32::from(side);
+                // Where the edge is seen, however the muscle is turned; never on top of the point. Seen
+                // edge on, across the muscle as it is seen.
+                let out = view.project(world + across * (control.radius * s)).map(|edge| edge - centre);
+                let out = out.filter(|out| out.length() > 1.0).unwrap_or(seen * s * radius);
+                handle(side, centre + out.normalize_or(seen * s) * out.length().max(least), (across, up))
+            })
+            .collect()
     }
 
-    /// The radius handle, if `px` is on it and no point's own handle is
-    /// nearer.
+    /// The way across a muscle at point `point`, square to its line and
+    /// level with the surface under it (or with the way it faces, floating),
+    /// and its way up there, both in the world. `None` where it has no line
+    /// or no way up.
+    fn across_at(&self, tube: usize, point: usize) -> Option<(Vec3, Vec3)> {
+        let live = self.tubes.get(tube)?;
+        let copy = live.copies.first()?;
+        let last = live.state.points.len().checked_sub(1)?;
+        let station = if point == last { copy.samples.last() } else { copy.samples.iter().find(|s| s.segment == point) }?;
+        let along = if point == last { station.tangent_in } else { station.tangent_out };
+        let across = station.up.cross(along);
+        let to_world = live.frame.frame_to_world();
+        (across.length_squared() > 1e-8)
+            .then(|| (to_world.transform_vector3(across).normalize(), to_world.transform_vector3(station.up).normalize()))
+    }
+
+    /// The radius handle under `px`, if no point's own handle is nearer.
     fn pick_ring(&self, view: &View, px: Vec2, handle_distance: Option<f32>) -> Option<RingHandle> {
-        let ring = self.ring_handle(view)?;
+        let ring = self.ring_handles(view).into_iter().min_by(|a, b| a.at.distance(px).total_cmp(&b.at.distance(px)))?;
         let distance = ring.at.distance(px);
         (distance < HANDLE_PICK * view.pixels_per_point && handle_distance.is_none_or(|d| distance <= d)).then_some(ring)
     }
@@ -316,8 +389,8 @@ impl TubeTool {
         }
         let (view, px) = (cx.view, cx.pointer);
         let handle = self.pick_handle(&view, px);
-        if self.pick_ring(&view, px, handle.map(|(_, d)| d)).is_some() {
-            self.pointer.hover_ring = true;
+        if let Some(ring) = self.pick_ring(&view, px, handle.map(|(_, d)| d)) {
+            self.pointer.hover_ring = Some(ring.side);
             return;
         }
         self.pointer.hover_handle = handle.map(|(hit, _)| hit);
@@ -347,7 +420,7 @@ impl TubeTool {
         let view = cx.view;
         let handle = self.pick_handle(&view, px);
         if let Some(ring) = self.pick_ring(&view, px, handle.map(|(_, d)| d)) {
-            self.begin_ring_drag(ring, px);
+            self.begin_ring_drag(&view, ring, px, extend);
             return true;
         }
         if let Some((hit, _)) = handle {
@@ -417,7 +490,8 @@ impl TubeTool {
         match self.pointer.drag {
             Drag::Point(_) => self.update_point_drag(cx, px),
             Drag::Draw => self.update_draw(cx, px),
-            Drag::Ring { tube, point, start_size, centre, start_distance } => {
+            Drag::Ring { tube, point, edge: Some(edge), .. } => self.drag_edge(cx, tube, point, &edge, px),
+            Drag::Ring { tube, point, start_size, centre, start_distance, edge: None, .. } => {
                 let factor = centre.distance(px) / start_distance;
                 self.set_point_size(tube, point, start_size * factor);
             }
@@ -590,15 +664,75 @@ impl TubeTool {
         true
     }
 
-    fn begin_ring_drag(&mut self, ring: RingHandle, px: Vec2) {
-        self.begin_edit("Point Size", 0.0);
+    /// A press on a radius handle. A tube's sizes the point evenly. A
+    /// muscle's moves the edge it is on and leaves the other where it is, or
+    /// with `both` (Shift) sizes the point evenly too.
+    fn begin_ring_drag(&mut self, view: &View, ring: RingHandle, px: Vec2, both: bool) {
+        let start = self.tubes[ring.tube].state.points[ring.point];
+        let edge = (ring.side != 0 && !both).then(|| {
+            let outward = ring.across * f32::from(ring.side);
+            let fixed = view.project(ring.world - outward * ring.half_width).unwrap_or(ring.centre);
+            let toward = (ring.at - fixed).normalize_or((ring.at - ring.centre).normalize_or(Vec2::X));
+            EdgeDrag {
+                start,
+                start_world: ring.world,
+                outward,
+                up: ring.up,
+                half_width: ring.half_width,
+                fixed,
+                toward,
+                start_reach: (px - fixed).dot(toward).max(1.0),
+            }
+        });
+        self.begin_edit(if edge.is_some() { "Move Edge" } else { "Point Size" }, 0.0);
+        if edge.is_some() {
+            self.say("Moving this edge: the other stays where it is. Shift + drag sizes both sides.");
+        }
         self.pointer.drag = Drag::Ring {
             tube: ring.tube,
             point: ring.point,
-            start_size: self.tubes[ring.tube].state.points[ring.point].size,
+            start_size: start.size,
             centre: ring.centre,
             start_distance: ring.centre.distance(px).max(1.0),
+            side: ring.side,
+            edge,
         };
+    }
+
+    /// A muscle's edge dragged to `px`: the point widened until that edge is
+    /// there, and moved across by as much, so the edge on the other side
+    /// stays put. A point on the surface is kept on it, facing the way it
+    /// did.
+    fn drag_edge(&mut self, cx: &Ctx, tube: usize, point: usize, edge: &EdgeDrag, px: Vec2) {
+        let Some(live) = self.tubes.get(tube) else { return };
+        if point >= live.state.points.len() {
+            return;
+        }
+        let start = edge.start;
+        let reach = (px - edge.fixed).dot(edge.toward);
+        let size = (start.size * reach / edge.start_reach).clamp(TubeSettings::MIN_SIZE, TubeSettings::MAX_SIZE);
+        if !size.is_finite() {
+            return;
+        }
+        let world = edge.start_world + edge.outward * (edge.half_width * (size / start.size - 1.0));
+        let op = live.copies.first().map_or(SymmetryOp::IDENTITY, |copy| copy.op);
+        let mut moved = live.frame.to_tube_point(&op, world, Vec3::ZERO, size, start.sharp);
+        if start.is_on_surface() {
+            // Down onto the model along the way up there; through the view where that finds nothing.
+            let above = edge.half_width * 2.0 + edge.start_world.distance(world);
+            let scene = cx.scene();
+            let down = raycast_anchor(scene, live.state.anchor, &Ray::new(world + edge.up * above, -edge.up))
+                .filter(|hit| hit.distance <= 2.0 * above);
+            let seen = || cx.view.project(world).and_then(|at| raycast_anchor(scene, live.state.anchor, &cx.view.ray(at)));
+            if let Some(hit) = down.or_else(seen) {
+                moved = live.frame.to_tube_point(&op, hit.position, Vec3::ZERO, size, start.sharp);
+            }
+            moved.surface_normal = start.surface_normal;
+        } else {
+            moved.facing = start.facing;
+        }
+        self.tubes[tube].state.points[point] = moved;
+        self.touch();
     }
 
     /// S went down: sideways travel now sizes the point under the pointer
@@ -681,7 +815,7 @@ impl TubeTool {
         self.pointer.stroke.last_px = px;
         if self.add_stroke_sample(cx, px) {
             let kept = if self.pointer.stroke.muscle {
-                self.simplify_muscle_stroke(cx, MAX_STROKE_POINTS)
+                self.simplify_muscle_stroke(cx, MAX_STROKE_POINTS, LIVE_MUSCLE_TOLERANCE)
             } else {
                 self.simplify_stroke(self.defaults.radius * 0.12, 400)
             };
@@ -730,12 +864,13 @@ impl TubeTool {
     /// A muscle's points from its stroke. The line is judged as it was drawn, on screen, not in space:
     /// a muscle is laid on the surface between its points whatever they are, so a straight line over
     /// a shoulder is two points, where a tube's stroke needs a point for every turn of the surface
-    /// under it. The tolerance is half the muscle's radius, which takes a shaky line as a clean one.
-    fn simplify_muscle_stroke(&self, cx: &Ctx, max_points: usize) -> Vec<usize> {
+    /// under it. The tolerance is `tolerance` of the muscle's radius: half of it for the muscle the
+    /// stroke makes, which takes a shaky line as a clean one.
+    fn simplify_muscle_stroke(&self, cx: &Ctx, max_points: usize, tolerance: f32) -> Vec<usize> {
         let stroke = &self.pointer.stroke;
         let flat: Vec<Vec3> = stroke.px.iter().map(|p| p.extend(0.0)).collect();
         let Some(&middle) = stroke.world.get(stroke.world.len() / 2) else { return Vec::new() };
-        let mut tolerance = (pixels_for(&cx.view, middle, self.defaults.radius) * 0.5).max(2.0);
+        let mut tolerance = (pixels_for(&cx.view, middle, self.defaults.radius) * tolerance).max(2.0);
         let mut kept = curve::simplify(&flat, tolerance);
         while kept.len() > max_points {
             tolerance *= 1.4;
@@ -791,7 +926,7 @@ impl TubeTool {
         // fraction of the radius wide is not something the tube can show
         // anyway.
         let kept = if self.pointer.stroke.muscle {
-            self.simplify_muscle_stroke(cx, MAX_STROKE_POINTS)
+            self.simplify_muscle_stroke(cx, MAX_STROKE_POINTS, MUSCLE_TOLERANCE)
         } else {
             self.simplify_stroke((radius * 0.3).max(length * 0.004), MAX_STROKE_POINTS)
         };

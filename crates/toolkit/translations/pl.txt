@@ -5086,6 +5086,9 @@ pl: Znów żywe: {0}.
 en: {title} selected. Click its curve to add a point, drag a point to move it.
 pl: Zaznaczono: {title}. Kliknij jego krzywą, aby dodać punkt, przeciągnij punkt, aby go przesunąć.
 
+en: Moving this edge: the other stays where it is. Shift + drag sizes both sides.
+pl: Przesuwasz tę krawędź: druga zostaje na miejscu. Shift + przeciąganie zmienia obie strony naraz.
+
 en: Drag further to draw a {0}.
 pl: Przeciągnij dalej, aby narysować: {0}.
 
@@ -5194,8 +5197,23 @@ pl: Jak mięsień przebiega między swoimi punktami: niska to proste odcinki z z
 en: How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.
 pl: Jak miękkie jest połączenie po scaleniu, w stosunku do tego, jak daleko mięsień odstaje od modelu: 0 to ostry szew. Trzymaj nisko na modelu o drobnym detalu, gdzie miękkie połączenie wciąga detal na mięsień.
 
+en: Shows the points of every live tube.
+pl: Pokazuje punkty wszystkich żywych rur.
+
+en: Shows the points of every live muscle.
+pl: Pokazuje punkty wszystkich żywych mięśni.
+
+en: Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by mistake. Click a tube to select it and bring up its points.
+pl: Pokazuje tylko punkty zaznaczonej rury, żeby pozostałe nie przeszkadzały i nie dało się ich złapać przez pomyłkę. Kliknij rurę, aby ją zaznaczyć i wyświetlić jej punkty.
+
+en: Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by mistake. Click a muscle to select it and bring up its points.
+pl: Pokazuje tylko punkty zaznaczonego mięśnia, żeby pozostałe nie przeszkadzały i nie dało się ich złapać przez pomyłkę. Kliknij mięsień, aby go zaznaczyć i wyświetlić jego punkty.
+
 en: Click a point in the viewport.
 pl: Kliknij punkt w widoku.
+
+en: Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own moves that edge and leaves the other where it is.
+pl: Szerokość w zaznaczonym punkcie, jako krotność własnej szerokości mięśnia w tym miejscu, równo po obu stronach. To samo robi kółko myszy nad punktem albo Shift + przeciąganie jednego z jego kwadratów. Przeciąganie kwadratu bez Shift przesuwa tę krawędź i zostawia drugą na miejscu.
 
 en: Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square handle, or the wheel over the point, does the same.
 pl: Grubość w zaznaczonym punkcie, jako krotność własnej grubości elementu ({one}) w tym miejscu. To samo robi przeciąganie kwadratowego uchwytu punktu lub kółko myszy nad punktem.

@@ -45,7 +45,13 @@
 //! above holds for it, with three differences. A stroke that starts just off the model's outline is
 //! pulled onto the model. A rough stroke is taken as the clean line it meant: a straight line is two
 //! points however the surface curves under it. And with Free placement a stroke started on the
-//! model floats in front of it rather than growing out of it.
+//! model floats in front of it rather than growing out of it. A muscle's selected point has a square on
+//! each edge rather than one beside it: dragging one moves that edge and leaves the other where it is,
+//! so a muscle can be widened toward one side without spreading into its neighbour (Shift + drag sizes
+//! both sides evenly).
+//!
+//! In either tool, Show Points: Selected Only hides every other shape's points (and they cannot be
+//! grabbed); their curves still show, and a click on one selects it.
 //!
 //! The two tools keep their own shapes, settings and undo steps: a tube is the Tube tool's, a muscle
 //! the Muscle tool's.

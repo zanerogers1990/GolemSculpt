@@ -107,26 +107,31 @@ impl TubeTool {
             } else {
                 ("Drag from the model", "Draw in mid-air")
             };
-            theme::shortcuts(
-                ui,
-                &[
-                    (from, draw.as_str()),
-                    ("Ctrl + drag", mid_air),
-                    ("Drag a point", "Move it"),
-                    ("Shift + drag an end", extend.as_str()),
-                    (add.as_str(), "Add a point"),
-                    ("Double-click a point", "Sharp / smooth"),
-                    ("Right-click a point", "Delete it"),
-                    ("Drag the square", "Thicker / thinner there"),
-                    ("Wheel over a point", "Thicker / thinner"),
-                    ("S + move sideways", size.as_str()),
-                    ("Delete", delete.as_str()),
-                    ("Enter", "Merge"),
-                    ("Ctrl + Z / Ctrl + Shift + Z", history.as_str()),
-                    ("Esc", "Cancel, deselect, leave"),
-                    ("Drag on background", "Orbit"),
-                ],
-            );
+            let squares: &[(&str, &str)] = if muscle {
+                &[("Drag a square", "Move that edge, not the other"), ("Shift + drag a square", "Wider / narrower evenly")]
+            } else {
+                &[("Drag the square", "Thicker / thinner there")]
+            };
+            let mut keys = vec![
+                (from, draw.as_str()),
+                ("Ctrl + drag", mid_air),
+                ("Drag a point", "Move it"),
+                ("Shift + drag an end", extend.as_str()),
+                (add.as_str(), "Add a point"),
+                ("Double-click a point", "Sharp / smooth"),
+                ("Right-click a point", "Delete it"),
+            ];
+            keys.extend_from_slice(squares);
+            keys.extend([
+                ("Wheel over a point", "Thicker / thinner"),
+                ("S + move sideways", size.as_str()),
+                ("Delete", delete.as_str()),
+                ("Enter", "Merge"),
+                ("Ctrl + Z / Ctrl + Shift + Z", history.as_str()),
+                ("Esc", "Cancel, deselect, leave"),
+                ("Drag on background", "Orbit"),
+            ]);
+            theme::shortcuts(ui, &keys);
         });
         self.flush(cx);
     }
@@ -348,6 +353,20 @@ impl TubeTool {
 
     fn point_controls(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
         let one = self.kind().one();
+        theme::heading(ui, "Show Points");
+        let tips = [
+            self.label("Shows the points of every live tube.", "Shows the points of every live muscle."),
+            self.label(
+                "Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by \
+                 mistake. Click a tube to select it and bring up its points.",
+                "Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by \
+                 mistake. Click a muscle to select it and bring up its points.",
+            ),
+        ];
+        if let Some(i) = pair(ui, cx, !self.only_selected_points(), ["All", "Selected Only"], tips) {
+            self.set_only_selected_points(i == 1);
+        }
+
         theme::heading(ui, "Selected Point");
         let selected = self.selected_point().is_some();
         let sharp = self.selected_is_sharp();
@@ -364,10 +383,17 @@ impl TubeTool {
             if r.changed() {
                 self.set_selected_point_size(log_size.exp());
             }
-            let help = format!(
-                "Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square \
-                 handle, or the wheel over the point, does the same."
-            );
+            let help = if self.kind() == Kind::Muscle {
+                "Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel \
+                 over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own \
+                 moves that edge and leaves the other where it is."
+                    .to_owned()
+            } else {
+                format!(
+                    "Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square \
+                     handle, or the wheel over the point, does the same."
+                )
+            };
             theme::tip(r, cx.tips, &help);
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, 2, 6.0);

@@ -224,4 +224,9 @@ pub struct Sample {
     /// anything for a round one.
     pub up: Vec3,
     pub flat: f32,
+    /// A muscle's underside filled down to the model: from `rest` below the centre (along `up`), where
+    /// the cross-section meets the surface it rests on, to `under` below it, as wide as the
+    /// cross-section is there. Nothing when `under` is not past `rest`. See `muscle::sample`.
+    pub rest: f32,
+    pub under: f32,
 }

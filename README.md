@@ -1889,7 +1889,7 @@ its own.
 | Double-click a point | Sharp / smooth |
 | Right-click a point | Delete it |
 | Delete | Delete the selected point, else the selected tube |
-| Drag the square beside the selected point | Thicker / thinner there |
+| Drag the square beside the selected point | Thicker / thinner there (a muscle's point has a square on each edge, which moves that edge alone: see Muscle) |
 | Scroll over a point | The same |
 | S + move sideways | Thickness of the point under the pointer, else of the tube |
 | Enter | Merge |
@@ -1931,7 +1931,14 @@ What is different from a tube:
   not of every groove under it.
 - **A rough line is enough.** The stroke is judged as you drew it on screen:
   wobbles smaller than a quarter of the muscle's width are dropped, so a shaky line
-  gives the same clean muscle as a careful one, with few points to edit.
+  gives the same clean muscle as a careful one, with few points to edit. While
+  the pen is down the muscle follows the line more closely, so it does not jump
+  each time the line bends enough for another point; it settles onto its few
+  points as the pen comes up.
+- **It lies steady under the pen.** Each point takes the way up of the form
+  under the muscle, felt at the muscle's own width, not the tilt of the one
+  triangle it landed on, so dragging a point over a finely detailed model, or
+  drawing over one, slides the muscle along rather than rocking it about.
 - **A stroke that starts just off the model is pulled onto it**, to the
   nearest place on its outline, as is one that strays over the edge on the way.
   Further out than that a drag orbits, as everywhere.
@@ -1957,8 +1964,21 @@ The panel shapes the selected muscle, and the next one you draw:
 | **Blend** | How soft the join is when merged, against how far the muscle stands off the model. |
 
 Each point can still be made thicker or thinner than the muscle's own width
-there, by its square handle or the wheel: a point in the middle of a muscle,
+there, by the wheel or **Point Size**: a point in the middle of a muscle,
 made thicker, is a second belly.
+
+**One side at a time.** The selected point has a square on each edge of the
+muscle. Drag one and only that edge moves, in or out; the edge on the other
+side stays where it is (the point slides across to keep it there, over the
+model). That widens a muscle toward the open side without spreading it into
+the muscle beside it. Shift + drag a square sizes both sides evenly. A muscle
+drawn as one straight line has only its two thin end points: click its
+middle to add a point there first.
+
+**Show Points: Selected Only** hides the points of every muscle but the
+selected one, so on a body covered in muscles the others' points are out of
+the way and cannot be grabbed by mistake. Their lines still show: click one
+to select it and bring up its points. **All** shows them all again.
 
 **On the surface and floating are not two kinds of muscle.** Each point is one
 or the other, and a muscle can have both: its two ends on the model and its
@@ -1978,6 +1998,14 @@ starts low (0.2). On a finely detailed model keep it low or at 0: a soft join
 there draws the detail up the sides of the muscle, and is most of the time a
 merge takes. For blocking a figure, **Keep Separate** costs nothing and leaves
 the model untouched: each muscle becomes an object named Muscle.
+
+**Nothing is left open under a muscle.** Where it bridges a groove or a dip,
+where a rounded form falls away beside it, or where a point has been lifted off
+the model, the space under it is filled down into the model, so Merge leaves
+no pocket or overhang underneath. The fill is part of the live muscle too
+(hidden inside the model), and of a muscle kept separate, which therefore sits
+on the body with no gap under it. A part floating more than a few widths off
+the model is left floating.
 
 The keys and gestures are the Tube tool's (see the table above), with B in
 place of T. Live muscles, like live tubes, are a scaffold: not saved in

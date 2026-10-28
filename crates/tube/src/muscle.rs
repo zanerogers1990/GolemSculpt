@@ -92,8 +92,23 @@ pub fn sample(
     }
 
     // Each station's way up and how firmly it is held to the surface, from the points either side.
-    let ups: Vec<Vec3> = points.iter().map(|p| (normal_matrix * op.apply(p.up())).normalize_or_zero()).collect();
+    let mut ups: Vec<Vec3> = points.iter().map(|p| (normal_matrix * op.apply(p.up())).normalize_or_zero()).collect();
     let last = points.len() - 1;
+    // A point on the surface faces the way the form under it does, at the muscle's own scale: the face
+    // it was put down on is one of a dense sculpt's millions, tilted every which way by the detail, and
+    // the stations either side are felt for along this. Dragged across the faces, a point would
+    // otherwise swing its whole muscle about with every face it crossed.
+    if let Some(ground) = ground.filter(|_| last > 0) {
+        for i in (0..=last).filter(|&i| points[i].is_on_surface()) {
+            let toward = if i < last {
+                controls[i + 1].position - controls[i].position
+            } else {
+                controls[i].position - controls[i - 1].position
+            };
+            let step = controls[i].radius * POINT_FEEL;
+            ups[i] = lie_of_form(controls[i].position, ups[i], toward, step, ground);
+        }
+    }
     let between = |s: &Sample| (s.segment.min(last), (s.segment + 1).min(last), s.segment_t.clamp(0.0, 1.0));
     let mut up: Vec<Vec3> = samples
         .iter()
@@ -115,6 +130,7 @@ pub fn sample(
     for s in &mut samples {
         s.radius *= profile(settings, s.distance / total);
     }
+    let mut deep: Vec<Option<f32>> = vec![None; samples.len()];
     if let Some(ground) = ground {
         // Far enough to find a surface that the run between two points has cut under or passed over.
         let reach: Vec<f32> = samples
@@ -124,7 +140,7 @@ pub fn sample(
                 radius * 2.0 + controls[a].position.distance(controls[b].position) * 0.5
             })
             .collect();
-        settle(&mut samples, &mut up, &held, &reach, radius, ground);
+        deep = settle(&mut samples, &mut up, &held, &reach, radius, ground);
         // A point on the surface is shown where the surface is now. The model may have been sculpted
         // since the point was put down: the muscle has followed it, and so does its handle.
         for (i, control) in controls.iter_mut().enumerate().filter(|(i, _)| points[*i].is_on_surface()) {
@@ -147,7 +163,19 @@ pub fn sample(
     for (k, s) in samples.iter_mut().enumerate() {
         s.flat = if up[k] == Vec3::ZERO { 1.0 } else { flatten };
         s.up = up[k];
-        s.center += up[k] * (lift(settings, s.radius, s.flat) * held[k]);
+        let rest = lift(settings, s.radius, s.flat) * held[k];
+        s.center += up[k] * rest;
+        // Filled under down into the model wherever the model was found under it: over a groove or a
+        // hollow it bridges, past the sides of a rounded form it lies along, under a point lifted off
+        // the surface. Never more than a few radii, and a part floating farther off than that is left
+        // floating.
+        let most = MAX_FILL_RADII * radius;
+        let fill_to = deep[k].filter(|_| s.up != Vec3::ZERO).and_then(|d| match held[k] > 0.0 {
+            true => Some(d.min(most)),
+            false => (d <= most).then_some(d),
+        });
+        s.rest = rest;
+        s.under = fill_to.map_or(0.0, |d| rest + d + FILL_MARGIN_RADII * radius);
     }
     curve::compute_tangents(&mut samples);
     (controls, samples)
@@ -156,37 +184,140 @@ pub fn sample(
 /// How far out from a station the surface is felt for, as a fraction of the muscle's half width there.
 const FEEL: f32 = 0.5;
 
+/// How far out the surface is felt for the fill under a muscle, as a fraction of its half width: next
+/// to its edge, where a rounded form under it has dropped away most.
+const FILL_FEEL: f32 = 0.95;
+
+/// How far a muscle is filled under, in radii: past the deepest the model was found under it by this
+/// much, so the fill goes well into the model however the merge's lattice falls; and down to the model
+/// from at most this far off it.
+const FILL_MARGIN_RADII: f32 = 0.3;
+const MAX_FILL_RADII: f32 = 2.5;
+
+/// How far out from a point on the surface the form under it is felt for, as a fraction of the
+/// muscle's half width there: at its edge, so the way up at a point is the lie of what the muscle
+/// covers, not of the wrinkle the point is on.
+const POINT_FEEL: f32 = 1.0;
+
+/// How far the five heights a station feels have to differ before it rests on the highest of them, as
+/// a fraction of the muscle's radius. Detail finer than this is averaged; a ridge taller than this is
+/// lain over.
+const SOFT_RADII: f32 = 0.08;
+
+/// What a station rests on, of the heights it felt: a smooth maximum. Over a ridge or a bump much
+/// taller than `soft` it is the highest of them, so a muscle lies over ridges and not down in the gaps
+/// between them; where they differ by less (the pores and wrinkles of a sculpt) it is about their mean.
+/// A plain maximum picks whichever little peak the five places happen to land on, and as the stations
+/// slide along under a moving point it picks another every frame.
+fn rest_on(heights: &[f32], soft: f32) -> f32 {
+    let highest = heights.iter().copied().fold(f32::MIN, f32::max);
+    if !(soft > 0.0) {
+        return highest;
+    }
+    let mean = heights.iter().map(|h| ((h - highest) / soft).exp()).sum::<f32>() / heights.len() as f32;
+    highest + soft * mean.ln()
+}
+
+/// The way up at a point on the surface: the tilt of the surface felt at four places `step` round it,
+/// along the muscle (`toward`) and across it. Felt twice, the second time along the first answer, so
+/// the face the point was put down on only picks the directions the first four are felt in.
+fn lie_of_form(at: Vec3, up: Vec3, toward: Vec3, step: f32, ground: Ground) -> Vec3 {
+    let mut normal = up;
+    if step <= 0.0 || up == Vec3::ZERO {
+        return up;
+    }
+    for _ in 0..2 {
+        let along = (toward - normal * toward.dot(normal)).normalize_or_zero();
+        if along == Vec3::ZERO {
+            break;
+        }
+        let across = normal.cross(along);
+        let feel = |offset: Vec3| ground(at + offset, normal, step * 2.0).map(|(p, _)| p);
+        let (Some(right), Some(left), Some(ahead), Some(behind)) =
+            (feel(across * step), feel(-across * step), feel(along * step), feel(-along * step))
+        else {
+            break;
+        };
+        let tilt = (ahead - behind).cross(right - left).normalize_or_zero();
+        // Only a tilt, not a wall: a point at an edge keeps the way up it had.
+        if tilt.dot(up) < 0.5 {
+            break;
+        }
+        normal = tilt;
+    }
+    normal
+}
+
+/// Repeated 1-2-1 averaging, `passes` times, with the ends free: each end is averaged with its one
+/// neighbour as though the run went on past it the same way. For the way up, which is not pinned at a
+/// muscle's points the way its height is.
+fn smooth_free<T>(values: &mut [T], passes: usize)
+where
+    T: Copy + std::ops::Add<Output = T> + std::ops::Mul<f32, Output = T>,
+{
+    let n = values.len();
+    if n < 2 {
+        return;
+    }
+    let mut next = values.to_vec();
+    for _ in 0..passes {
+        for i in 0..n {
+            let before = values[i.saturating_sub(1)];
+            let after = values[(i + 1).min(n - 1)];
+            let (before, after) = if i == 0 { (after, after) } else if i == n - 1 { (before, before) } else { (before, after) };
+            next[i] = (before + values[i] * 2.0 + after) * 0.25;
+        }
+        values.copy_from_slice(&next);
+    }
+}
+
 /// Puts the stations between points on the surface back onto it, and turns their way up to its normal.
 ///
 /// The surface is felt at the muscle's own scale: under the station and at four places round it, half
-/// way to the muscle's edge. The station rests on the highest of them, as a muscle lies over ridges
-/// and not down in the gaps between them, and its way up is the tilt of the four, which is the lie of
-/// the form there whatever the detail on it is doing.
-fn settle(samples: &mut [Sample], up: &mut [Vec3], held: &[f32], reach: &[f32], radius: f32, ground: Ground) {
+/// way to the muscle's edge. The station rests on a smooth maximum of them (see [`rest_on`]), as a
+/// muscle lies over ridges and not down in the gaps between them, and its way up is the tilt of the
+/// four, which is the lie of the form there whatever the detail on it is doing.
+///
+/// Returns, for each station the model was found under, how far below where it rests (along its way
+/// up as it was) the model is at the deepest under its footprint, near enough: what the muscle is
+/// filled under by. A station of a muscle that is laid on the model somewhere but is itself off it (a
+/// point lifted, or between two such) only looks straight down.
+fn settle(samples: &mut [Sample], up: &mut [Vec3], held: &[f32], reach: &[f32], radius: f32, ground: Ground) -> Vec<Option<f32>> {
     let n = samples.len();
     let mut rise: Vec<Option<f32>> = vec![None; n];
+    let mut lowest: Vec<Option<f32>> = vec![None; n];
     let mut normal: Vec<Vec3> = up.to_vec();
+    let soft = SOFT_RADII * radius;
+    let laid = held.iter().any(|&h| h > 0.0);
     for k in 0..n {
-        if held[k] <= 0.0 || up[k] == Vec3::ZERO {
+        if up[k] == Vec3::ZERO {
             continue;
         }
         let (centre, way_up) = (samples[k].center, up[k]);
+        if held[k] <= 0.0 {
+            if laid {
+                lowest[k] = ground(centre, way_up, reach[k]).map(|(at, _)| (at - centre).dot(way_up));
+            }
+            continue;
+        }
         let Some((at, found)) = ground(centre, way_up, reach[k]) else { continue };
-        let mut highest = (at - centre).dot(way_up);
+        let mut heights = vec![(at - centre).dot(way_up)];
         normal[k] = found.normalize_or(way_up);
 
         let along = (samples[k].tangent_out - way_up * samples[k].tangent_out.dot(way_up)).normalize_or_zero();
         let across = way_up.cross(along);
         if along == Vec3::ZERO {
-            rise[k] = Some(highest);
+            rise[k] = Some(heights[0]);
             continue;
         }
         let step = samples[k].radius * FEEL;
         let feel = |offset: Vec3| ground(centre + offset, way_up, reach[k]).map(|(at, _)| at);
         let round = [feel(across * step), feel(-across * step), feel(along * step), feel(-along * step)];
-        for at in round.iter().flatten() {
-            highest = highest.max((*at - centre).dot(way_up));
-        }
+        heights.extend(round.iter().flatten().map(|at| (*at - centre).dot(way_up)));
+        let edge = samples[k].radius * FILL_FEEL;
+        let edges = [feel(across * edge), feel(-across * edge)];
+        let below = heights.iter().copied().chain(edges.iter().flatten().map(|at| (*at - centre).dot(way_up)));
+        lowest[k] = below.reduce(f32::min);
         if let [Some(right), Some(left), Some(ahead), Some(behind)] = round {
             let tilt = (ahead - behind).cross(right - left).normalize_or_zero();
             // Only a tilt, not a wall: a station beside a cliff keeps the way up it had.
@@ -195,7 +326,7 @@ fn settle(samples: &mut [Sample], up: &mut [Vec3], held: &[f32], reach: &[f32], 
                 normal[k] = tilt;
             }
         }
-        rise[k] = Some(highest);
+        rise[k] = Some(rest_on(&heights, soft));
     }
     // A station that found nothing takes its neighbour's answer.
     let mut filled: Vec<f32> = Vec::with_capacity(n);
@@ -208,9 +339,21 @@ fn settle(samples: &mut [Sample], up: &mut [Vec3], held: &[f32], reach: &[f32], 
     let sigma = SMOOTH_RADII * radius / spacing;
     let passes = (2.0 * sigma * sigma).round().clamp(1.0, 200.0) as usize;
     smooth(&mut filled, passes);
-    smooth(&mut normal, passes);
+    // The two ends are where the muscle is thinnest, and felt over the smallest patch: the way up there
+    // is the run's, not theirs alone.
+    smooth_free(&mut normal, passes);
     for k in 0..n {
         samples[k].center += up[k] * (filled[k] * held[k]);
         up[k] = up[k].lerp(normal[k].normalize_or(up[k]), held[k]).normalize_or(up[k]);
     }
+    // How deep under where each station now rests, and the deepest within a radius along the muscle
+    // either way: the fill between two stations is straight, and a dip between them is as deep.
+    let deep: Vec<Option<f32>> = (0..n).map(|k| lowest[k].map(|low| (filled[k] * held[k] - low).max(0.0))).collect();
+    let reach_along = (1.0 / SPACING_PER_RADIUS).ceil() as usize;
+    (0..n)
+        .map(|k| {
+            let window = k.saturating_sub(reach_along)..(k + reach_along + 1).min(n);
+            deep[k].map(|own| deep[window].iter().flatten().copied().fold(own, f32::max))
+        })
+        .collect()
 }

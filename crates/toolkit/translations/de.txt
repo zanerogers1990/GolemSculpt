@@ -5086,6 +5086,9 @@ de: {0} wieder live.
 en: {title} selected. Click its curve to add a point, drag a point to move it.
 de: {title} ausgewählt. Klicke auf seine Kurve, um einen Punkt hinzuzufügen, ziehe einen Punkt, um ihn zu verschieben.
 
+en: Moving this edge: the other stays where it is. Shift + drag sizes both sides.
+de: Dieser Rand wird verschoben: Der andere bleibt, wo er ist. Shift + ziehen ändert beide Seiten gleichzeitig.
+
 en: Drag further to draw a {0}.
 de: Ziehe weiter, um ein Element zu zeichnen ({0}).
 
@@ -5194,8 +5197,23 @@ de: Wie der Muskel zwischen seinen Punkten verläuft: Niedrig sind gerade Abschn
 en: How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.
 de: Wie weich der Übergang beim Verschmelzen ist, im Verhältnis dazu, wie weit der Muskel vom Modell absteht: 0 ist eine scharfe Naht. Halte es bei einem fein detaillierten Modell niedrig, wo ein weicher Übergang das Detail den Muskel hinaufzieht.
 
+en: Shows the points of every live tube.
+de: Zeigt die Punkte aller Live-Röhren.
+
+en: Shows the points of every live muscle.
+de: Zeigt die Punkte aller Live-Muskeln.
+
+en: Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by mistake. Click a tube to select it and bring up its points.
+de: Zeigt nur die Punkte der ausgewählten Röhre, damit die anderen nicht im Weg sind und nicht versehentlich gegriffen werden können. Klicke auf eine Röhre, um sie auszuwählen und ihre Punkte einzublenden.
+
+en: Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by mistake. Click a muscle to select it and bring up its points.
+de: Zeigt nur die Punkte des ausgewählten Muskels, damit die anderen nicht im Weg sind und nicht versehentlich gegriffen werden können. Klicke auf einen Muskel, um ihn auszuwählen und seine Punkte einzublenden.
+
 en: Click a point in the viewport.
 de: Klicke einen Punkt im Viewport an.
+
+en: Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own moves that edge and leaves the other where it is.
+de: Breite am ausgewählten Punkt, als Vielfaches der eigenen Breite des Muskels dort, auf beiden Seiten gleichmäßig. Das Rad über dem Punkt oder Shift + Ziehen an einem seiner Quadrate bewirkt dasselbe. Ziehen an einem Quadrat ohne Shift bewegt diesen Rand und lässt den anderen, wo er ist.
 
 en: Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square handle, or the wheel over the point, does the same.
 de: Dicke am ausgewählten Punkt, als Vielfaches der eigenen Dicke des Elements ({one}) dort. Das Ziehen am quadratischen Griff des Punkts oder das Rad über dem Punkt bewirkt dasselbe.

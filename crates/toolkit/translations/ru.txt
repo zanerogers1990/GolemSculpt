@@ -5086,6 +5086,9 @@ ru: {0} снова живые.
 en: {title} selected. Click its curve to add a point, drag a point to move it.
 ru: Выбрано: {title}. Кликните по его кривой, чтобы добавить точку, или потяните точку, чтобы переместить её.
 
+en: Moving this edge: the other stays where it is. Shift + drag sizes both sides.
+ru: Вы двигаете этот край: другой остаётся на месте. Shift + перетаскивание меняет обе стороны сразу.
+
 en: Drag further to draw a {0}.
 ru: Тяните дальше, чтобы нарисовать: {0}.
 
@@ -5194,8 +5197,23 @@ ru: Как мышца проходит между точками: малое з�
 en: How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.
 ru: Насколько мягко соединение при слиянии — в зависимости от того, насколько мышца отстоит от модели: 0 — чёткий шов. Держите значение малым на мелко детализированной модели, где мягкое соединение тянет детали вверх по мышце.
 
+en: Shows the points of every live tube.
+ru: Показывает точки всех живых трубок.
+
+en: Shows the points of every live muscle.
+ru: Показывает точки всех живых мышц.
+
+en: Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by mistake. Click a tube to select it and bring up its points.
+ru: Показывает точки только выбранной трубки, чтобы остальные не мешали и их нельзя было схватить по ошибке. Кликните по трубке, чтобы выбрать её и показать её точки.
+
+en: Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by mistake. Click a muscle to select it and bring up its points.
+ru: Показывает точки только выбранной мышцы, чтобы остальные не мешали и их нельзя было схватить по ошибке. Кликните по мышце, чтобы выбрать её и показать её точки.
+
 en: Click a point in the viewport.
 ru: Кликните по точке во вьюпорте.
+
+en: Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own moves that edge and leaves the other where it is.
+ru: Ширина в выбранной точке как кратное собственной ширины мышцы в этом месте, поровну с обеих сторон. То же делает колесо над точкой или Shift + перетаскивание одного из её квадратов. Перетаскивание квадрата без Shift сдвигает этот край, а другой остаётся на месте.
 
 en: Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square handle, or the wheel over the point, does the same.
 ru: Толщина в выбранной точке как кратное собственной толщины ({one}) в этом месте. То же делает перетаскивание квадратной ручки точки или колесо над точкой.

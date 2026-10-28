@@ -165,7 +165,9 @@ fn the_radius_at_a_point_changes_by_its_handle_the_wheel_and_s() {
     // The square handle beside the selected point: twice as far from the
     // point is twice as thick there.
     bench.frame(&mut tool);
-    let ring = tool.ring_handle(&bench.env.view).expect("the selected point has a radius handle");
+    let rings = tool.ring_handles(&bench.env.view);
+    assert_eq!(rings.len(), 1, "a tube's point has one radius handle");
+    let ring = rings[0];
     assert!(ring.at.distance(ring.centre) > 10.0);
     bench.drag(&mut tool, ring.at, ring.centre + (ring.at - ring.centre) * 2.0);
     assert!((tool.selected_point_size() - 2.0).abs() < 0.02, "{}", tool.selected_point_size());

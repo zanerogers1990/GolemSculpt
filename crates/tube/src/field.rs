@@ -73,6 +73,99 @@ struct Cone {
     stretch: f32,
     flat: f32,
     ends: (Vec3, Vec3),
+    /// What fills under a muscle's cross-section, down into the model.
+    keel: Option<Keel>,
+}
+
+/// The fill under a muscle between two stations: straight down from where its cross-section meets
+/// the surface it rests on, as wide as the cross-section is there, to below the model. A box swept
+/// from one station to the other, its depths and width going linearly between theirs. Where the
+/// muscle bends, the boxes either side of a station fan apart below it: each reaches on past a
+/// station between two of them (`reach`), so the fan has no gaps.
+#[derive(Clone, Copy, Debug)]
+struct Keel {
+    start: Vec3,
+    /// Along the run, its length; the way up square to it, and across.
+    axis: Vec3,
+    length: f32,
+    up: Vec3,
+    across: Vec3,
+    /// From each end: below the centre line, where the fill starts and where it ends; its half width.
+    top: [f32; 2],
+    bottom: [f32; 2],
+    width: [f32; 2],
+    reach: [f32; 2],
+}
+
+impl Keel {
+    /// Between two stations, if either is filled under. `inner`: whether each is a station between
+    /// two runs, which the box reaches on past.
+    fn between(a: &Sample, b: &Sample, inner: [bool; 2]) -> Option<Keel> {
+        if !(a.under > a.rest || b.under > b.rest) {
+            return None;
+        }
+        let up = (a.up + b.up).normalize_or_zero();
+        let run = b.center - a.center;
+        let length = run.length();
+        let axis = if length > 1e-9 { run / length } else { up.any_orthonormal_vector() };
+        let up = (up - axis * up.dot(axis)).normalize_or_zero();
+        if up == Vec3::ZERO {
+            return None;
+        }
+        // As wide as the cross-section where it meets the surface: the ellipse's chord there.
+        let width = |s: &Sample| {
+            let half_depth = (s.radius * s.flat).max(1e-9);
+            s.radius * (1.0 - (s.rest / half_depth).clamp(-1.0, 1.0).powi(2)).max(0.0).sqrt()
+        };
+        let depth = |s: &Sample| (s.rest, s.under.max(s.rest));
+        let ((ta, ba), (tb, bb)) = (depth(a), depth(b));
+        // A bend of up to about 25 degrees between two runs leaves no gap however far down.
+        let overlap = 0.5 * ba.max(bb).max(0.0);
+        let reach = inner.map(|inner| if inner { overlap } else { 0.0 });
+        Some(Keel {
+            start: a.center,
+            axis,
+            length,
+            up,
+            across: axis.cross(up),
+            top: [ta, tb],
+            bottom: [ba, bb],
+            width: [width(a), width(b)],
+            reach,
+        })
+    }
+
+    /// Its corners, for a box round it.
+    fn corners(&self) -> [Vec3; 8] {
+        let mut corners = [Vec3::ZERO; 8];
+        for (i, corner) in corners.iter_mut().enumerate() {
+            let end = i & 1;
+            let along = if end == 0 { -self.reach[0] } else { self.length + self.reach[1] };
+            let at = self.start + self.axis * along;
+            let below = if i & 2 == 0 { self.top[end] } else { self.bottom[end] };
+            let side = if i & 4 == 0 { 1.0 } else { -1.0 };
+            *corner = at - self.up * below + self.across * (side * self.width[end]);
+        }
+        corners
+    }
+
+    /// Signed distance, near enough: exact to the box at the nearest place along the run.
+    #[inline]
+    fn distance(&self, p: Vec3) -> f32 {
+        let d = p - self.start;
+        let along = d.dot(self.axis);
+        let t = if self.length > 1e-9 { (along / self.length).clamp(0.0, 1.0) } else { 0.0 };
+        let past = (-along - self.reach[0]).max(along - self.length - self.reach[1]);
+        let lerp = |v: [f32; 2]| v[0] + (v[1] - v[0]) * t;
+        let (top, bottom, width) = (lerp(self.top), lerp(self.bottom), lerp(self.width));
+        let v = d.dot(self.up);
+        let x = d.dot(self.across).abs();
+        // Down is negative along `up`: the box is from -bottom to -top.
+        let qv = (v + 0.5 * (top + bottom)).abs() - 0.5 * (bottom - top);
+        let qx = x - width;
+        let outside = Vec3::new(qx.max(0.0), qv.max(0.0), past.max(0.0)).length();
+        outside + qx.max(qv).max(past).min(0.0)
+    }
 }
 
 impl Cone {
@@ -108,7 +201,20 @@ impl Cone {
             stretch,
             flat,
             ends,
+            keel: None,
         }
+    }
+
+    /// The same cone with the fill under it, its box grown to hold that.
+    fn with_keel(mut self, keel: Option<Keel>) -> Cone {
+        self.keel = keel;
+        if let Some(keel) = &keel {
+            for corner in keel.corners() {
+                self.min = self.min.min(corner);
+                self.max = self.max.max(corner);
+            }
+        }
+        self
     }
 
     /// The same cone with neither end thinner than `floor`, in width or in depth: a flattened one
@@ -116,7 +222,7 @@ impl Cone {
     fn thickened(&self, floor: f32) -> Cone {
         let (ra, rb) = (self.ra.max(floor), self.rb.max(floor));
         let flat = self.flat.max(floor / ra.max(rb)).min(1.0);
-        Cone::flattened(self.ends.0, self.ends.1, ra, rb, self.up, flat)
+        Cone::flattened(self.ends.0, self.ends.1, ra, rb, self.up, flat).with_keel(self.keel)
     }
 
     /// Half the cone's least depth: what a lattice has to resolve.
@@ -128,10 +234,15 @@ impl Cone {
     /// by up to `flat` across it, with the surface itself in the right place.
     #[inline]
     fn distance(&self, p: Vec3) -> f32 {
-        if self.stretch == 0.0 {
-            return self.round_distance(p);
+        let d = if self.stretch == 0.0 {
+            self.round_distance(p)
+        } else {
+            self.round_distance(p + self.up * (self.stretch * p.dot(self.up))) * self.flat
+        };
+        match &self.keel {
+            Some(keel) => d.min(keel.distance(p)),
+            None => d,
         }
-        self.round_distance(p + self.up * (self.stretch * p.dot(self.up))) * self.flat
     }
 
     /// Exact signed distance to the hull, after Inigo Quilez's region-split
@@ -257,10 +368,12 @@ impl TubeField {
         if n < 2 {
             return;
         }
-        for pair in samples.windows(2) {
+        for (i, pair) in samples.windows(2).enumerate() {
             let up = (pair[0].up + pair[1].up).normalize_or_zero();
             let flat = if up == Vec3::ZERO { 1.0 } else { 0.5 * (pair[0].flat + pair[1].flat) };
-            let cone = Cone::flattened(pair[0].center, pair[1].center, pair[0].radius, pair[1].radius, up, flat);
+            let inner = [i > 0, i + 2 < n];
+            let cone = Cone::flattened(pair[0].center, pair[1].center, pair[0].radius, pair[1].radius, up, flat)
+                .with_keel(Keel::between(&pair[0], &pair[1], inner));
             self.bounds = Aabb::union(self.bounds, Aabb::new(cone.min, cone.max));
             self.min_radius = self.min_radius.min(cone.thinnest());
             self.max_radius = self.max_radius.max(cone.ra).max(cone.rb);

@@ -5086,6 +5086,9 @@ es: {0} de nuevo en vivo.
 en: {title} selected. Click its curve to add a point, drag a point to move it.
 es: {title} seleccionado. Haz clic en su curva para añadir un punto, arrastra un punto para moverlo.
 
+en: Moving this edge: the other stays where it is. Shift + drag sizes both sides.
+es: Moviendo este borde: el otro se queda donde está. Shift + arrastrar ajusta ambos lados a la vez.
+
 en: Drag further to draw a {0}.
 es: Arrastra más lejos para dibujar un {0}.
 
@@ -5194,8 +5197,23 @@ es: Cómo fluye el músculo entre sus puntos: un valor bajo da tramos rectos con
 en: How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.
 es: Cuán suave es la unión al fusionar, respecto a cuánto se separa el músculo del modelo: 0 es una costura nítida. Mantenlo bajo en un modelo con mucho detalle, donde una unión suave arrastra el detalle hacia arriba por el músculo.
 
+en: Shows the points of every live tube.
+es: Muestra los puntos de todos los tubos en vivo.
+
+en: Shows the points of every live muscle.
+es: Muestra los puntos de todos los músculos en vivo.
+
+en: Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by mistake. Click a tube to select it and bring up its points.
+es: Muestra solo los puntos del tubo seleccionado, para que los demás no estorben y no se puedan agarrar por error. Haz clic en un tubo para seleccionarlo y que aparezcan sus puntos.
+
+en: Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by mistake. Click a muscle to select it and bring up its points.
+es: Muestra solo los puntos del músculo seleccionado, para que los demás no estorben y no se puedan agarrar por error. Haz clic en un músculo para seleccionarlo y que aparezcan sus puntos.
+
 en: Click a point in the viewport.
 es: Haz clic en un punto de la vista 3D.
+
+en: Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own moves that edge and leaves the other where it is.
+es: Anchura en el punto seleccionado, como múltiplo de la anchura propia del músculo en ese lugar, aplicada por igual a ambos lados. La rueda sobre el punto, o Shift + arrastrar uno de sus cuadrados, hace lo mismo. Arrastrar un cuadrado sin Shift mueve ese borde y deja el otro donde está.
 
 en: Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square handle, or the wheel over the point, does the same.
 es: Grosor en el punto seleccionado, como múltiplo del propio {one} en ese lugar. Arrastrar el tirador cuadrado del punto, o usar la rueda sobre el punto, hace lo mismo.

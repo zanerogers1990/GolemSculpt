@@ -5086,6 +5086,9 @@ ja: {0} を再びライブにしました。
 en: {title} selected. Click its curve to add a point, drag a point to move it.
 ja: {title} を選択しました。カーブをクリックすると点を追加でき、点をドラッグすると動かせます。
 
+en: Moving this edge: the other stays where it is. Shift + drag sizes both sides.
+ja: この縁を動かしています。もう一方の縁はそのままです。Shift + ドラッグで両側をいっしょに調整します。
+
 en: Drag further to draw a {0}.
 ja: さらにドラッグして {0} を描きます。
 
@@ -5194,8 +5197,23 @@ ja: 点と点の間で筋肉がどう流れるか。低いと直線で、各点�
 en: How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.
 ja: 統合時の継ぎ目のやわらかさ(筋肉がモデルから浮いている量との兼ね合い)。0 でくっきりした継ぎ目になります。ディテールの細かいモデルでは低く保ってください。継ぎ目をやわらかくすると、ディテールが筋肉の上に引きずられます。
 
+en: Shows the points of every live tube.
+ja: ライブのチューブすべての点を表示します。
+
+en: Shows the points of every live muscle.
+ja: ライブの筋肉すべての点を表示します。
+
+en: Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by mistake. Click a tube to select it and bring up its points.
+ja: 選択中のチューブの点だけを表示します。ほかのチューブの点がじゃまにならず、うっかりつかんでしまうこともありません。チューブをクリックして選択すると、その点が現れます。
+
+en: Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by mistake. Click a muscle to select it and bring up its points.
+ja: 選択中の筋肉の点だけを表示します。ほかの筋肉の点がじゃまにならず、うっかりつかんでしまうこともありません。筋肉をクリックして選択すると、その点が現れます。
+
 en: Click a point in the viewport.
 ja: ビューポートで点をクリックしてください。
+
+en: Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own moves that edge and leaves the other where it is.
+ja: 選択中の点での幅を、その位置での筋肉本来の幅に対する倍率で指定します。変化は両側に均等にかかります。点の上でホイールを回すか、点の四角いハンドルを Shift + ドラッグしても同じです。四角いハンドルを Shift なしでドラッグすると、その縁だけが動き、もう一方の縁はそのままです。
 
 en: Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square handle, or the wheel over the point, does the same.
 ja: 選択中の点での太さを、その位置での {one} 本来の太さに対する倍率で指定します。点の四角いハンドルをドラッグするか、点の上でホイールを回しても同じです。

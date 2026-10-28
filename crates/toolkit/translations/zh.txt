@@ -5086,6 +5086,9 @@ zh: {0} 重新变为实时。
 en: {title} selected. Click its curve to add a point, drag a point to move it.
 zh: 已选中 {title}。点击它的曲线可添加一个点，拖动点可移动它。
 
+en: Moving this edge: the other stays where it is. Shift + drag sizes both sides.
+zh: 正在移动这一侧的边缘：另一侧保持不动。按住 Shift 并拖动，可同时调整两侧。
+
 en: Drag further to draw a {0}.
 zh: 再拖远一些来画一个 {0}。
 
@@ -5194,8 +5197,23 @@ zh: 肌肉在各点之间的走势：低则是直线段、每个点处有折角�
 en: How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.
 zh: 合并时过渡有多柔和（相对于肌肉离开模型的距离）：0 是清晰的接缝。在细节精细的模型上请保持较低，因为柔和的过渡会把细节拖到肌肉上。
 
+en: Shows the points of every live tube.
+zh: 显示所有实时管子的点。
+
+en: Shows the points of every live muscle.
+zh: 显示所有实时肌肉的点。
+
+en: Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by mistake. Click a tube to select it and bring up its points.
+zh: 只显示选中管子的点，这样其他管子的点不会碍事，也不会被误抓。点击一根管子将其选中，即可显示它的点。
+
+en: Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by mistake. Click a muscle to select it and bring up its points.
+zh: 只显示选中肌肉的点，这样其他肌肉的点不会碍事，也不会被误抓。点击一条肌肉将其选中，即可显示它的点。
+
 en: Click a point in the viewport.
 zh: 在视口中点击一个点。
+
+en: Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own moves that edge and leaves the other where it is.
+zh: 选中点处的宽度，以该处肌肉自身宽度的倍数计，两侧均匀变化。在该点上滚动滚轮，或按住 Shift 拖动它的某个方形手柄，效果相同。不按 Shift 拖动一个方形手柄，则只移动那一侧的边缘，另一侧保持不动。
 
 en: Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square handle, or the wheel over the point, does the same.
 zh: 选中点处的粗细，以该处 {one} 自身粗细的倍数计。拖动该点的方形手柄，或在该点上滚动滚轮，效果相同。

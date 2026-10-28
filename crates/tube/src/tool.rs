@@ -72,6 +72,9 @@ pub struct TubeTool {
 
     /// A scripted picture is being taken of the shapes alone: no handles.
     pub(crate) bare: bool,
+    /// Only the selected shape's points are shown, and only they can be grabbed: on a body covered in
+    /// muscles the others' points are in the way.
+    pub(crate) only_selected_points: bool,
     /// The last message, for the panel.
     pub(crate) status: String,
     /// A message not yet passed to the app's status line.
@@ -98,6 +101,7 @@ impl Default for TubeTool {
             pointer: Pointer::default(),
             finish: Finishing::default(),
             bare: false,
+            only_selected_points: false,
             status: String::new(),
             outgoing: None,
             scene_stepped: false,
@@ -319,6 +323,21 @@ impl TubeTool {
 
     pub fn set_on_surface(&mut self, value: bool) {
         self.defaults.on_surface = value;
+    }
+
+    /// Whether only the selected shape's points are shown and can be grabbed. The others' curves still
+    /// show, and a click on one selects it and brings its points up.
+    pub fn only_selected_points(&self) -> bool {
+        self.only_selected_points
+    }
+
+    pub fn set_only_selected_points(&mut self, value: bool) {
+        self.only_selected_points = value;
+    }
+
+    /// Whether the points of tube `tube` are shown, and can be grabbed.
+    pub(crate) fn shows_points(&self, tube: usize) -> bool {
+        !self.only_selected_points || Some(tube) == self.active_tube()
     }
 
     /// The selected point's thickness, as a multiple of the tube's radius.
@@ -700,10 +719,12 @@ impl TubeTool {
                 draw.overlay.dot(px, 4.0, INSERT, HANDLE_OUTLINE);
             }
         }
-        // The radius handle of the selected point: drag it to size the tube
-        // there.
-        if let Some(ring) = self.ring_handle(view).filter(|_| idle || matches!(self.pointer.drag, Drag::Ring { .. })) {
-            let lit = self.pointer.hover_ring || matches!(self.pointer.drag, Drag::Ring { .. });
+        // The radius handles of the selected point: drag one to size the tube
+        // there, or to move that edge of a muscle.
+        let ringing = matches!(self.pointer.drag, Drag::Ring { .. });
+        for ring in self.ring_handles(view).into_iter().filter(|_| idle || ringing) {
+            let lit = self.pointer.hover_ring == Some(ring.side)
+                || matches!(self.pointer.drag, Drag::Ring { side, edge, .. } if edge.is_none() || side == ring.side);
             draw.overlay.line(ring.centre, ring.at, 1.0, SIZE_RING);
             draw.overlay.square(ring.at, if lit { 5.5 } else { 4.5 }, if lit { HANDLE } else { SELECTED }, HANDLE_OUTLINE);
         }
@@ -728,6 +749,9 @@ impl TubeTool {
                 OTHER_CURVE
             };
             draw.overlay.polyline_3d(view, &copy.curve_world, if canonical && active { 2.0 } else { 1.2 }, color);
+            if !self.shows_points(index) {
+                continue;
+            }
 
             for (i, (&world, point)) in copy.handle_world.iter().zip(&tube.state.points).enumerate() {
                 let Some(px) = view.project(world) else { continue };
@@ -775,7 +799,7 @@ impl TubeTool {
     fn draw_cursor(&self, cx: &Ctx, draw: &mut Draw) {
         let pointer = &self.pointer;
         let busy = !matches!(pointer.drag, Drag::None) || pointer.hover_handle.is_some() || pointer.hover_curve.is_some();
-        if busy || pointer.hover_ring || self.finish.is_busy() {
+        if busy || pointer.hover_ring.is_some() || self.finish.is_busy() {
             return;
         }
         let Some((px, depth_point)) = pointer.cursor else { return };

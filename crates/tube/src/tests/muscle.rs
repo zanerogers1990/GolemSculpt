@@ -212,6 +212,95 @@ fn a_muscle_drawn_free_over_the_model_floats_in_front_of_it() {
 }
 
 #[test]
+fn with_selected_only_the_other_muscles_points_are_neither_shown_nor_grabbed() {
+    let (mut bench, mut tool, _) = bench();
+    stroke(&mut bench, &mut tool, &[on_sphere(-0.35, 0.2), on_sphere(-0.05, 0.3)]);
+    stroke(&mut bench, &mut tool, &[on_sphere(0.05, -0.25), on_sphere(0.35, -0.15)]);
+    assert_eq!(tool.active_tube(), Some(1));
+    let dots = |bench: &mut Bench, tool: &mut TubeTool| {
+        let draw = bench.frame(tool);
+        draw.overlay.shapes.iter().filter(|s| matches!(s, sculpt_toolkit::Shape::Dot { .. })).count()
+    };
+    assert_eq!(dots(&mut bench, &mut tool), 4, "every muscle's points");
+
+    tool.set_only_selected_points(true);
+    assert_eq!(dots(&mut bench, &mut tool), 2, "the selected muscle's points alone");
+    // A press on the other muscle's end does not take its hidden point: it selects that muscle.
+    let first = tool.points(0).to_vec();
+    let end = bench.px(tool.handle_world(0, 1, 0).unwrap());
+    bench.drag(&mut tool, end, end + Vec2::new(30.0, 20.0));
+    assert_eq!(tool.points(0), &first[..], "the hidden point stayed where it was");
+    assert_eq!((tool.active_tube(), tool.selected_point()), (Some(0), None));
+    assert_eq!(dots(&mut bench, &mut tool), 2, "and its points came up in place of the other's");
+    // Nor do the wheel or a right-click find a hidden point.
+    let hidden = bench.px(tool.handle_world(1, 0, 0).unwrap());
+    bench.hover(hidden);
+    assert!(!bench.send(&mut tool, Event::Wheel(1.0)));
+    assert!(!bench.press(&mut tool, hidden, Button::Right));
+    bench.release(&mut tool);
+    assert_eq!(tool.point_count(1), 2);
+
+    // With nothing selected, no muscle's points show.
+    assert!(bench.key(&mut tool, Key::Escape));
+    assert_eq!(dots(&mut bench, &mut tool), 0);
+    tool.set_only_selected_points(false);
+    assert_eq!(dots(&mut bench, &mut tool), 4);
+}
+
+/// The muscle's two edges at its selected point, in the world, the one `outward` points to first.
+fn edges(bench: &Bench, tool: &TubeTool, outward: Vec3) -> (Vec3, Vec3, f32) {
+    let rings = tool.ring_handles(&bench.env.view);
+    assert_eq!(rings.len(), 2, "a muscle's point has a handle on each edge");
+    let ring = rings[0];
+    let side = if ring.across.dot(outward) > 0.0 { 1.0 } else { -1.0 };
+    let out = ring.across * side;
+    (ring.world + out * ring.half_width, ring.world - out * ring.half_width, ring.half_width)
+}
+
+#[test]
+fn dragging_one_edge_of_a_muscle_moves_that_edge_and_leaves_the_other() {
+    let (mut bench, mut tool, _) = bench();
+    stroke(&mut bench, &mut tool, &[on_sphere(-0.3, 0.0), on_sphere(0.3, 0.0)]);
+    // A point at its belly, clicked onto the curve and let go where it was put.
+    bench.click(&mut tool, bench.px(on_sphere(0.0, 0.0)), Button::Left);
+    assert_eq!((tool.point_count(0), tool.selected_point()), (3, Some(1)));
+    bench.frame(&mut tool);
+    let rings = tool.ring_handles(&bench.env.view);
+    let up_screen = rings.iter().max_by(|a, b| b.at.y.total_cmp(&a.at.y)).copied().unwrap();
+    let outward = up_screen.across * f32::from(up_screen.side);
+    assert!(outward.y > 0.9, "the muscle runs along x, so its edges are up and down: {outward}");
+    let (out_edge, in_edge, half) = edges(&bench, &tool, outward);
+
+    // Half as far again from the edge that stays: half as wide again, all of it on the dragged side.
+    let toward = (up_screen.at - bench.px(in_edge)).normalize();
+    let to = up_screen.at + toward * up_screen.at.distance(bench.px(in_edge)) * 0.5;
+    bench.drag(&mut tool, up_screen.at, to);
+    bench.frame(&mut tool);
+    assert_eq!(tool.next_undo_label(), Some("Move Edge"));
+    let (out_after, in_after, half_after) = edges(&bench, &tool, outward);
+    assert!((half_after / half - 1.5).abs() < 0.1, "{half} became {half_after}");
+    assert!(in_after.distance(in_edge) < half * 0.15, "the edge that stays moved {}", in_after.distance(in_edge) / half);
+    assert!((out_after.y - out_edge.y - half).abs() < half * 0.2, "the dragged edge went out {}", (out_after.y - out_edge.y) / half);
+    let point = tool.points(0)[1];
+    assert!(point.is_on_surface() && (point.position.length() - 0.5).abs() < 0.005, "{point:?}");
+
+    // Shift + drag sizes both sides evenly: the point stays where it is.
+    let (before, size) = (tool.points(0)[1].position, tool.points(0)[1].size);
+    let rings = tool.ring_handles(&bench.env.view);
+    let ring = rings[0];
+    bench.env.mods.shift = true;
+    bench.drag(&mut tool, ring.at, ring.centre + (ring.at - ring.centre) * 1.5);
+    bench.env.mods.shift = false;
+    assert_eq!(tool.points(0)[1].position, before);
+    assert!((tool.points(0)[1].size / size - 1.5).abs() < 0.05, "{}", tool.points(0)[1].size / size);
+
+    // One Ctrl+Z each.
+    assert!(bench.undo(&mut tool));
+    assert!(bench.undo(&mut tool));
+    assert_eq!(tool.points(0)[1].size, 1.0);
+}
+
+#[test]
 fn with_free_placement_a_dragged_point_lifts_off_the_surface_and_keeps_the_way_it_was_turned() {
     let (mut bench, mut tool, _) = bench();
     stroke(&mut bench, &mut tool, &[on_sphere(-0.25, 0.0), on_sphere(0.25, 0.0)]);

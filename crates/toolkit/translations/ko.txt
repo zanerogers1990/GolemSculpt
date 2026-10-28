@@ -5084,6 +5084,9 @@ ko: 다시 라이브 상태가 되었습니다 ({0}).
 en: {title} selected. Click its curve to add a point, drag a point to move it.
 ko: {title}: 선택됨. 커브를 클릭하면 점이 추가되고, 점을 드래그하면 이동합니다.
 
+en: Moving this edge: the other stays where it is. Shift + drag sizes both sides.
+ko: 이 가장자리를 옮기는 중입니다. 반대쪽 가장자리는 그대로 있습니다. Shift + 드래그하면 양쪽이 함께 조절됩니다.
+
 en: Drag further to draw a {0}.
 ko: 더 드래그해서 {0} 하나를 그리세요.
 
@@ -5192,8 +5195,23 @@ ko: 근육이 점 사이를 어떻게 이어지는지 정합니다. 낮으면 �
 en: How soft the join is when merged, against how far the muscle stands off the model: 0 is a crisp seam. Keep it low on a finely detailed model, where a soft join drags the detail up the muscle.
 ko: 병합할 때 이음새가 얼마나 부드러운지 정하며, 근육이 모델에서 얼마나 떨어져 있는지와 관련됩니다. 0은 또렷한 이음선입니다. 디테일이 세밀한 모델에서는 부드러운 이음새가 디테일을 근육 위로 끌어올리므로 낮게 유지하세요.
 
+en: Shows the points of every live tube.
+ko: 라이브 상태인 모든 튜브의 점을 표시합니다.
+
+en: Shows the points of every live muscle.
+ko: 라이브 상태인 모든 근육의 점을 표시합니다.
+
+en: Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by mistake. Click a tube to select it and bring up its points.
+ko: 선택한 튜브의 점만 표시하므로, 다른 튜브의 점은 방해되지 않고 실수로 잡을 일도 없습니다. 튜브를 클릭해 선택하면 그 점이 나타납니다.
+
+en: Shows only the selected muscle's points, so the others are out of the way and cannot be grabbed by mistake. Click a muscle to select it and bring up its points.
+ko: 선택한 근육의 점만 표시하므로, 다른 근육의 점은 방해되지 않고 실수로 잡을 일도 없습니다. 근육을 클릭해 선택하면 그 점이 나타납니다.
+
 en: Click a point in the viewport.
 ko: 뷰포트에서 점을 클릭하세요.
+
+en: Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own moves that edge and leaves the other where it is.
+ko: 선택한 점의 너비를, 그 위치에서 근육 본래 너비의 배수로 정하며 양쪽에 똑같이 적용됩니다. 점 위에서 휠을 돌리거나 점의 사각형 핸들 중 하나를 Shift + 드래그해도 같습니다. 사각형 핸들을 Shift 없이 드래그하면 그쪽 가장자리만 움직이고 반대쪽은 그대로 있습니다.
 
 en: Thickness at the selected point, as a multiple of the {one}'s own there. Dragging the point's square handle, or the wheel over the point, does the same.
 ko: 선택한 점의 굵기를, 그 위치에서 {one} 본래 굵기의 배수로 정합니다. 점의 사각형 핸들을 드래그하거나 점 위에서 휠을 돌려도 같습니다.
