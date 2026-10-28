@@ -73,6 +73,39 @@ fn smooth_off_is_the_remesh_as_it_always_was() {
     assert_eq!((off.positions, off.indices), (plain.positions, plain.indices));
 }
 
+/// Detail finer than the cells (a muscled body remeshed low) used to come
+/// out of Smooth as scales: relaxing after the rebuild could not take out
+/// what the rebuild had solved for as creases. Now the rebuild under Smooth
+/// places slight edges as the smooth surface they nearly are
+/// ([`ROUNDED_EDGES`]), and the same relaxing leaves far less shading noise,
+/// with the ball the same size.
+#[test]
+fn smooth_rounds_detail_finer_than_the_cells() {
+    let ball = primitives::build(Primitive::Sphere, 400_000, 0.5);
+    let positions = ball
+        .positions
+        .iter()
+        .map(|p| {
+            let d = p.normalize();
+            // Ridges round the ball, about 1.7 cells apart at 64 and two
+            // fifths of a cell deep.
+            let around = d.z.atan2(d.x);
+            d * (0.5 + 0.003 * (120.0 * around).sin() * (1.0 - d.y * d.y).sqrt())
+        })
+        .collect();
+    let ridged = Mesh::new(positions, ball.indices.clone(), None);
+    let (now, _) = Copied::of(&ridged).remesh(64, AS_IT_IS, DEFAULT_SMOOTH as u32).unwrap();
+    // Smooth as it was: every crease solved for, then the same relaxing.
+    let mut old = remesh_with(&ridged.positions, &ridged.indices, &RemeshSettings::new(64)).unwrap();
+    smoothing::relax(&mut old.mesh.positions, &old.mesh.indices, DEFAULT_SMOOTH as u32);
+    let old = Mesh::new(old.mesh.positions, old.mesh.indices, None);
+    let (rough_now, rough_old) = (roughness(&now), roughness(&old));
+    println!("roughness {rough_now} now, {rough_old} with every crease solved for");
+    assert!(rough_now < 0.7 * rough_old, "roughness {rough_now} now, {rough_old} with every crease solved for");
+    let ratio = volume(&now) / volume(&old);
+    assert!((ratio - 1.0).abs() < 0.005, "volume ratio {ratio}");
+}
+
 /// A mirrored rebuild comes out exactly symmetric, which smoothing each side
 /// on its own would spoil, so it is not smoothed.
 #[test]

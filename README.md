@@ -1285,11 +1285,15 @@ parts that pass through each other and closes holes, and says when it did.
   there and is not used; the line says so. One at a time, and not while
   another job is working.
 - **Smooth**, under Resolution, goes from Off to 10 and starts at 2. A
-  remesh copies the old surface exactly, its flat faces included, so after
-  a step up in resolution the old triangles come back as ripples, and along
-  a groove the rebuild leaves small stair-steps of its own. Above Off, the
-  old mesh is first rounded into a finer smooth one where its triangles are
-  bigger than the new ones (sharp edges, past 60 degrees, kept), and the
+  remesh copies the old surface exactly, its flat faces and every crease
+  included, so after a step up in resolution the old triangles come back as
+  ripples, along a groove the rebuild leaves small stair-steps of its own,
+  and detail finer than the new triangles (the fibres of a muscled body
+  remeshed low) comes back as scales and pits. Above Off, the old mesh is
+  first rounded into a finer smooth one where its triangles are bigger than
+  the new ones (sharp edges, past 60 degrees, kept); the rebuild places
+  everything that turns by less than 60 degrees within one cell as the
+  smooth surface it nearly is, and only sharper edges as creases; and the
   result is then smoothed lightly that many times, without shrinking it.
   Off is the remesh exactly as before. On a grooved test ball stepped up
   from 128 to 300, the shading noise fell by more than half, with the shape

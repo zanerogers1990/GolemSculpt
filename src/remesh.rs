@@ -214,7 +214,7 @@ fn rebuild(
     // Asked before anything about size is: a model behind its mirror plane
     // has no resolution that works, and must not be sent to try a lower one.
     check_mirror_side(bounds.max, symmetry)?;
-    let settings = RemeshSettings { resolution, mirror: symmetry, max_triangles: MAX_TRIANGLES };
+    let settings = RemeshSettings { mirror: symmetry, ..RemeshSettings::new(resolution) };
     // The kernel would lower the resolution to fit the budget. Here the
     // resolution is the user's own number, so say no instead, and say what
     // number would do: one the kernel will not then refuse for memory.
@@ -233,18 +233,35 @@ fn rebuild(
     Ok((Mesh::new(rebuilt.mesh.positions, rebuilt.mesh.indices, None), notes))
 }
 
+/// Above Off, a cell of the rebuild whose surface turns by less than this
+/// many degrees is placed as the smooth surface it nearly is, not solved for
+/// the crease its crossings describe (`RemeshSettings::rounding_edges_under`).
+///
+/// A sculpted body remeshed at 126 came out knitted: its muscle fibres were
+/// finer than the cells, and a cell straddling several of them snapped its
+/// vertex to wherever their walls met, a pit here and a spike there,
+/// everywhere. Averaged instead, those cells come out as the smooth surface
+/// they can carry, and what the relaxing after takes out is wrinkles, not
+/// scales. An edge that turns by more than this (a box's, a cut's, the
+/// Muscle tool's one-sided squares) is still copied sharp. Sixty: the edges
+/// `sculpt_volume::smooth::refine` keeps as lines too.
+pub const ROUNDED_EDGES: f32 = 60.0;
+
 /// [`remesh_with`], smoothed `smooth` times over (the Remesh card's Smooth).
 ///
 /// A remesh copies the old surface exactly, its flat faces and the edges
-/// between them included. Stepped up to a finer resolution, the old
-/// triangles are bigger than the new cells and come back as ripples, and
-/// along a groove that runs across the lattice the rebuild adds stair-steps
-/// of its own. So, above zero: where the old triangles are bigger than the
-/// new cells, the old mesh is first refined into a smooth one a step or two
-/// finer, keeping its sharp edges; and the result is relaxed `smooth` times,
-/// which irons out wrinkles a cell or two across and leaves the size and the
-/// forms (see `sculpt_volume::smooth`, which has the measurements). Zero is
-/// the remesh as it always was.
+/// between them included, and every crease it can find. Stepped up to a
+/// finer resolution, the old triangles are bigger than the new cells and
+/// come back as ripples; along a groove that runs across the lattice the
+/// rebuild adds stair-steps of its own; and detail finer than the cells
+/// comes out as scales. So, above zero: where the old triangles are bigger
+/// than the new cells, the old mesh is first refined into a smooth one a
+/// step or two finer, keeping its sharp edges; the rebuild places every cell
+/// whose surface turns by less than [`ROUNDED_EDGES`] as a smooth surface;
+/// and the result is relaxed `smooth` times, which irons out wrinkles a
+/// cell or two across and leaves the size and the forms (see
+/// `sculpt_volume::smooth`, which has the measurements). Zero is the remesh
+/// as it always was.
 ///
 /// A mirrored rebuild is never smoothed: it comes out exactly symmetric, and
 /// would come out of smoothing only nearly so. Remesh itself never mirrors
@@ -260,6 +277,7 @@ fn smoothed(
     if smooth == 0 || settings.mirror.contains(&true) {
         return remesh_with(positions, indices, settings);
     }
+    let settings = &settings.rounding_edges_under(ROUNDED_EDGES);
     let cell = longest / settings.resolution as f32;
     let steps = smoothing::refine_steps(area, smoothing::live_triangles(indices), cell);
     let mut refined: Option<(Vec<Vec3>, Vec<u32>)> = None;
@@ -453,7 +471,7 @@ mod tests {
         let refused = voxel_remesh(&far, 1024, mirror).err().unwrap();
         assert!(refused.starts_with("That resolution would make more than 80 million triangles. Try "), "{refused}");
         let offered: u32 = refused.split(' ').nth(10).and_then(|word| word.parse().ok()).expect("a resolution to try");
-        let settings = RemeshSettings { resolution: offered, mirror, max_triangles: MAX_TRIANGLES };
+        let settings = RemeshSettings { mirror, ..RemeshSettings::new(offered) };
         assert_eq!(admits(&far.positions, &far.indices, &settings), Ok(()), "offered {offered}");
         // On its mirror planes the triangles alone decide, as they always did.
         let centred = heavy_cube(Vec3::ZERO);
@@ -501,7 +519,7 @@ mod tests {
     /// the 99th percentile and the worst, and the share of vertices more
     /// than 5 degrees apart.
     fn normals_apart(model: &Mesh, resolution: u32) -> (f32, f32, f32, f32) {
-        let settings = RemeshSettings { resolution, mirror: [false; 3], max_triangles: MAX_TRIANGLES };
+        let settings = RemeshSettings::new(resolution);
         let rebuilt = remesh_with(&model.positions, &model.indices, &settings).unwrap();
         assert_eq!(rebuilt.normals.len(), rebuilt.mesh.positions.len());
         let (mesh, went) = Mesh::new_mapped(rebuilt.mesh.positions.clone(), rebuilt.mesh.indices.clone(), None);

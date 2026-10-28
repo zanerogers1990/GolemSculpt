@@ -370,7 +370,12 @@ pub fn boolean_with(
     }
     let sources = Sources::of(&scans);
     let source = Combined { scans, op, grid, long_edges: AtomicUsize::new(0) };
-    let options = ExtractOptions { mirror: settings.mirror, max_vertices: settings.max_triangles / 4 * 3 };
+    // Booleans copy every edge they find: a cut is a cut.
+    let options = ExtractOptions {
+        mirror: settings.mirror,
+        max_vertices: settings.max_triangles / 4 * 3,
+        planar_cosine: crate::qef::PLANAR_COSINE,
+    };
     let mut surface = extract::extract(&source, &grid, &options).map_err(|error| {
         if !error.contains("no solid volume") {
             return error;

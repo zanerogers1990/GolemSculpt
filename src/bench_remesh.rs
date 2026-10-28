@@ -44,13 +44,16 @@ pub fn run(resolutions: &[usize]) {
     let smooth = setting("SCULPT_BENCH_REMESH_SMOOTH").unwrap_or(0);
     println!("smooth: {smooth}");
     println!("source: {} triangles, {} vertices, {:.0} MB held", mesh.triangle_count(), mesh.vertex_count(), mb(mesh.memory_bytes()));
-    println!("{:>6} {:>10} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}", "res", "triangles", "kernel", "Mesh::new", "census", "total", "held MB", "peak MB");
+    println!(
+        "{:>6} {:>10} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9} {:>7}",
+        "res", "triangles", "kernel", "Mesh::new", "census", "total", "held MB", "peak MB", "noise"
+    );
     for resolution in resolutions {
         if smooth > 0 {
             smoothed_line(&mesh, resolution, smooth);
             continue;
         }
-        let settings = RemeshSettings { resolution, mirror: [false; 3], max_triangles: sculpt_volume::budget::MAX_TRIANGLES };
+        let settings = RemeshSettings::new(resolution);
         let start = Instant::now();
         let rebuilt = match remesh_with(&mesh.positions, &mesh.indices, &settings) {
             Ok(rebuilt) => rebuilt,
@@ -68,7 +71,7 @@ pub fn run(resolutions: &[usize]) {
         let census = t.elapsed().as_secs_f64();
         let total = start.elapsed().as_secs_f64();
         println!(
-            "{resolution:>6} {:>10} {:>8.2}s {:>8.2}s {:>8.2}s {:>8.2}s {:>9.0} {:>9.0}{}",
+            "{resolution:>6} {:>10} {:>8.2}s {:>8.2}s {:>8.2}s {:>8.2}s {:>9.0} {:>9.0} {:>6.2}{}",
             built.triangle_count(),
             kernel,
             new,
@@ -76,6 +79,7 @@ pub fn run(resolutions: &[usize]) {
             total,
             mb(built.memory_bytes()),
             mb(peak_bytes()),
+            shading_noise(&built),
             if closed { "" } else { "  (not closed)" },
         );
     }
@@ -93,14 +97,34 @@ fn smoothed_line(mesh: &Mesh, resolution: u32, smooth: u32) {
     let closed = crate::printable::census(&built).is_closed();
     let census = t.elapsed().as_secs_f64();
     println!(
-        "{resolution:>6} {:>10} {kernel:>8.2}s {:>9} {census:>8.2}s {:>8.2}s {:>9.0} {:>9.0}{}",
+        "{resolution:>6} {:>10} {kernel:>8.2}s {:>9} {census:>8.2}s {:>8.2}s {:>9.0} {:>9.0} {:>6.2}{}",
         built.triangle_count(),
         "(in it)",
         start.elapsed().as_secs_f64(),
         mb(built.memory_bytes()),
         mb(peak_bytes()),
+        shading_noise(&built),
         if closed { "" } else { "  (not closed)" },
     );
+}
+
+/// The shading noise a result carries: how far, on average, each vertex
+/// normal turns from the mean of its neighbours', in degrees (root mean
+/// square). A scaly or pitted rebuild reads high; a clean one of a smooth
+/// model under a degree.
+fn shading_noise(mesh: &Mesh) -> f32 {
+    let mut sums = vec![Vec3::ZERO; mesh.positions.len()];
+    for t in mesh.indices.chunks_exact(3) {
+        for e in 0..3 {
+            sums[t[e] as usize] += mesh.normals[t[(e + 1) % 3] as usize];
+        }
+    }
+    let total: f32 = sums
+        .iter()
+        .zip(&mesh.normals)
+        .map(|(sum, n)| n.angle_between(sum.normalize_or(*n)).to_degrees().powi(2))
+        .sum();
+    (total / mesh.positions.len().max(1) as f32).sqrt()
 }
 
 fn mb(bytes: usize) -> f64 {

@@ -18,6 +18,7 @@ use crate::budget::{self, Job};
 pub use crate::budget::{MAX_RESOLUTION, MAX_TRIANGLES, MIN_RESOLUTION};
 use crate::extract::{self, ExtractOptions, Stats, Surface};
 use crate::grid::Grid;
+use crate::qef;
 use crate::scan::Scan;
 
 /// Output triangles per unit of source area, in cells. Surface Nets theory
@@ -37,11 +38,27 @@ pub struct RemeshSettings {
     pub mirror: [bool; 3],
     /// The resolution is lowered as far as needed to stay under this.
     pub max_triangles: usize,
+    /// How aligned a cell's normals must be for its vertex to be placed as
+    /// a smooth surface rather than solved for a crease: the sharpest,
+    /// [`qef::PLANAR_COSINE`], unless asked otherwise, which copies every
+    /// edge the old surface has. See [`RemeshSettings::rounding_edges_under`].
+    pub planar_cosine: f32,
 }
 
 impl RemeshSettings {
     pub fn new(resolution: u32) -> RemeshSettings {
-        RemeshSettings { resolution, mirror: [false; 3], max_triangles: MAX_TRIANGLES }
+        RemeshSettings { resolution, mirror: [false; 3], max_triangles: MAX_TRIANGLES, planar_cosine: qef::PLANAR_COSINE }
+    }
+
+    /// The same settings, placing every cell whose normals turn by less than
+    /// `degrees` as the smooth surface it nearly is (see [`qef::solve_with`]):
+    /// for a sculpted model whose detail is finer than the cells, which
+    /// solved for its creases comes out scaly and pitted. Edges that turn by
+    /// more stay sharp. Nought, or anything under the sharpest the solve
+    /// gets, is the settings as they were.
+    pub fn rounding_edges_under(self, degrees: f32) -> RemeshSettings {
+        let cosine = (degrees.clamp(0.0, 180.0).to_radians() * 0.5).cos();
+        RemeshSettings { planar_cosine: cosine.min(qef::PLANAR_COSINE), ..self }
     }
 }
 
@@ -209,7 +226,11 @@ pub fn remesh_with(positions: &[Vec3], indices: &[u32], settings: &RemeshSetting
     let scan = Scan::new(positions, indices, &grid)?;
     // The estimate can be low for a crumpled surface: allow half as much again
     // before refusing outright.
-    let options = ExtractOptions { mirror: settings.mirror, max_vertices: settings.max_triangles / 4 * 3 };
+    let options = ExtractOptions {
+        mirror: settings.mirror,
+        max_vertices: settings.max_triangles / 4 * 3,
+        planar_cosine: settings.planar_cosine,
+    };
     let surface = extract::extract(&scan, &grid, &options).map_err(|error| {
         if scan.open_fraction() > 0.5 {
             "The model is not a closed surface, so it has no inside to rebuild. Close its holes first.".to_string()
@@ -274,6 +295,65 @@ mod tests {
                 assert!(off < 0.1 * out.cell, "{name} at {resolution}: a vertex {} cells off", off / out.cell);
             }
         }
+    }
+
+    /// A ball ridged finer than the cells (a muscled body remeshed low): the
+    /// shading noise each vertex normal makes against its neighbours', in
+    /// degrees, root mean square.
+    fn shading_noise(mesh: &TriMesh) -> f32 {
+        let mut normals = vec![Vec3::ZERO; mesh.vertex_count()];
+        for t in mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+            let n = (b - a).cross(c - a);
+            t.iter().for_each(|&v| normals[v as usize] += n);
+        }
+        let normals: Vec<Vec3> = normals.iter().map(|n| n.normalize_or_zero()).collect();
+        let mut sums = vec![Vec3::ZERO; mesh.vertex_count()];
+        for t in mesh.indices.chunks_exact(3) {
+            for e in 0..3 {
+                sums[t[e] as usize] += normals[t[(e + 1) % 3] as usize];
+            }
+        }
+        let total: f32 = sums
+            .iter()
+            .zip(&normals)
+            .map(|(sum, n)| n.angle_between(sum.normalize_or(*n)).to_degrees().powi(2))
+            .sum();
+        (total / mesh.vertex_count() as f32).sqrt()
+    }
+
+    /// Rounding edges under 60 degrees: a ball ridged finer than the cells
+    /// comes out much less rough than solved for every crease, the same size,
+    /// and a box still a box. The sharpest setting is the plain remesh to
+    /// the bit.
+    #[test]
+    fn rounding_slight_edges_smooths_fine_ridges_and_keeps_a_box_sharp() {
+        let mut ridged = icosphere(7, 0.5, Vec3::ZERO);
+        for p in &mut ridged.positions {
+            let d = p.normalize();
+            // Ridges round the ball, about 1.7 cells apart at 64, and two
+            // fifths of a cell deep.
+            let around = d.z.atan2(d.x);
+            let r = 0.5 + 0.003 * (120.0 * around).sin() * (1.0 - d.y * d.y).sqrt();
+            *p = d * r;
+        }
+        let sharp = rebuilt(&ridged, 64, [false; 3]);
+        let rounded = remesh_with(&ridged.positions, &ridged.indices, &settings(64, [false; 3]).rounding_edges_under(60.0)).unwrap();
+        assert_closed(&rounded.mesh, "rounded ridged ball");
+        let (noise_sharp, noise_rounded) = (shading_noise(&sharp.mesh), shading_noise(&rounded.mesh));
+        assert!(noise_rounded < 0.6 * noise_sharp, "shading noise {noise_rounded} rounded, {noise_sharp} sharp");
+        let volume = rounded.mesh.signed_volume() / sharp.mesh.signed_volume();
+        assert!((volume - 1.0).abs() < 0.005, "volume ratio {volume}");
+        let off = worst_radius_error(&rounded.mesh, 0.5, Vec3::ZERO);
+        assert!(off < 0.5 * rounded.cell, "a vertex {} cells off the ball", off / rounded.cell);
+
+        let half = Vec3::new(0.5, 0.35, 0.25);
+        let cube = rotated(&box_mesh(-half, half), Vec3::new(31.0, 17.0, 9.0));
+        let plain = rebuilt(&cube, 48, [false; 3]);
+        let still_sharp = remesh_with(&cube.positions, &cube.indices, &settings(48, [false; 3]).rounding_edges_under(60.0)).unwrap();
+        assert_eq!(still_sharp.mesh.positions, plain.mesh.positions, "a box's right angles are still solved for");
+        let as_before = remesh_with(&ridged.positions, &ridged.indices, &settings(64, [false; 3]).rounding_edges_under(0.0)).unwrap();
+        assert_eq!(as_before.mesh.positions, sharp.mesh.positions);
     }
 
     #[test]

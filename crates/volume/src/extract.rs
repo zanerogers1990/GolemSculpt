@@ -82,11 +82,16 @@ pub struct ExtractOptions {
     pub mirror: [bool; 3],
     /// Refuse to build more vertices than this.
     pub max_vertices: usize,
+    /// How aligned a cell's normals must be for its vertex to be placed as
+    /// a smooth surface rather than solved for a crease (see
+    /// [`qef::solve_with`]): the sharpest, [`qef::PLANAR_COSINE`], unless
+    /// asked otherwise.
+    pub planar_cosine: f32,
 }
 
 impl Default for ExtractOptions {
     fn default() -> ExtractOptions {
-        ExtractOptions { mirror: [false; 3], max_vertices: 60_000_000 }
+        ExtractOptions { mirror: [false; 3], max_vertices: 60_000_000, planar_cosine: qef::PLANAR_COSINE }
     }
 }
 
@@ -355,8 +360,15 @@ fn corner(c: usize) -> Vec3 {
 }
 
 /// Solves one patch of a cell (or the whole cell when `patch` is `None`):
-/// position, normal and feature rank.
-fn solve_patch(grid: &Grid, cell: Cell, hermite: &Hermite, patch: Option<(u32, usize)>) -> (Vec3, Vec3, u8) {
+/// position, normal and feature rank. `planar_cosine` is
+/// [`ExtractOptions::planar_cosine`].
+fn solve_patch(
+    grid: &Grid,
+    cell: Cell,
+    hermite: &Hermite,
+    patch: Option<(u32, usize)>,
+    planar_cosine: f32,
+) -> (Vec3, Vec3, u8) {
     let mut points = [Vec3::ZERO; 12];
     let mut normals = [Vec3::ZERO; 12];
     let mut count = 0;
@@ -371,7 +383,7 @@ fn solve_patch(grid: &Grid, cell: Cell, hermite: &Hermite, patch: Option<(u32, u
         normals[count] = hermite.normal[e];
         count += 1;
     }
-    let (local, rank) = qef::solve(&points[..count], &normals[..count]);
+    let (local, rank) = qef::solve_with(&points[..count], &normals[..count], planar_cosine);
     let [i, j, k] = cell.at();
     let normal = normals[..count].iter().copied().sum::<Vec3>();
     let normal = normal.try_normalize().unwrap_or_else(|| way_out(cell.mask));
@@ -435,7 +447,7 @@ impl Lattice<'_> {
     }
 }
 
-fn solve_vertices<S: CellSource>(source: &S, lattice: &Lattice) -> Vertices {
+fn solve_vertices<S: CellSource>(source: &S, lattice: &Lattice, planar_cosine: f32) -> Vertices {
     let cells = &lattice.cells.cells;
     let (positions, normals, ranks, _) = parallel::build3(&lattice.vertex_ends(), |c, positions, normals, ranks| {
         let mut hermite = Hermite::default();
@@ -446,7 +458,7 @@ fn solve_vertices<S: CellSource>(source: &S, lattice: &Lattice) -> Vertices {
             let patches = if simple { 0 } else { lattice.creases.patches_of(ci) };
             for p in 0..lattice.vertices_of(ci).len() {
                 let patch = (!simple).then_some((patches, p));
-                let (position, normal, rank) = solve_patch(lattice.grid, cell, &hermite, patch);
+                let (position, normal, rank) = solve_patch(lattice.grid, cell, &hermite, patch, planar_cosine);
                 positions.push(position);
                 normals.push(normal);
                 ranks.push(rank);
@@ -741,7 +753,7 @@ fn extract_as_is<S: CellSource>(source: &S, grid: &Grid, options: &ExtractOption
     let creases = resolve_creases(source, &cells);
     let base = vertex_bases(&cells, &creases);
     let lattice = Lattice { grid, cells: &cells, creases: &creases, base: &base };
-    let mut vertices = solve_vertices(source, &lattice);
+    let mut vertices = solve_vertices(source, &lattice, options.planar_cosine);
 
     let mut stats = Stats {
         cells: cells.cells.len(),

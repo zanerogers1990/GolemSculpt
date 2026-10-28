@@ -36,8 +36,10 @@ const CLAMP_MARGIN: f32 = 0.25;
 const DAMPING: f32 = 0.03;
 
 /// How aligned the normals must be for the cell to count as locally flat:
-/// cos 5.7 degrees. Not delicate; a real crease is far beyond it.
-const PLANAR_COSINE: f32 = 0.995;
+/// cos 5.7 degrees. Not delicate; a real crease is far beyond it. The
+/// sharpest a solve gets, and what [`solve`] uses; [`solve_with`] takes a
+/// looser one.
+pub const PLANAR_COSINE: f32 = 0.995;
 
 /// An eigenvalue above this fraction of the largest counts toward the feature
 /// rank. A crease turning by about 20 degrees or more registers; the spread
@@ -49,6 +51,26 @@ pub const FEATURE_FRACTION: f32 = 0.03;
 /// many independent directions the normals carry (1 flat or smoothly curved,
 /// 2 a crease, 3 a corner, 0 when there were no crossings at all).
 pub fn solve(points: &[Vec3], normals: &[Vec3]) -> (Vec3, u8) {
+    solve_with(points, normals, PLANAR_COSINE)
+}
+
+/// [`solve`] with `planar_cosine` in place of [`PLANAR_COSINE`]: how aligned
+/// a cell's normals must be for it to count as smooth, as the length of
+/// their mean (1 when they all point one way; the cosine of half the angle
+/// between two equal bunches of them).
+///
+/// A looser one, say cos 30 degrees, takes a cell whose normals turn by less
+/// than 60 degrees for the smooth surface it nearly is, and places its
+/// vertex at the average of the crossings slid on to their mean plane, which
+/// rounds an edge that slight off by a fraction of a cell. That is for a
+/// remesh of a sculpted model whose detail is finer than the cells: solved
+/// for the creases its crossings describe, a cell straddling several small
+/// grooves snaps its vertex to wherever those walls meet, and the surface
+/// comes out scaly, pitted and spiked (a body of muscle fibres remeshed at
+/// 126 looked knitted). Averaged, it comes out as the smooth surface the
+/// cells can carry. An edge that turns more than that is still solved for as
+/// sharp, so a box stays a box.
+pub fn solve_with(points: &[Vec3], normals: &[Vec3], planar_cosine: f32) -> (Vec3, u8) {
     let count = points.len().min(normals.len());
     if count == 0 {
         return (Vec3::splat(0.5), 0);
@@ -63,7 +85,7 @@ pub fn solve(points: &[Vec3], normals: &[Vec3]) -> (Vec3, u8) {
     // reduces to sliding the mass point along that direction, so do that
     // directly rather than run an eigen-decomposition to be told the same.
     let sum_length = normal_sum.length();
-    if sum_length >= count as f32 * PLANAR_COSINE {
+    if sum_length >= count as f32 * planar_cosine {
         let axis = normal_sum / sum_length;
         let along: f32 = points.iter().map(|&p| axis.dot(p - mass)).sum();
         // The same damping the general path gives its dominant direction, so
@@ -223,6 +245,40 @@ mod tests {
         let (b, rb) = solve(&mp, &mn);
         assert_eq!(ra, rb);
         assert!(flip(a).distance(b) < 1e-5);
+    }
+
+    /// Asked to round edges under 60 degrees: a crease that turns by 40 is
+    /// placed as a smooth surface, at the average of its crossings slid on
+    /// to their mean plane (a little inside the crease), with rank 1; a
+    /// right-angled one is still solved for, and lands on the line.
+    #[test]
+    fn a_looser_planar_cosine_rounds_slight_creases_and_keeps_sharp_ones() {
+        let loose = 30f32.to_radians().cos();
+        let corner = Vec3::new(0.55, 0.45, 0.5);
+        let slight = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(40f32.to_radians().cos(), 40f32.to_radians().sin(), 0.0)];
+        let (mut p, mut n) = (Vec::new(), Vec::new());
+        plane_crossings(corner, slight[0], &mut p, &mut n);
+        plane_crossings(corner, slight[1], &mut p, &mut n);
+        let (sharp, rank_sharp) = solve(&p, &n);
+        let (rounded, rank_rounded) = solve_with(&p, &n, loose);
+        assert_eq!((rank_sharp, rank_rounded), (2, 1));
+        assert!(sharp.distance(corner) < 5e-3, "the sharp solve left the crease: {sharp}");
+        let off = rounded.distance(corner);
+        assert!(off > 0.02 && off < 0.5, "rounded off the crease by {off} cells: {rounded}");
+        // On the mean plane through the average of the crossings.
+        let mean_n = (slight[0] + slight[1].normalize()).normalize();
+        let mass = p.iter().copied().sum::<Vec3>() / p.len() as f32;
+        let mean_d: f32 = p.iter().map(|&q| mean_n.dot(q - mass)).sum::<f32>() / p.len() as f32;
+        assert!((mean_n.dot(rounded - mass) - mean_d).abs() < 2e-3, "off the mean plane: {rounded}");
+
+        let (mut p, mut n) = (Vec::new(), Vec::new());
+        plane_crossings(corner, Vec3::X, &mut p, &mut n);
+        plane_crossings(corner, Vec3::Y, &mut p, &mut n);
+        let (x, rank) = solve_with(&p, &n, loose);
+        assert_eq!(rank, 2);
+        assert!((x.x - corner.x).abs() < 5e-3 && (x.y - corner.y).abs() < 5e-3, "off the right-angled crease: {x}");
+        // The sharpest cosine is the plain solve, to the bit.
+        assert_eq!(solve_with(&p, &n, PLANAR_COSINE), solve(&p, &n));
     }
 
     #[test]
