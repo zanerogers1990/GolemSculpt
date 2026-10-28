@@ -15,12 +15,19 @@ add it to a shortcut's Target). Without it the window opens where Windows
 puts it, usually the main monitor. Test builds made while working on the app
 open on whichever monitor the Claude window is on.
 
-For pen pressure, tick **Enable Windows Ink** in the Huion driver. The
-**Stroke** card (Brush tab) shows whether pressure is arriving: a live bar
-while the pen is down, and a line saying so if none has been seen since the
-app opened. Lifting the pen does not add a last, harder bit to the stroke: it
-ends at the pressure the pen last had (a mouse has no pressure and always
-sculpts at full strength and full size).
+Pen pressure arrives either of two ways, and both work. With **Enable
+Windows Ink** ticked in the Huion driver, Windows reports the pen to the
+window with its pressure. With Ink off (which is also rid of its
+press-and-hold circles and flicks), the pen reaches the window as a mouse,
+and GolemSculpt reads its pressure through WinTab instead, the driver's own
+channel (`Wintab32.dll`, which the Huion and Wacom drivers install); the
+driver's pen must then be in pen mode, not mouse mode, for it to serve
+pressure. The **Stroke** card (Brush tab) shows whether pressure is arriving:
+a live bar while the pen is down, saying "through WinTab" when that is the
+way, and a line saying so if none has been seen since the app opened.
+Lifting the pen does not add a last, harder bit to the stroke: it ends at the
+pressure the pen last had (a mouse has no pressure and always sculpts at full
+strength and full size).
 
 ## Controls
 

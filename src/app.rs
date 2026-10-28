@@ -91,6 +91,7 @@ mod unity;
 mod unsaved;
 mod view_moves;
 mod visibility;
+mod wintab;
 
 /// Two clicks (or F twice) this close together are a double: Windows' own
 /// starting double-click time, and room for a pen tip, which lands a little
@@ -288,6 +289,12 @@ struct Input {
     /// the pen's tip. What any other touch does meanwhile is not the
     /// stroke's business (app/pen.rs).
     pen_touch: Option<u64>,
+    /// A touch event has carried pressure this session: Windows Ink reports
+    /// the pen, and WinTab's packets are ignored from here on (app/wintab.rs).
+    ink_seen: bool,
+    /// The tip's pressure as of the latest WinTab packet, or `None` with the
+    /// tip up: what a stroke begun by a mouse press draws at.
+    wintab_tip: Option<f32>,
     last_click: Option<(Instant, Vec2)>,
     /// Where the press under way began, if that was on an interface
     /// control, and the last tap on one: a press on the view straight after
@@ -307,6 +314,9 @@ struct Input {
 
 struct Running {
     window: Arc<Window>,
+    /// The tablet driver's own pressure channel, for a pen whose pressure
+    /// the window does not report (app/wintab.rs).
+    wintab: Option<wintab::Tablet>,
     gpu: Gpu,
     renderer: Renderer,
     egui_ctx: egui::Context,
@@ -461,6 +471,8 @@ impl App {
         let Some(running) = &mut self.running else { return };
         // The graphics card reported a fault: a copy of the scene, and out.
         running.stop_on_graphics_fault();
+        // Pen pressure through WinTab that no pointer event carried (app/wintab.rs).
+        running.wintab_poll();
         // The question about unsaved work was answered with a way to close.
         if running.quitting() {
             event_loop.exit();
@@ -600,6 +612,7 @@ impl Running {
         let stats = Stats { adapter: gpu.adapter_name.clone(), ..Default::default() };
         let now = Instant::now();
         let mut running = Running {
+            wintab: wintab::Tablet::open(&window),
             window,
             gpu,
             renderer,
@@ -634,6 +647,8 @@ impl Running {
                 pen_down: false,
                 pen_pressure: None,
                 pen_touch: None,
+                ink_seen: false,
+                wintab_tip: None,
                 last_click: None,
                 on_control: None,
                 ui_tap: None,
@@ -671,6 +686,7 @@ impl Running {
             blender: blender::State::new(args.screenshot.is_some()),
             args,
         };
+        running.doc.sculptor.pen_meter.wintab_tablet = running.wintab.is_some();
         running.scene_changed();
         running.sync_view();
         running.files_start(opened);
@@ -877,11 +893,15 @@ impl Running {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if !self.input.pen_down {
-                    self.pointer_moved(Vec2::new(position.x as f32, position.y as f32), None);
+                    // A pen the window takes for a mouse may still report
+                    // pressure through WinTab (app/wintab.rs).
+                    let pressure = self.wintab_reading();
+                    self.pointer_moved(Vec2::new(position.x as f32, position.y as f32), pressure);
                 }
             }
             // Alt-tab or a click elsewhere: no release will come for what is held.
             WindowEvent::Focused(false) => self.focus_lost(),
+            WindowEvent::Focused(true) => self.wintab_focused(),
             // A file from Explorer: opened or imported by its kind (app/drop.rs).
             WindowEvent::HoveredFile(path) => self.file_hovered(&path),
             WindowEvent::DroppedFile(path) => self.act(Action::DropFile(path)),
@@ -895,7 +915,10 @@ impl Running {
                     return;
                 }
                 match state {
-                    ElementState::Pressed => self.pointer_pressed(button, None),
+                    ElementState::Pressed => {
+                        let pressure = self.wintab_reading();
+                        self.pointer_pressed(button, pressure);
+                    }
                     ElementState::Released => self.pointer_released(button),
                 }
             }
