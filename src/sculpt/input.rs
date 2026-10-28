@@ -114,6 +114,13 @@ pub struct PenMeter {
     pub known: bool,
     /// The pressure it reports now, 0 to 1, while its tip is down.
     pub now: Option<f32>,
+    /// The pressure comes through WinTab, the tablet driver's own channel,
+    /// rather than the window's pen events (app/wintab.rs): the readout says
+    /// so. Off again the moment a pen event carries pressure.
+    pub wintab: bool,
+    /// A tablet was found through WinTab when the app opened, so pressure
+    /// can arrive that way: the readout's advice goes by it.
+    pub wintab_tablet: bool,
 }
 
 impl PenMeter {

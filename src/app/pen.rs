@@ -43,6 +43,12 @@ pub(super) enum Step {
 /// which touch has the pointer, and says what the app is to do about it.
 pub(super) fn touched(input: &mut Input, meter: &mut PenMeter, touch: &Touch) -> Step {
     let force = touch.force.map(|force| force.normalized() as f32);
+    if force.is_some() {
+        // Windows Ink reports the pen's pressure: WinTab's packets are
+        // ignored from here on, so the pen never counts twice (app/wintab.rs).
+        input.ink_seen = true;
+        meter.wintab = false;
+    }
     let ours = input.pen_touch == Some(touch.id);
     if input.pen_touch.is_some() && !ours {
         return Step::Ignore;
@@ -128,7 +134,7 @@ mod tests {
         let steps = feed(&mut input, &mut meter, &[touch(TouchPhase::Started, PEN, (400.0, 300.0), None)]);
         assert_eq!(steps, [Step::Press(None)], "it opens as a mouse would: full strength, full size");
         assert_eq!((input.pointer, input.pen_down, input.pen_touch), (Vec2::new(400.0, 300.0), true, Some(PEN)));
-        assert_eq!(meter, PenMeter { seen: false, known: false, now: None });
+        assert_eq!(meter, PenMeter { seen: false, known: false, now: None, wintab: false, wintab_tablet: false });
 
         // Pressure arrives mid-stroke: it is a pen, and is from here on.
         let steps = feed(&mut input, &mut meter, &[touch(TouchPhase::Moved, PEN, (410.0, 300.0), Some(0.4))]);

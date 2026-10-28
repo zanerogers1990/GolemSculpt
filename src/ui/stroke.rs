@@ -130,24 +130,40 @@ pub fn card(ui: &mut Ui, s: &mut Settings, pen: &PenMeter, tips: bool) {
 /// Whether the pen's pressure is reaching the app, and what it is now.
 fn pen_readout(ui: &mut Ui, pen: &PenMeter) {
     if !pen.seen {
+        // Pressure can come through the window's pen events (Windows Ink)
+        // or the tablet driver's WinTab channel (app/wintab.rs): the advice
+        // goes by whether a WinTab tablet was found when the app opened.
+        let advice = if pen.wintab_tablet {
+            "The tablet driver's WinTab channel is open, so pressure should arrive with Windows Ink on or off. If \
+             this line stays, take the pen out of mouse mode in the Huion tablet driver; until then the pen works \
+             as a mouse: full strength, full size."
+        } else {
+            "No WinTab tablet was found when GolemSculpt opened, so pressure can only come through Windows Ink: if \
+             this line stays, tick \"Enable Windows Ink\" in the Huion tablet driver, or the pen works as a mouse: \
+             full strength, full size."
+        };
         return theme::hint(
             ui,
-            "No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line turns \
-             into a live bar. If it stays, tick \"Enable Windows Ink\" in the Huion tablet driver, or the pen works \
-             as a mouse: full strength, full size.",
+            &format!(
+                "No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line \
+                 turns into a live bar. {advice}"
+            ),
         );
     }
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 4.0, theme::FIELD());
+    // Which way the pressure arrives: Windows Ink through the window's pen
+    // events, or the tablet driver's WinTab channel (app/wintab.rs).
+    let through = if pen.wintab { " (through WinTab)" } else { "" };
     let text = match pen.now {
         Some(pressure) => {
             let mut filled = rect;
             filled.set_width(rect.width() * pressure.clamp(0.0, 1.0));
             p.rect_filled(filled, 4.0, ACCENT());
-            format!("Pen pressure now: {}", percent(pressure))
+            format!("Pen pressure now: {}{through}", percent(pressure))
         }
-        None => "Pen pressure: the pen is up".to_owned(),
+        None => format!("Pen pressure{through}: the pen is up"),
     };
     p.text(rect.center(), Align2::CENTER_CENTER, text, theme::font(11.0), theme::TEXT());
 }
