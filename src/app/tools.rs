@@ -46,6 +46,7 @@ fn registry() -> Vec<Box<dyn kit::Tool>> {
         sculpt_region::split(),
         sculpt_keys::tool(),
         sculpt_region::extract(),
+        sculpt_maskfit::tool(),
     ]
 }
 

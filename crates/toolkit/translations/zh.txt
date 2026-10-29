@@ -3784,8 +3784,11 @@ zh: 指针停在一处时继续添加。对所有笔刷生效。
 en: How the pen answers your hand, for every brush. Higher needs a firmer press before pressure counts, which steadies light strokes; lower answers to the lightest touch. What pressure then changes (size, strength, and by how much) is set for each brush, in its own settings.
 zh: 笔对你手上力度的反应，对所有笔刷生效。越高，需要按得更重压力才起作用，这会让轻的笔触更稳；越低，最轻的触碰也有反应。压力具体改变什么（大小、强度，以及幅度）在每支笔刷自己的设置里设定。
 
-en: No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line turns into a live bar. If it stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
-zh: 自 GolemSculpt 打开以来，还没有收到任何笔压。请把笔按在数位板上：这一行会变成实时的进度条。如果它一直不变，请在 Huion 数位板驱动中勾选“Enable Windows Ink”，否则笔会被当成鼠标使用：满强度、满大小。
+en: The tablet driver's WinTab channel is open, so pressure should arrive with Windows Ink on or off. If this line stays, take the pen out of mouse mode in the Huion tablet driver; until then the pen works as a mouse: full strength, full size.
+zh: 数位板驱动的 WinTab 通道已打开，所以无论 Windows Ink 开还是关，压感都应该能传入。如果这一行一直不消失，请在 Huion 数位板驱动中让笔退出鼠标模式；在此之前，笔会被当成鼠标使用：满强度、满大小。
+
+en: No WinTab tablet was found when GolemSculpt opened, so pressure can only come through Windows Ink: if this line stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
+zh: GolemSculpt 打开时没有找到 WinTab 数位板，所以压感只能通过 Windows Ink 传入：如果这一行一直不消失，请在 Huion 数位板驱动中勾选“Enable Windows Ink”，否则笔会被当成鼠标使用：满强度、满大小。
 
 en: Of the selected object, "{0}".
 zh: 属于所选物体“{0}”。
@@ -4645,6 +4648,63 @@ zh: 轮廓线自相交叉，所以表面会穿过自己。
 en: The curve swings across the axis between points - held just off it (a thin neck).
 zh: 曲线在两点之间摆过了轴——已被保持在刚好离开轴的位置（形成一个细颈）。
 
+en: Select the mask's shell.
+zh: 请选择面具的壳体。
+
+en: Needs the head the mask is worn on, overlapping the mask: import it (Mask Head.stl) or move it under the mask.
+zh: 需要戴面具的头部模型，并且要与面具重叠：请导入它（Mask Head.stl），或把它移到面具下面。
+
+en: The head has gone.
+zh: 头部模型不见了。
+
+en: No part of the selected object faces the head closely enough to be a mask's inside. Select the shell, with the head under it.
+zh: 所选物体没有任何部分离头部足够近，不能算作面具的内侧。请选择壳体，并把头部放在它下面。
+
+en: Still checking the mask; Refit again in a moment.
+zh: 仍在检查面具；请稍后再用一次 Refit。
+
+en: Refitted the inside: {count} points now sit {gap} off the head. Undo (Ctrl+Z) puts them back.
+zh: 已重新贴合内侧：现在有 {count} 个顶点离头部 {gap}。撤销（Ctrl+Z）可恢复。
+
+en: The inside could not be refitted.
+zh: 无法重新贴合内侧。
+
+en: Checking the mask...
+zh: 正在检查面具...
+
+en: Wall fine everywhere: thinnest {thinnest}.
+zh: 各处壁厚都没问题：最薄处 {thinnest}。
+
+en: Thinnest wall {thinnest}; {thin} points under Min Wall (red).
+zh: 最薄壁厚 {thinnest}；有 {thin} 个顶点低于 Min Wall（红色）。
+
+en: {close} inside points too close to the face (orange): Refit Inside.
+zh: 内侧有 {close} 个顶点离脸太近（橙色）：用 Refit Inside。
+
+en: How far the inside sits off the skin: room for comfort and padding. Double tap to type a length.
+zh: 内侧离皮肤多远：为舒适度和衬垫留出空间。双击可输入长度。
+
+en: The thinnest wall you want to print. Thinner places show red. Double tap to type a length.
+zh: 你想打印的最薄壁厚。更薄的地方会显示为红色。双击可输入长度。
+
+en: Check a mask to wear against the head it goes on, and put its inside back to fit after sculpting.
+zh: 对照面具所戴的头部检查面具，并在雕刻后把它的内侧重新贴合。
+
+en: Red: wall thinner than Min Wall. Orange: inside too close to the face. Refit Inside fixes the fit.
+zh: 红色：壁厚小于 Min Wall。橙色：内侧离脸太近。Refit Inside 可修正贴合。
+
+en: Select the mask's shell. The head it is worn on is checked against it.
+zh: 请选择面具的壳体。它所戴的头部会与它对照检查。
+
+en: Moves the inside of the mask back to the head plus the Gap. The outside, your sculpting, stays. One undo step (Ctrl+Z). Subdivision levels of the shell are not kept.
+zh: 把面具的内侧移回头部加上 Gap 的位置。外侧（你雕刻的部分）保持不变。算一个撤销步骤（Ctrl+Z）。壳体的细分级别不会保留。
+
+en: Puts the tool away. Nothing is changed by looking.
+zh: 收起该工具。查看不会改变任何东西。
+
+en: Making a mask: mask the area on the head, Extract it, sculpt the shell, then come here.
+zh: 制作面具：在头部上遮罩出区域，用 Extract 提取，雕刻壳体，然后回到这里。
+
 en: Rulers that read real lengths in mm or inches: drag across the model to measure (L).
 zh: 显示真实长度的标尺，单位为 mm 或英寸：在模型上拖动来测量（L）。
 
@@ -4855,14 +4915,14 @@ zh: 预览：{0} 个三角面。点击 Accept 保留。
 en: Mask an area first. Accept makes it a new object.
 zh: 请先遮罩一块区域。Accept 会把它变成一个新物体。
 
-en: How thick the extracted shell is, as a fraction of the object's size.
-zh: 提取出的壳有多厚，以物体大小的比例计。
+en: How thick the extracted shell is. Double tap to type a length; Shift+drag for fine steps.
+zh: 提取出的壳体有多厚。双击可输入长度；Shift+拖动可微调。
 
 en: Offset (sink <-> float)
 zh: Offset (sink <-> float)（偏移：下沉 - 浮起）
 
-en: Moves the extracted shell in or out relative to the masked surface.
-zh: 相对于被遮罩的表面，把提取出的壳向内或向外移动。
+en: Moves the extracted shell in or out relative to the masked surface. Double tap to type a length.
+zh: 让提取出的壳体相对于遮罩的表面向内或向外移动。双击可输入长度。
 
 en: Edge Falloff (slab <-> feathered)
 zh: Edge Falloff (slab <-> feathered)（边缘衰减：平板 - 羽化）

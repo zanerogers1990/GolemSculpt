@@ -2869,6 +2869,7 @@ dependencies = [
  "sculpt-hands",
  "sculpt-keys",
  "sculpt-lathe",
+ "sculpt-maskfit",
  "sculpt-measure",
  "sculpt-multires",
  "sculpt-region",
@@ -2945,6 +2946,19 @@ dependencies = [
  "rayon",
  "sculpt-geom",
  "sculpt-toolkit",
+]
+
+[[package]]
+name = "sculpt-maskfit"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "glam",
+ "rayon",
+ "sculpt-cut",
+ "sculpt-geom",
+ "sculpt-toolkit",
+ "sculpt-volume",
 ]
 
 [[package]]

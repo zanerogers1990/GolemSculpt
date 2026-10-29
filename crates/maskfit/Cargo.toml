@@ -1,0 +1,17 @@
+[package]
+name = "sculpt-maskfit"
+version = "0.1.0"
+edition = "2024"
+description = "The Mask Fit tool: a mask to wear checked against the head it is worn on, and its inside put back to fit."
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+egui = { workspace = true }
+sculpt-geom = { path = "../geom" }
+sculpt-toolkit = { path = "../toolkit" }
+sculpt-volume = { path = "../volume" }
+
+# Only the tests: the real-head check makes its shell the way the app does.
+[dev-dependencies]
+sculpt-cut = { path = "../cut" }

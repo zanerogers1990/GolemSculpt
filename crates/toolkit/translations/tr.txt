@@ -3784,8 +3784,11 @@ tr: İmleç tek bir yerde dururken eklemeye devam et. Her fırça için.
 en: How the pen answers your hand, for every brush. Higher needs a firmer press before pressure counts, which steadies light strokes; lower answers to the lightest touch. What pressure then changes (size, strength, and by how much) is set for each brush, in its own settings.
 tr: Kalemin elinin hareketine nasıl yanıt verdiği, her fırça için. Yüksek değer, basıncın sayılması için daha sert bir basış gerektirir ve hafif darbeleri sabitler; düşük değer en hafif dokunuşa yanıt verir. Basıncın sonra neyi değiştirdiği (boyut, güç ve ne kadar) her fırça için kendi ayarlarında belirlenir.
 
-en: No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line turns into a live bar. If it stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
-tr: GolemSculpt açıldığından beri henüz kalem basıncı gelmedi. Kalemi tablete bastır: bu satır canlı bir çubuğa dönüşür. Dönüşmezse Huion tablet sürücüsünde “Enable Windows Ink” seçeneğini işaretle, yoksa kalem fare gibi çalışır: tam güç, tam boyut.
+en: The tablet driver's WinTab channel is open, so pressure should arrive with Windows Ink on or off. If this line stays, take the pen out of mouse mode in the Huion tablet driver; until then the pen works as a mouse: full strength, full size.
+tr: Tablet sürücüsünün WinTab kanalı açık, bu yüzden basınç Windows Ink açıkken de kapalıyken de gelmeli. Bu satır kalırsa Huion tablet sürücüsünde kalemi fare modundan çıkar; o zamana kadar kalem fare gibi çalışır: tam güç, tam boyut.
+
+en: No WinTab tablet was found when GolemSculpt opened, so pressure can only come through Windows Ink: if this line stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
+tr: GolemSculpt açıldığında WinTab tableti bulunamadı, bu yüzden basınç yalnızca Windows Ink ile gelebilir: bu satır kalırsa Huion tablet sürücüsünde “Enable Windows Ink” seçeneğini işaretle, yoksa kalem fare gibi çalışır: tam güç, tam boyut.
 
 en: Of the selected object, "{0}".
 tr: Seçili nesne için: “{0}”.
@@ -4645,6 +4648,63 @@ tr: Dış hat kendini kesiyor, bu yüzden yüzey kendi içinden geçiyor.
 en: The curve swings across the axis between points - held just off it (a thin neck).
 tr: Eğri noktalar arasında ekseni aşıyor - ondan hemen uzakta tutuldu (ince bir boyun).
 
+en: Select the mask's shell.
+tr: Maskenin kabuğunu seç.
+
+en: Needs the head the mask is worn on, overlapping the mask: import it (Mask Head.stl) or move it under the mask.
+tr: Maskenin takıldığı baş gerekir ve maskeyle çakışmalıdır: onu içe aktar (Mask Head.stl) ya da maskenin altına taşı.
+
+en: The head has gone.
+tr: Baş kayboldu.
+
+en: No part of the selected object faces the head closely enough to be a mask's inside. Select the shell, with the head under it.
+tr: Seçili nesnenin hiçbir kısmı, bir maskenin iç yüzü olacak kadar yakından başa bakmıyor. Kabuğu seç, başı da altına koy.
+
+en: Still checking the mask; Refit again in a moment.
+tr: Maske hâlâ kontrol ediliyor; birazdan Refit'i tekrar kullan.
+
+en: Refitted the inside: {count} points now sit {gap} off the head. Undo (Ctrl+Z) puts them back.
+tr: İç yüz yeniden oturtuldu: {count} nokta artık baştan {gap} uzakta. Undo (Ctrl+Z) onları geri koyar.
+
+en: The inside could not be refitted.
+tr: İç yüz yeniden oturtulamadı.
+
+en: Checking the mask...
+tr: Maske kontrol ediliyor...
+
+en: Wall fine everywhere: thinnest {thinnest}.
+tr: Duvar her yerde iyi: en ince yer {thinnest}.
+
+en: Thinnest wall {thinnest}; {thin} points under Min Wall (red).
+tr: En ince duvar {thinnest}; {thin} nokta Min Wall'un altında (kırmızı).
+
+en: {close} inside points too close to the face (orange): Refit Inside.
+tr: İç yüzdeki {close} nokta yüze çok yakın (turuncu): Refit Inside.
+
+en: How far the inside sits off the skin: room for comfort and padding. Double tap to type a length.
+tr: İç yüzün tenden ne kadar uzakta durduğu: rahatlık ve dolgu için boşluk. Bir uzunluk yazmak için çift dokun.
+
+en: The thinnest wall you want to print. Thinner places show red. Double tap to type a length.
+tr: Basmak istediğin en ince duvar. Daha ince yerler kırmızı görünür. Bir uzunluk yazmak için çift dokun.
+
+en: Check a mask to wear against the head it goes on, and put its inside back to fit after sculpting.
+tr: Takılacak bir maskeyi, takıldığı başa karşı kontrol et ve şekillendirdikten sonra iç yüzünü yeniden oturt.
+
+en: Red: wall thinner than Min Wall. Orange: inside too close to the face. Refit Inside fixes the fit.
+tr: Kırmızı: duvar Min Wall'dan ince. Turuncu: iç yüz yüze çok yakın. Refit Inside oturmayı düzeltir.
+
+en: Select the mask's shell. The head it is worn on is checked against it.
+tr: Maskenin kabuğunu seç. Takıldığı baş ona karşı kontrol edilir.
+
+en: Moves the inside of the mask back to the head plus the Gap. The outside, your sculpting, stays. One undo step (Ctrl+Z). Subdivision levels of the shell are not kept.
+tr: Maskenin iç yüzünü başa artı Gap kadar mesafeye geri getirir. Dış yüz, yani şekillendirdiğin kısım, kalır. Tek bir geri alma adımı (Ctrl+Z). Kabuğun alt bölüm seviyeleri korunmaz.
+
+en: Puts the tool away. Nothing is changed by looking.
+tr: Aracı kaldırır. Bakmak hiçbir şeyi değiştirmez.
+
+en: Making a mask: mask the area on the head, Extract it, sculpt the shell, then come here.
+tr: Maske yapmak için: baştaki alanı maskele, Extract'a bas, kabuğu şekillendir, sonra buraya gel.
+
 en: Rulers that read real lengths in mm or inches: drag across the model to measure (L).
 tr: mm veya inç cinsinden gerçek uzunlukları okuyan cetveller: ölçmek için modelin üzerinde sürükle (L).
 
@@ -4855,14 +4915,14 @@ tr: Önizleme: {0} üçgen. Korumak için Accept.
 en: Mask an area first. Accept makes it a new object.
 tr: Önce bir alanı maskele. Accept onu yeni bir nesne yapar.
 
-en: How thick the extracted shell is, as a fraction of the object's size.
-tr: Ayıklanan kabuğun, nesnenin boyutunun bir oranı olarak ne kadar kalın olduğu.
+en: How thick the extracted shell is. Double tap to type a length; Shift+drag for fine steps.
+tr: Çıkarılan kabuğun ne kadar kalın olduğu. Bir uzunluk yazmak için çift dokun; ince adımlar için Shift+sürükle.
 
 en: Offset (sink <-> float)
 tr: Offset (sink <-> float)
 
-en: Moves the extracted shell in or out relative to the masked surface.
-tr: Ayıklanan kabuğu maskeli yüzeye göre içeri veya dışarı taşır.
+en: Moves the extracted shell in or out relative to the masked surface. Double tap to type a length.
+tr: Çıkarılan kabuğu, maskelenen yüzeye göre içe veya dışa kaydırır. Bir uzunluk yazmak için çift dokun.
 
 en: Edge Falloff (slab <-> feathered)
 tr: Edge Falloff (slab <-> feathered)

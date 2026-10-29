@@ -16,7 +16,7 @@ use egui::Color32;
 use glam::Vec3;
 use rayon::prelude::*;
 use sculpt_cut::{ExtractSettings, extract};
-use sculpt_geom::TriMesh;
+use sculpt_geom::{TriMesh, units};
 use sculpt_toolkit::draw::smooth_normals;
 use sculpt_toolkit::theme::{self, ACCENT, ButtonStyle};
 use sculpt_toolkit::{
@@ -299,10 +299,26 @@ impl Extract {
         let passes = |v: f32| format!("{}", v.round() as u32);
         let amount = |v: f32| format!("{v:.2}");
 
-        let r = theme::slider(ui, "Thickness", &mut s.thickness_fraction, 0.002..=0.5, percent);
-        theme::tip(r, cx.tips, "How thick the extracted shell is, as a fraction of the object's size.");
-        let r = theme::slider(ui, "Offset (sink <-> float)", &mut s.offset_fraction, -0.25..=0.25, percent);
-        theme::tip(r, cx.tips, "Moves the extracted shell in or out relative to the masked surface.");
+        // Thickness and Offset are shares of the object's size, but a shell for
+        // a printer is thought of in millimetres: shown, dragged and typed (a
+        // double tap) as lengths whenever there is an object to measure.
+        let scale = length_per_share(cx);
+        let unit = cx.unit;
+        let length_slider = |ui: &mut egui::Ui, label: &str, share: &mut f32, range: std::ops::RangeInclusive<f32>| {
+            let Some(scale) = scale else { return theme::slider(ui, label, share, range, percent) };
+            let mut length = units::to_unit(*share * scale, unit);
+            let span = units::to_unit(range.start() * scale, unit)..=units::to_unit(range.end() * scale, unit);
+            let readout = |v: f32| format!("{} ({:.1}%)", units::format(units::from_unit(v, unit), unit, true), units::from_unit(v, unit) / scale * 100.0);
+            let r = theme::slider(ui, label, &mut length, span, readout);
+            if r.changed() {
+                *share = (units::from_unit(length, unit) / scale).clamp(*range.start(), *range.end());
+            }
+            r
+        };
+        let r = length_slider(ui, "Thickness", &mut s.thickness_fraction, 0.002..=0.5);
+        theme::tip(r, cx.tips, "How thick the extracted shell is. Double tap to type a length; Shift+drag for fine steps.");
+        let r = length_slider(ui, "Offset (sink <-> float)", &mut s.offset_fraction, -0.25..=0.25);
+        theme::tip(r, cx.tips, "Moves the extracted shell in or out relative to the masked surface. Double tap to type a length.");
         let r = theme::slider(ui, "Edge Falloff (slab <-> feathered)", &mut s.falloff_amount, 0.0..=1.0, amount);
         theme::tip(r, cx.tips, "How the shell thins toward its border: 0 is a flat slab edge, higher feathers it thinner.");
 
@@ -324,6 +340,24 @@ impl Extract {
         let r = theme::checkbox(ui, &mut s.invert_region, "Extract Unmasked Instead", ACCENT());
         theme::tip(r, cx.tips, "Extracts the unmasked area instead of the masked one.");
     }
+}
+
+/// How long, in the scene, a share of 1 of the selected object's size is for
+/// Thickness and Offset: half its longest side (as `sculpt_cut::extract`
+/// measures it) times the object's own scale. `None` with nothing to measure.
+fn length_per_share(cx: &Ctx) -> Option<f32> {
+    let scene = cx.scene();
+    let (info, mesh) = (scene.active_info()?, scene.active_mesh()?);
+    let (lo, hi) = mesh
+        .positions
+        .par_iter()
+        .with_min_len(1 << 14)
+        .fold(|| (Vec3::MAX, Vec3::MIN), |(lo, hi), &p| (lo.min(p), hi.max(p)))
+        .reduce(|| (Vec3::MAX, Vec3::MIN), |a, b| (a.0.min(b.0), a.1.max(b.1)));
+    let extent = ((hi - lo) * 0.5).max_element();
+    let extent = if extent > 1e-6 { extent } else { 1.0 };
+    let scale = info.placement.scale.abs().max_element();
+    (extent.is_finite() && scale > 0.0).then_some(extent * scale)
 }
 
 /// The tool, ready to register with the app.

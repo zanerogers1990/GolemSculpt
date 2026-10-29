@@ -3784,8 +3784,11 @@ ru: Продолжать добавлять, пока указатель сто�
 en: How the pen answers your hand, for every brush. Higher needs a firmer press before pressure counts, which steadies light strokes; lower answers to the lightest touch. What pressure then changes (size, strength, and by how much) is set for each brush, in its own settings.
 ru: Как перо отвечает вашей руке — для всех кистей. Большее значение требует более сильного нажима, прежде чем он начнёт учитываться, что стабилизирует лёгкие мазки; меньшее реагирует на самое лёгкое касание. Что именно меняет нажим (размер, силу и на сколько) — задаётся для каждой кисти в её собственных настройках.
 
-en: No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line turns into a live bar. If it stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
-ru: С момента запуска GolemSculpt нажим пера ещё не поступал. Прижмите перо к планшету: эта строка превратится в живую полосу. Если этого не происходит, отметьте «Enable Windows Ink» в драйвере планшета Huion, иначе перо работает как мышь: полная сила, полный размер.
+en: The tablet driver's WinTab channel is open, so pressure should arrive with Windows Ink on or off. If this line stays, take the pen out of mouse mode in the Huion tablet driver; until then the pen works as a mouse: full strength, full size.
+ru: Канал WinTab драйвера планшета открыт, так что нажим должен приходить при включённом и при выключенном Windows Ink. Если эта строка остаётся, выведите перо из режима мыши в драйвере планшета Huion; пока этого нет, перо работает как мышь: полная сила, полный размер.
+
+en: No WinTab tablet was found when GolemSculpt opened, so pressure can only come through Windows Ink: if this line stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
+ru: При запуске GolemSculpt планшет WinTab не найден, поэтому нажим может приходить только через Windows Ink: если эта строка остаётся, отметьте «Enable Windows Ink» в драйвере планшета Huion, иначе перо работает как мышь: полная сила, полный размер.
 
 en: Of the selected object, "{0}".
 ru: Для выбранного объекта «{0}».
@@ -4645,6 +4648,63 @@ ru: Контур пересекает сам себя, поэтому повер
 en: The curve swings across the axis between points - held just off it (a thin neck).
 ru: Кривая между точками пересекает ось — удерживается чуть в стороне от неё (тонкая шейка).
 
+en: Select the mask's shell.
+ru: Выберите оболочку маски.
+
+en: Needs the head the mask is worn on, overlapping the mask: import it (Mask Head.stl) or move it under the mask.
+ru: Нужна голова, на которой носят маску, и она должна пересекаться с маской: импортируйте её (Mask Head.stl) или поместите под маску.
+
+en: The head has gone.
+ru: Головы больше нет.
+
+en: No part of the selected object faces the head closely enough to be a mask's inside. Select the shell, with the head under it.
+ru: Ни одна часть выбранного объекта не обращена к голове достаточно близко, чтобы быть внутренней стороной маски. Выберите оболочку, с головой под ней.
+
+en: Still checking the mask; Refit again in a moment.
+ru: Маска ещё проверяется; запустите Refit снова через мгновение.
+
+en: Refitted the inside: {count} points now sit {gap} off the head. Undo (Ctrl+Z) puts them back.
+ru: Внутренняя сторона подогнана заново: {count} вершин теперь на расстоянии {gap} от головы. Undo (Ctrl+Z) вернёт их.
+
+en: The inside could not be refitted.
+ru: Не удалось подогнать внутреннюю сторону.
+
+en: Checking the mask...
+ru: Проверка маски...
+
+en: Wall fine everywhere: thinnest {thinnest}.
+ru: Стенка везде в порядке: самая тонкая {thinnest}.
+
+en: Thinnest wall {thinnest}; {thin} points under Min Wall (red).
+ru: Самая тонкая стенка {thinnest}; {thin} вершин тоньше Min Wall (красные).
+
+en: {close} inside points too close to the face (orange): Refit Inside.
+ru: {close} вершин внутренней стороны слишком близко к лицу (оранжевые): Refit Inside.
+
+en: How far the inside sits off the skin: room for comfort and padding. Double tap to type a length.
+ru: Как далеко внутренняя сторона от кожи: место для удобства и подкладки. Коснитесь дважды, чтобы ввести длину.
+
+en: The thinnest wall you want to print. Thinner places show red. Double tap to type a length.
+ru: Самая тонкая стенка, которую вы хотите напечатать. Более тонкие места видны красным. Коснитесь дважды, чтобы ввести длину.
+
+en: Check a mask to wear against the head it goes on, and put its inside back to fit after sculpting.
+ru: Проверьте носимую маску по голове, на которую она надевается, и после лепки подгоните её внутреннюю сторону обратно.
+
+en: Red: wall thinner than Min Wall. Orange: inside too close to the face. Refit Inside fixes the fit.
+ru: Красный: стенка тоньше Min Wall. Оранжевый: внутренняя сторона слишком близко к лицу. Refit Inside исправляет посадку.
+
+en: Select the mask's shell. The head it is worn on is checked against it.
+ru: Выберите оболочку маски. Голова, на которой её носят, проверяется по ней.
+
+en: Moves the inside of the mask back to the head plus the Gap. The outside, your sculpting, stays. One undo step (Ctrl+Z). Subdivision levels of the shell are not kept.
+ru: Возвращает внутреннюю сторону маски к голове плюс Gap. Внешняя сторона, ваша лепка, остаётся. Один шаг Undo (Ctrl+Z). Уровни подразделения оболочки не сохраняются.
+
+en: Puts the tool away. Nothing is changed by looking.
+ru: Убирает инструмент. От просмотра ничего не меняется.
+
+en: Making a mask: mask the area on the head, Extract it, sculpt the shell, then come here.
+ru: Как сделать маску: замаскируйте область на голове, нажмите Extract, вылепите оболочку, затем приходите сюда.
+
 en: Rulers that read real lengths in mm or inches: drag across the model to measure (L).
 ru: Линейки, показывающие реальные длины в mm или дюймах: тяните по модели, чтобы измерить (L).
 
@@ -4855,14 +4915,14 @@ ru: Предпросмотр: треугольников — {0}. Нажмите
 en: Mask an area first. Accept makes it a new object.
 ru: Сначала замаскируйте область. Accept превращает её в новый объект.
 
-en: How thick the extracted shell is, as a fraction of the object's size.
-ru: Толщина извлечённой оболочки в долях размера объекта.
+en: How thick the extracted shell is. Double tap to type a length; Shift+drag for fine steps.
+ru: Какой толщины извлечённая оболочка. Коснитесь дважды, чтобы ввести длину; Shift+перетаскивание для мелких шагов.
 
 en: Offset (sink <-> float)
 ru: Offset (утопить <-> приподнять)
 
-en: Moves the extracted shell in or out relative to the masked surface.
-ru: Сдвигает извлечённую оболочку внутрь или наружу относительно замаскированной поверхности.
+en: Moves the extracted shell in or out relative to the masked surface. Double tap to type a length.
+ru: Сдвигает извлечённую оболочку внутрь или наружу относительно замаскированной поверхности. Коснитесь дважды, чтобы ввести длину.
 
 en: Edge Falloff (slab <-> feathered)
 ru: Edge Falloff (плита <-> растушёвка)

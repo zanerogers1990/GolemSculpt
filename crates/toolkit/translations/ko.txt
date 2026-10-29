@@ -3782,8 +3782,11 @@ ko: 포인터가 한곳에 머무는 동안에도 계속 더합니다. 모든 �
 en: How the pen answers your hand, for every brush. Higher needs a firmer press before pressure counts, which steadies light strokes; lower answers to the lightest touch. What pressure then changes (size, strength, and by how much) is set for each brush, in its own settings.
 ko: 모든 브러시에 적용되는, 펜이 손의 힘에 반응하는 방식입니다. 높을수록 필압이 반영되기까지 더 세게 눌러야 해서 가벼운 스트로크가 안정되고, 낮을수록 아주 가벼운 터치에도 반응합니다. 필압이 무엇을(크기, 강도) 얼마나 바꾸는지는 브러시마다 각자의 설정에서 정합니다.
 
-en: No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line turns into a live bar. If it stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
-ko: GolemSculpt를 연 뒤 아직 필압이 들어온 적이 없습니다. 펜을 태블릿에 대고 누르세요. 이 줄이 실시간 막대로 바뀝니다. 그대로라면 Huion 태블릿 드라이버에서 "Enable Windows Ink"를 체크하세요. 그러지 않으면 펜이 마우스처럼 작동합니다(최대 강도, 최대 크기).
+en: The tablet driver's WinTab channel is open, so pressure should arrive with Windows Ink on or off. If this line stays, take the pen out of mouse mode in the Huion tablet driver; until then the pen works as a mouse: full strength, full size.
+ko: 태블릿 드라이버의 WinTab 채널이 열려 있어서, Windows Ink를 켜든 끄든 필압이 들어와야 합니다. 이 줄이 그대로라면 Huion 태블릿 드라이버에서 펜을 마우스 모드에서 빼세요. 그때까지 펜은 마우스처럼 작동합니다(최대 강도, 최대 크기).
+
+en: No WinTab tablet was found when GolemSculpt opened, so pressure can only come through Windows Ink: if this line stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
+ko: GolemSculpt를 열 때 WinTab 태블릿을 찾지 못해서 필압은 Windows Ink로만 들어올 수 있습니다. 이 줄이 그대로라면 Huion 태블릿 드라이버에서 "Enable Windows Ink"를 체크하세요. 그러지 않으면 펜이 마우스처럼 작동합니다(최대 강도, 최대 크기).
 
 en: Of the selected object, "{0}".
 ko: 선택한 오브젝트 "{0}"에 대한 것입니다.
@@ -4643,6 +4646,63 @@ ko: 윤곽선이 스스로 교차해서 표면이 자기 자신을 관통합니�
 en: The curve swings across the axis between points - held just off it (a thin neck).
 ko: 커브가 점 사이에서 축을 가로질러 휘어지므로 축에서 살짝 떨어진 상태로 유지됩니다(가는 목 모양).
 
+en: Select the mask's shell.
+ko: 마스크의 셸을 선택하세요.
+
+en: Needs the head the mask is worn on, overlapping the mask: import it (Mask Head.stl) or move it under the mask.
+ko: 마스크를 쓰는 머리가 필요하며, 마스크와 겹쳐 있어야 합니다. 머리를 가져오거나(Mask Head.stl) 마스크 아래로 옮기세요.
+
+en: The head has gone.
+ko: 머리가 없어졌습니다.
+
+en: No part of the selected object faces the head closely enough to be a mask's inside. Select the shell, with the head under it.
+ko: 선택한 오브젝트에는 마스크의 안쪽이라 할 만큼 머리와 가까이 마주한 부분이 없습니다. 머리를 아래에 둔 채 셸을 선택하세요.
+
+en: Still checking the mask; Refit again in a moment.
+ko: 아직 마스크를 확인하는 중입니다. 잠시 후 Refit을 다시 누르세요.
+
+en: Refitted the inside: {count} points now sit {gap} off the head. Undo (Ctrl+Z) puts them back.
+ko: 안쪽을 다시 맞췄습니다. 이제 점 {count}개가 머리에서 {gap} 떨어져 있습니다. 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.
+
+en: The inside could not be refitted.
+ko: 안쪽을 다시 맞추지 못했습니다.
+
+en: Checking the mask...
+ko: 마스크 확인 중...
+
+en: Wall fine everywhere: thinnest {thinnest}.
+ko: 벽이 모두 괜찮습니다. 가장 얇은 곳은 {thinnest}입니다.
+
+en: Thinnest wall {thinnest}; {thin} points under Min Wall (red).
+ko: 가장 얇은 벽은 {thinnest}입니다. 점 {thin}개가 Min Wall보다 얇습니다(빨강).
+
+en: {close} inside points too close to the face (orange): Refit Inside.
+ko: 안쪽 점 {close}개가 얼굴에 너무 가깝습니다(주황). Refit Inside를 사용하세요.
+
+en: How far the inside sits off the skin: room for comfort and padding. Double tap to type a length.
+ko: 안쪽이 피부에서 얼마나 떨어지는지 정합니다. 편안함과 패딩을 위한 여유입니다. 두 번 탭하면 길이를 입력할 수 있습니다.
+
+en: The thinnest wall you want to print. Thinner places show red. Double tap to type a length.
+ko: 출력하려는 가장 얇은 벽입니다. 더 얇은 곳은 빨갛게 표시됩니다. 두 번 탭하면 길이를 입력할 수 있습니다.
+
+en: Check a mask to wear against the head it goes on, and put its inside back to fit after sculpting.
+ko: 쓰는 마스크를 맞는 머리에 대어 확인하고, 스컬프팅한 뒤 안쪽을 다시 맞춥니다.
+
+en: Red: wall thinner than Min Wall. Orange: inside too close to the face. Refit Inside fixes the fit.
+ko: 빨강: Min Wall보다 얇은 벽. 주황: 안쪽이 얼굴에 너무 가까움. Refit Inside가 맞춤을 바로잡습니다.
+
+en: Select the mask's shell. The head it is worn on is checked against it.
+ko: 마스크의 셸을 선택하세요. 마스크를 쓰는 머리가 그것과 대조해 확인됩니다.
+
+en: Moves the inside of the mask back to the head plus the Gap. The outside, your sculpting, stays. One undo step (Ctrl+Z). Subdivision levels of the shell are not kept.
+ko: 마스크의 안쪽을 머리에 Gap을 더한 위치로 되돌립니다. 바깥쪽, 곧 스컬프팅한 부분은 그대로입니다. 실행 취소(Ctrl+Z) 한 단계로 되돌릴 수 있습니다. 셸의 서브디비전 레벨은 유지되지 않습니다.
+
+en: Puts the tool away. Nothing is changed by looking.
+ko: 도구를 닫습니다. 보기만 해서는 아무것도 바뀌지 않습니다.
+
+en: Making a mask: mask the area on the head, Extract it, sculpt the shell, then come here.
+ko: 마스크 만들기: 머리에서 영역을 마스크하고, Extract하고, 셸을 스컬프팅한 다음 여기로 오세요.
+
 en: Rulers that read real lengths in mm or inches: drag across the model to measure (L).
 ko: mm나 인치로 실제 길이를 재는 눈금자입니다. 모델 위를 드래그해 측정하세요(L).
 
@@ -4853,14 +4913,14 @@ ko: 미리보기: 삼각형 {0}개. 유지하려면 Accept를 누르세요.
 en: Mask an area first. Accept makes it a new object.
 ko: 먼저 영역을 마스크하세요. Accept를 누르면 새 오브젝트가 만들어집니다.
 
-en: How thick the extracted shell is, as a fraction of the object's size.
-ko: 추출된 셸의 두께를 오브젝트 크기에 대한 비율로 정합니다.
+en: How thick the extracted shell is. Double tap to type a length; Shift+drag for fine steps.
+ko: 추출한 셸의 두께입니다. 두 번 탭하면 길이를 입력할 수 있습니다. Shift+드래그로 세밀하게 조절합니다.
 
 en: Offset (sink <-> float)
 ko: Offset (가라앉음 <-> 뜸)
 
-en: Moves the extracted shell in or out relative to the masked surface.
-ko: 추출된 셸을 마스크된 표면 기준으로 안쪽 또는 바깥쪽으로 옮깁니다.
+en: Moves the extracted shell in or out relative to the masked surface. Double tap to type a length.
+ko: 추출한 셸을 마스크된 표면 기준으로 안쪽이나 바깥쪽으로 옮깁니다. 두 번 탭하면 길이를 입력할 수 있습니다.
 
 en: Edge Falloff (slab <-> feathered)
 ko: Edge Falloff (평판 <-> 페더링)

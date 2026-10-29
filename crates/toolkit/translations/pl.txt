@@ -3784,8 +3784,11 @@ pl: Dodawaj dalej, gdy kursor stoi w jednym miejscu. Dla każdego pędzla.
 en: How the pen answers your hand, for every brush. Higher needs a firmer press before pressure counts, which steadies light strokes; lower answers to the lightest touch. What pressure then changes (size, strength, and by how much) is set for each brush, in its own settings.
 pl: Jak pióro reaguje na twoją rękę, dla każdego pędzla. Wyżej potrzebuje mocniejszego nacisku, zanim nacisk się liczy, co stabilizuje lekkie pociągnięcia; niżej reaguje na najlżejszy dotyk. To, co nacisk wtedy zmienia (rozmiar, siłę i o ile), ustawia się dla każdego pędzla w jego własnych ustawieniach.
 
-en: No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line turns into a live bar. If it stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
-pl: Od uruchomienia GolemSculpt nie dotarł jeszcze żaden nacisk pióra. Dociśnij pióro do tabletu: ta linia zamieni się w żywy pasek. Jeśli nie, zaznacz „Enable Windows Ink” w sterowniku tabletu Huion, bo inaczej pióro działa jak mysz: pełna siła, pełny rozmiar.
+en: The tablet driver's WinTab channel is open, so pressure should arrive with Windows Ink on or off. If this line stays, take the pen out of mouse mode in the Huion tablet driver; until then the pen works as a mouse: full strength, full size.
+pl: Kanał WinTab sterownika tabletu jest otwarty, więc nacisk powinien docierać przy włączonym i wyłączonym Windows Ink. Jeśli ta linia zostaje, wyłącz tryb myszy dla pióra w sterowniku tabletu Huion; do tego czasu pióro działa jak mysz: pełna siła, pełny rozmiar.
+
+en: No WinTab tablet was found when GolemSculpt opened, so pressure can only come through Windows Ink: if this line stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
+pl: Po uruchomieniu GolemSculpt nie znaleziono tabletu WinTab, więc nacisk może docierać tylko przez Windows Ink: jeśli ta linia zostaje, zaznacz „Enable Windows Ink” w sterowniku tabletu Huion, bo inaczej pióro działa jak mysz: pełna siła, pełny rozmiar.
 
 en: Of the selected object, "{0}".
 pl: Zaznaczonego obiektu „{0}”.
@@ -4645,6 +4648,63 @@ pl: Kontur przecina samego siebie, więc powierzchnia przechodzi przez siebie.
 en: The curve swings across the axis between points - held just off it (a thin neck).
 pl: Krzywa przechodzi przez oś między punktami – trzymana tuż obok niej (cienka szyjka).
 
+en: Select the mask's shell.
+pl: Zaznacz powłokę maski.
+
+en: Needs the head the mask is worn on, overlapping the mask: import it (Mask Head.stl) or move it under the mask.
+pl: Potrzebna jest głowa, na której nosi się maskę, nachodząca na maskę: zaimportuj ją (Mask Head.stl) albo umieść pod maską.
+
+en: The head has gone.
+pl: Głowy już nie ma.
+
+en: No part of the selected object faces the head closely enough to be a mask's inside. Select the shell, with the head under it.
+pl: Żadna część zaznaczonego obiektu nie jest zwrócona ku głowie dość blisko, by być wnętrzem maski. Zaznacz powłokę z głową pod nią.
+
+en: Still checking the mask; Refit again in a moment.
+pl: Maska wciąż jest sprawdzana; użyj Refit ponownie za chwilę.
+
+en: Refitted the inside: {count} points now sit {gap} off the head. Undo (Ctrl+Z) puts them back.
+pl: Wnętrze dopasowane ponownie: {count} wierzchołków leży teraz {gap} od głowy. Cofnij (Ctrl+Z) przywraca je na miejsce.
+
+en: The inside could not be refitted.
+pl: Nie udało się ponownie dopasować wnętrza.
+
+en: Checking the mask...
+pl: Sprawdzanie maski...
+
+en: Wall fine everywhere: thinnest {thinnest}.
+pl: Ścianka wszędzie w porządku: najcieńsza {thinnest}.
+
+en: Thinnest wall {thinnest}; {thin} points under Min Wall (red).
+pl: Najcieńsza ścianka {thinnest}; {thin} wierzchołków poniżej Min Wall (czerwone).
+
+en: {close} inside points too close to the face (orange): Refit Inside.
+pl: {close} wierzchołków wnętrza zbyt blisko twarzy (pomarańczowe): Refit Inside.
+
+en: How far the inside sits off the skin: room for comfort and padding. Double tap to type a length.
+pl: Jak daleko od skóry leży wnętrze: miejsce na wygodę i wyściółkę. Stuknij dwukrotnie, aby wpisać długość.
+
+en: The thinnest wall you want to print. Thinner places show red. Double tap to type a length.
+pl: Najcieńsza ścianka, jaką chcesz wydrukować. Cieńsze miejsca są czerwone. Stuknij dwukrotnie, aby wpisać długość.
+
+en: Check a mask to wear against the head it goes on, and put its inside back to fit after sculpting.
+pl: Sprawdź maskę do noszenia względem głowy, na którą pasuje, i po rzeźbieniu przywróć jej wnętrze do dopasowania.
+
+en: Red: wall thinner than Min Wall. Orange: inside too close to the face. Refit Inside fixes the fit.
+pl: Czerwone: ścianka cieńsza niż Min Wall. Pomarańczowe: wnętrze zbyt blisko twarzy. Refit Inside naprawia dopasowanie.
+
+en: Select the mask's shell. The head it is worn on is checked against it.
+pl: Zaznacz powłokę maski. Głowa, na której się ją nosi, jest sprawdzana względem niej.
+
+en: Moves the inside of the mask back to the head plus the Gap. The outside, your sculpting, stays. One undo step (Ctrl+Z). Subdivision levels of the shell are not kept.
+pl: Przesuwa wnętrze maski z powrotem do głowy plus Gap. Zewnętrze, czyli twoja rzeźba, zostaje. Jeden krok cofnięcia (Ctrl+Z). Poziomy podziału powłoki nie są zachowywane.
+
+en: Puts the tool away. Nothing is changed by looking.
+pl: Odkłada narzędzie. Samo patrzenie niczego nie zmienia.
+
+en: Making a mask: mask the area on the head, Extract it, sculpt the shell, then come here.
+pl: Robienie maski: zamaskuj obszar na głowie, użyj Extract, wyrzeźb powłokę, potem wróć tutaj.
+
 en: Rulers that read real lengths in mm or inches: drag across the model to measure (L).
 pl: Linijki pokazujące rzeczywiste długości w mm lub calach: przeciągnij po modelu, aby zmierzyć (L).
 
@@ -4855,14 +4915,14 @@ pl: Podgląd: {0} trójkątów. Użyj Accept, aby zachować.
 en: Mask an area first. Accept makes it a new object.
 pl: Najpierw zamaskuj obszar. Accept zamienia go w nowy obiekt.
 
-en: How thick the extracted shell is, as a fraction of the object's size.
-pl: Jak gruba jest wyodrębniona powłoka, jako ułamek rozmiaru obiektu.
+en: How thick the extracted shell is. Double tap to type a length; Shift+drag for fine steps.
+pl: Jak gruba jest wyciągnięta powłoka. Stuknij dwukrotnie, aby wpisać długość; Shift+przeciągnij dla drobnych kroków.
 
 en: Offset (sink <-> float)
 pl: Offset (sink <-> float)
 
-en: Moves the extracted shell in or out relative to the masked surface.
-pl: Przesuwa wyodrębnioną powłokę do środka lub na zewnątrz względem zamaskowanej powierzchni.
+en: Moves the extracted shell in or out relative to the masked surface. Double tap to type a length.
+pl: Przesuwa wyciągniętą powłokę do wewnątrz lub na zewnątrz względem zamaskowanej powierzchni. Stuknij dwukrotnie, aby wpisać długość.
 
 en: Edge Falloff (slab <-> feathered)
 pl: Edge Falloff (slab <-> feathered)

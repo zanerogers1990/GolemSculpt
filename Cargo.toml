@@ -27,6 +27,7 @@ sculpt-array = { path = "crates/array" }
 sculpt-cut = { path = "crates/cut" }
 sculpt-geom = { path = "crates/geom" }
 sculpt-hands = { path = "crates/hands" }
+sculpt-maskfit = { path = "crates/maskfit" }
 sculpt-keys = { path = "crates/keys" }
 sculpt-lathe = { path = "crates/lathe" }
 sculpt-measure = { path = "crates/measure" }
@@ -101,6 +102,7 @@ members = [
     "crates/region",
     "crates/multires",
     "crates/hands",
+    "crates/maskfit",
     "crates/uv",
 ]
 

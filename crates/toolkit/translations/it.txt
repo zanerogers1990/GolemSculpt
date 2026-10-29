@@ -3783,8 +3783,11 @@ it: Continua ad aggiungere mentre il puntatore resta fermo in un punto. Per ogni
 en: How the pen answers your hand, for every brush. Higher needs a firmer press before pressure counts, which steadies light strokes; lower answers to the lightest touch. What pressure then changes (size, strength, and by how much) is set for each brush, in its own settings.
 it: Come la penna risponde alla tua mano, per ogni pennello. Più alto richiede una pressione più decisa prima che la pressione conti, il che stabilizza le pennellate leggere; più basso risponde al tocco più leggero. Cosa cambia poi la pressione (dimensione, intensità, e di quanto) si imposta per ogni pennello, nelle sue impostazioni.
 
-en: No pen pressure has arrived yet since GolemSculpt opened. Press the pen on the tablet: this line turns into a live bar. If it stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
-it: Da quando GolemSculpt è stato aperto non è ancora arrivata alcuna pressione della penna. Premi la penna sulla tavoletta: questa riga diventa una barra in tempo reale. Se resta così, spunta «Enable Windows Ink» nel driver della tavoletta Huion, altrimenti la penna funziona come un mouse: intensità piena, dimensione piena.
+en: The tablet driver's WinTab channel is open, so pressure should arrive with Windows Ink on or off. If this line stays, take the pen out of mouse mode in the Huion tablet driver; until then the pen works as a mouse: full strength, full size.
+it: Il canale WinTab del driver della tavoletta è aperto, quindi la pressione dovrebbe arrivare con Windows Ink attivo o no. Se questa riga resta, togli la penna dalla modalità mouse nel driver della tavoletta Huion; fino ad allora la penna funziona come un mouse: intensità piena, dimensione piena.
+
+en: No WinTab tablet was found when GolemSculpt opened, so pressure can only come through Windows Ink: if this line stays, tick "Enable Windows Ink" in the Huion tablet driver, or the pen works as a mouse: full strength, full size.
+it: All'apertura di GolemSculpt non è stata trovata nessuna tavoletta WinTab, quindi la pressione può arrivare solo da Windows Ink: se questa riga resta, spunta «Enable Windows Ink» nel driver della tavoletta Huion, altrimenti la penna funziona come un mouse: intensità piena, dimensione piena.
 
 en: Of the selected object, "{0}".
 it: Dell'oggetto selezionato, «{0}».
@@ -4644,6 +4647,63 @@ it: Il contorno si incrocia, quindi la superficie attraversa se stessa.
 en: The curve swings across the axis between points - held just off it (a thin neck).
 it: La curva oscilla attraverso l'asse tra i punti – tenuta appena fuori da esso (un collo sottile).
 
+en: Select the mask's shell.
+it: Seleziona il guscio della maschera.
+
+en: Needs the head the mask is worn on, overlapping the mask: import it (Mask Head.stl) or move it under the mask.
+it: Serve la testa su cui si indossa la maschera, sovrapposta alla maschera: importala (Mask Head.stl) o mettila sotto la maschera.
+
+en: The head has gone.
+it: La testa non c'è più.
+
+en: No part of the selected object faces the head closely enough to be a mask's inside. Select the shell, with the head under it.
+it: Nessuna parte dell'oggetto selezionato è abbastanza vicina alla testa da essere l'interno di una maschera. Seleziona il guscio, con la testa sotto.
+
+en: Still checking the mask; Refit again in a moment.
+it: Sto ancora controllando la maschera; usa di nuovo Refit tra un momento.
+
+en: Refitted the inside: {count} points now sit {gap} off the head. Undo (Ctrl+Z) puts them back.
+it: Interno riadattato: {count} vertici ora stanno a {gap} dalla testa. Undo (Ctrl+Z) li rimette com'erano.
+
+en: The inside could not be refitted.
+it: Non è stato possibile riadattare l'interno.
+
+en: Checking the mask...
+it: Controllo della maschera...
+
+en: Wall fine everywhere: thinnest {thinnest}.
+it: Parete a posto ovunque: la più sottile è {thinnest}.
+
+en: Thinnest wall {thinnest}; {thin} points under Min Wall (red).
+it: Parete più sottile {thinnest}; {thin} vertici sotto Min Wall (rosso).
+
+en: {close} inside points too close to the face (orange): Refit Inside.
+it: {close} vertici dell'interno troppo vicini al viso (arancione): Refit Inside.
+
+en: How far the inside sits off the skin: room for comfort and padding. Double tap to type a length.
+it: Quanto l'interno sta lontano dalla pelle: spazio per comfort e imbottitura. Doppio tocco per digitare una lunghezza.
+
+en: The thinnest wall you want to print. Thinner places show red. Double tap to type a length.
+it: La parete più sottile che vuoi stampare. I punti più sottili appaiono in rosso. Doppio tocco per digitare una lunghezza.
+
+en: Check a mask to wear against the head it goes on, and put its inside back to fit after sculpting.
+it: Controlla una maschera da indossare rispetto alla testa su cui va, e rimetti a misura il suo interno dopo aver scolpito.
+
+en: Red: wall thinner than Min Wall. Orange: inside too close to the face. Refit Inside fixes the fit.
+it: Rosso: parete più sottile di Min Wall. Arancione: interno troppo vicino al viso. Refit Inside sistema l'adattamento.
+
+en: Select the mask's shell. The head it is worn on is checked against it.
+it: Seleziona il guscio della maschera. La testa su cui si indossa viene controllata rispetto ad esso.
+
+en: Moves the inside of the mask back to the head plus the Gap. The outside, your sculpting, stays. One undo step (Ctrl+Z). Subdivision levels of the shell are not kept.
+it: Riporta l'interno della maschera alla testa più il Gap. L'esterno, la tua scultura, resta. Un solo passo di Undo (Ctrl+Z). I livelli di suddivisione del guscio non vengono mantenuti.
+
+en: Puts the tool away. Nothing is changed by looking.
+it: Mette via lo strumento. Guardare non cambia nulla.
+
+en: Making a mask: mask the area on the head, Extract it, sculpt the shell, then come here.
+it: Per fare una maschera: maschera l'area sulla testa, usa Extract, scolpisci il guscio, poi vieni qui.
+
 en: Rulers that read real lengths in mm or inches: drag across the model to measure (L).
 it: Righelli che leggono lunghezze reali in mm o pollici: trascina attraverso il modello per misurare (L).
 
@@ -4854,14 +4914,14 @@ it: Anteprima: {0} triangoli. Premi Accept per conservare.
 en: Mask an area first. Accept makes it a new object.
 it: Maschera prima un'area. Accept ne fa un nuovo oggetto.
 
-en: How thick the extracted shell is, as a fraction of the object's size.
-it: Quanto è spesso il guscio estratto, come frazione della dimensione dell'oggetto.
+en: How thick the extracted shell is. Double tap to type a length; Shift+drag for fine steps.
+it: Quanto è spesso il guscio estratto. Doppio tocco per digitare una lunghezza; Shift+trascina per passi fini.
 
 en: Offset (sink <-> float)
 it: Offset (affonda <-> fluttua)
 
-en: Moves the extracted shell in or out relative to the masked surface.
-it: Sposta il guscio estratto dentro o fuori rispetto alla superficie mascherata.
+en: Moves the extracted shell in or out relative to the masked surface. Double tap to type a length.
+it: Sposta il guscio estratto verso l'interno o l'esterno rispetto alla superficie mascherata. Doppio tocco per digitare una lunghezza.
 
 en: Edge Falloff (slab <-> feathered)
 it: Edge Falloff (lastra <-> sfumato)

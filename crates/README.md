@@ -18,6 +18,7 @@ else's build.
 | `measure` | `sculpt-measure` | The Measure tool: the first tool written against the toolkit. |
 | `tube` | `sculpt-tube` | The Tube tool: tubes drawn along curves and fused into the model. |
 | `hands` | `sculpt-hands` | The Hand & Foot tool: hands and feet built from sliders and poses, accepted as a base to sculpt. |
+| `maskfit` | `sculpt-maskfit` | The Mask Fit tool: a mask to wear checked against the head it goes on (thin walls, an inside too close to the face) and its inside refitted to the head after sculpting. |
 | `keys` | `sculpt-keys` | The Keys tool: joints that register the pieces of a split model. |
 | `region` | `sculpt-region` | The region tools: box and lasso select, hide, mask, trim and split, and mask extract. |
 | `uv` | `sculpt-uv` | UVs made for a mesh that has none: charts cut along normals and face groups, laid flat (LSCM, then ARAP, by the `uvunwrap` crate) and packed into the square, each polygon kept whole. |
