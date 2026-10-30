@@ -5191,8 +5191,32 @@ ru: Живых: {count} {one}{0}, из них в пустом пространс
 en: {count} live {one}{0}.
 ru: Живых: {count} {one}{0}.
 
-en: Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's).
-ru: Симметрия выбранного объекта: {symmetry}. {one} создаётся с симметрией объекта, на котором нарисован (карточка Symmetry на вкладке Mesh панели Sculpt показывает симметрию выбранного объекта).
+en: Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.
+ru: Mirror {axis} включено для {name}: элементы ({many}) на нём создаются отражёнными по {axis}.
+
+en: Mirror {axis} off for {name}.
+ru: Mirror {axis} выключено для {name}.
+
+en: Mirror off for {name}: its {many} are made once.
+ru: Mirror выключено для {name}: элементы ({many}) на нём создаются один раз.
+
+en: Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ru: Отражение по X: то, что вы рисуете, создаётся и с другой стороны, слева направо. X, Y и Z можно включить вместе. Это симметрия объекта, на котором рисуют, поэтому его кисти отражают так же.
+
+en: Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ru: Отражение по Y: то, что вы рисуете, создаётся и с другой стороны, сверху вниз. X, Y и Z можно включить вместе. Это симметрия объекта, на котором рисуют, поэтому его кисти отражают так же.
+
+en: Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ru: Отражение по Z: то, что вы рисуете, создаётся и с другой стороны, спереди назад. X, Y и Z можно включить вместе. Это симметрия объекта, на котором рисуют, поэтому его кисти отражают так же.
+
+en: For {name}, the object the selected {one} is on. Clicking selects it.
+ru: Для {name} — объекта, на котором лежит выбранный элемент ({one}). Щелчок выбирает его.
+
+en: Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry card on the Sculpt panel's Mesh tab shows the same).
+ru: Симметрия выбранного объекта: {symmetry}. Нарисованные на нём элементы ({many}) создаются с ней (карточка Symmetry на вкладке Mesh панели Sculpt показывает то же).
+
+en: Mirror is off for the selected object: each {one} is made once.
+ru: Mirror выключено для выбранного объекта: каждый элемент ({one}) создаётся один раз.
 
 en: The stroke sticks to the model, half sunk into it: veins, ridges, tails draped along a body. Dragged points slide over the surface.
 ru: Мазок прилипает к модели, наполовину утопая в ней: вены, гребни, хвосты, лежащие вдоль тела. Перетаскиваемые точки скользят по поверхности.

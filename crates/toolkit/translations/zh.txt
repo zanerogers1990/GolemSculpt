@@ -5191,8 +5191,32 @@ zh: {count} 个实时的 {one}{0}，其中 {1} 个在空白处（只能用 Keep 
 en: {count} live {one}{0}.
 zh: {count} 个实时的 {one}{0}。
 
-en: Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's).
-zh: 所选物体的对称：{symmetry}。{one} 会按它所画在的物体的对称来生成（Sculpt 面板 Mesh 选项卡上的 Symmetry 卡片会显示所选物体的对称）。
+en: Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.
+zh: {name} 的 Mirror {axis} 已开启：其上的{many}沿 {axis} 镜像生成。
+
+en: Mirror {axis} off for {name}.
+zh: {name} 的 Mirror {axis} 已关闭。
+
+en: Mirror off for {name}: its {many} are made once.
+zh: {name} 的 Mirror 已关闭：其上的{many}只生成一次。
+
+en: Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+zh: 沿 X 镜像：你画的内容也会在另一侧生成（左右）。X、Y、Z 可以同时开启。这是所画物体的对称设置，因此它的笔刷也会同样镜像。
+
+en: Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+zh: 沿 Y 镜像：你画的内容也会在另一侧生成（上下）。X、Y、Z 可以同时开启。这是所画物体的对称设置，因此它的笔刷也会同样镜像。
+
+en: Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+zh: 沿 Z 镜像：你画的内容也会在另一侧生成（前后）。X、Y、Z 可以同时开启。这是所画物体的对称设置，因此它的笔刷也会同样镜像。
+
+en: For {name}, the object the selected {one} is on. Clicking selects it.
+zh: 用于 {name}，即所选{one}所在的物体。点击会选中它。
+
+en: Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry card on the Sculpt panel's Mesh tab shows the same).
+zh: 所选物体的对称：{symmetry}。画在它上面的{many}按此对称生成（Sculpt 面板 Mesh 选项卡上的 Symmetry 卡片显示相同内容）。
+
+en: Mirror is off for the selected object: each {one} is made once.
+zh: 所选物体的 Mirror 已关闭：每个{one}只生成一次。
 
 en: The stroke sticks to the model, half sunk into it: veins, ridges, tails draped along a body. Dragged points slide over the surface.
 zh: 笔触会贴在模型上，一半沉入其中：适合血管、脊线、搭在身体上的尾巴。拖动的点会在表面上滑动。

@@ -5189,8 +5189,32 @@ ko: 라이브 상태: {count} {one}{0}, 그중 {1}개는 빈 공간에 있음 (K
 en: {count} live {one}{0}.
 ko: 라이브 상태: {count} {one}{0}.
 
-en: Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's).
-ko: 선택한 오브젝트의 대칭: {symmetry}. {one} 하나는 그려지는 오브젝트의 대칭을 따라 만들어집니다(Sculpt 패널 Mesh 탭의 Symmetry 카드에서 선택한 오브젝트의 대칭을 볼 수 있습니다).
+en: Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.
+ko: {name}의 Mirror {axis} 켜짐: 그 위의 {many}는 {axis}를 기준으로 미러되어 만들어집니다.
+
+en: Mirror {axis} off for {name}.
+ko: {name}의 Mirror {axis} 꺼짐.
+
+en: Mirror off for {name}: its {many} are made once.
+ko: {name}의 Mirror 꺼짐: 그 위의 {many}는 한 번만 만들어집니다.
+
+en: Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ko: X 기준 미러: 그린 것이 반대쪽에도 만들어집니다(좌우). X, Y, Z는 함께 켤 수 있습니다. 그리는 오브젝트의 대칭이므로 그 브러시도 같은 방식으로 미러됩니다.
+
+en: Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ko: Y 기준 미러: 그린 것이 반대쪽에도 만들어집니다(위아래). X, Y, Z는 함께 켤 수 있습니다. 그리는 오브젝트의 대칭이므로 그 브러시도 같은 방식으로 미러됩니다.
+
+en: Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ko: Z 기준 미러: 그린 것이 반대쪽에도 만들어집니다(앞뒤). X, Y, Z는 함께 켤 수 있습니다. 그리는 오브젝트의 대칭이므로 그 브러시도 같은 방식으로 미러됩니다.
+
+en: For {name}, the object the selected {one} is on. Clicking selects it.
+ko: {name}용: 선택한 {one}가 놓인 오브젝트입니다. 클릭하면 선택됩니다.
+
+en: Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry card on the Sculpt panel's Mesh tab shows the same).
+ko: 선택한 오브젝트의 대칭: {symmetry}. 그 위에 그린 {many}는 이 대칭으로 만들어집니다(Sculpt 패널 Mesh 탭의 Symmetry 카드에도 같은 내용이 표시됩니다).
+
+en: Mirror is off for the selected object: each {one} is made once.
+ko: 선택한 오브젝트의 Mirror가 꺼져 있습니다: 각 {one}는 한 번만 만들어집니다.
 
 en: The stroke sticks to the model, half sunk into it: veins, ridges, tails draped along a body. Dragged points slide over the surface.
 ko: 스트로크가 모델에 반쯤 파묻힌 채 붙습니다. 핏줄, 능선, 몸을 따라 늘어진 꼬리 등에 알맞습니다. 드래그한 점은 표면 위를 미끄러집니다.

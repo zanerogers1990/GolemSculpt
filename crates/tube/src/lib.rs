@@ -14,6 +14,8 @@
 //! symmetry, so one stroke with X mirroring on makes both arms, and one with
 //! radial symmetry on makes a tube for each repeat round the axis (twice as
 //! many with a mirror as well).
+//! The panel's Mirror X / Y / Z buttons switch that object's mirror axes
+//! (any mix of them) without a trip to the Symmetry card.
 //!
 //! While the tool is up it has the pointer:
 //!

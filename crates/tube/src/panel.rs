@@ -5,7 +5,7 @@
 use egui::Color32;
 use sculpt_geom::units;
 use sculpt_toolkit::theme::{self, ACCENT, ButtonStyle};
-use sculpt_toolkit::{Ctx, Env};
+use sculpt_toolkit::{Command, Ctx, Env, ObjectId};
 
 use crate::tool::TubeTool;
 use crate::types::{CapStyle, Kind, TubeSettings};
@@ -81,6 +81,7 @@ impl TubeTool {
         let summary = if count == 0 { String::new() } else { format!("{count} live") };
         theme::category(ui, title, if muscle { ACCENT_MUSCLE } else { ACCENT_TUBE }, &summary, true, |ui| {
             self.finish_rows(ui, cx);
+            self.mirror_row(ui, cx);
             if muscle {
                 self.muscle_controls(ui, cx);
             } else {
@@ -184,13 +185,79 @@ impl TubeTool {
             _ => format!("{count} live {one}{}.", plural(count)),
         };
         theme::line(ui, &line, theme::HINT());
-        if let Some(symmetry) = symmetry_summary(cx) {
-            let text = format!(
-                "Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is \
-                 drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's)."
-            );
-            theme::hint(ui, &text);
+    }
+
+    /// The object whose mirror axes the Mirror buttons switch: the one the
+    /// selected tube was drawn on, else the selected object, which is what
+    /// the next tube is drawn on when it starts off the model.
+    pub(crate) fn mirror_target(&self, cx: &Ctx) -> ObjectId {
+        let anchor = self.active_tube().and_then(|tube| self.tubes[tube].state.anchor);
+        anchor.filter(|&a| cx.scene().exists(a)).unwrap_or_else(|| cx.scene().active())
+    }
+
+    /// Switches mirroring across one axis (0 X, 1 Y, 2 Z) on the object the
+    /// tubes are made on. It is the Symmetry card's setting, so the brushes
+    /// on that object follow it too, and like those ticks it is not an undo
+    /// step. That object is selected first if it was not.
+    pub(crate) fn toggle_mirror(&mut self, cx: &mut Ctx, axis: usize) {
+        let target = self.mirror_target(cx);
+        if target != cx.scene().active() {
+            cx.commit("Select", vec![Command::Select { object: target }]);
         }
+        let mut mirror = cx.mirror;
+        mirror[axis] = !mirror[axis];
+        cx.set_mirror(mirror);
+        let name = cx.scene().info(target).map(|info| info.name.to_owned()).unwrap_or_default();
+        let (on, many, axis) = (mirror[axis], self.kind().many(), ["X", "Y", "Z"][axis]);
+        self.say(if on {
+            format!("Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.")
+        } else if mirror.contains(&true) {
+            format!("Mirror {axis} off for {name}.")
+        } else {
+            format!("Mirror off for {name}: its {many} are made once.")
+        });
+    }
+
+    /// Mirror X / Y / Z for the object the tubes are made on, and what
+    /// symmetry that is.
+    fn mirror_row(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
+        let kind = self.kind();
+        let (one, many) = (kind.one(), kind.many());
+        theme::heading(ui, "Mirror");
+        let target = self.mirror_target(cx);
+        let mirror = cx.symmetry_of(target).mirror;
+        let mut clicked = None;
+        ui.horizontal(|ui| {
+            let w = theme::row_width(ui, 3, 6.0);
+            // Whole sentences, each its own literal: a tooltip is translated by its whole English text.
+            let tips = [
+                "Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on \
+                 together. It is the drawn-on object's symmetry, so its brushes mirror the same way.",
+                "Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on \
+                 together. It is the drawn-on object's symmetry, so its brushes mirror the same way.",
+                "Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on \
+                 together. It is the drawn-on object's symmetry, so its brushes mirror the same way.",
+            ];
+            for (axis, (label, tip)) in ["X", "Y", "Z"].into_iter().zip(tips).enumerate() {
+                let style = ButtonStyle { active: mirror[axis].then_some(ACCENT()), height: 24.0, ..Default::default() };
+                if theme::tip(theme::button(ui, w, label, style), cx.tips, tip).clicked() {
+                    clicked = Some(axis);
+                }
+            }
+        });
+        if let Some(axis) = clicked {
+            self.toggle_mirror(cx, axis);
+        }
+        let elsewhere = (target != cx.scene().active()).then(|| cx.scene().info(target).map(|info| info.name.to_owned()));
+        let text = match (elsewhere.flatten(), symmetry_summary(cx)) {
+            (Some(name), _) => format!("For {name}, the object the selected {one} is on. Clicking selects it."),
+            (None, Some(symmetry)) => format!(
+                "Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry \
+                 card on the Sculpt panel's Mesh tab shows the same)."
+            ),
+            (None, None) => format!("Mirror is off for the selected object: each {one} is made once."),
+        };
+        theme::hint(ui, &text);
     }
 
     /// Placement, ends and the whole-tube sliders. They edit the selected

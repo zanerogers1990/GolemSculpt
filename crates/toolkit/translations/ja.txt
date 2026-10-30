@@ -5191,8 +5191,32 @@ ja: ライブの {count} {one}{0}。うち {1} は何もない空間にありま
 en: {count} live {one}{0}.
 ja: ライブの {count} {one}{0}。
 
-en: Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's).
-ja: 選択中のオブジェクトのシンメトリ: {symmetry}。{one} は、描いたオブジェクトのシンメトリに従って作られます(選択中のオブジェクトのシンメトリは、Sculpt パネルの Mesh タブにある Symmetry カードで確認できます)。
+en: Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.
+ja: {name} の Mirror {axis} オン: その上の{many}は {axis} でミラーされて作られます。
+
+en: Mirror {axis} off for {name}.
+ja: {name} の Mirror {axis} オフ。
+
+en: Mirror off for {name}: its {many} are made once.
+ja: {name} の Mirror オフ: その上の{many}は一度だけ作られます。
+
+en: Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ja: X でミラー: 描いたものが反対側にも作られます(左右)。X、Y、Z は同時にオンにできます。描いているオブジェクトのシンメトリーなので、そのブラシも同じようにミラーします。
+
+en: Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ja: Y でミラー: 描いたものが反対側にも作られます(上下)。X、Y、Z は同時にオンにできます。描いているオブジェクトのシンメトリーなので、そのブラシも同じようにミラーします。
+
+en: Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+ja: Z でミラー: 描いたものが反対側にも作られます(前後)。X、Y、Z は同時にオンにできます。描いているオブジェクトのシンメトリーなので、そのブラシも同じようにミラーします。
+
+en: For {name}, the object the selected {one} is on. Clicking selects it.
+ja: {name} 用: 選択中の{one}が載っているオブジェクトです。クリックすると選択されます。
+
+en: Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry card on the Sculpt panel's Mesh tab shows the same).
+ja: 選択中のオブジェクトのシンメトリー: {symmetry}。その上に描いた{many}はこれに従って作られます(Sculpt パネルの Mesh タブにある Symmetry カードにも同じものが表示されます)。
+
+en: Mirror is off for the selected object: each {one} is made once.
+ja: 選択中のオブジェクトの Mirror はオフです: 各{one}は一度だけ作られます。
 
 en: The stroke sticks to the model, half sunk into it: veins, ridges, tails draped along a body. Dragged points slide over the surface.
 ja: ストロークはモデルに貼り付き、半分沈みます。血管、稜線、体に沿わせたしっぽなどに使えます。ドラッグした点は、サーフェス上をスライドします。

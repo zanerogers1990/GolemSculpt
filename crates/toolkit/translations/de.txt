@@ -5191,8 +5191,32 @@ de: {count} Live-Elemente ({one}{0}), {1} im leeren Raum (nur Keep Separate).
 en: {count} live {one}{0}.
 de: {count} Live-Elemente ({one}{0}).
 
-en: Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's).
-de: Symmetrie des ausgewählten Objekts: {symmetry}. Ein Element ({one}) wird unter der Symmetrie des Objekts erzeugt, auf dem es gezeichnet wird (die Karte Symmetry im Reiter Mesh des Panels Sculpt zeigt die des ausgewählten Objekts).
+en: Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.
+de: Mirror {axis} für {name} an: die Elemente ({many}) darauf werden über {axis} gespiegelt erzeugt.
+
+en: Mirror {axis} off for {name}.
+de: Mirror {axis} für {name} aus.
+
+en: Mirror off for {name}: its {many} are made once.
+de: Mirror für {name} aus: die Elemente ({many}) darauf werden nur einmal erzeugt.
+
+en: Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+de: Spiegeln über X: Was du zeichnest, entsteht auch auf der anderen Seite, von links nach rechts. X, Y und Z können zusammen an sein. Es ist die Symmetrie des Objekts, auf dem gezeichnet wird, daher spiegeln dessen Pinsel genauso.
+
+en: Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+de: Spiegeln über Y: Was du zeichnest, entsteht auch auf der anderen Seite, von oben nach unten. X, Y und Z können zusammen an sein. Es ist die Symmetrie des Objekts, auf dem gezeichnet wird, daher spiegeln dessen Pinsel genauso.
+
+en: Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+de: Spiegeln über Z: Was du zeichnest, entsteht auch auf der anderen Seite, von vorn nach hinten. X, Y und Z können zusammen an sein. Es ist die Symmetrie des Objekts, auf dem gezeichnet wird, daher spiegeln dessen Pinsel genauso.
+
+en: For {name}, the object the selected {one} is on. Clicking selects it.
+de: Für {name}, das Objekt, auf dem das ausgewählte Element ({one}) liegt. Ein Klick wählt es aus.
+
+en: Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry card on the Sculpt panel's Mesh tab shows the same).
+de: Symmetrie des ausgewählten Objekts: {symmetry}. Die darauf gezeichneten Elemente ({many}) werden unter ihr erzeugt (die Karte Symmetry im Reiter Mesh des Panels Sculpt zeigt dasselbe).
+
+en: Mirror is off for the selected object: each {one} is made once.
+de: Mirror ist für das ausgewählte Objekt aus: jedes Element ({one}) wird nur einmal erzeugt.
 
 en: The stroke sticks to the model, half sunk into it: veins, ridges, tails draped along a body. Dragged points slide over the surface.
 de: Der Strich haftet am Modell, halb darin versenkt: Adern, Grate, Schwänze, die sich an einem Körper entlangziehen. Gezogene Punkte gleiten über die Oberfläche.

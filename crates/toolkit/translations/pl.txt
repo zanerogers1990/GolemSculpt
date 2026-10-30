@@ -5191,8 +5191,32 @@ pl: Żywych: {count} ({one}{0}), z tego {1} w pustej przestrzeni (tylko Keep Sep
 en: {count} live {one}{0}.
 pl: Żywych: {count} ({one}{0}).
 
-en: Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's).
-pl: Symetria zaznaczonego obiektu: {symmetry}. Element ({one}) powstaje pod symetrią obiektu, na którym jest rysowany (karta Symmetry w zakładce Mesh panelu Sculpt pokazuje symetrię zaznaczonego obiektu).
+en: Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.
+pl: Mirror {axis} włączone dla {name}: elementy ({many}) na nim powstają odbite względem {axis}.
+
+en: Mirror {axis} off for {name}.
+pl: Mirror {axis} wyłączone dla {name}.
+
+en: Mirror off for {name}: its {many} are made once.
+pl: Mirror wyłączone dla {name}: elementy ({many}) na nim powstają tylko raz.
+
+en: Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+pl: Odbicie względem X: to, co rysujesz, powstaje też po drugiej stronie, z lewej na prawą. X, Y i Z mogą być włączone razem. To symetria obiektu, na którym rysujesz, więc jego pędzle odbijają tak samo.
+
+en: Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+pl: Odbicie względem Y: to, co rysujesz, powstaje też po drugiej stronie, z góry na dół. X, Y i Z mogą być włączone razem. To symetria obiektu, na którym rysujesz, więc jego pędzle odbijają tak samo.
+
+en: Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+pl: Odbicie względem Z: to, co rysujesz, powstaje też po drugiej stronie, z przodu do tyłu. X, Y i Z mogą być włączone razem. To symetria obiektu, na którym rysujesz, więc jego pędzle odbijają tak samo.
+
+en: For {name}, the object the selected {one} is on. Clicking selects it.
+pl: Dla {name}, obiektu, na którym leży zaznaczony element ({one}). Kliknięcie go zaznacza.
+
+en: Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry card on the Sculpt panel's Mesh tab shows the same).
+pl: Symetria zaznaczonego obiektu: {symmetry}. Narysowane na nim elementy ({many}) powstają zgodnie z nią (karta Symmetry na karcie Mesh panelu Sculpt pokazuje to samo).
+
+en: Mirror is off for the selected object: each {one} is made once.
+pl: Mirror jest wyłączone dla zaznaczonego obiektu: każdy element ({one}) powstaje tylko raz.
 
 en: The stroke sticks to the model, half sunk into it: veins, ridges, tails draped along a body. Dragged points slide over the surface.
 pl: Pociągnięcie przywiera do modelu, do połowy w niego zatopione: żyły, grzbiety, ogony ułożone wzdłuż ciała. Przeciągane punkty ślizgają się po powierzchni.

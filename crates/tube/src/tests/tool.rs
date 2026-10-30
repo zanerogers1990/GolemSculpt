@@ -483,6 +483,64 @@ fn a_tube_is_made_under_the_symmetry_of_the_object_it_is_drawn_on() {
     assert_eq!(bench.doc.symmetry(other).mirror, [false, true, true], "and the object that was selected keeps its own");
 }
 
+/// The panel's Mirror X / Y / Z: any mix of the three, shown in the preview
+/// at once, set on the object the tube is on (the same setting as the
+/// Symmetry card, so not an undo step), and merged as one step.
+#[test]
+fn the_panels_mirror_buttons_mirror_the_tube_across_any_mix_of_axes() {
+    let (mut bench, mut tool, body) = bench();
+    draw_horn(&mut bench, &mut tool);
+    assert_eq!(tool.copy_count(0), 1);
+    for (axis, mirror, copies) in [(0, [true, false, false], 2), (1, [true, true, false], 4), (2, [true, true, true], 8)] {
+        bench.call(|cx| tool.toggle_mirror(cx, axis));
+        assert_eq!(bench.doc.symmetry(body).mirror, mirror);
+        let draw = bench.frame(&mut tool);
+        assert_eq!(tool.copy_count(0), copies);
+        let mesh = preview_mesh(&draw, 0);
+        assert_eq!(shells(&mesh), copies, "the preview shows every copy");
+        for plane in (0..3).filter(|&a| mirror[a]) {
+            assert_eq!(unmatched_across(&mesh, plane).0, 0, "exactly symmetric across axis {plane}");
+        }
+    }
+    // Y off again leaves X and Z: four copies.
+    bench.call(|cx| tool.toggle_mirror(cx, 1));
+    bench.frame(&mut tool);
+    assert_eq!((bench.doc.symmetry(body).mirror, tool.copy_count(0)), ([true, false, true], 4));
+    assert!(status(&bench).starts_with("Mirror Y off for Body"), "{}", status(&bench));
+    assert_eq!(bench.doc.undo_steps(), 0, "switching mirrors is not an undo step");
+
+    assert!(bench.key(&mut tool, Key::Enter));
+    wait_for_merge(&mut bench, &mut tool);
+    assert_eq!((tool.tube_count(), bench.doc.undo_steps()), (0, 1), "the four copies merge as one step");
+    let merged = bench.doc.mesh(body).unwrap().to_tri_mesh();
+    assert_closed(&merged, "the body with its four horns");
+    assert_eq!(shells(&merged), 1);
+    for plane in [0, 2] {
+        let x = merged.positions.iter().map(|p| p[plane]).fold(f32::MIN, f32::max);
+        let y = merged.positions.iter().map(|p| -p[plane]).fold(f32::MIN, f32::max);
+        assert!((x - y).abs() < 0.02, "horns on both sides across axis {plane}: {x} and {y}");
+    }
+}
+
+/// With the selected tube on an object that is not the selected one, the
+/// buttons switch that object's mirror and select it, and leave the other's.
+#[test]
+fn the_mirror_buttons_switch_the_object_the_selected_tube_is_on() {
+    let (mut bench, mut tool, body) = bench();
+    draw_horn(&mut bench, &mut tool);
+    let other = bench.add("Other", cube(0.1));
+    let aside = Placement::at(Vec3::new(0.0, 1.4, 0.0));
+    bench.call(|cx| cx.commit("Place", vec![Command::Place { object: other, placement: aside }]));
+    assert_eq!(bench.doc.active(), other);
+    bench.call(|cx| assert_eq!(tool.mirror_target(cx), body));
+
+    bench.call(|cx| tool.toggle_mirror(cx, 0));
+    assert_eq!(bench.doc.active(), body, "the object the tube is on is selected");
+    assert_eq!((bench.doc.symmetry(body).mirror, bench.doc.symmetry(other).mirror), ([true, false, false], [false; 3]));
+    bench.frame(&mut tool);
+    assert_eq!(tool.copy_count(0), 2);
+}
+
 /// A symmetry fixed in the world, on an object that has been moved, turned
 /// and resized: the tube's copy is its mirror image across the world's plane,
 /// not across the object's own.

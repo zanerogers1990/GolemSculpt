@@ -5191,8 +5191,32 @@ es: {count} {one}{0} en vivo, {1} en el espacio vacío (solo Keep Separate).
 en: {count} live {one}{0}.
 es: {count} {one}{0} en vivo.
 
-en: Symmetry of the selected object: {symmetry}. A {one} is made under the symmetry of the object it is drawn on (the Symmetry card on the Sculpt panel's Mesh tab shows the selected object's).
-es: Simetría del objeto seleccionado: {symmetry}. Un {one} se crea bajo la simetría del objeto sobre el que se dibuja (la tarjeta Symmetry, en la pestaña Mesh del panel Sculpt, muestra la del objeto seleccionado).
+en: Mirror {axis} on for {name}: its {many} are made mirrored across {axis}.
+es: Mirror {axis} activado para {name}: sus {many} se crean reflejados a través de {axis}.
+
+en: Mirror {axis} off for {name}.
+es: Mirror {axis} desactivado para {name}.
+
+en: Mirror off for {name}: its {many} are made once.
+es: Mirror desactivado para {name}: sus {many} se crean una sola vez.
+
+en: Mirror across X: what you draw is also made on the other side, left to right. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+es: Reflejo a través de X: lo que dibujes también se crea al otro lado, de izquierda a derecha. X, Y y Z pueden estar activados a la vez. Es la simetría del objeto sobre el que se dibuja, así que sus pinceles reflejan igual.
+
+en: Mirror across Y: what you draw is also made on the other side, top to bottom. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+es: Reflejo a través de Y: lo que dibujes también se crea al otro lado, de arriba abajo. X, Y y Z pueden estar activados a la vez. Es la simetría del objeto sobre el que se dibuja, así que sus pinceles reflejan igual.
+
+en: Mirror across Z: what you draw is also made on the other side, front to back. X, Y and Z can be on together. It is the drawn-on object's symmetry, so its brushes mirror the same way.
+es: Reflejo a través de Z: lo que dibujes también se crea al otro lado, de delante hacia atrás. X, Y y Z pueden estar activados a la vez. Es la simetría del objeto sobre el que se dibuja, así que sus pinceles reflejan igual.
+
+en: For {name}, the object the selected {one} is on. Clicking selects it.
+es: Para {name}, el objeto sobre el que está el {one} seleccionado. Al hacer clic se selecciona.
+
+en: Symmetry of the selected object: {symmetry}. The {many} drawn on it are made under it (the Symmetry card on the Sculpt panel's Mesh tab shows the same).
+es: Simetría del objeto seleccionado: {symmetry}. Los {many} dibujados sobre él se crean bajo ella (la tarjeta Symmetry, en la pestaña Mesh del panel Sculpt, muestra lo mismo).
+
+en: Mirror is off for the selected object: each {one} is made once.
+es: Mirror está desactivado para el objeto seleccionado: cada {one} se crea una sola vez.
 
 en: The stroke sticks to the model, half sunk into it: veins, ridges, tails draped along a body. Dragged points slide over the surface.
 es: El trazo se pega al modelo, medio hundido en él: venas, crestas, colas recostadas a lo largo de un cuerpo. Los puntos arrastrados se deslizan sobre la superficie.
