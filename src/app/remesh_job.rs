@@ -47,6 +47,8 @@ struct Of {
     uid: u64,
     edits: u64,
     started: Instant,
+    /// Whether an uneven Scale was put into the mesh first.
+    evened: bool,
 }
 
 /// A remesh at work.
@@ -80,6 +82,9 @@ impl Running {
         if let Some(why) = self.remesh_refusal() {
             return self.status(why, false);
         }
+        // Voxels are cubes in the mesh's own space, so a stretched object
+        // would come back with stretched triangles.
+        let evened = self.even_scale_for_remesh();
         let doc = &self.doc;
         let resolution = doc.opts.remesh_resolution as u32;
         let smooth = doc.opts.remesh_smooth as u32;
@@ -95,7 +100,7 @@ impl Running {
             let census = printable::census(&mesh);
             Ok((mesh, notes, census))
         });
-        let of = Of { mesh: doc.scene.active_mesh(), uid: doc.mesh.uid, edits: doc.history.edits, started: Instant::now() };
+        let of = Of { mesh: doc.scene.active_mesh(), uid: doc.mesh.uid, edits: doc.history.edits, started: Instant::now(), evened };
         self.remesh.pending = Some(Pending { job, of });
         self.redraw = true;
     }
@@ -153,7 +158,10 @@ impl Running {
         self.toast("Remesh");
         let ms = pending.started.elapsed().as_secs_f64() * 1000.0;
         // What it did about holes the model had, then whether the result is closed.
-        let text = format!("Remeshed to {tris} triangles in {ms:.0} ms, both sides as they were.{}", notes.after_remesh());
+        let mut text = format!("Remeshed to {tris} triangles in {ms:.0} ms, both sides as they were.{}", notes.after_remesh());
+        if pending.evened {
+            text += " Its uneven Scale went into the mesh first, so the triangles come out even and brushes land round.";
+        }
         match printable::warning(&[(&name, census)], Cure::OtherResolution) {
             Some(warning) => self.status(format!("{text} {warning}"), false),
             None => self.status(text, true),

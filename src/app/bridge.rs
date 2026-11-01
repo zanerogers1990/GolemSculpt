@@ -620,6 +620,7 @@ impl Running {
                     "selected": doc.scene.is_selected(o.id),
                     "visible": o.visible,
                     "position": point(o.position),
+                    "scale": point(o.scale),
                     "size": point(size),
                     "triangles": mesh.map_or(0, |m| m.live_triangle_count()),
                     "vertices": mesh.map_or(0, |m| m.vertex_count()),
@@ -1000,6 +1001,7 @@ impl Running {
                 Action::MaskShape(shape, num(args, "amount").unwrap_or(cavity::DEFAULT_AMOUNT).clamp(0.0, 1.0))
             }
             "setorigintomesh" => Action::SetOriginToMesh,
+            "applyscale" => Action::ApplyScale,
             "clone" => Action::CloneObject,
             "instance" => Action::InstanceObject,
             "makeunique" => {

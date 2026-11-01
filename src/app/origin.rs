@@ -148,7 +148,7 @@ impl Running {
     /// The box round everything drawn for each of `objects`, in the world:
     /// the object, its live mirror copies and the copies of its array, one
     /// box for each place, in the scene's own order.
-    fn drawn_boxes(&self, objects: &[u64]) -> Vec<(Vec3, Vec3)> {
+    pub(super) fn drawn_boxes(&self, objects: &[u64]) -> Vec<(Vec3, Vec3)> {
         let (scene, slot) = (&self.doc.scene, &self.doc.mesh);
         let mut boxes = Vec::new();
         for object in objects.iter().filter_map(|&id| scene.get(id)) {

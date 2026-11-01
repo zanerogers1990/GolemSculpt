@@ -749,7 +749,7 @@ fn tools() -> Value {
                     &[
                         "undo", "redo", "remesh", "mask_invert", "mask_clear", "mask_blur", "mask_sharpen",
                         "mask_grow", "mask_shrink", "mask_recesses", "mask_peaks", "clone", "instance", "make_unique",
-                        "set_origin_to_mesh",
+                        "set_origin_to_mesh", "apply_scale",
                         "subdivide", "level", "level_up", "level_down", "delete_lower_levels", "delete_higher_levels",
                         "reconstruct_subdiv", "project_detail", "unwrap_uvs", "bake_maps",
                         "layer_new", "layer_record", "layer_strength", "layer_show", "layer_hide", "layer_rename",
@@ -766,6 +766,8 @@ fn tools() -> Value {
                      copy; instance adds a linked copy that shares the mesh; make_unique unlinks an instance. \
                      set_origin_to_mesh moves the object's centre (its pivot, and its own mirror planes) to the \
                      middle of its mesh without moving the object. \
+                     apply_scale puts an object's uneven scale into its mesh without changing how it looks, so \
+                     brushes and remeshing stop being stretched by it (remesh does this by itself first). \
                      mask_recesses masks what lies in creases and pits, and mask_peaks what stands proud, in place \
                      of the mask there is; follow either with mask_invert to sculpt only there. \
                      Subdivision levels (get_state gives each object's levels): subdivide adds a level with four \

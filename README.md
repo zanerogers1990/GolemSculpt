@@ -2952,8 +2952,14 @@ and its Live Mirror) and **Combine** (the booleans, Join and exporting the
 selection, shown once two or more objects are selected). A button that would
 do nothing is left out rather than greyed: Reset Shape appears once the
 object has been sculpted, Make Unique on an instance, Reset Rotation and
-Scale once it is turned or resized, Set Origin to Mesh once its centre is
-off its mesh. Live Mirror is three buttons, **Mirror X**, **Mirror Y** and
+Scale once it is turned or resized, Apply Scale once it is stretched more one
+way than another, Set Origin to Mesh once its centre is off its mesh. **Apply
+Scale** puts the stretch into the mesh and nothing changes on screen: a brush
+works in the mesh's own space, so on a stretched object it lands stretched
+whatever the ring shows, and Remesh makes stretched triangles. Remesh applies
+it first by itself, as its own undo step, unless the object has something that
+refuses it (subdivision levels, sculpt layers, unmerged tubes or keys, an
+attached SSphere rig). Live Mirror is three buttons, **Mirror X**, **Mirror Y** and
 **Mirror Z**, until the object is mirrored; then ticks for the planes it is
 mirrored across, with Validate and Remove.
 

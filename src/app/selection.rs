@@ -339,6 +339,8 @@ impl Running {
         let doc = &mut self.doc;
         doc.scene.aim_brush(target, copy);
         self.local = self.view.local_to(doc.scene.brush_matrix());
+        self.warn_if_stretched();
+        let doc = &mut self.doc;
         // The shape Reset Shape goes back to is the one before this stroke.
         // Mask strokes move nothing.
         if !doc.sculptor.settings.mask_mode {
@@ -409,6 +411,7 @@ impl Running {
     /// cube and the sphere, `apart` asks for a union that will not be
     /// started (`demo_too_big`), `origin` moves the
     /// centre of a piece that is far from it (`origin_demo`, app/origin.rs),
+    /// `apply-scale` puts a stretch into a mesh (`apply_scale_demo`),
     /// and `play` runs `selection_play` first.
     pub(super) fn demo_select(&mut self) {
         let extra = std::env::var("SCULPT_DEMO_SELECT").unwrap_or_default();
@@ -435,6 +438,7 @@ impl Running {
             "intersect" => self.demo_boolean(BooleanOp::Intersect),
             "apart" => self.demo_too_big(),
             "origin" => self.origin_demo(),
+            "apply-scale" => self.apply_scale_demo(),
             _ => {}
         }
     }

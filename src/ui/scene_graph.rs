@@ -581,6 +581,13 @@ fn selected(ui: &mut Ui, doc: &mut Doc, assets: &Assets, st: &mut State, tips: b
             actions.push(Action::ResetTransform);
         }
     }
+    if doc.scene.scale_is_uneven() {
+        let style = ButtonStyle { height: 26.0, ..Default::default() };
+        let help = "Puts the object's stretch into its mesh and sets its Scale to 1: nothing changes on screen, but brushes land round where the ring shows them instead of stretched with the object, and Remesh makes even triangles. Remesh does this by itself first. Instances, live mirror copies and arrays stay as they look. Undo (Ctrl+Z) puts it back.";
+        if tip(theme::button(ui, ui.available_width(), "Apply Scale", style), tips, help).clicked() {
+            actions.push(Action::ApplyScale);
+        }
+    }
     if doc.scene.origin_off_mesh(&doc.mesh).is_some() {
         let style = ButtonStyle { height: 26.0, ..Default::default() };
         let help = "Moves the object's centre to the middle of its mesh without moving the object: nothing changes on screen. The centre is where the gizmo sits, what the object turns and resizes about, and where its own (Local) mirror planes and radial axis pass, so those come with it. For a piece cut off a model, which keeps the model's centre. Instances, live mirror copies and arrays stay where they are. Undo (Ctrl+Z) puts the centre back.";

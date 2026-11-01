@@ -526,6 +526,9 @@ pub enum Action {
     /// Move the active object's centre to the middle of its mesh, leaving
     /// the object where it is (see app/origin.rs).
     SetOriginToMesh,
+    /// Put the active object's uneven Scale into its mesh, leaving the object
+    /// as it looks (see app/apply_scale.rs).
+    ApplyScale,
     /// Turn the active object's pivot back to the world's axes, leaving the
     /// object where it is (see app/pivot.rs).
     AlignPivot,

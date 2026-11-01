@@ -66,6 +66,7 @@ mod masked;
 mod mirror_copies;
 mod new_scene;
 mod older;
+mod apply_scale;
 mod origin;
 mod pen;
 mod pivot;
@@ -346,6 +347,8 @@ struct Running {
     decimate: decimate::State,
     /// A Remesh at work in the background (see app/remesh_job.rs).
     remesh: remesh_job::State,
+    /// What Apply Scale remembers (see app/apply_scale.rs).
+    apply_scale: apply_scale::State,
     /// A Bake Maps at work in the background (see app/bake.rs).
     bake: Option<bake::Pending>,
     /// A screenshot the Claude bridge is waiting for.
@@ -673,6 +676,7 @@ impl Running {
             print_watch: Default::default(),
             decimate: Default::default(),
             remesh: Default::default(),
+            apply_scale: Default::default(),
             bake: None,
             capture: None,
             transform: Default::default(),
@@ -1598,6 +1602,7 @@ impl Running {
             Action::Tool(tool) => self.set_tool(tool),
             Action::ResetTransform => self.reset_transform(),
             Action::SetOriginToMesh => self.set_origin_to_mesh(),
+            Action::ApplyScale => self.apply_scale(),
             Action::AlignPivot => self.align_pivot(),
             Action::MakeSkin => self.spheres_make_skin(),
             Action::Mirror(command) => self.mirror_command(command),
