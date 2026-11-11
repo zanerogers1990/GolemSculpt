@@ -2065,6 +2065,15 @@ pl: Przeciągnij od stawu, aby powiększyć tę część, ku stawowi, aby ją zm
 en: Drag along the limb to make it longer and thinner, or shorter and fatter.
 pl: Przeciągnij wzdłuż kończyny, aby ją wydłużyć i zwęzić albo skrócić i pogrubić.
 
+en: The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts across it. The brush size sets how far up the limb the joint is.
+pl: Pierścień pędzla wybiera część: to, co obejmuje, jest kończyną, a staw trafia tam, gdzie pierścień przecina ją w poprzek. Rozmiar pędzla ustala, jak daleko wzdłuż kończyny leży staw.
+
+en: The face group under the pen is the part: it bends where it meets the rest of the model, wherever on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush size only sets how soft the bend is, with Rigidity.
+pl: Grupa ścian pod piórem jest częścią: zgina się tam, gdzie styka się z resztą modelu, gdziekolwiek na niej naciśniesz, i zabiera ze sobą wszystko, co leży za nią, na przykład dłoń przy przedramieniu. Rozmiar pędzla ustala tylko, jak miękkie jest zgięcie, razem z Rigidity.
+
+en: Pose is set to work from face groups, and this object has none: make some on the Face Groups card (Mesh tab), or set Pose to Brush Ring.
+pl: Pose jest ustawiony tak, by działać na grupach ścian, a ten obiekt nie ma żadnych: utwórz je na karcie Face Groups (zakładka Mesh) albo przestaw Pose na Brush Ring.
+
 en: The object the spheres were attached to is gone. They stay where they are.
 pl: Obiektu, do którego przyczepiono kule, już nie ma. Zostają tam, gdzie są.
 
@@ -3354,6 +3363,9 @@ pl: Jak ostro kończyna zgina się w stawie: niska zgina w długi miękki łuk, 
 
 en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The brush size sets how far up the limb the joint is.
 pl: Biała linia pokazuje, gdzie się zegnie, zanim naciśniesz: kropka na każdym stawie i pierścień wokół tego, który zostaje na miejscu. Rozmiar pędzla ustala, jak daleko wzdłuż kończyny leży staw.
+
+en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The joint is where the face group under the pen meets the rest of the model; make the parts groups of their own first (Mesh tab, Face Groups).
+pl: Biała linia pokazuje, gdzie się zegnie, zanim naciśniesz: kropka na każdym stawie i pierścień wokół tego, który zostaje na miejscu. Staw jest tam, gdzie grupa ścian pod piórem styka się z resztą modelu; najpierw zrób z każdej części osobną grupę (zakładka Mesh, Face Groups).
 
 en: Puts the detail of another object onto this one. For clean topology: Clone the sculpt, Quad Remesh the copy, then Subdivide (Ctrl+D) and Project, a few times over. The copy takes on the sculpt's detail and keeps its even quads and levels.\n\nEach point looks along its own direction, out and in, for the other surface facing its way, and goes to the nearer. The mask protects as it does from a brush.
 pl: Przenosi detal innego obiektu na ten. Dla czystej topologii: użyj Clone na rzeźbie, Quad Remesh na kopii, potem Subdivide (Ctrl+D) i Project, kilka razy. Kopia przejmuje detal rzeźby i zachowuje swoje równe czworokąty i poziomy.\n\nKażdy punkt szuka wzdłuż własnego kierunku, na zewnątrz i do środka, drugiej powierzchni zwróconej ku niemu i idzie do bliższej. Maska chroni tak samo jak przed pędzlem.

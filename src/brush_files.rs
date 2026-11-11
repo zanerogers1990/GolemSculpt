@@ -40,7 +40,7 @@ use serde_json::Value;
 
 use crate::prefs::{AlphaKept, BrushTuning};
 use crate::sculpt::library::{Library, Origin, Record};
-use crate::sculpt::{Brush, BrushSettings, FalloffCurve, PoseMode, Settings};
+use crate::sculpt::{Brush, BrushSettings, FalloffCurve, PoseFrom, PoseMode, Settings};
 
 /// The folder's name, beside the settings file.
 pub const FOLDER: &str = "brushes";
@@ -120,6 +120,8 @@ struct RecordKept {
     #[serde(skip_serializing_if = "Option::is_none")]
     pose_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pose_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pose_joints: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pose_offset: Option<f32>,
@@ -144,6 +146,7 @@ impl RecordKept {
             layer_height: own(Brush::Layer).then_some(n.layer_height),
             move_connected: own(Brush::Move).then_some(n.move_connected),
             pose_mode: own(Brush::Pose).then(|| n.pose.mode.name().to_owned()),
+            pose_from: own(Brush::Pose).then(|| n.pose.from.name().to_owned()),
             pose_joints: own(Brush::Pose).then_some(n.pose.joints),
             pose_offset: own(Brush::Pose).then_some(n.pose.offset),
             pose_rigidity: own(Brush::Pose).then_some(n.pose.rigidity),
@@ -206,6 +209,8 @@ impl RecordKept {
         theirs.pose.joints = self.pose_joints.unwrap_or(theirs.pose.joints);
         let mode = self.pose_mode.as_deref().and_then(|name| PoseMode::ALL.into_iter().find(|mode| mode.name() == name));
         theirs.pose.mode = mode.unwrap_or(theirs.pose.mode);
+        let from = self.pose_from.as_deref().and_then(|name| PoseFrom::ALL.into_iter().find(|from| from.name() == name));
+        theirs.pose.from = from.unwrap_or(theirs.pose.from);
         // Only its own kernel's numbers are the brush's to say.
         let numbers = base.numbers.with_own(kernel, &theirs);
         (Record { settings, falloff, alpha, numbers }.in_range(), missing)

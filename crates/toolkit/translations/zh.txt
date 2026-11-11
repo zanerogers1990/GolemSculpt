@@ -2065,6 +2065,15 @@ zh: 远离关节拖动可让该部分变大，朝向关节拖动则变小。按�
 en: Drag along the limb to make it longer and thinner, or shorter and fatter.
 zh: 沿肢体拖动，可让它变长变细，或变短变粗。
 
+en: The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts across it. The brush size sets how far up the limb the joint is.
+zh: 由笔刷圈选出部位：圈住的部分就是肢体，关节放在笔刷圈横切肢体的地方。笔刷大小决定关节在肢体上多远处。
+
+en: The face group under the pen is the part: it bends where it meets the rest of the model, wherever on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush size only sets how soft the bend is, with Rigidity.
+zh: 笔下的面组就是部位：无论按在它的哪里，它都会在与模型其余部分相接处弯曲，并带上它以外的一切，比如前臂末端的手。笔刷大小只与 Rigidity 一起决定弯曲有多柔和。
+
+en: Pose is set to work from face groups, and this object has none: make some on the Face Groups card (Mesh tab), or set Pose to Brush Ring.
+zh: Pose 设置为按面组工作，但这个物体没有面组：请在 Face Groups 卡片（Mesh 选项卡）上创建，或者把 Pose 改为 Brush Ring。
+
 en: The object the spheres were attached to is gone. They stay where they are.
 zh: 球体所附着的物体已经不在了。它们留在原处。
 
@@ -3354,6 +3363,9 @@ zh: 肢体在关节处弯得多急：低则弯成一道长长的柔和曲线，�
 
 en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The brush size sets how far up the limb the joint is.
 zh: 按下之前，白线会显示它将在哪里弯曲：每个关节上有一个点，保持不动的那个关节外有一个圆环。笔刷大小决定关节在肢体上多远处。
+
+en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The joint is where the face group under the pen meets the rest of the model; make the parts groups of their own first (Mesh tab, Face Groups).
+zh: 按下之前，白线会显示它将在哪里弯曲：每个关节上有一个点，保持不动的那个关节外有一个圆环。关节位于笔下的面组与模型其余部分相接的地方；请先把每个部位各自设为一个组（Mesh 选项卡，Face Groups）。
 
 en: Puts the detail of another object onto this one. For clean topology: Clone the sculpt, Quad Remesh the copy, then Subdivide (Ctrl+D) and Project, a few times over. The copy takes on the sculpt's detail and keeps its even quads and levels.\n\nEach point looks along its own direction, out and in, for the other surface facing its way, and goes to the nearer. The mask protects as it does from a brush.
 zh: 把另一个物体的细节投射到这个物体上。用于得到干净的拓扑：先 Clone 雕刻，对副本做 Quad Remesh，再 Subdivide（Ctrl+D）并 Project，如此重复几次。副本会获得雕刻的细节，同时保留均匀的四边面和级别。\n\n每个点沿自己的方向向外和向内寻找朝向它的另一个表面，并移到较近的那个。遮罩的保护方式和笔刷一样。

@@ -5,7 +5,8 @@
 use egui::{Color32, LayerId, Pos2, Stroke, Ui};
 
 use super::theme::{self, ACCENT, ButtonStyle};
-use crate::sculpt::{PoseMode, PoseSettings, Settings};
+use crate::mesh::Mesh;
+use crate::sculpt::{POSE_NO_GROUPS, PoseFrom, PoseMode, PoseSettings, Settings};
 
 /// The preview's lines and joints. White on a dark edge, as the brush ring
 /// is, so it shows on any material.
@@ -54,8 +55,9 @@ pub fn overlay(ctx: &egui::Context, chains: &[Vec<Pos2>]) {
     }
 }
 
-/// The Pose brush's part of the brush settings card.
-pub fn settings(ui: &mut Ui, s: &mut Settings, tips: bool) {
+/// The Pose brush's part of the brush settings card. `mesh` is the one the
+/// brush works on: whether it has face groups decides what Face Group says.
+pub fn settings(ui: &mut Ui, s: &mut Settings, mesh: &Mesh, tips: bool) {
     let pose = &mut s.pose;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -68,6 +70,22 @@ pub fn settings(ui: &mut Ui, s: &mut Settings, tips: bool) {
         }
     });
     theme::hint(ui, pose.mode.help());
+
+    // What a press takes hold of: the brush ring's reach, or the face group under the pen.
+    theme::heading(ui, "Works From");
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let w = theme::row_width(ui, PoseFrom::ALL.len(), 4.0);
+        for from in PoseFrom::ALL {
+            let style = ButtonStyle { active: (pose.from == from).then_some(ACCENT()), ..Default::default() };
+            if theme::tip(theme::button(ui, w, from.name(), style), tips, from.help()).clicked() {
+                pose.from = from;
+            }
+        }
+    });
+    if pose.from == PoseFrom::Group && !mesh.has_groups() {
+        theme::hint(ui, POSE_NO_GROUPS);
+    }
 
     if pose.mode == PoseMode::Bend {
         let mut joints = pose.joints as f32;
@@ -92,7 +110,16 @@ pub fn settings(ui: &mut Ui, s: &mut Settings, tips: bool) {
     );
     theme::about(
         ui,
-        "The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that \
-         stays put. The brush size sets how far up the limb the joint is.",
+        match pose.from {
+            PoseFrom::Ring => {
+                "The white line shows where it will bend before you press: a dot on each joint, and a ring round the \
+                 one that stays put. The brush size sets how far up the limb the joint is."
+            }
+            PoseFrom::Group => {
+                "The white line shows where it will bend before you press: a dot on each joint, and a ring round the \
+                 one that stays put. The joint is where the face group under the pen meets the rest of the model; \
+                 make the parts groups of their own first (Mesh tab, Face Groups)."
+            }
+        },
     );
 }

@@ -2065,6 +2065,15 @@ tr: O parçayı büyütmek için eklemden uzağa, küçültmek için ekleme doğ
 en: Drag along the limb to make it longer and thinner, or shorter and fatter.
 tr: Uzvu daha uzun ve ince ya da daha kısa ve kalın yapmak için uzuv boyunca sürükle.
 
+en: The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts across it. The brush size sets how far up the limb the joint is.
+tr: Parçayı fırça halkası seçer: halkanın içine aldığı kısım uzuvdur ve eklem, halkanın uzvu enine kestiği yere gelir. Fırça boyutu, eklemin uzuv boyunca ne kadar yukarıda olduğunu belirler.
+
+en: The face group under the pen is the part: it bends where it meets the rest of the model, wherever on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush size only sets how soft the bend is, with Rigidity.
+tr: Kalemin altındaki yüz grubu parçanın kendisidir: neresine basarsan bas, modelin geri kalanıyla buluştuğu yerden bükülür ve ötesinde kalan her şeyi, örneğin önkoldaki eli, beraberinde götürür. Fırça boyutu yalnızca bükülmenin ne kadar yumuşak olduğunu belirler, Rigidity ile birlikte.
+
+en: Pose is set to work from face groups, and this object has none: make some on the Face Groups card (Mesh tab), or set Pose to Brush Ring.
+tr: Pose yüz gruplarından çalışacak şekilde ayarlı ve bu nesnenin hiç yüz grubu yok: Face Groups kartında (Mesh sekmesi) birkaç tane oluştur ya da Pose'u Brush Ring olarak ayarla.
+
 en: The object the spheres were attached to is gone. They stay where they are.
 tr: Kürelerin bağlı olduğu nesne yok oldu. Küreler olduğu yerde kalıyor.
 
@@ -3354,6 +3363,9 @@ tr: Uzvun bir eklemde ne kadar keskin büküldüğü: düşük değer uzun, yumu
 
 en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The brush size sets how far up the limb the joint is.
 tr: Beyaz çizgi, basmadan önce nerede bükülecek olduğunu gösterir: her eklemde bir nokta ve yerinde kalan eklemin çevresinde bir halka. Fırça boyutu, eklemin uzuv boyunca ne kadar yukarıda olduğunu belirler.
+
+en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The joint is where the face group under the pen meets the rest of the model; make the parts groups of their own first (Mesh tab, Face Groups).
+tr: Beyaz çizgi, basmadan önce nerede bükülecek olduğunu gösterir: her eklemde bir nokta ve yerinde kalan eklemin çevresinde bir halka. Eklem, kalemin altındaki yüz grubunun modelin geri kalanıyla buluştuğu yerdedir; önce her parçayı kendi grubu yap (Mesh sekmesi, Face Groups).
 
 en: Puts the detail of another object onto this one. For clean topology: Clone the sculpt, Quad Remesh the copy, then Subdivide (Ctrl+D) and Project, a few times over. The copy takes on the sculpt's detail and keeps its even quads and levels.\n\nEach point looks along its own direction, out and in, for the other surface facing its way, and goes to the nearer. The mask protects as it does from a brush.
 tr: Başka bir nesnenin detayını bunun üzerine koyar. Temiz topoloji için: heykeli Clone et, kopyaya Quad Remesh uygula, sonra Subdivide (Ctrl+D) ve Project, birkaç kez üst üste. Kopya heykelin detayını alır ve eşit dörtgenlerini ve seviyelerini korur.\n\nHer nokta kendi yönü boyunca, dışarı ve içeri, kendisine bakan diğer yüzeyi arar ve daha yakın olana gider. Maske, bir fırçaya karşı olduğu gibi korur.

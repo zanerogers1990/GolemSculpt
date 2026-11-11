@@ -46,7 +46,7 @@ use crate::mesh::primitives::{self, Primitive};
 use crate::scene::Space;
 use crate::sculpt::alpha::{self, AlphaSettings};
 use crate::sculpt::cavity;
-use crate::sculpt::{BrushSettings, FlattenMode, PointerSample, PoseMode, PoseSettings, Radial, RadialAxis, SmoothMode};
+use crate::sculpt::{BrushSettings, FlattenMode, PointerSample, PoseFrom, PoseMode, PoseSettings, Radial, RadialAxis, SmoothMode};
 use crate::ui::question::listed;
 use crate::ui::theme;
 
@@ -579,6 +579,7 @@ impl Running {
             "symmetry_space": symmetry.space.name().to_ascii_lowercase(),
             "pose": {
                 "mode": s.pose.mode.name(),
+                "from": s.pose.from.name(),
                 "joints": s.pose.joints,
                 "offset": round(s.pose.offset),
                 "rigidity": round(s.pose.rigidity),
@@ -743,6 +744,13 @@ impl Running {
                 .find(|mode| key(mode.name()) == key(name))
                 .ok_or("pose_mode is \"bend\", \"resize\" or \"stretch\".")?;
         }
+        if let Some(name) = text(args, "pose_from") {
+            s.pose.from = match key(name).as_str() {
+                "ring" | "brushring" => PoseFrom::Ring,
+                "group" | "facegroup" => PoseFrom::Group,
+                _ => return Err("pose_from is \"ring\" or \"group\".".into()),
+            };
+        }
         if let Some(joints) = num(args, "pose_joints") {
             s.pose.joints = joints.round().clamp(1.0, PoseSettings::MAX_JOINTS as f32) as u32;
         }
@@ -845,7 +853,9 @@ impl Running {
             time: start + i as f64 / 240.0,
         };
         // As for a stroke of the pointer's: a sculpt layer that records but does not show takes none.
-        if let Some(why) = self.doc.layer_stroke_refusal().or_else(|| self.doc.erase_refusal(smooth)) {
+        // Nor does Pose working from face groups on an object that has none.
+        let refusal = self.doc.layer_stroke_refusal().or_else(|| self.doc.erase_refusal(smooth));
+        if let Some(why) = refusal.or_else(|| self.doc.pose_refusal(smooth)) {
             return Err(why);
         }
         // The Paint brush in Sample mode picks paint up at the first point: a click, not a stroke.

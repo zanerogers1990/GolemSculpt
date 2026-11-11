@@ -78,7 +78,7 @@ fn every_brush_goes_to_a_file_and_comes_back_the_same() {
         (s.clay_depth, s.clay_softness, s.clay_relax) = (0.9, 0.3, 0.8);
         (s.crease_pinch, s.crease_depth, s.flatten_offset, s.layer_height) = (0.2, 0.7, -0.2, 0.4);
         s.move_connected = true;
-        s.pose = crate::sculpt::PoseSettings { mode: PoseMode::Stretch, joints: 3, offset: 1.2, rigidity: 0.1 };
+        s.pose = crate::sculpt::PoseSettings { mode: PoseMode::Stretch, joints: 3, offset: 1.2, rigidity: 0.1, ..Default::default() };
     }
     for (i, entry) in library.entries().iter().enumerate() {
         let record = library.record(i, &s);

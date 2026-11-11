@@ -21,6 +21,16 @@
 //!   copy won: dragged to the right, a tail on the centre line swung left.
 //! - Copies on limbs of their own that merely touch (two legs at the crotch)
 //!   share the pull where they overlap, the way Move does.
+//!
+//! The brush can also take hold by face group instead of by its ring
+//! ([`PoseFrom::Group`], Blender's Face Sets origin). Only what is found
+//! changes: the flood fills the group under the pen instead of the ring, so
+//! the group's border is where it leaves, and from there everything is as
+//! for the ring. Of the ways out of the group, the one that leads to the
+//! bulk of the model is the joint; whatever lies past any other (a hand
+//! beyond a forearm) goes with the group; the bend is softened across the
+//! border by Rigidity, as across a ring's cut; and every copy of the brush
+//! works from the group under itself.
 
 mod build;
 mod solve;
@@ -79,10 +89,58 @@ impl PoseMode {
     }
 }
 
+/// What a press of the Pose brush takes hold of.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PoseFrom {
+    /// The surface the brush ring takes in, out to where the ring cuts the
+    /// limb, which is where the joint goes (Blender's Topology origin).
+    #[default]
+    Ring,
+    /// The face group under the pen, whatever the brush's size: the joint is
+    /// where that group meets the part of the model that leads to the bulk
+    /// of it (Blender's Face Sets origin). A forearm made a group of its own
+    /// bends at the elbow, wherever on it the pen comes down.
+    Group,
+}
+
+impl PoseFrom {
+    pub const ALL: [PoseFrom; 2] = [PoseFrom::Ring, PoseFrom::Group];
+
+    /// The button's name, which is also how the settings file writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            PoseFrom::Ring => "Brush Ring",
+            PoseFrom::Group => "Face Group",
+        }
+    }
+
+    pub fn help(self) -> &'static str {
+        match self {
+            PoseFrom::Ring => {
+                "The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts \
+                 across it. The brush size sets how far up the limb the joint is."
+            }
+            PoseFrom::Group => {
+                "The face group under the pen is the part: it bends where it meets the rest of the model, wherever \
+                 on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush \
+                 size only sets how soft the bend is, with Rigidity."
+            }
+        }
+    }
+}
+
+/// What the Pose brush's card and the status line say when Face Group is
+/// chosen and the object has no face groups to work from.
+pub const NO_GROUPS: &str = "Pose is set to work from face groups, and this object has none: make some on the Face \
+                             Groups card (Mesh tab), or set Pose to Brush Ring.";
+
 /// The Pose brush's own settings.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct PoseSettings {
     pub mode: PoseMode,
+    /// What a press takes hold of: the brush ring's reach, or the face group
+    /// under the pen.
+    pub from: PoseFrom,
     /// How many joints a bend has (Blender's IK Segments). Resize and
     /// Stretch always work about one.
     pub joints: u32,
@@ -96,7 +154,7 @@ pub struct PoseSettings {
 
 impl Default for PoseSettings {
     fn default() -> Self {
-        Self { mode: PoseMode::Bend, joints: 1, offset: 0.0, rigidity: 0.6 }
+        Self { mode: PoseMode::Bend, from: PoseFrom::Ring, joints: 1, offset: 0.0, rigidity: 0.6 }
     }
 }
 
@@ -155,6 +213,54 @@ fn nearest_vertex(mesh: &Mesh, to: Vec3, within: f32) -> Option<u32> {
     None
 }
 
+/// Most vertices of a group [`group_seed`] looks through for one inside it.
+const SEED_SEARCH: usize = 4096;
+
+/// For a press that works from face groups: the group of the face that shows
+/// nearest `to` (no further off than `within`), and a vertex inside that
+/// group to flood it from. Inside means every face round the vertex is the
+/// group's, so that the flood stops on the group's border and the border is
+/// where the joint goes. A corner of the face itself, nearest `to` first,
+/// is nearly always one; on a group only a face or two wide, the nearest
+/// such vertex across the group's faces is. `None` where there is no face
+/// near, or the group has no inside at all (a strip one face wide).
+fn group_seed(mesh: &Mesh, to: Vec3, within: f32) -> Option<(u16, u32)> {
+    let hidden = |t: u32| mesh.is_triangle_hidden(t);
+    let (triangle, _) = mesh.bvh.nearest_triangle(&mesh.positions, &mesh.indices, to, within * within, hidden)?;
+    let group = mesh.group_of(triangle);
+    let mut corners: Vec<u32> = mesh.indices[triangle as usize * 3..triangle as usize * 3 + 3].to_vec();
+    let far = |v: &u32| mesh.positions[*v as usize].distance_squared(to);
+    corners.sort_by(|a, b| far(a).total_cmp(&far(b)));
+    if let Some(&seed) = corners.iter().find(|&&v| build::in_group(mesh, v, group)) {
+        return Some((group, seed));
+    }
+    // Out over the group's own faces, a ring of vertices at a time.
+    let rings = mesh.rings();
+    let mut seen: std::collections::HashSet<u32> = corners.iter().copied().collect();
+    let mut next = 0;
+    while let Some(&v) = corners.get(next) {
+        next += 1;
+        if next > SEED_SEARCH {
+            break;
+        }
+        for &t in rings.vert_tris(v) {
+            if mesh.group_of(t) != group || hidden(t) {
+                continue;
+            }
+            for &u in &mesh.indices[t as usize * 3..t as usize * 3 + 3] {
+                if !seen.insert(u) {
+                    continue;
+                }
+                if build::in_group(mesh, u, group) {
+                    return Some((group, u));
+                }
+                corners.push(u);
+            }
+        }
+    }
+    None
+}
+
 /// What one copy of the brush found.
 struct Found {
     /// Which of the stroke's symmetry operations this copy is.
@@ -179,31 +285,54 @@ fn find(
     (budget, core): (Option<usize>, bool),
     mut each: impl FnMut(usize, &Skeleton, &mut Scratch),
 ) -> Vec<Found> {
-    // A hold names its copy in a byte.
-    let seeds: Vec<(usize, Vec3, u32)> = ops
+    // Working from face groups on an object that has none, a press takes
+    // hold of nothing (and the app says why before it gets here).
+    if settings.from == PoseFrom::Group && !mesh.has_groups() {
+        return Vec::new();
+    }
+    // A hold names its copy in a byte. Each copy works from the group under
+    // itself, so a left and a right forearm that are groups of their own
+    // each bend at their own elbow.
+    let seeds: Vec<(usize, Vec3, u32, Option<u16>)> = ops
         .iter()
         .enumerate()
         .take(u8::MAX as usize)
         .filter_map(|(op, copy)| {
             let centre = copy.apply_point(at);
-            Some((op, centre, nearest_vertex(mesh, centre, radius)?))
+            match settings.from {
+                PoseFrom::Ring => Some((op, centre, nearest_vertex(mesh, centre, radius)?, None)),
+                PoseFrom::Group => {
+                    let (group, seed) = group_seed(mesh, centre, radius)?;
+                    Some((op, centre, seed, Some(group)))
+                }
+            }
         })
         .collect();
-    let mut found = Vec::with_capacity(seeds.len());
-    for (i, &(op, centre, seed)) in seeds.iter().enumerate() {
+    let mut found: Vec<Found> = Vec::with_capacity(seeds.len());
+    let mut kept = Vec::with_capacity(seeds.len());
+    for (i, &(op, centre, seed, group)) in seeds.iter().enumerate() {
         let ask = Ask {
             centre,
             seed,
             radius,
+            group,
             offset: settings.offset.clamp(0.0, PoseSettings::MAX_OFFSET),
             joints: settings.joint_count(),
             budget,
             core,
         };
-        let skeleton = build::skeleton(mesh, scratch, &ask);
-        let carries = seeds.iter().map(|&(_, _, other)| scratch.part_of(other).is_some()).collect();
-        each(i, &skeleton, scratch);
+        // Only a group too big for the preview's budget finds nothing.
+        let Some(skeleton) = build::skeleton(mesh, scratch, &ask) else { continue };
+        let carries = seeds.iter().map(|&(_, _, other, _)| scratch.part_of(other).is_some()).collect();
+        each(found.len(), &skeleton, scratch);
         found.push(Found { op, skeleton, carries });
+        kept.push(i);
+    }
+    // `carries` is by copy found, as `limbs` reads it.
+    if kept.len() < seeds.len() {
+        for f in &mut found {
+            f.carries = kept.iter().map(|&k| f.carries[k]).collect();
+        }
     }
     found
 }
@@ -632,6 +761,16 @@ impl Sculptor {
             points.extend(skeleton.joints);
             self.pose.hover.push(points);
         }
+    }
+
+    /// Why a press begun now would take hold of nothing, if it is the Pose
+    /// brush's and that is so: set to work from face groups on an object
+    /// that has none. A press that came to nothing would look like a brush
+    /// that is broken, so the app turns it down and says this instead.
+    pub fn pose_refusal(&self, mesh: &Mesh, smooth_held: bool) -> Option<&'static str> {
+        let s = &self.settings;
+        let posing = !s.mask_mode && self.effective_brush(smooth_held) == Brush::Pose;
+        (posing && s.pose.from == PoseFrom::Group && !mesh.has_groups()).then_some(NO_GROUPS)
     }
 
     /// The Pose brush's chains for the preview (see [`State::chains`]).

@@ -21,6 +21,11 @@
 //!   of times, which is a width in edges: the same setting is a soft bend on
 //!   a coarse mesh and a crease on a fine one. Here a bend is as wide as a
 //!   share of the brush radius, measured along the surface.
+//!
+//! Working from a face group ([`Ask::group`]), the first flood fills the
+//! group instead of the brush ring, and everything after it is the same: the
+//! group's border is where the flood left, and the way out of it toward the
+//! bulk of the model is the joint.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -45,6 +50,10 @@ pub struct Ask {
     /// A vertex of the surface that was grabbed.
     pub seed: u32,
     pub radius: f32,
+    /// Working from a face group: this one. The flood then fills what is
+    /// inside the group (see [`in_group`]) in place of what is inside the
+    /// brush ring, and leaves it at the group's border.
+    pub group: Option<u16>,
     /// How much further off than the brush ring the first joint sits, in
     /// brush radii (Blender's Pose Origin Offset).
     pub offset: f32,
@@ -174,6 +183,15 @@ impl Scratch {
     pub fn part_of(&self, v: u32) -> Option<usize> {
         self.seen(v).then(|| self.part[v as usize] as usize)
     }
+}
+
+/// Whether every face round `v` is in group `group`: the vertices of the
+/// group short of its border. Those on the border are on faces of both
+/// groups, and are where a flood of the group leaves it.
+pub fn in_group(mesh: &Mesh, v: u32, group: u16) -> bool {
+    let rings = mesh.rings();
+    let round = rings.vert_tris(v);
+    !round.is_empty() && round.iter().all(|&t| mesh.group_of(t) == group)
 }
 
 /// How far apart the vertices are around `v`: the root mean square length of
@@ -355,14 +373,18 @@ fn find_body(
 
 /// Finds the chain for a press at `ask.centre`. Leaves in `scratch` which
 /// vertices each joint carries, for [`holds`] to read.
-pub fn skeleton(mesh: &Mesh, scratch: &mut Scratch, ask: &Ask) -> Skeleton {
+///
+/// `None` only for a face group with more vertices than `ask.budget`: the
+/// group is the part, and there is no telling where it ends without
+/// crossing all of it.
+pub fn skeleton(mesh: &Mesh, scratch: &mut Scratch, ask: &Ask) -> Option<Skeleton> {
     scratch.begin(mesh.vertex_count());
     let hidden = mesh.hidden_vertices();
     let pos = &mesh.positions;
     let r2 = ask.radius * ask.radius;
 
     // Everything joined to the grabbed vertex without leaving the brush
-    // ring, and the vertices just outside it.
+    // ring (or the face group), and the vertices just outside it.
     let mut inside = std::mem::take(&mut scratch.parts[0]);
     let mut ring = Vec::new();
     scratch.mark(ask.seed, 0);
@@ -371,12 +393,20 @@ pub fn skeleton(mesh: &Mesh, scratch: &mut Scratch, ask: &Ask) -> Skeleton {
     let mut next = 0;
     while let Some(&v) = inside.get(next) {
         next += 1;
+        if ask.group.is_some() && ask.budget.is_some_and(|most| inside.len() > most) {
+            scratch.parts[0] = inside;
+            return None;
+        }
         for &u in mesh.neighbours(v) {
             if scratch.seen(u) || hidden.is_some_and(|h| h[u as usize]) {
                 continue;
             }
             let d2 = pos[u as usize].distance_squared(ask.centre);
-            if d2 < r2 {
+            let within = match ask.group {
+                None => d2 < r2,
+                Some(group) => in_group(mesh, u, group),
+            };
+            if within {
                 scratch.mark(u, 0);
                 inside.push(u);
                 if d2 > far.0 {
@@ -397,7 +427,7 @@ pub fn skeleton(mesh: &Mesh, scratch: &mut Scratch, ask: &Ask) -> Skeleton {
         let far = pos[far.1 as usize];
         let core = core(&inside);
         scratch.parts[0] = inside;
-        return Skeleton { head: ask.centre, joints: vec![far + reach(ask.centre, far)], core, girth: 0.0 };
+        return Some(Skeleton { head: ask.centre, joints: vec![far + reach(ask.centre, far)], core, girth: 0.0 });
     }
 
     let (mut front, settled) = find_body(mesh, scratch, &ring, &mut inside, ask.budget);
@@ -469,7 +499,7 @@ pub fn skeleton(mesh: &Mesh, scratch: &mut Scratch, ask: &Ask) -> Skeleton {
     }
     scratch.rings[joints.len() - 1] = front;
     scratch.layer = layer;
-    Skeleton { head: ask.centre, joints, core, girth }
+    Some(Skeleton { head: ask.centre, joints, core, girth })
 }
 
 /// How much of the chain's move every vertex follows, for the chain

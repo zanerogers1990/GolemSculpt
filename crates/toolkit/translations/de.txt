@@ -2065,6 +2065,15 @@ de: Ziehe vom Gelenk weg, um diesen Teil größer zu machen, zum Gelenk hin, um 
 en: Drag along the limb to make it longer and thinner, or shorter and fatter.
 de: Ziehe entlang der Gliedmaße, um sie länger und dünner oder kürzer und dicker zu machen.
 
+en: The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts across it. The brush size sets how far up the limb the joint is.
+de: Der Pinselring wählt den Teil: Was er umfasst, ist die Gliedmaße, und das Gelenk liegt dort, wo der Ring sie quer schneidet. Die Pinselgröße bestimmt, wie weit oben an der Gliedmaße das Gelenk liegt.
+
+en: The face group under the pen is the part: it bends where it meets the rest of the model, wherever on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush size only sets how soft the bend is, with Rigidity.
+de: Die Flächengruppe unter dem Stift ist der Teil: Sie biegt sich dort, wo sie auf den Rest des Modells trifft, egal wo du auf ihr drückst, und nimmt alles mit, was dahinter liegt, etwa die Hand an einem Unterarm. Die Pinselgröße bestimmt nur, wie weich die Biegung ist, zusammen mit Rigidity.
+
+en: Pose is set to work from face groups, and this object has none: make some on the Face Groups card (Mesh tab), or set Pose to Brush Ring.
+de: Pose ist so eingestellt, dass es von Flächengruppen ausgeht, und dieses Objekt hat keine: Lege welche auf der Karte Face Groups an (Reiter Mesh), oder stelle Pose auf Brush Ring.
+
 en: The object the spheres were attached to is gone. They stay where they are.
 de: Das Objekt, an dem die Kugeln befestigt waren, ist weg. Sie bleiben, wo sie sind.
 
@@ -3354,6 +3363,9 @@ de: Wie scharf sich die Gliedmaße an einem Gelenk biegt: Niedrig biegt in einer
 
 en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The brush size sets how far up the limb the joint is.
 de: Die weiße Linie zeigt, wo sie sich biegen wird, bevor du drückst: ein Punkt an jedem Gelenk und ein Ring um das, das an Ort und Stelle bleibt. Die Pinselgröße bestimmt, wie weit oben an der Gliedmaße das Gelenk liegt.
+
+en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The joint is where the face group under the pen meets the rest of the model; make the parts groups of their own first (Mesh tab, Face Groups).
+de: Die weiße Linie zeigt, wo sie sich biegen wird, bevor du drückst: ein Punkt an jedem Gelenk und ein Ring um das, das an Ort und Stelle bleibt. Das Gelenk liegt dort, wo die Flächengruppe unter dem Stift auf den Rest des Modells trifft; mach zuerst aus jedem Teil eine eigene Gruppe (Reiter Mesh, Face Groups).
 
 en: Puts the detail of another object onto this one. For clean topology: Clone the sculpt, Quad Remesh the copy, then Subdivide (Ctrl+D) and Project, a few times over. The copy takes on the sculpt's detail and keeps its even quads and levels.\n\nEach point looks along its own direction, out and in, for the other surface facing its way, and goes to the nearer. The mask protects as it does from a brush.
 de: Überträgt das Detail eines anderen Objekts auf dieses. Für saubere Topologie: Nutze Clone für den Sculpt, Quad Remesh für die Kopie, dann Subdivide (Ctrl+D) und Project, ein paar Mal. Die Kopie übernimmt das Detail des Sculpts und behält ihre gleichmäßigen Quads und Stufen.\n\nJeder Punkt sucht in seiner eigenen Richtung, nach außen und innen, nach der anderen Oberfläche, die ihm zugewandt ist, und geht zur näheren. Die Maske schützt wie vor einem Pinsel.

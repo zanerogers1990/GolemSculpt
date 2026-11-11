@@ -61,6 +61,19 @@ impl Running {
         self.ui.pose = chains;
     }
 
+    /// Whether a press is turned down for the Pose brush, saying why on the
+    /// status line: set to work from face groups on an object that has none.
+    /// The press would otherwise take hold of nothing and look broken.
+    pub(super) fn pose_refuses_stroke(&mut self, shift: bool) -> bool {
+        match self.doc.pose_refusal(shift) {
+            Some(why) => {
+                self.status(why, false);
+                true
+            }
+            None => false,
+        }
+    }
+
     // ---- for visual checks ---------------------------------------------------
 
     /// Stands a small figure in the scene and poses it; used with
@@ -288,11 +301,13 @@ impl Running {
         // The settings come back from the settings file.
         let s = &mut self.doc.sculptor.settings;
         (s.pose.mode, s.pose.joints, s.pose.offset, s.pose.rigidity) = (PoseMode::Stretch, 4, 0.5, 0.25);
+        s.pose.from = crate::sculpt::PoseFrom::Group;
         let kept = crate::prefs::BrushPrefs::of(s);
         s.pose = Default::default();
         s.brush = Brush::Clay;
         kept.apply(s);
-        let kept = (s.pose.mode, s.pose.joints, s.pose.offset, s.pose.rigidity) == (PoseMode::Stretch, 4, 0.5, 0.25);
+        let kept = (s.pose.mode, s.pose.joints, s.pose.offset, s.pose.rigidity) == (PoseMode::Stretch, 4, 0.5, 0.25)
+            && s.pose.from == crate::sculpt::PoseFrom::Group;
         say("the Pose settings are remembered", s.brush == Brush::Pose && kept);
         self.doc.sculptor.settings.pose = Default::default();
 
@@ -328,6 +343,14 @@ impl Running {
         self.doc.sculptor.settings.screen_space_size = false;
         self.doc.sculptor.settings.radius_world = 0.3;
         look(self);
+    }
+}
+
+impl crate::doc::Doc {
+    /// Why a Pose press begun now on the active object would do nothing,
+    /// if it would (`Sculptor::pose_refusal`); the bridge asks this too.
+    pub(crate) fn pose_refusal(&self, smooth_held: bool) -> Option<String> {
+        self.sculptor.pose_refusal(&self.mesh, smooth_held).map(str::to_owned)
     }
 }
 

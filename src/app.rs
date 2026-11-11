@@ -1057,6 +1057,7 @@ impl Running {
                 // layer to paint on, which is made if there is none (app/paint.rs).
                 let refused = refused || (on_active && self.paint_samples_press(pos, mods.shift_key()));
                 let refused = refused || (on_active && self.paint_refuses_stroke(mods.shift_key()));
+                let refused = refused || (on_active && self.pose_refuses_stroke(mods.shift_key()));
                 if on_active && !refused {
                     self.stroke_baseline(mods.shift_key());
                 }

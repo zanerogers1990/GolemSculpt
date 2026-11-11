@@ -2063,6 +2063,15 @@ ko: 관절에서 멀어지게 드래그하면 그 부분이 커지고, 관절 �
 en: Drag along the limb to make it longer and thinner, or shorter and fatter.
 ko: 팔다리를 따라 드래그하면 더 길고 가늘어지거나, 더 짧고 굵어집니다.
 
+en: The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts across it. The brush size sets how far up the limb the joint is.
+ko: 브러시 링이 부위를 고릅니다. 링 안에 들어오는 부분이 팔다리가 되고, 관절은 링이 팔다리를 가로지르는 곳에 놓입니다. 브러시 크기가 관절이 팔다리의 어디쯤인지를 정합니다.
+
+en: The face group under the pen is the part: it bends where it meets the rest of the model, wherever on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush size only sets how soft the bend is, with Rigidity.
+ko: 펜 아래의 페이스 그룹이 부위가 됩니다. 그 위 어디를 누르든 모델의 나머지 부분과 만나는 곳에서 구부러지고, 그 너머에 있는 것(예: 아래팔 끝의 손)도 함께 움직입니다. 브러시 크기는 Rigidity와 함께 구부러짐이 얼마나 부드러운지만 정합니다.
+
+en: Pose is set to work from face groups, and this object has none: make some on the Face Groups card (Mesh tab), or set Pose to Brush Ring.
+ko: Pose가 페이스 그룹을 기준으로 작동하도록 설정되어 있는데 이 오브젝트에는 페이스 그룹이 없습니다. Face Groups 카드(Mesh 탭)에서 만들거나 Pose를 Brush Ring으로 바꾸세요.
+
 en: The object the spheres were attached to is gone. They stay where they are.
 ko: 구가 붙어 있던 오브젝트가 사라졌습니다. 구는 제자리에 남습니다.
 
@@ -3352,6 +3361,9 @@ ko: 관절에서 팔다리가 얼마나 급하게 구부러지는지 정합니�
 
 en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The brush size sets how far up the limb the joint is.
 ko: 누르기 전에 흰색 선이 구부러질 위치를 보여 줍니다. 관절마다 점이 있고, 제자리에 고정되는 관절에는 링이 있습니다. 브러시 크기가 관절이 팔다리의 어디쯤인지를 정합니다.
+
+en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The joint is where the face group under the pen meets the rest of the model; make the parts groups of their own first (Mesh tab, Face Groups).
+ko: 누르기 전에 흰색 선이 구부러질 위치를 보여 줍니다. 관절마다 점이 있고, 제자리에 고정되는 관절에는 링이 있습니다. 관절은 펜 아래의 페이스 그룹이 모델의 나머지 부분과 만나는 곳입니다. 먼저 각 부위를 각각의 그룹으로 만드세요(Mesh 탭, Face Groups).
 
 en: Puts the detail of another object onto this one. For clean topology: Clone the sculpt, Quad Remesh the copy, then Subdivide (Ctrl+D) and Project, a few times over. The copy takes on the sculpt's detail and keeps its even quads and levels.\n\nEach point looks along its own direction, out and in, for the other surface facing its way, and goes to the nearer. The mask protects as it does from a brush.
 ko: 다른 오브젝트의 디테일을 이 오브젝트로 옮깁니다. 깔끔한 토폴로지를 만들 때 쓰며, 스컬프트를 Clone하고 복사본을 Quad Remesh한 뒤 Subdivide(Ctrl+D)와 Project를 여러 번 반복합니다. 복사본은 스컬프트의 디테일을 가지면서 고른 쿼드와 레벨을 유지합니다.\n\n각 점은 자기 방향을 따라 바깥쪽과 안쪽으로 자기 쪽을 향한 다른 표면을 찾아 더 가까운 쪽으로 이동합니다. 마스크는 브러시일 때와 똑같이 보호합니다.

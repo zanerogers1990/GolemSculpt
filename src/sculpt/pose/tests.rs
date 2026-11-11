@@ -419,18 +419,18 @@ fn a_search_that_runs_out_of_budget_still_gives_a_joint() {
     let mesh = limb();
     let centre = Vec3::new(0.0, 0.3, THICK);
     let seed = nearest_vertex(&mesh, centre, 0.3).unwrap();
-    let ask = |budget| Ask { centre, seed, radius: 0.3, offset: 0.0, joints: 3, budget, core: false };
+    let ask = |budget| Ask { centre, seed, radius: 0.3, group: None, offset: 0.0, joints: 3, budget, core: false };
     let mut scratch = Scratch::default();
-    let whole = build::skeleton(&mesh, &mut scratch, &ask(None));
+    let whole = build::skeleton(&mesh, &mut scratch, &ask(None)).unwrap();
     let cut = ring_cut_below(0.3, 0.3);
     assert_eq!(whole.joints.len(), 3);
     assert!((whole.joints[0].y - cut).abs() < 0.03, "the joint is at {}", whole.joints[0]);
 
-    let short = build::skeleton(&mesh, &mut scratch, &ask(Some(40)));
+    let short = build::skeleton(&mesh, &mut scratch, &ask(Some(40))).unwrap();
     assert_eq!(short.joints.len(), 1);
     assert!(short.joints[0].distance(Vec3::new(0.0, 0.3, 0.0)) < 0.03, "the joint is at {}", short.joints[0]);
     // Enough budget to finish, and the answer is the unhurried one.
-    assert_eq!(build::skeleton(&mesh, &mut scratch, &ask(Some(100_000))), whole);
+    assert_eq!(build::skeleton(&mesh, &mut scratch, &ask(Some(100_000))), Some(whole));
 }
 
 #[test]
@@ -971,6 +971,217 @@ fn hidden_surface_is_neither_moved_nor_crossed() {
         }
     }
     assert!(moved > 500);
+}
+
+// ------------------------------------------------------------ face groups
+
+/// `mesh` with each face in the group `of` gives the middle of the face.
+fn grouped(mut mesh: Mesh, of: impl Fn(Vec3) -> u16) -> Mesh {
+    let ids = (0..mesh.triangle_count())
+        .map(|t| of((0..3).map(|c| mesh.positions[mesh.indices[t * 3 + c] as usize]).sum::<Vec3>() / 3.0))
+        .collect();
+    mesh.set_group_ids(ids);
+    mesh
+}
+
+/// The height of the row of the limb's vertices nearest `y`. The limb's rows
+/// are level, so a border between groups laid along one is a level ring.
+fn row_near(mesh: &Mesh, y: f32) -> f32 {
+    mesh.positions.iter().map(|p| p.y).min_by(|a, b| (a - y).abs().total_cmp(&(b - y).abs())).unwrap()
+}
+
+/// A sculptor holding the Pose brush set to work from face groups.
+fn by_groups(radius: f32, setup: impl FnOnce(&mut Settings)) -> Sculptor {
+    poser(radius, |s| {
+        s.pose.from = PoseFrom::Group;
+        setup(s);
+    })
+}
+
+/// The limb in two groups, the upper part 2 and the lower 1: pressed anywhere
+/// on the upper part, at any brush size, it bends at the border, and the
+/// lower part is left exactly where it was.
+#[test]
+fn working_from_face_groups_the_limb_bends_at_the_border_and_the_other_group_stays_still() {
+    let plain = limb();
+    let border = row_near(&plain, 0.2);
+    let mesh = grouped(plain, |c| if c.y > border { 2 } else { 1 });
+    for (y, radius) in [(0.4, 0.1), (0.8, 0.3), (1.0, 0.05), (0.25, 0.6)] {
+        let chain = hover(&mesh, &mut by_groups(radius, |_| {}), Vec3::new(0.0, y, THICK));
+        assert_eq!(chain.len(), 2, "pressed at {y}: the grabbed point and one joint");
+        let joint = chain[1];
+        assert!((joint.y - border).abs() < 1e-4, "pressed at {y}, radius {radius}: joint at {joint}, border at {border}");
+        assert!(Vec2::new(joint.x, joint.z).length() < 0.05 * THICK, "joint {joint} is off the centre line");
+    }
+
+    let mut mesh = mesh;
+    let before = mesh.positions.clone();
+    let view = view_of(&mesh, 0.0);
+    let radius = 0.3;
+    let mut sculptor = by_groups(radius, |_| {});
+    let (from, to) = (Vec3::new(0.0, 0.8, THICK), Vec3::new(0.45, 0.45, THICK));
+    let rest = drag(&mut mesh, &mut sculptor, &view, from, to, false);
+    let chain = chains(&sculptor)[0].clone();
+    assert!(release(&mut mesh, &mut sculptor, &view).is_some(), "the drag moved the limb");
+    let (joint, turn) = (rest[1], turn_about(rest[1], rest[0], chain[0]));
+    // The bend reaches 0.16 of the brush size each side of the border at
+    // the default Rigidity, measured along the surface.
+    let band = 0.16 * radius + 1e-3;
+    let (mut still, mut rigid, mut worst) = (0, 0, 0.0f32);
+    for (v, &was) in before.iter().enumerate() {
+        let now = mesh.positions[v];
+        if was.y < border - band {
+            assert_eq!(now, was, "vertex {v} of the lower group moved");
+            still += 1;
+        } else if was.y > border + band {
+            worst = worst.max(now.distance(joint + turn * (was - joint)));
+            rigid += 1;
+        }
+    }
+    assert!(still > 500 && rigid > 500, "{still} still, {rigid} carried");
+    assert!(worst < 1e-5, "the upper group is {worst} from where a rigid turn about the border puts it");
+    // And across the border the bend is soft: something there moved part of the way.
+    let between = before.iter().zip(&mesh.positions).filter(|(was, now)| (was.y - border).abs() < band && was != now);
+    assert!(between.count() > 32, "nothing bent softly across the border");
+}
+
+/// Three groups along the limb: the lower part, a forearm and a hand. The
+/// forearm pressed bends at its border with the lower part, which leads to
+/// the bulk of the model, and the hand goes with it whole.
+#[test]
+fn working_from_face_groups_what_lies_past_the_group_goes_with_it() {
+    let plain = limb();
+    let (elbow, wrist) = (row_near(&plain, -0.2), row_near(&plain, 0.5));
+    let mut mesh = grouped(plain, |c| match c.y {
+        y if y < elbow => 1,
+        y if y < wrist => 2,
+        _ => 3,
+    });
+    let before = mesh.positions.clone();
+    let view = view_of(&mesh, 0.0);
+    let mut sculptor = by_groups(0.2, |s| s.pose.rigidity = 1.0);
+    let (from, to) = (Vec3::new(0.0, 0.1, THICK), Vec3::new(0.4, -0.05, THICK));
+    let rest = drag(&mut mesh, &mut sculptor, &view, from, to, false);
+    assert!((rest[1].y - elbow).abs() < 1e-4, "the joint is at {}, the elbow at {elbow}", rest[1]);
+    let chain = chains(&sculptor)[0].clone();
+    assert!(release(&mut mesh, &mut sculptor, &view).is_some());
+    let (joint, turn) = (rest[1], turn_about(rest[1], rest[0], chain[0]));
+    let mut hand = 0;
+    for (v, &was) in before.iter().enumerate() {
+        let now = mesh.positions[v];
+        if was.y < elbow - 1e-4 {
+            assert_eq!(now, was, "vertex {v} below the elbow moved");
+        } else {
+            // A hinge (Rigidity 1): the forearm and the hand turn whole.
+            assert!(now.distance(joint + turn * (was - joint)) < 1e-5, "vertex {v} at {was} was not carried whole");
+            hand += usize::from(was.y > wrist);
+        }
+    }
+    assert!(hand > 500, "{hand} vertices of the hand");
+}
+
+/// Two limbs either side of the mirror plane, each with an upper part that
+/// is a group of its own (2 on the right, 3 on the left): pressed on the
+/// right one, the left one bends as its mirror image, each at its own border.
+#[test]
+fn working_from_face_groups_a_mirrored_drag_gives_a_mirrored_result() {
+    for joints in [1, 2] {
+        let mut mesh = grouped(two_limbs(), |c| match (c.y > 0.2, c.x > 0.0) {
+            (false, _) => 1,
+            (true, true) => 2,
+            (true, false) => 3,
+        });
+        let twins = twins(&mesh);
+        let before = mesh.positions.clone();
+        let view = view_of(&mesh, 0.0);
+        let mut sculptor = by_groups(0.3, |s| {
+            s.symmetry = [true, false, false];
+            s.pose.joints = joints;
+        });
+        let grabbed = Vec3::new(0.6, 0.8, THICK);
+        assert_eq!(chains_at(&mesh, &mut sculptor, grabbed), 2, "a chain for each limb");
+        let rest = drag(&mut mesh, &mut sculptor, &view, grabbed, Vec3::new(0.95, 0.55, THICK), false);
+        assert!((rest[1].y - 0.2).abs() < 0.05, "{joints} joints: the joint is at {}", rest[1]);
+        assert!(release(&mut mesh, &mut sculptor, &view).is_some());
+        let flip = Vec3::new(-1.0, 1.0, 1.0);
+        let (mut worst, mut moved) = (0.0f32, [0.0f32; 2]);
+        for (v, &t) in twins.iter().enumerate() {
+            worst = worst.max(mesh.positions[t as usize].distance(mesh.positions[v] * flip));
+            let far = mesh.positions[v].distance(before[v]);
+            moved[usize::from(before[v].x > 0.0)] = moved[usize::from(before[v].x > 0.0)].max(far);
+            if before[v].y < 0.0 && joints == 1 {
+                assert_eq!(mesh.positions[v], before[v], "vertex {v} of the lower group moved");
+            }
+        }
+        assert!(moved[0] > 0.1 && moved[1] > 0.1, "{joints} joints: both limbs moved, {moved:?}");
+        assert!(worst < 2e-6, "{joints} joints: the two sides differ by {worst}");
+    }
+}
+
+/// Set to work from face groups on an object that has none: the app is
+/// told why a press would do nothing, there is no chain to show, and a drag
+/// that gets through anyway changes nothing.
+#[test]
+fn working_from_face_groups_on_an_object_without_any_does_nothing_and_says_why() {
+    let mut mesh = limb();
+    let before = mesh.positions.clone();
+    let view = view_of(&mesh, 0.0);
+    let mut sculptor = by_groups(0.3, |_| {});
+    assert_eq!(sculptor.pose_refusal(&mesh, false), Some(NO_GROUPS));
+    // Not with Shift held, which is the Smooth brush, nor while painting the mask.
+    assert_eq!(sculptor.pose_refusal(&mesh, true), None);
+    sculptor.settings.mask_mode = true;
+    assert_eq!(sculptor.pose_refusal(&mesh, false), None);
+    sculptor.settings.mask_mode = false;
+    assert_eq!(chains_at(&mesh, &mut sculptor, Vec3::new(0.0, 0.8, THICK)), 0, "a chain with no group to show");
+    let (from, to) = (Vec3::new(0.0, 0.8, THICK), Vec3::new(0.45, 0.45, THICK));
+    assert!(sculptor.begin(&mut mesh, &view, sample(&view, from, 0), false, false));
+    for step in 1..=10 {
+        sculptor.sample(&mut mesh, &view, sample(&view, from.lerp(to, step as f32 / 10.0), step));
+        sculptor.frame(&mut mesh, &view, 1.0 / 60.0);
+    }
+    assert!(release(&mut mesh, &mut sculptor, &view).is_none(), "nothing to undo");
+    assert!(mesh.positions == before, "the limb moved");
+    // The brush ring needs no groups, and an object with groups needs no telling.
+    assert_eq!(poser(0.3, |_| {}).pose_refusal(&mesh, false), None);
+    let mesh = grouped(mesh, |c| if c.y > 0.2 { 2 } else { 1 });
+    assert_eq!(sculptor.pose_refusal(&mesh, false), None);
+}
+
+/// Working from the brush ring, as Pose always did, groups on the object make
+/// no difference: the same drag gives the same limb, to the bit, with or
+/// without them.
+#[test]
+fn working_from_the_brush_ring_face_groups_change_nothing() {
+    let pose = |mut mesh: Mesh| {
+        let view = view_of(&mesh, 0.0);
+        let mut sculptor = poser(0.5, |s| s.pose.joints = 2);
+        drag(&mut mesh, &mut sculptor, &view, Vec3::new(0.0, 0.8, THICK), Vec3::new(0.4, 0.5, THICK), false);
+        release(&mut mesh, &mut sculptor, &view).expect("the drag moved the limb");
+        mesh.positions
+    };
+    let plain = pose(limb());
+    let border = row_near(&limb(), 0.2);
+    assert!(pose(grouped(limb(), |c| if c.y > border { 2 } else { 1 })) == plain);
+    assert!(PoseSettings::default().from == PoseFrom::Ring, "the brush ring is still where Pose starts");
+}
+
+/// A drag that works from a face group is one undo step, as any Pose drag.
+#[test]
+fn working_from_face_groups_one_drag_is_one_undo_step() {
+    let plain = limb();
+    let border = row_near(&plain, 0.2);
+    let mut mesh = grouped(plain, |c| if c.y > border { 2 } else { 1 });
+    let before = mesh.positions.clone();
+    let view = view_of(&mesh, 0.0);
+    let mut sculptor = by_groups(0.3, |_| {});
+    let mut history = History::default();
+    drag(&mut mesh, &mut sculptor, &view, Vec3::new(0.0, 0.8, THICK), Vec3::new(0.4, 0.5, THICK), false);
+    history.push_stroke(release(&mut mesh, &mut sculptor, &view).expect("the drag moved the limb"));
+    assert_eq!(history.steps(), (1, 0));
+    assert!(mesh.positions != before);
+    history.undo(&mut mesh);
+    assert!(mesh.positions == before, "undo did not put the limb back");
 }
 
 // ----------------------------------------------------------------- timing

@@ -2065,6 +2065,15 @@ ja: 関節から離れる方向にドラッグするとその部分が大きく�
 en: Drag along the limb to make it longer and thinner, or shorter and fatter.
 ja: 手足に沿ってドラッグすると、長く細くなったり、短く太くなったりします。
 
+en: The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts across it. The brush size sets how far up the limb the joint is.
+ja: ブラシのリングがパーツを選びます。リングに入る部分が手足になり、関節はリングが手足を横切る位置に来ます。ブラシのサイズで、手足のどのあたりに関節が来るかが決まります。
+
+en: The face group under the pen is the part: it bends where it meets the rest of the model, wherever on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush size only sets how soft the bend is, with Rigidity.
+ja: ペンの下のフェイスグループがパーツになります。どこを押しても、そのグループはモデルの残りの部分と接する位置で曲がり、その先にあるもの(前腕の先の手など)も一緒に動きます。ブラシのサイズは、Rigidity と合わせて曲がりの柔らかさを決めるだけです。
+
+en: Pose is set to work from face groups, and this object has none: make some on the Face Groups card (Mesh tab), or set Pose to Brush Ring.
+ja: Pose はフェイスグループから動かす設定ですが、このオブジェクトにはフェイスグループがありません。Face Groups カード(Mesh タブ)で作成するか、Pose を Brush Ring に切り替えてください。
+
 en: The object the spheres were attached to is gone. They stay where they are.
 ja: スフィアを取り付けていたオブジェクトがなくなりました。スフィアはその場に残ります。
 
@@ -3354,6 +3363,9 @@ ja: 関節での曲がり方の鋭さ。低いと長くやわらかな曲線で�
 
 en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The brush size sets how far up the limb the joint is.
 ja: 押す前に、白い線で曲がる位置が分かります。各関節にドット、動かない関節にはリングが付きます。ブラシのサイズで、手足のどのあたりに関節が来るかが決まります。
+
+en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The joint is where the face group under the pen meets the rest of the model; make the parts groups of their own first (Mesh tab, Face Groups).
+ja: 押す前に、白い線で曲がる位置が分かります。各関節にドット、動かない関節にはリングが付きます。関節は、ペンの下のフェイスグループがモデルの残りの部分と接する位置です。先に各パーツをそれぞれのグループにしておいてください(Mesh タブ、Face Groups)。
 
 en: Puts the detail of another object onto this one. For clean topology: Clone the sculpt, Quad Remesh the copy, then Subdivide (Ctrl+D) and Project, a few times over. The copy takes on the sculpt's detail and keeps its even quads and levels.\n\nEach point looks along its own direction, out and in, for the other surface facing its way, and goes to the nearer. The mask protects as it does from a brush.
 ja: 別のオブジェクトのディテールを、このオブジェクトに乗せます。きれいなトポロジーにするには、スカルプトを Clone し、コピーを Quad Remesh してから、Subdivide (Ctrl+D) と Project を数回繰り返します。コピーがスカルプトのディテールを引き継ぎ、均一なクワッドとレベルを保ちます。\n\n各頂点は、自分の向きに沿って外側と内側を探し、向かい合うもう一方のサーフェスのうち近いほうへ移動します。マスクは、ブラシのときと同じように頂点を守ります。

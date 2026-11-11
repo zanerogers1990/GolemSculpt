@@ -704,4 +704,20 @@ fn the_pose_preview_shows_the_chain_a_press_kept_to_its_group_will_make() {
         let off = apart(&shown, &made);
         assert!(off < 0.02, "tick {stay_in_group}: the preview is {off} from the chain the press makes");
     }
+
+    // Working from face groups, Stay in Group is left out: the group is what the press takes hold of
+    // already, and fenced in it the brush could not see the rest of the model to bend against.
+    let by_group = |stay_in_group: bool| {
+        let mut sculptor = poser(stay_in_group);
+        sculptor.settings.pose.from = crate::sculpt::PoseFrom::Group;
+        sculptor
+    };
+    let pos = view.project(at).unwrap();
+    assert!(!stay(&mut mesh, &by_group(true), &view, pos, false), "a Face Group press is not fenced in");
+    assert!(!mesh.stays_in_groups());
+    let (free, kept) = (preview(&mut mesh, &mut by_group(false)), preview(&mut mesh, &mut by_group(true)));
+    assert!(!free.is_empty() && apart(&free, &kept) == 0.0, "the tick changes nothing: {free:?} / {kept:?}");
+    // And the joint is the border between the two groups, at y = 0, on the limb's middle.
+    let joint = free[0][1];
+    assert!(joint.y.abs() < 0.03 && joint.x.abs() < 0.02 && joint.z.abs() < 0.02, "joint at {joint}");
 }

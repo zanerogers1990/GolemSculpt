@@ -51,7 +51,7 @@ use crate::mesh::Mesh;
 use crate::mesh::groups::{self, Carried, Fit, GroupsStep, Made, Source};
 use crate::mesh::paint::transfer as paint;
 use crate::scene::Scene;
-use crate::sculpt::Sculptor;
+use crate::sculpt::{PoseFrom, Sculptor};
 use crate::ui::groups::{Armed, Ask, Picked, counted};
 
 mod bridge;
@@ -120,10 +120,15 @@ pub(crate) fn stay_at(mesh: &mut Mesh, sculptor: &Sculptor, at: glam::Vec3, smoo
 /// Whether a stroke begun now would be kept to its group: the mesh has
 /// groups, and the brush that would do the work has the tick. With Shift
 /// held that is the Smooth brush Shift brings up, by its own tick.
+///
+/// Never for Pose working from face groups: the group is what it takes hold
+/// of already, and the fence would stop it finding the rest of the model on
+/// the far side of the group's border, which is how it tells where to bend.
 fn stays(mesh: &Mesh, sculptor: &Sculptor, smooth_held: bool) -> bool {
     let settings = &sculptor.settings;
     let brush = sculptor.effective_brush(smooth_held);
-    mesh.has_groups() && settings.in_use(brush, smooth_held && !settings.mask_mode).0.stay_in_group
+    let by_group = brush == crate::sculpt::Brush::Pose && !settings.mask_mode && settings.pose.from == PoseFrom::Group;
+    mesh.has_groups() && !by_group && settings.in_use(brush, smooth_held && !settings.mask_mode).0.stay_in_group
 }
 
 /// The face that shows nearest `at`.

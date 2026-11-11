@@ -632,7 +632,7 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
                 );
                 theme::about(ui, "Ctrl or the right button pushes the surface in or pulls it out, the way it faces: drag up for out, down for in. At the outline, drag the way it faces.");
             }
-            Brush::Pose => pose::settings(ui, s, tips),
+            Brush::Pose => pose::settings(ui, s, &doc.mesh, tips),
             // Auto Smooth and the rest, below, are theirs.
             Brush::Standard | Brush::SnakeHook => {}
         }

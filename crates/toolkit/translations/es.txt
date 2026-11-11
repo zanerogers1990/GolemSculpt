@@ -2065,6 +2065,15 @@ es: Arrastra alejándote de la articulación para agrandar esa parte, y hacia la
 en: Drag along the limb to make it longer and thinner, or shorter and fatter.
 es: Arrastra a lo largo de la extremidad para hacerla más larga y fina, o más corta y gruesa.
 
+en: The brush ring picks the part: what it takes in is the limb, and the joint goes where the ring cuts across it. The brush size sets how far up the limb the joint is.
+es: El anillo del pincel elige la parte: lo que abarca es la extremidad, y la articulación va donde el anillo la corta de lado a lado. El tamaño del pincel determina a qué altura de la extremidad está la articulación.
+
+en: The face group under the pen is the part: it bends where it meets the rest of the model, wherever on it you press, and takes along whatever lies past it, such as the hand on a forearm. The brush size only sets how soft the bend is, with Rigidity.
+es: El grupo de caras bajo el lápiz es la parte: se dobla donde se une con el resto del modelo, pulses donde pulses sobre él, y se lleva consigo lo que haya más allá, como la mano en un antebrazo. El tamaño del pincel solo determina lo suave que es la curva, junto con Rigidity.
+
+en: Pose is set to work from face groups, and this object has none: make some on the Face Groups card (Mesh tab), or set Pose to Brush Ring.
+es: Pose está ajustado para trabajar a partir de grupos de caras, y este objeto no tiene ninguno: crea algunos en la tarjeta Face Groups (pestaña Mesh), o pon Pose en Brush Ring.
+
 en: The object the spheres were attached to is gone. They stay where they are.
 es: El objeto al que estaban unidas las esferas ya no está. Se quedan donde están.
 
@@ -3354,6 +3363,9 @@ es: Cuán bruscamente se dobla la extremidad en una articulación: un valor bajo
 
 en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The brush size sets how far up the limb the joint is.
 es: La línea blanca muestra por dónde se doblará antes de que pulses: un punto en cada articulación, y un anillo alrededor de la que se queda fija. El tamaño del pincel determina a qué altura de la extremidad está la articulación.
+
+en: The white line shows where it will bend before you press: a dot on each joint, and a ring round the one that stays put. The joint is where the face group under the pen meets the rest of the model; make the parts groups of their own first (Mesh tab, Face Groups).
+es: La línea blanca muestra por dónde se doblará antes de que pulses: un punto en cada articulación, y un anillo alrededor de la que se queda fija. La articulación está donde el grupo de caras bajo el lápiz se une con el resto del modelo; primero haz de cada parte un grupo propio (pestaña Mesh, Face Groups).
 
 en: Puts the detail of another object onto this one. For clean topology: Clone the sculpt, Quad Remesh the copy, then Subdivide (Ctrl+D) and Project, a few times over. The copy takes on the sculpt's detail and keeps its even quads and levels.\n\nEach point looks along its own direction, out and in, for the other surface facing its way, and goes to the nearer. The mask protects as it does from a brush.
 es: Pone el detalle de otro objeto sobre este. Para una topología limpia: haz Clone de la escultura, Quad Remesh a la copia, y luego Subdivide (Ctrl+D) y Project, varias veces. La copia adquiere el detalle de la escultura y conserva sus quads uniformes y sus niveles.\n\nCada punto busca, en su propia dirección, hacia fuera y hacia dentro, la otra superficie que mira hacia él, y va a la más cercana. La máscara protege igual que frente a un pincel.

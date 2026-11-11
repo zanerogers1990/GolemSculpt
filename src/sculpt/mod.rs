@@ -66,7 +66,7 @@ use kernels::{CurvatureBase, Dab, Params, SymOp};
 pub use modes::{FlattenMode, SmoothMode};
 pub use pace::Pace;
 use share::{Settling, Shared, Tally};
-pub use pose::{PoseMode, PoseSettings};
+pub use pose::{NO_GROUPS as POSE_NO_GROUPS, PoseFrom, PoseMode, PoseSettings};
 pub use symmetry::{Radial, RadialAxis};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

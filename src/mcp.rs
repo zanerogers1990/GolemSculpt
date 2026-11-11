@@ -481,6 +481,22 @@ fn lazy_properties() -> Value {
     })
 }
 
+/// The Pose brush's choice of what it takes hold of, on its own because
+/// set_brush's list of settings is already as long as one json! can be.
+fn pose_from_property() -> Value {
+    json!({
+        "pose_from": {
+            "type": "string",
+            "enum": ["ring", "group"],
+            "description": "Pose: what a press takes hold of. ring (the app's default) takes what the brush ring \
+                            reaches and puts the joint where the ring cuts the limb; group takes the face group \
+                            under the press, with the joint where it meets the part leading to the bulk of the \
+                            model, and whatever lies past it goes along. group needs the object to have face \
+                            groups: a stroke on one without is turned down.",
+        },
+    })
+}
+
 fn with_properties(mut properties: Value, more: Value) -> Value {
     if let (Some(all), Value::Object(more)) = (properties.as_object_mut(), more) {
         all.extend(more);
@@ -607,7 +623,7 @@ fn tools() -> Value {
              a deleted brush's file was kept). The symmetry settings (mirror_x, mirror_y, mirror_z, radial, radial_axis, radial_custom_axis, \
              symmetry_space) are not the brush's: each object has its own, and these set the active object's. \
              Select another object and its own symmetry is what strokes are made under.",
-            with_properties(with_properties(brush_library_properties(), lazy_properties()), json!({
+            with_properties(with_properties(with_properties(brush_library_properties(), lazy_properties()), pose_from_property()), json!({
                 "brush": string(
                     "The brush, by its name in the library: a base brush (Move, Clay, Smooth, Crease, Inflate, \
                      Flatten, Pose, Standard, Layer, Snake Hook, Pinch, Nudge, Erase Layer, Paint), a shipped one or \

@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sculpt::alpha::AlphaSettings;
 use crate::sculpt::dyntopo::{self, DynTopo};
-use crate::sculpt::{Brush, BrushSettings, FalloffCurve, FlattenMode, PoseMode, PoseSettings, Settings, SmoothMode};
+use crate::sculpt::{Brush, BrushSettings, FalloffCurve, FlattenMode, PoseFrom, PoseMode, PoseSettings, Settings, SmoothMode};
 
 const FILE_NAME: &str = "settings.json";
 
@@ -374,6 +374,10 @@ pub struct BrushPrefs {
     /// joints a bend has, how far past the brush ring the first one sits and
     /// how sharply a joint bends.
     pub pose_mode: String,
+    /// Pose: what a press takes hold of, by name (Brush Ring or Face Group).
+    /// A file from before there was a choice has none, and gets Brush Ring,
+    /// which is what Pose did then.
+    pub pose_from: String,
     pub pose_joints: u32,
     pub pose_offset: f32,
     pub pose_rigidity: f32,
@@ -461,6 +465,7 @@ impl BrushPrefs {
             move_connected: s.move_connected,
             move_strength: s.per_brush[Brush::Move.index()].strength,
             pose_mode: s.pose.mode.name().to_owned(),
+            pose_from: s.pose.from.name().to_owned(),
             pose_joints: s.pose.joints,
             pose_offset: s.pose.offset,
             pose_rigidity: s.pose.rigidity,
@@ -499,6 +504,7 @@ impl BrushPrefs {
         if let Some(mode) = PoseMode::ALL.into_iter().find(|mode| mode.name() == self.pose_mode) {
             s.pose.mode = mode;
         }
+        s.pose.from = PoseFrom::ALL.into_iter().find(|from| from.name() == self.pose_from).unwrap_or(d.pose.from);
         s.pose.joints = self.pose_joints.clamp(1, PoseSettings::MAX_JOINTS);
         s.pose.offset = fit(self.pose_offset, 0.0, PoseSettings::MAX_OFFSET, d.pose.offset);
         s.pose.rigidity = fit(self.pose_rigidity, 0.0, 1.0, d.pose.rigidity);
@@ -1320,7 +1326,7 @@ mod tests {
     fn a_settings_file_from_before_the_pose_brush_still_loads() {
         let mut older = serde_json::to_value(Prefs::default()).unwrap();
         let brush = older["brush"].as_object_mut().unwrap();
-        for key in ["pose_mode", "pose_joints", "pose_offset", "pose_rigidity"] {
+        for key in ["pose_mode", "pose_from", "pose_joints", "pose_offset", "pose_rigidity"] {
             assert!(brush.remove(key).is_some(), "{key} is in the file");
         }
         // Nor about the brushes added after it.
@@ -1439,7 +1445,7 @@ mod tests {
         settings.screen_space_size = false;
         settings.radius_world = 0.125;
         settings.move_connected = true;
-        settings.pose = PoseSettings { mode: PoseMode::Stretch, joints: 5, offset: 0.75, rigidity: 0.2 };
+        settings.pose = PoseSettings { mode: PoseMode::Stretch, from: PoseFrom::Group, joints: 5, offset: 0.75, rigidity: 0.2 };
         settings.per_brush[Brush::Layer.index()].front_facing = true;
         settings.per_brush[Brush::Flatten.index()].focal_shift = -0.4;
         let drawn = FalloffCurve { points: vec![glam::Vec2::new(0.0, 1.0), glam::Vec2::new(0.25, 0.75), glam::Vec2::new(1.0, 0.0)] };
@@ -1454,7 +1460,7 @@ mod tests {
         assert_eq!(back.brush, Brush::SnakeHook);
         assert!(back.per_brush[Brush::Layer.index()].front_facing);
         assert_eq!((back.screen_space_size, back.radius_world, back.move_connected), (false, 0.125, true));
-        assert_eq!(back.pose, PoseSettings { mode: PoseMode::Stretch, joints: 5, offset: 0.75, rigidity: 0.2 });
+        assert_eq!(back.pose, PoseSettings { mode: PoseMode::Stretch, from: PoseFrom::Group, joints: 5, offset: 0.75, rigidity: 0.2 });
         assert_eq!(back.falloff[Brush::Clay.index()], Some(drawn));
         assert!(back.falloff[Brush::Crease.index()].is_none(), "a brush with no curve kept goes back to its own falloff");
 
