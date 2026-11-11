@@ -16,6 +16,9 @@ pub mod cavity;
 pub mod dyntopo;
 pub mod erase;
 mod falloff;
+mod hook;
+#[cfg(test)]
+mod hook_tests;
 mod input;
 mod jitter;
 mod kernels;

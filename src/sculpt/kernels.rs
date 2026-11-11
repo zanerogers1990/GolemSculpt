@@ -19,6 +19,7 @@ use super::Brush;
 use super::alpha::{Frame, Stamp};
 use super::erase::{self, Erased};
 use super::falloff::Falloff;
+use super::hook::Hooked;
 use super::modes::{FlattenMode, SmoothMode};
 use super::share::{Shared, Sharing};
 use crate::mesh::{Mesh, Rings, StrokeVertex};
@@ -638,6 +639,8 @@ pub struct Scratch {
     relaxed_prepared: Vec<(u32, u32)>,
     /// Steady Plane: each copy of the brush's planes so far (see [`Steady`]).
     steady: Vec<(SymOp, Steady)>,
+    /// Snake Hook: what each copy of the pull has hold of (hook.rs).
+    hooked: Hooked,
     /// What a pass of the smoothing that keeps volume, or of Even Out, has
     /// worked out for each vertex of the dab's leaves (see [`relax_step`]).
     tidy: Vec<Tidy>,
@@ -832,6 +835,14 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
     if p.prints() {
         return print(mesh, p, d, leaves);
     }
+    // Snake Hook pulls only the surface joined to what it has hold of, and
+    // tidies only that (hook.rs). Taken out of the scratch buffers for the
+    // dab, as Auto Smooth below works in them too.
+    let hooked = (p.brush == Brush::SnakeHook).then(|| {
+        let mut hooked = std::mem::take(&mut scratch.hooked);
+        hooked.take_hold(mesh, p.radius, d, leaves);
+        hooked
+    });
     match p.brush {
         Brush::Inflate => inflate(mesh, p, d, leaves, scratch),
         Brush::Standard => standard(mesh, p, d, leaves, scratch),
@@ -840,7 +851,11 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
         Brush::Clay => clay(mesh, p, d, leaves, fit, scratch),
         Brush::Crease => crease(mesh, p, d, leaves),
         Brush::Smooth => smooth_dab(mesh, p, d, leaves, fit, scratch),
-        Brush::SnakeHook => snake(mesh, p, d, leaves),
+        Brush::SnakeHook => {
+            if let Some(hooked) = hooked.as_ref().filter(|h| h.holds_any()) {
+                snake(mesh, p, d, leaves, hooked);
+            }
+        }
         Brush::Pinch => pinch(mesh, p, d, leaves),
         Brush::Nudge => nudge(mesh, p, d, leaves, fit),
         // Move and Pose take hold once at the press and are dragged, not
@@ -850,7 +865,13 @@ pub fn apply(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], 
     // Smooth is smoothing already. A brush with neither at nought is left
     // exactly as it was: nothing more is read or written.
     if p.brush != Brush::Smooth && p.tidy > 0.0 && (p.auto_smooth > 0.0 || p.even_out > 0.0) {
-        tidy(mesh, p, d, leaves, scratch);
+        if hooked.as_ref().is_none_or(Hooked::holds_any) {
+            tidy(mesh, p, d, leaves, scratch, hooked.as_ref());
+        }
+    }
+    if let Some(mut hooked) = hooked {
+        hooked.keep(d.copy);
+        scratch.hooked = hooked;
     }
 }
 
@@ -2215,7 +2236,9 @@ fn weighs_by_start(brush: Brush) -> bool {
 /// up with the way the stroke is going.
 ///
 /// Measured where the brush measures its own weights, from the dab's centre.
-fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
+/// For Snake Hook, only what the pull holds (`hooked`): a part the ring
+/// passes over is not pulled, and is not smoothed either.
+fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch, hooked: Option<&Hooked>) {
     // For the dabs since the last that tidied (`Params::tidy`).
     let p = &Params { dose: p.tidy, ..*p };
     let passes = (p.auto_smooth * d.pressure * p.dose * SMOOTH_MOST_PASSES).clamp(0.0, SMOOTH_MOST_PASSES);
@@ -2237,7 +2260,7 @@ fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scra
         let i = v as usize;
         let pos = mesh.positions[i];
         let d2 = if by_start { mesh.start_pos(v) } else { pos }.distance_squared(centre);
-        if d2 >= r2 {
+        if d2 >= r2 || hooked.is_some_and(|hooked| !hooked.holds(v)) {
             return 0.0;
         }
         p.falloff.at(d2.sqrt() / r, smooth)
@@ -2555,7 +2578,11 @@ fn nudge(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
 /// under the tip is turned about it by the turn of the way the stroke is
 /// going since the step before (from `dir` to `heading`), by its weight, so
 /// a pull that curves keeps its cross-section square to its path.
-fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
+///
+/// Only the surface the pull has hold of moves (`hooked`, see hook.rs): the
+/// rest of what is inside the ring, a finger beside the one being pulled,
+/// stays where it is.
+fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], hooked: &Hooked) {
     let r = p.radius;
     let r2 = r * r;
     let follow = (p.strength * d.pressure).clamp(0.0, 1.0);
@@ -2569,7 +2596,7 @@ fn snake(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     mesh.move_within(leaves, d.center, r2, |_, vt| {
         let pos = vt.pos;
         let d2 = pos.distance_squared(d.center);
-        if d2 >= r2 {
+        if d2 >= r2 || !hooked.holds(vt.index) {
             return None;
         }
         let w = p.falloff.at(d2.sqrt() / r, smooth)
