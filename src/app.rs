@@ -347,6 +347,9 @@ struct Running {
     decimate: decimate::State,
     /// A Remesh at work in the background (see app/remesh_job.rs).
     remesh: remesh_job::State,
+    /// A Check Symmetry, Make Symmetric or Symmetry Cleanup at work in the
+    /// background (see app/symmetry_repair.rs).
+    symmetry_repair: symmetry_repair::State,
     /// What Apply Scale remembers (see app/apply_scale.rs).
     apply_scale: apply_scale::State,
     /// A Bake Maps at work in the background (see app/bake.rs).
@@ -676,6 +679,7 @@ impl Running {
             print_watch: Default::default(),
             decimate: Default::default(),
             remesh: Default::default(),
+            symmetry_repair: Default::default(),
             apply_scale: Default::default(),
             bake: None,
             capture: None,
@@ -2010,6 +2014,8 @@ impl Running {
         // A Decimate or a Remesh that has finished in the background takes the model's place.
         self.decimate_frame();
         self.remesh_frame();
+        // So do the Symmetry card's repairs (app/symmetry_repair.rs).
+        self.symmetry_repair_frame();
         // A Bake Maps that has finished says where its files went (app/bake.rs).
         self.bake_frame();
 

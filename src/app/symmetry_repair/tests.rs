@@ -321,3 +321,138 @@ fn a_recording_layer_takes_the_repair_like_any_stroke() {
     assert_eq!(history.undo(&mut mesh), Some(false));
     assert!(furthest(&mesh.positions, &before) < 1e-5);
 }
+
+/// `repair` of `mesh` the way the app runs it: worked out on a copy in a job
+/// of its own, then landed on `mesh` as `Running::symmetry_repair_land`
+/// does. Returns the line, and the rebuilt mesh of a weld, which the app
+/// puts in the old one's place.
+fn through_a_job(mesh: &mut Mesh, history: &mut History, repair: Repair) -> (Result<String, String>, Option<Mesh>) {
+    let jobs = sculpt_toolkit::Jobs::plain();
+    let copied = Copied::of(mesh);
+    let job = jobs.spawn(repair.label(), move |cx| in_background(cx, repair, copied, "Ball", 1.0));
+    let (found, census) = match job.wait() {
+        Ok(done) => done,
+        Err(why) => return (Err(why), None),
+    };
+    match found {
+        Found::Checked(text, _) => (Ok(text), None),
+        Found::Symmetrized(text, moved) => (Ok(text + &commit(mesh, history, &moved)), None),
+        Found::Cleaned(text, cleaning) => match apply_cleaning(mesh, history, cleaning, text) {
+            (Cleanup::Rebuilt(built), text) => {
+                // The job checked the weld for closed, so the window need not.
+                assert_eq!(census, Some(printable::census(&built)));
+                (Ok(text), Some(built))
+            }
+            (_, text) => {
+                assert_eq!(census, None);
+                (Ok(text), None)
+            }
+        },
+    }
+}
+
+#[test]
+fn a_repair_run_in_the_background_comes_to_what_the_direct_call_does() {
+    // Check Symmetry: the same line, on a model that is and one that is not.
+    for mut mesh in [symmetric(), lopsided(), with_an_odd_part()] {
+        let (said, before) = (symmetry_of(&mesh, "Ball", Axis::X, 1.0).0, mesh.positions.clone());
+        let mut history = History::default();
+        let (text, _) = through_a_job(&mut mesh, &mut history, Repair::Check(Axis::X));
+        assert_eq!(text.unwrap(), said);
+        assert_eq!((mesh.positions, history.steps()), (before, (0, 0)), "a check changes nothing");
+    }
+
+    // Make Symmetric, from either side: the same line, the same vertices moved, one undo step.
+    for from_positive in [false, true] {
+        let (mut direct, mut queued) = (lopsided(), lopsided());
+        let (mut direct_history, mut queued_history) = (History::default(), History::default());
+        let said = make_symmetric(&mut direct, &mut direct_history, Axis::X, 1.0, from_positive);
+        let (text, built) = through_a_job(&mut queued, &mut queued_history, Repair::Make { axis: Axis::X, from_positive });
+        assert!(built.is_none());
+        assert_eq!(text, said);
+        assert_eq!(queued.positions, direct.positions);
+        assert_eq!(queued_history.steps(), (1, 0));
+        assert_eq!(queued_history.undo(&mut queued), Some(false));
+        assert_eq!(queued.positions, lopsided().positions);
+    }
+
+    // And its refusal, word for word, with nothing changed.
+    let mut odd = with_an_odd_part();
+    let mut history = History::default();
+    let refused = make_symmetric(&mut with_an_odd_part(), &mut History::default(), Axis::X, 1.0, true);
+    let (text, _) = through_a_job(&mut odd, &mut history, Repair::Make { axis: Axis::X, from_positive: true });
+    assert!(refused.is_err());
+    assert_eq!(text, refused);
+    assert_eq!((odd.positions, history.steps()), (with_an_odd_part().positions, (0, 0)));
+
+    // Symmetry Cleanup that only moves vertices: a stroke, as the direct call makes.
+    let ball = symmetric();
+    let mut knocked = ball.positions.clone();
+    for (k, p) in knocked.iter_mut().filter(|p| p.x == 0.0).enumerate() {
+        p.x = if k % 2 == 0 { 4e-4 } else { -3e-4 };
+    }
+    let (mut direct, mut queued) =
+        (Mesh::new(knocked.clone(), ball.indices.clone(), None), Mesh::new(knocked, ball.indices.clone(), None));
+    let (mut direct_history, mut queued_history) = (History::default(), History::default());
+    let said = clean_up(&mut direct, &mut direct_history, Axis::X, 1.0).map(|(_, text)| text);
+    let (text, built) = through_a_job(&mut queued, &mut queued_history, Repair::Cleanup(Axis::X));
+    assert!(built.is_none());
+    assert_eq!(text, said);
+    assert_eq!(queued.positions, direct.positions);
+    assert_eq!(queued_history.steps(), (1, 0));
+
+    // And one that welds: the same new mesh, built in the job.
+    let (mut direct, mut queued) = (two_halves(), two_halves());
+    let Ok((Cleanup::Rebuilt(welded), said)) = clean_up(&mut direct, &mut History::default(), Axis::X, 1.0) else {
+        panic!("two halves weld");
+    };
+    let mut history = History::default();
+    let (text, built) = through_a_job(&mut queued, &mut history, Repair::Cleanup(Axis::X));
+    let built = built.expect("a weld is a new mesh");
+    assert_eq!(text, Ok(said));
+    assert_eq!((&built.positions, &built.indices, &built.mask), (&welded.positions, &welded.indices, &welded.mask));
+    assert_eq!(history.steps(), (0, 0), "the app records a rebuilt mesh as it puts it in place");
+}
+
+#[test]
+fn a_repair_is_not_used_on_a_model_changed_while_it_worked() {
+    let repair = Repair::Make { axis: Axis::X, from_positive: false };
+    let mut mesh = lopsided();
+    let mut history = History::default();
+    let of = Of::now(repair, 7, mesh.uid, &history);
+    assert!(of.holds(7, &mesh, &history), "nothing has happened yet");
+    // Another object's mesh, or another mesh in this object's place.
+    assert!(!of.holds(8, &mesh, &history));
+    assert!(!of.holds(7, &lopsided(), &history));
+
+    // An edit recorded since: here the repair itself, pressed again by hand.
+    make_symmetric(&mut mesh, &mut history, Axis::X, 1.0, false).unwrap();
+    assert!(!of.holds(7, &mesh, &history));
+    // An edit begun from the model as it is now holds until the next one.
+    let of = Of::now(repair, 7, mesh.uid, &history);
+    assert!(of.holds(7, &mesh, &history));
+    // An Undo records no edit, and is a change of model all the same.
+    let edits = history.edits;
+    assert_eq!(history.undo(&mut mesh), Some(false));
+    assert_eq!(history.edits, edits);
+    assert!(!of.holds(7, &mesh, &history));
+}
+
+#[test]
+fn a_cancelled_repair_says_so_without_bad_news() {
+    // What the job says on a cancel is what the landing knows for one (`cancelled`).
+    let jobs = sculpt_toolkit::Jobs::plain();
+    let repair = Repair::Cleanup(Axis::X);
+    let copied = Copied::of(&two_halves());
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let job = jobs.spawn(repair.label(), move |cx| {
+        let _ = wait.recv();
+        in_background(cx, repair, copied, "Ball", 1.0)
+    });
+    jobs.cancel(0);
+    go.send(()).unwrap();
+    let Err(why) = job.wait() else { panic!("a cancelled repair hands back nothing to land") };
+    assert_eq!(why, cancelled(repair));
+    assert_eq!(why, "Symmetry Cleanup was cancelled. The model is as it was.");
+    assert_eq!(cancelled(Repair::Check(Axis::X)), "Check Symmetry was cancelled.");
+}

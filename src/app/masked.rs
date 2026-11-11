@@ -17,11 +17,35 @@
 //! A vertex on a plane is moved by the average of the two halves' moves,
 //! which keeps it on the plane. With the object's own planes, a model that
 //! is mirrored to the bit stays mirrored to the bit.
+//!
+//! **Radial symmetry.** With strokes repeated round an axis as well, the
+//! drag is repeated as a stroke is: through the same list of copies the
+//! brushes and the Pose tool keep (`Settings::symmetry_group`), every turn
+//! round the axis and every mirror image. Mask round six tentacles, pull one
+//! out, and all six come out. The free surface is shared out between the
+//! copies as pieces: one piece follows the gizmo, and each of the others is
+//! that piece as one copy carries it, moved as that copy carries the drag.
+//! Which piece a vertex is in is a matter of which copy of one point, the
+//! middle of the leading piece, it is nearest; so the borders between the
+//! pieces run halfway between one tentacle and the next, through the mask,
+//! where they tear nothing. The leading piece is the one furthest out along
+//! the first spoke of the radial guide (the plus side of the planes, as
+//! above), or the only free piece when just one is left free. A vertex on a
+//! border (on the axis, or on a plane among the copies) is shared by the
+//! copies that meet there and moved by the average of their moves, which is
+//! what the Move grab's sharing rule (`share::Hold`) comes to for copies that
+//! hold a vertex alike: it keeps a vertex on the axis on the axis, and no
+//! copy counts for more than another, whatever order the copies come in.
+//! Turns by a share of a circle are not exact in floats, so the copies agree
+//! to rounding rather than to the bit.
 
-use glam::{Affine3A, DMat4, DVec3, Mat3, Mat4, Vec3};
+use glam::{Affine3A, DMat4, DVec3, Mat3, Mat4, Quat, Vec3};
 use rayon::prelude::*;
+use sculpt_geom::SymmetryGroup;
+use sculpt_symmetry::Placement;
 
 use crate::mesh::{Mesh, StrokeDelta};
+use crate::sculpt::{Radial, RadialAxis, Settings};
 
 /// Mask values at or below this count as no mask at all, as in the Unity
 /// app: what an erased or blurred-out mask leaves behind must not switch the
@@ -40,6 +64,252 @@ pub struct Mirror {
     /// Where the object stands, when the planes are the world's (its
     /// symmetry is World); `None` for planes of its own.
     pub world: Option<Mat4>,
+    /// Radial symmetry on top of the planes, if the object has it on.
+    /// `None`, or radial symmetry that is off, leaves the drag exactly as it
+    /// was before radial symmetry had a say in it.
+    pub radial: Option<Turns>,
+}
+
+/// The radial symmetry a masked drag is repeated under, as the object has it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Turns {
+    pub radial: Radial,
+    /// Where the object stands, when its symmetry is the world's; `None` for
+    /// a symmetry of its own.
+    pub world: Option<Placement>,
+}
+
+/// How near the border between two pieces a vertex has to be, as a share of
+/// the model's size, to be shared by both. Far more than the rounding a
+/// vertex kept on the axis is off by, and far less than any vertex a
+/// sculptor could have put beside it.
+const ON_BORDER: f64 = 1e-5;
+
+/// How many times the middle of the leading piece is looked for again, each
+/// time from where the last left it (see `Copies::new`).
+const SETTLE: usize = 4;
+
+/// The free surface under radial symmetry, shared out between the copies of
+/// the drag (see the top of this file).
+struct Copies {
+    /// Each copy as a map of the mesh's own space, in the symmetry's own
+    /// order (the drag as made first), and the inverse of each.
+    ops: Vec<DMat4>,
+    inverses: Vec<DMat4>,
+    /// The middle of the leading piece, as each copy carries it: a vertex is
+    /// in the piece of the copy whose point here it is nearest.
+    seeds: Vec<DVec3>,
+    /// `ON_BORDER` in the mesh's own units.
+    near: f64,
+    /// The sets of copies that share a vertex on a border, one bit a copy.
+    shared: Vec<[u64; 4]>,
+    /// For each vertex of `Deform::verts`, which move it takes: the copy its
+    /// piece is, or past the last copy, a set of `shared`.
+    region: Vec<u32>,
+    /// What the status line says the drag was repeated as.
+    words: String,
+}
+
+/// The copies a vertex at `p` takes its move from: one, or several sharing it.
+enum Region {
+    One(usize),
+    Shared([u64; 4]),
+}
+
+impl Copies {
+    /// The copies under `turns` with the mirror axes `axes`, and the free
+    /// vertices `verts` of `mesh` shared out between them. `None` when the
+    /// symmetry has no turns in it after all: the planes alone then do it,
+    /// as they always have.
+    fn new(mesh: &Mesh, verts: &[u32], axes: [bool; 3], turns: Turns) -> Option<Copies> {
+        if turns.radial.repeats() < Radial::MIN_COUNT || verts.is_empty() {
+            return None;
+        }
+        // The very list a stroke under this symmetry is made as.
+        let mut settings = Settings::default();
+        settings.set_symmetry(axes, turns.radial, turns.world);
+        let group: SymmetryGroup = settings.symmetry_group();
+        if group.radial_count() < 2 || group.len() > SymmetryGroup::MAX_ELEMENTS {
+            return None;
+        }
+        let ops: Vec<DMat4> = group.iter().map(|op| op.to_mat4().as_dmat4()).collect();
+        let inverses: Vec<DMat4> = ops.iter().map(|op| op.inverse()).collect();
+
+        // Where to start looking for the leading piece: the free vertex
+        // furthest out along the radial guide's first spoke, leant a little
+        // to the plus side of every plane (a spoke can lie on one). That is
+        // in the symmetry's own space, which for a World symmetry is the
+        // world's.
+        let spoke = Quat::from_rotation_arc(Vec3::Y, turns.radial.axis_vector()) * Vec3::X;
+        let lead = (spoke + Vec3::splat(0.05)).as_dvec3();
+        let frame = turns.world.map_or(DMat4::IDENTITY, |at| at.matrix().as_dmat4());
+        let at = |v: u32| mesh.positions[v as usize].as_dvec3();
+        let first = verts
+            .par_iter()
+            .with_min_len(1 << 14)
+            .map(|&v| (frame.transform_point3(at(v)).dot(lead), v))
+            // The furthest out, and of those the first: the same vertex
+            // however the work is shared between threads.
+            .reduce(|| (f64::NEG_INFINITY, u32::MAX), |a, b| if b.0 > a.0 || (b.0 == a.0 && b.1 < a.1) { b } else { a })
+            .1;
+        let mut copies = Copies {
+            seeds: Vec::new(),
+            ops,
+            inverses,
+            near: ON_BORDER * f64::from(mesh.bounds().size().max_element().max(1e-12)),
+            shared: Vec::new(),
+            region: Vec::new(),
+            words: words(axes, turns.radial),
+        };
+
+        // The middle of the leading piece: every free vertex is carried back
+        // into the leading piece by the copy it is nearest, and the middle is
+        // where those land, by how free each is. Looked for again from there
+        // a few times, it settles in the middle of one tentacle and its
+        // images, with the borders halfway to the next. On a sample of the
+        // vertices, added up in fixed runs, so the same mesh always settles
+        // in the same place.
+        let stride = (verts.len() >> 17).max(1);
+        let sample: Vec<u32> = verts.iter().step_by(stride).copied().collect();
+        let mut middle = at(first);
+        for _ in 0..SETTLE {
+            copies.seeds = copies.ops.iter().map(|op| op.transform_point3(middle)).collect();
+            let runs: Vec<(DVec3, f64)> = sample
+                .par_chunks(4096)
+                .map(|run| {
+                    let (mut sum, mut weight) = (DVec3::ZERO, 0.0);
+                    for &v in run {
+                        let p = at(v);
+                        let w = f64::from(1.0 - mesh.mask[v as usize]);
+                        sum += copies.inverses[copies.nearest(p).0].transform_point3(p) * w;
+                        weight += w;
+                    }
+                    (sum, weight)
+                })
+                .collect();
+            let (sum, weight) = runs.iter().fold((DVec3::ZERO, 0.0), |(s, w), &(a, b)| (s + a, w + b));
+            if weight > 0.0 {
+                middle = sum / weight;
+            }
+        }
+        copies.seeds = copies.ops.iter().map(|op| op.transform_point3(middle)).collect();
+
+        // Which piece each free vertex is in, once, at the press.
+        let n = copies.ops.len() as u32;
+        let mut region: Vec<u32> = verts
+            .par_iter()
+            .with_min_len(1 << 12)
+            .map(|&v| match copies.region_of(mesh.positions[v as usize]) {
+                Region::One(g) => g as u32,
+                Region::Shared(_) => u32::MAX,
+            })
+            .collect();
+        for (slot, code) in region.iter_mut().enumerate() {
+            if *code == u32::MAX {
+                let Region::Shared(set) = copies.region_of(mesh.positions[verts[slot] as usize]) else { unreachable!() };
+                let k = match copies.shared.iter().position(|s| *s == set) {
+                    Some(k) => k,
+                    None => {
+                        copies.shared.push(set);
+                        copies.shared.len() - 1
+                    }
+                };
+                *code = n + k as u32;
+            }
+        }
+        copies.region = region;
+        Some(copies)
+    }
+
+    /// The copy whose point `seeds` is nearest `p`, and how near, squared.
+    /// Of copies as near as each other, the first.
+    #[inline]
+    fn nearest(&self, p: DVec3) -> (usize, f64) {
+        let mut best = (0, f64::INFINITY);
+        for (g, seed) in self.seeds.iter().enumerate() {
+            let d = p.distance_squared(*seed);
+            if d < best.1 {
+                best = (g, d);
+            }
+        }
+        best
+    }
+
+    /// Which copies a vertex that was at `p` at the press takes its move from.
+    fn region_of(&self, p: Vec3) -> Region {
+        let p = p.as_dvec3();
+        let (best, least) = self.nearest(p);
+        let mut set = [0u64; 4];
+        let mut more = false;
+        for (g, seed) in self.seeds.iter().enumerate() {
+            // How much further a point is from one copy's point than from
+            // another's is twice its distance from the border between them
+            // times how far apart the two are; copies whose points are one
+            // (as near as rounding) share everything between them.
+            let apart = seed.distance(self.seeds[best]);
+            if g != best && p.distance_squared(*seed) - least <= 2.0 * self.near * (apart + self.near) {
+                set[g / 64] |= 1 << (g % 64);
+                more = true;
+            }
+        }
+        if !more {
+            return Region::One(best);
+        }
+        set[best / 64] |= 1 << (best % 64);
+        Region::Shared(set)
+    }
+
+    /// The move `region` names, of those `maps` gives, for a vertex that was
+    /// at `p` at the press: worked out again, the same way, for when only
+    /// the place is known.
+    fn code(&self, p: Vec3) -> usize {
+        match self.region_of(p) {
+            Region::One(g) => g,
+            Region::Shared(set) => match self.shared.iter().position(|s| *s == set) {
+                Some(k) => self.ops.len() + k,
+                // Every vertex was sorted at the press, so this is never
+                // reached; the drag as made is the safest move to give.
+                None => 0,
+            },
+        }
+    }
+
+    /// How many moves `maps` gives: one a copy, and one a shared set.
+    fn moves(&self) -> usize {
+        self.ops.len() + self.shared.len()
+    }
+
+    /// The move of each piece, from the move `local` of the leading one:
+    /// that move as each copy carries it, and for a shared set the average of
+    /// its copies' moves.
+    fn maps(&self, local: DMat4) -> Vec<DMat4> {
+        // No move is no move in every piece, exactly.
+        if local == DMat4::IDENTITY {
+            return vec![DMat4::IDENTITY; self.moves()];
+        }
+        let mut maps: Vec<DMat4> = self.ops.iter().zip(&self.inverses).map(|(op, inverse)| *op * local * *inverse).collect();
+        for set in &self.shared {
+            let members = (0..self.ops.len()).filter(|&g| set[g / 64] & (1 << (g % 64)) != 0);
+            let (sum, count) = members.fold((DMat4::ZERO, 0u32), |(s, c), g| (s + maps[g], c + 1));
+            maps.push(sum * (1.0 / f64::from(count.max(1))));
+        }
+        maps
+    }
+}
+
+/// "6 times round Y and mirrored across X": what the status line says a
+/// drag under radial symmetry was repeated as.
+fn words(axes: [bool; 3], radial: Radial) -> String {
+    let round = match radial.axis {
+        RadialAxis::Custom => "round the custom axis".to_owned(),
+        axis => format!("round {}", axis.name()),
+    };
+    let planes: Vec<&str> = (0..3).filter(|&a| axes[a]).map(|a| ["X", "Y", "Z"][a]).collect();
+    let count = radial.repeats().clamp(Radial::MIN_COUNT, Radial::MAX_COUNT);
+    match planes.is_empty() {
+        true => format!("{count} times {round}"),
+        false => format!("{count} times {round} and mirrored across {}", planes.join(" and ")),
+    }
 }
 
 /// Which side of each mirror plane a vertex is on.
@@ -133,8 +403,12 @@ pub struct Deform {
     verts: Vec<u32>,
     /// The parts of the mesh's spatial index those vertices touch.
     leaves: Vec<u32>,
-    /// The mirror planes the drag is repeated across, if any.
+    /// The mirror planes the drag is repeated across, if any, with no
+    /// radial symmetry.
     sides: Option<Sides>,
+    /// Every copy the drag is repeated as, under radial symmetry. `sides`
+    /// is then `None`: the copies have the planes among them.
+    copies: Option<Copies>,
     /// The drag as last applied, in the mesh's own space: one move for
     /// each place `Sides::code` names, or just the one with no mirror. Their
     /// turn and stretch is what the mesh's sculpt layers are carried by when
@@ -153,7 +427,8 @@ impl Deform {
         }
         let verts: Vec<u32> =
             (0..mask.len() as u32).into_par_iter().with_min_len(1 << 14).filter(|&v| mask[v as usize] < 1.0).collect();
-        let mut sides = Sides::new(mirror);
+        let copies = mirror.radial.and_then(|turns| Copies::new(mesh, &verts, mirror.axes, turns));
+        let mut sides = if copies.is_some() { None } else { Sides::new(mirror) };
         if let Some(sides) = &mut sides {
             // How much free surface each half holds, by vertex: [plus, minus] per axis.
             let free = verts
@@ -177,8 +452,13 @@ impl Deform {
         }
         let leaves = mesh.leaves_of(&verts);
         mesh.begin_stroke();
-        let maps = std::cell::RefCell::new(vec![Affine3A::IDENTITY; if sides.is_some() { 27 } else { 1 }]);
-        Some(Deform { uid: mesh.uid, verts, leaves, sides, maps })
+        let moves = match (&copies, &sides) {
+            (Some(copies), _) => copies.moves(),
+            (None, Some(_)) => 27,
+            (None, None) => 1,
+        };
+        let maps = std::cell::RefCell::new(vec![Affine3A::IDENTITY; moves]);
+        Some(Deform { uid: mesh.uid, verts, leaves, sides, copies, maps })
     }
 
     /// How many vertices the drag can move.
@@ -193,6 +473,17 @@ impl Deform {
         let axes = self.sides.as_ref()?.axes;
         let names: Vec<&str> = (0..3).filter(|&a| axes[a]).map(|a| ["X", "Y", "Z"][a]).collect();
         Some(names.join(" and "))
+    }
+
+    /// How the status line says the drag was repeated, to follow the
+    /// object's name: ", each side the mirror image of the other across X",
+    /// ", repeated 6 times round Y", or nothing with no symmetry.
+    pub fn how(&self) -> String {
+        match (&self.copies, self.mirrored()) {
+            (Some(copies), _) => format!(", repeated {}", copies.words),
+            (None, Some(planes)) => format!(", each side the mirror image of the other across {planes}"),
+            (None, None) => String::new(),
+        }
     }
 
     /// Puts the surface where the drag has it now. `world` is the whole drag
@@ -212,15 +503,17 @@ impl Deform {
             let model = model.as_dmat4();
             model.inverse() * world * model
         };
-        let maps: Vec<Affine3A> = match &self.sides {
-            None => vec![Affine3A::from_mat4(local.as_mat4())],
-            Some(sides) => sides.maps(local).iter().map(|m| Affine3A::from_mat4(m.as_mat4())).collect(),
+        let maps: Vec<Affine3A> = match (&self.copies, &self.sides) {
+            (Some(copies), _) => copies.maps(local).iter().map(|m| Affine3A::from_mat4(m.as_mat4())).collect(),
+            (None, None) => vec![Affine3A::from_mat4(local.as_mat4())],
+            (None, Some(sides)) => sides.maps(local).iter().map(|m| Affine3A::from_mat4(m.as_mat4())).collect(),
         };
-        let sides = self.sides.as_ref();
-        mesh.move_listed(&self.verts, |_, vertex| {
-            let map = match sides {
-                None => &maps[0],
-                Some(sides) => &maps[sides.code(vertex.start)],
+        let (sides, copies) = (self.sides.as_ref(), self.copies.as_ref());
+        mesh.move_listed(&self.verts, |slot, vertex| {
+            let map = match (copies, sides) {
+                (Some(copies), _) => &maps[copies.region[slot] as usize],
+                (None, None) => &maps[0],
+                (None, Some(sides)) => &maps[sides.code(vertex.start)],
             };
             let moved = map.transform_point3(vertex.start);
             // A half-masked vertex goes half the way, which gives a pulled
@@ -240,9 +533,13 @@ impl Deform {
             return None;
         }
         let maps = self.maps.into_inner();
-        let sides = self.sides;
+        let (sides, copies) = (self.sides, self.copies);
         let linear = |start: Vec3| {
-            let at = sides.as_ref().map_or(0, |sides| sides.code(start));
+            let at = match (&copies, &sides) {
+                (Some(copies), _) => copies.code(start),
+                (None, Some(sides)) => sides.code(start),
+                (None, None) => 0,
+            };
             Mat3::from(maps[at].matrix3)
         };
         match mesh.end_stroke_carried(&linear) {
@@ -442,7 +739,7 @@ mod tests {
         drag.world_delta()
     }
 
-    const ACROSS_X: Mirror = Mirror { axes: [true, false, false], world: None };
+    const ACROSS_X: Mirror = Mirror { axes: [true, false, false], world: None, radial: None };
 
     #[test]
     fn under_mirror_symmetry_pulling_one_side_out_pulls_the_other_out_as_far() {
@@ -556,7 +853,7 @@ mod tests {
             mesh.mask[v] = if x < 0.1 { 1.0 } else { 0.0 };
         }
         let before = mesh.positions.clone();
-        let mirror = Mirror { axes: [true, false, false], world: Some(model) };
+        let mirror = Mirror { axes: [true, false, false], world: Some(model), radial: None };
 
         // Nothing moved is nothing moved, to the bit, on either side.
         let deform = Deform::begin(&mut mesh, mirror).unwrap();
@@ -598,6 +895,177 @@ mod tests {
         deform.apply(&mut mesh, Mat4::IDENTITY, DMat4::from_translation(glam::DVec3::X));
         assert_eq!(mesh.positions, before);
         assert!(deform.end(&mut mesh).is_none());
+    }
+
+    /// Radial symmetry about the object's own Y, `count` times round.
+    fn round_y(count: u32) -> Turns {
+        Turns { radial: Radial { on: true, count, axis: RadialAxis::Y, custom_axis: Vec3::Y }, world: None }
+    }
+
+    /// Which way round Y an angle (in degrees) points: 0 along X.
+    fn spoke(degrees: f32) -> Vec3 {
+        Quat::from_rotation_y(degrees.to_radians()) * Vec3::X
+    }
+
+    /// A ball masked all over but for a patch round the middle at each of
+    /// `centres` (angles round Y, in degrees), each reaching `half` degrees
+    /// either side: tentacles to pull, with the mask between them.
+    fn patched_ball(centres: &[f32], half: f32) -> Mesh {
+        let mut mesh = primitives::build(Primitive::Sphere, 80_000, 0.5);
+        for v in 0..mesh.vertex_count() {
+            let p = mesh.positions[v];
+            let flat = Vec3::new(p.x, 0.0, p.z);
+            let near = centres.iter().any(|&c| flat.angle_between(spoke(c)).to_degrees() < half);
+            mesh.mask[v] = if p.y.abs() < 0.2 && near { 0.0 } else { 1.0 };
+        }
+        mesh
+    }
+
+    /// Checks that each patch of `patched_ball(centres)` went the way the
+    /// copy that carries the first patch onto it carries a pull of 0.3 along
+    /// X, that the masked part stayed, and that one undo puts it all back.
+    fn each_patch_went_as_its_copy_carries_the_pull(centres: &[f32], half: f32, axes: [bool; 3], turns: Turns) {
+        let mut mesh = patched_ball(centres, half);
+        let (before, mask) = (mesh.positions.clone(), mesh.mask.clone());
+        let placement = Placement { position: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE };
+        let deform = Deform::begin(&mut mesh, Mirror { axes, world: None, radial: Some(turns) }).unwrap();
+        pull_x(&mut mesh, &deform, placement, 0.3);
+        let mut settings = Settings::default();
+        settings.set_symmetry(axes, turns.radial, None);
+        let group = settings.symmetry_group();
+        let mut moved = vec![0; centres.len()];
+        for v in 0..before.len() {
+            let travelled = mesh.positions[v] - before[v];
+            if mask[v] >= 1.0 {
+                assert_eq!(travelled, Vec3::ZERO, "a masked vertex moved");
+                continue;
+            }
+            let flat = Vec3::new(before[v].x, 0.0, before[v].z);
+            let patch = (0..centres.len()).min_by(|&a, &b| {
+                flat.angle_between(spoke(centres[a])).total_cmp(&flat.angle_between(spoke(centres[b])))
+            });
+            let patch = patch.unwrap();
+            let copy = group
+                .iter()
+                .min_by(|a, b| {
+                    let off = |op: &&sculpt_geom::SymmetryOp| op.apply_point(spoke(centres[0])).distance(spoke(centres[patch]));
+                    off(a).total_cmp(&off(b))
+                })
+                .unwrap();
+            let want = copy.apply(Vec3::X * 0.3);
+            assert!(travelled.distance(want) < 1e-4, "patch at {}: went {travelled}, not {want}", centres[patch]);
+            moved[patch] += 1;
+        }
+        assert!(moved.iter().all(|&n| n > 20), "every patch is free and moved: {moved:?}");
+        let mut history = History::default();
+        history.push_stroke(deform.end(&mut mesh).expect("the patches moved"));
+        assert_eq!(history.steps(), (1, 0));
+        assert_eq!(history.undo(&mut mesh), Some(false));
+        assert_eq!(mesh.positions, before, "one undo step puts every copy back");
+    }
+
+    #[test]
+    fn under_radial_symmetry_every_copy_round_the_axis_moves_as_the_others_do() {
+        // Six tentacles, the first just off X: it follows the arrow out
+        // along X, and each of the others goes out along its own spoke.
+        let centres: Vec<f32> = (0..6).map(|k| 10.0 + 60.0 * k as f32).collect();
+        each_patch_went_as_its_copy_carries_the_pull(&centres, 12.0, [false; 3], round_y(6));
+
+        let mut mesh = patched_ball(&centres, 12.0);
+        let mirror = Mirror { radial: Some(round_y(6)), ..Mirror::default() };
+        let deform = Deform::begin(&mut mesh, mirror).unwrap();
+        assert_eq!(deform.how(), ", repeated 6 times round Y");
+        deform.end(&mut mesh);
+    }
+
+    #[test]
+    fn under_radial_and_mirror_symmetry_the_mirror_images_move_too() {
+        // Mirror X on top of six turns round Y: twelve patches, each turn of
+        // the first and the mirror image of each.
+        let mut centres: Vec<f32> = (0..6).map(|k| 10.0 + 60.0 * k as f32).collect();
+        centres.extend((0..6).map(|k| 170.0 + 60.0 * k as f32));
+        each_patch_went_as_its_copy_carries_the_pull(&centres, 6.0, [true, false, false], round_y(6));
+
+        let mut mesh = patched_ball(&centres, 6.0);
+        let mirror = Mirror { axes: [true, false, false], world: None, radial: Some(round_y(6)) };
+        let deform = Deform::begin(&mut mesh, mirror).unwrap();
+        assert_eq!(deform.how(), ", repeated 6 times round Y and mirrored across X");
+        deform.end(&mut mesh);
+    }
+
+    #[test]
+    fn under_radial_symmetry_one_copy_left_free_follows_the_gizmo() {
+        // The one free tentacle points away from X, and still goes where
+        // the arrow is pulled.
+        let mut mesh = patched_ball(&[190.0], 12.0);
+        let before = mesh.positions.clone();
+        let placement = Placement { position: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE };
+        let deform = Deform::begin(&mut mesh, Mirror { radial: Some(round_y(6)), ..Mirror::default() }).unwrap();
+        pull_x(&mut mesh, &deform, placement, 0.3);
+        let mut free = 0;
+        for v in (0..before.len()).filter(|&v| mesh.mask[v] == 0.0) {
+            let travelled = mesh.positions[v] - before[v];
+            assert!(travelled.distance(Vec3::X * 0.3) < 1e-4, "{travelled}");
+            free += 1;
+        }
+        assert!(free > 20);
+        deform.end(&mut mesh);
+    }
+
+    #[test]
+    fn under_radial_symmetry_a_vertex_on_the_axis_stays_on_it() {
+        // The top of the ball free: its pole is on the axis, where every
+        // copy meets, and is moved by what all of them agree on.
+        let mut mesh = masked_ball(80_000);
+        let before = mesh.positions.clone();
+        let on: Vec<usize> = (0..before.len())
+            .filter(|&v| mesh.mask[v] == 0.0 && before[v].x.abs() < 1e-6 && before[v].z.abs() < 1e-6)
+            .collect();
+        assert!(!on.is_empty(), "the ball has a vertex at its pole");
+        let placement = Placement { position: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE };
+        let deform = Deform::begin(&mut mesh, Mirror { radial: Some(round_y(5)), ..Mirror::default() }).unwrap();
+        pull_x(&mut mesh, &deform, placement, 0.3);
+        for &v in &on {
+            let p = mesh.positions[v];
+            assert!(p.x.abs() < 1e-5 && p.z.abs() < 1e-5, "the pole left the axis: {p}");
+        }
+        deform.end(&mut mesh);
+
+        // A pull along the axis is the same for every copy, so every free
+        // vertex goes all the way, on a border or not.
+        let mut mesh = masked_ball(80_000);
+        let (view, target, frame) = gizmo(placement, Orientation::Global);
+        let px = |p: Vec3| view.project(p).unwrap();
+        let deform = Deform::begin(&mut mesh, Mirror { radial: Some(round_y(5)), ..Mirror::default() }).unwrap();
+        let grab = Vec3::Y * frame.arm;
+        let mut drag = Drag::on(Handle::Move(1), frame, &target, &view, px(grab));
+        drag.update(&view, px(grab + Vec3::Y * 0.3));
+        deform.apply(&mut mesh, Mat4::IDENTITY, drag.world_delta());
+        for v in (0..before.len()).filter(|&v| mesh.mask[v] == 0.0) {
+            let travelled = mesh.positions[v] - before[v];
+            assert!(travelled.distance(Vec3::Y * 0.3) < 1e-4, "{travelled}");
+        }
+        deform.end(&mut mesh);
+    }
+
+    #[test]
+    fn with_radial_symmetry_off_the_drag_is_what_it_was_to_the_bit() {
+        let placement = Placement {
+            position: Vec3::new(0.3, -0.1, 0.2),
+            rotation: Quat::from_rotation_z(0.4) * Quat::from_rotation_y(0.5),
+            scale: Vec3::new(1.0, 1.4, 0.7),
+        };
+        let off = Turns { radial: Radial { on: false, ..round_y(6).radial }, world: None };
+        let mut results = Vec::new();
+        for mirror in [ACROSS_X, Mirror { radial: Some(off), ..ACROSS_X }] {
+            let mut mesh = middle_masked_ball();
+            let deform = Deform::begin(&mut mesh, mirror).unwrap();
+            pull_x(&mut mesh, &deform, placement, 0.3);
+            assert_eq!(deform.how(), ", each side the mirror image of the other across X");
+            deform.end(&mut mesh);
+            results.push(mesh.positions);
+        }
+        assert!(results[0] == results[1], "radial symmetry that is off changed the drag");
     }
 
     /// `cargo test --release masked -- --ignored --nocapture`

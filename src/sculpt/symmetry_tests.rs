@@ -1618,9 +1618,8 @@ fn sectors_do_not_drift_apart_over_a_session() {
 }
 
 /// A custom axis tilted against a mirror plane makes copies that are not a
-/// closed set (the mirror image of a turn is no turn about the same axis),
-/// so nothing can be shared out between them: they are applied one after
-/// another, each copy once.
+/// closed set (the mirror image of a turn is no turn about the same axis).
+/// Every copy is still sculpted once.
 #[test]
 fn a_custom_axis_tilted_against_a_mirror_plane_still_sculpts_every_copy() {
     let mut mesh = primitives::build(Primitive::Sphere, 80_000, 0.5);
@@ -1639,6 +1638,35 @@ fn a_custom_axis_tilted_against_a_mirror_plane_still_sculpts_every_copy() {
         let raised = mesh.positions.iter().filter(|p| p.distance(image) < BRUSH_RADIUS && p.length() > 0.502).count();
         assert!(raised > 5, "nothing was raised round the copy at {image}");
     }
+}
+
+/// With such an axis the copies that land on one another are still shared
+/// out: a dab on the mirror plane, which its own mirror image lands right on
+/// top of, builds no taller with the mirror on than with it off. (They were
+/// applied one after another, and a brush that adds built twice as tall down
+/// the centre line.)
+#[test]
+fn a_custom_axis_tilted_against_a_mirror_plane_still_shares_the_centre_line() {
+    let tallest = |mirror: bool| {
+        let mut mesh = primitives::build(Primitive::Sphere, 80_000, 0.5);
+        let view = view_of(&mesh);
+        let mut sculptor = sculptor_with(Brush::Inflate);
+        sculptor.settings.per_brush[Brush::Inflate.index()].accumulate = true;
+        sculptor.settings.symmetry = [mirror, false, false];
+        sculptor.settings.radial =
+            Radial { on: true, count: 3, axis: RadialAxis::Custom, custom_axis: Vec3::new(0.3, 1.0, 0.2) };
+        assert_eq!(sculptor.settings.symmetry_group().is_group(), !mirror);
+        // On the mirror plane, well away from the axis.
+        let centre = Vec3::new(0.0, 0.1, (0.25f32 - 0.01).sqrt());
+        let at = view.project(centre).unwrap();
+        run_stroke(&mut mesh, &mut sculptor, &view, &line(at, at + Vec2::new(0.0, 12.0), 8));
+        let near = mesh.positions.iter().filter(|p| p.distance(centre) < 1.5 * BRUSH_RADIUS);
+        near.map(|p| p.length() - 0.5).fold(0.0f32, f32::max)
+    };
+    let (with, without) = (tallest(true), tallest(false));
+    println!("tallest on the centre line: {with:.5} with the mirror, {without:.5} without");
+    assert!(without > 1e-4, "the stroke raised {without}");
+    assert!(with < 1.25 * without && with > 0.75 * without, "{with} with the mirror, {without} without");
 }
 
 // --------------------------------------------- Pinch and Nudge at the axis

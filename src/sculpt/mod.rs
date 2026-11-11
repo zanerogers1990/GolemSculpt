@@ -380,6 +380,15 @@ pub const DEFAULT_AUTO_SMOOTH: [(Brush, f32); 2] = [(Brush::Inflate, 0.15), (Bru
 // worst angle after three passes at full Strength 39.7 to 40.5 degrees) and
 // cost a dab half as much again (`--brush-feel`, `--bench`).
 
+/// Where Smooth's Keep Volume starts: all of what a dab drew the form in by
+/// is given back. Until 2026-11-11 it started at nought, and going over a
+/// place again and again wore a trench in it (ten strokes at full Strength
+/// took a fifth of a cubic radius off `--brush-feel`'s ball and left it
+/// lumpier than one stroke had); with it, the same ten leave a twentieth of
+/// the lumps and the ball its size. Lumps and roughness go down as fast
+/// either way. A settings file from before is read by it (`prefs.rs`).
+pub const DEFAULT_KEEP_VOLUME: f32 = 1.0;
+
 /// Where Snake Hook's Thickness starts.
 pub const DEFAULT_THICKNESS: f32 = 0.5;
 
@@ -528,6 +537,7 @@ impl Default for Settings {
             per_brush[b.index()].auto_smooth = amount;
         }
         per_brush[Brush::SnakeHook.index()].thickness = DEFAULT_THICKNESS;
+        per_brush[Brush::Smooth.index()].keep_volume = DEFAULT_KEEP_VOLUME;
         // Smooth stays All, not Surface: Surface keeps a form's size, but it
         // keeps a lump the size of the brush too (a stroke took 3% off one,
         // where All takes a quarter: `--brush-feel`'s lumps), and taking
@@ -866,6 +876,9 @@ struct Stroke {
     /// the pointer has left the mesh, or (`ending`) the stroke is over.
     lifted: bool,
     ending: bool,
+    /// Whether the path has had a knot since the frame before: the pen is
+    /// moving, however long the frame took (see `Sculptor::frame`).
+    knotted: bool,
     /// What the stroke has spent of this frame, and how wide its backlog is
     /// being spaced: 1 unless it is too far behind.
     meter: pace::Meter,
@@ -1116,6 +1129,23 @@ pub struct Lag {
     /// Where on the screen the brush has got to.
     pub at: Vec2,
 }
+
+/// A stroke whose next point on the surface is this many of the ring's
+/// radii nearer the eye or further from it than the last, and
+/// [`JUMP_SLOPE`] times as far that way as it is across the screen, has not
+/// travelled over the surface: the pen has slid off the edge of one form on
+/// to another behind it (off an arm on to the body), or back. The path is
+/// not carried on across the gap. Its dabs were laid along the straight line
+/// between the two, through the air, and marked the rim of the form it left
+/// and a streak on the one it came to; and dynamic topology refined along
+/// that line. The stroke is walked out where it left and starts afresh where
+/// it lands, as it does when the pen leaves the model and comes back.
+///
+/// Within a radius and a half the ring reaches both anyway. And a surface
+/// that only slopes steeply away is not a jump: eight times as deep as
+/// across is a slope of 83 degrees, past which it is the form's own edge.
+const DEPTH_JUMP: f32 = 1.5;
+const JUMP_SLOPE: f32 = 8.0;
 
 /// How long, in seconds, a press must be held in place before Clay prints
 /// the opening dab of a swept alpha where it landed (see
@@ -1481,6 +1511,7 @@ impl Sculptor {
             seg: None,
             lifted: false,
             ending: false,
+            knotted: false,
             meter: pace::Meter::default(),
             widen: 1.0,
             world_per_px: view.world_per_pixel(view.depth_of(hit.pos)),
@@ -1772,6 +1803,17 @@ impl Sculptor {
         self.last_hit = Some(hit.pos);
 
         if let Some(last) = stroke.knots.last() {
+            // Off the edge of one form on to another behind it, or back
+            // ([`DEPTH_JUMP`]): the path ends here, as if the pen had left
+            // the model, and starts afresh with the next sample.
+            let (was, now) = (view.depth_of(last.pos), view.depth_of(hit.pos));
+            let deep = (now - was).abs();
+            let across = last.px.distance(px) * view.world_per_pixel(was.min(now));
+            if deep > DEPTH_JUMP * p.radius && deep > JUMP_SLOPE * across {
+                stroke.lifted = true;
+                self.dyntopo.pause();
+                return;
+            }
             if last.px.distance(px) < 2.0 {
                 return;
             }
@@ -1782,7 +1824,7 @@ impl Sculptor {
             // The groove's frame follows the stroke with a little lag so it
             // neither jitters nor chases its own wall. It is taken over the
             // ring's whole radius however small the pen has made the brush.
-            let foot = kernels::footprint_normal(mesh, hit.pos, p.radius, false).unwrap_or(normal);
+            let foot = kernels::footprint_normal(mesh, hit.pos, p.radius, false, normal).unwrap_or(normal);
             let n = match stroke.crease_n {
                 Some(prev) => slerp_dir(prev, foot, 0.35),
                 None => foot,
@@ -1813,6 +1855,7 @@ impl Sculptor {
         });
         stroke.knots.push(knot);
         stroke.last_knot_time = sample.time;
+        stroke.knotted = true;
     }
 
     /// Lays dabs along every stretch of the path that is ready, for as long
@@ -2085,11 +2128,15 @@ impl Sculptor {
         if !p.mask && p.brush == Brush::Clay {
             for &op in &stroke.ops {
                 let (at, cam) = (op.apply_point(dab.center), op.apply_point(dab.cam));
-                stroke.frame_centres.push(kernels::Centre { at, cam, radius: p.radius });
+                let normal = op.apply_dir(dab.normal);
+                stroke.frame_centres.push(kernels::Centre { at, cam, radius: p.radius, normal });
             }
         }
+        // How high the dab stands over the surface under it, which is how
+        // high each copy is set over its own side's (`Dab::copied`).
+        let height = if stroke.ops.len() > 1 { kernels::height_over(mesh, &p, dab.center, dab.normal) } else { None };
         if let Some(walk) = stroke.radial.as_mut() {
-            return walk.apply(mesh, &p, &dab, reach, &mut stroke.scratch);
+            return walk.apply(mesh, &p, &dab, reach, height, &mut stroke.scratch);
         }
 
         let Stroke { ops, mirrors, scratch, walk, .. } = stroke;
@@ -2097,7 +2144,16 @@ impl Sculptor {
         let near = mirrors.near(dab.center, 1.5 * reach);
         // Mirror images only come this way, eight at the most.
         debug_assert!(ops.len() <= 64);
+        // The images across the planes the dab is near (not the dab as it
+        // was drawn): what holds a vertex on one of those planes to it
+        // (`share::held_on`).
+        let across_near: Vec<SymOp> = (0..ops.len())
+            .filter(|&j| mirrors.across(j) != 0 && mirrors.across(j) & !near == 0)
+            .map(|j| ops[j])
+            .collect();
+        let on_plane = share::on_plane(p.radius);
         let mut handled = 0u64;
+        let mut copies: Vec<Dab> = Vec::with_capacity(8);
         for i in 0..ops.len() {
             if handled >> i & 1 != 0 {
                 continue;
@@ -2116,11 +2172,13 @@ impl Sculptor {
             // only. Then all of them, ascending, each leaf once: the order
             // the saved copies below are laid out in, and what lets a dab's
             // vertices be shared out between threads.
+            copies.clear();
+            copies.extend(group.iter().map(|&op| dab.copied(mesh, &p, op, height)));
             reached.clear();
             ends.clear();
-            for &op in group.iter() {
+            for copy in &copies {
                 let from = reached.len();
-                mesh.bvh.leaves_in_sphere(op.apply_point(dab.center), reach, reached);
+                mesh.bvh.leaves_in_sphere(copy.center, reach, reached);
                 reached[from..].sort_unstable();
                 ends.push(reached.len());
             }
@@ -2133,13 +2191,13 @@ impl Sculptor {
             }
             let own = |k: usize| &reached[if k == 0 { 0 } else { ends[k - 1] }..ends[k]];
 
-            if group.len() == 1 || p.mask {
-                // Mask amounts all have the same sign and saturate, so order
-                // does not matter there.
-                for (k, &op) in group.iter().enumerate() {
-                    if !own(k).is_empty() {
-                        kernels::apply(mesh, &p, &dab.mirrored(op), own(k), leaves, scratch);
-                    }
+            if p.mask && group.len() > 1 {
+                // The copies that can meet lay one dab's worth of mask
+                // between them, not one each.
+                kernels::mask_paint_together(mesh, &p, &copies, leaves);
+            } else if group.len() == 1 {
+                if !own(0).is_empty() {
+                    kernels::apply(mesh, &p, &copies[0], own(0), leaves, scratch);
                 }
             } else {
                 // Copies that can meet: each applied to the surface as it
@@ -2161,18 +2219,21 @@ impl Sculptor {
                 // tip up to eight times over each one) took half as long
                 // again on one thread as on all of them.
                 let shares = total >= kernels::PAR_MIN;
-                for (k, &op) in group.iter().enumerate() {
+                for k in 0..group.len() {
                     if own(k).is_empty() {
                         continue;
                     }
                     let mine: usize = own(k).iter().map(|&l| kernels::owned(&mesh.bvh.leaves[l as usize]).len()).sum();
                     let few = mine < kernels::PAR_MIN;
                     let moves = if shares && few { &leaves[..] } else { own(k) };
-                    kernels::apply(mesh, &p, &dab.mirrored(op), moves, leaves, scratch);
+                    kernels::apply(mesh, &p, &copies[k], moves, leaves, scratch);
                     tally.add(share::bank(mesh, own(k), leaves, starts, saved, &mut shared, sharing));
                 }
                 let (saved, settling) = (&*saved, Settling::of(sharing, &tally));
-                mesh.move_vertices(leaves, |at, _| settling.step(&shared[at]).map(|step| saved[at] + step));
+                mesh.move_vertices(leaves, |at, vt| {
+                    let step = settling.step(&shared[at])?;
+                    Some(share::held_on(&across_near, vt.start, saved[at] + step, on_plane))
+                });
                 scratch.shared = shared;
             }
 
@@ -2251,12 +2312,21 @@ impl Sculptor {
             stroke.meter.start();
             if resting {
                 stroke.cam = view.pos;
-                // A short pause releases the segment that was waiting for a knot.
+                // A short pause releases the segment that was waiting for a
+                // knot: the pen has gone on reporting without getting
+                // anywhere, or a whole frame as long as the pause has gone
+                // by without a knot. (A long frame alone does not say the
+                // pen has paused. Taken to, every frame of a stroke on a
+                // mesh heavy enough to take a twentieth of a second laid
+                // its newest stretch before the knot after it was known,
+                // with a guessed end, and a curved stroke came out with a
+                // small corner a frame.)
                 let pause = stroke.pause_to_release();
-                if stroke.time - stroke.last_knot_time > pause || f64::from(dt) > pause {
+                if stroke.time - stroke.last_knot_time > pause || (f64::from(dt) > pause && !stroke.knotted) {
                     Self::advance(mesh, stroke, true, pace, &mut self.dabs_applied);
                 }
             }
+            stroke.knotted = false;
             // Smoothing, flattening, layering, erasing a layer and masking keep
             // working while the pointer rests (each has a place to stop at);
             // additive brushes only do with the option on.
@@ -2312,6 +2382,9 @@ impl Sculptor {
                     stroke.relax,
                     stroke.object_size,
                     stroke.curvature,
+                    // The mirror images (the first copy is the stroke as
+                    // drawn); copies round an axis are not held here.
+                    if stroke.radial.is_none() { &stroke.ops[1..] } else { &[] },
                     &mut stroke.scratch,
                 );
             }

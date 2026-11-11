@@ -63,6 +63,12 @@ pub struct Walk {
     /// set of them that cannot meet another set.
     subgroup: Vec<usize>,
     cosets: Vec<usize>,
+    /// The copies of the set in hand: the ones that can meet, each applied
+    /// to the surface as it stood before any of them.
+    set: Vec<SymOp>,
+    /// How high the dab in hand stands over the surface under it: what its
+    /// copies are set down by (`Dab::copied`).
+    height: Option<f32>,
     /// The leaves each copy of the set in hand reaches, one run per copy, and
     /// where each run ends.
     reached: Vec<u32>,
@@ -86,6 +92,8 @@ impl Walk {
             group,
             subgroup: Vec::new(),
             cosets: Vec::new(),
+            set: Vec::new(),
+            height: None,
             reached: Vec::new(),
             ends: Vec::new(),
             leaves: Vec::new(),
@@ -98,24 +106,91 @@ impl Walk {
     /// Applies a dab and every copy of it. `reach` is the widest radius one
     /// copy reads or writes vertices within, which for Clay's swept tip is
     /// more than the brush's radius.
-    pub fn apply(&mut self, mesh: &mut Mesh, p: &Params, dab: &Dab, reach: f32, scratch: &mut Scratch) {
-        // Mask amounts all have the same sign and saturate, so order does not
-        // matter there.
-        if !p.mask {
-            // Two copies can meet when they land within the margin of each
-            // other. That is measured by the brush's radius, as is how much
-            // they overlap: a sweep makes a copy look further for its
-            // vertices, it does not put it any nearer its neighbours.
-            let within = 2.0 * p.radius * INTERACTION_MARGIN;
-            self.group.interacting_subgroup(dab.center, within, &mut self.subgroup);
+    /// more than the brush's radius; `height` is how high the dab stands
+    /// over the surface under it (`kernels::height_over`).
+    pub fn apply(
+        &mut self,
+        mesh: &mut Mesh,
+        p: &Params,
+        dab: &Dab,
+        reach: f32,
+        height: Option<f32>,
+        scratch: &mut Scratch,
+    ) {
+        self.height = height;
+        // Two copies can meet when they land within the margin of each
+        // other. That is measured by the brush's radius, as is how much
+        // they overlap: a sweep makes a copy look further for its
+        // vertices, it does not put it any nearer its neighbours.
+        let within = 2.0 * p.radius * INTERACTION_MARGIN;
+        if !self.group.is_group() {
+            return self.in_clusters(mesh, p, dab, reach, within, scratch);
         }
-        if p.mask || self.subgroup.len() == 1 {
+        self.group.interacting_subgroup(dab.center, within, &mut self.subgroup);
+        if self.subgroup.len() == 1 {
             return self.in_turn(mesh, p, dab, reach, scratch);
         }
         self.group.coset_representatives(&self.subgroup, &mut self.cosets);
         let mut settling = None;
         for coset in 0..self.cosets.len() {
-            settling = self.together(mesh, p, dab, reach, self.cosets[coset], settling, scratch);
+            // The coset's copies: its representative times each of the
+            // copies that can meet. More than one copy can meet only in a
+            // real group (see `interacting_subgroup`), where every product
+            // is another copy.
+            let (group, representative) = (&self.group, self.cosets[coset]);
+            self.set.clear();
+            let copy = |&h: &usize| SymOp::from(group[group.product(representative, h).unwrap_or(representative)]);
+            self.set.extend(self.subgroup.iter().map(copy));
+            if p.mask {
+                // The copies that can meet lay one dab's worth of mask
+                // between them (`kernels::mask_paint_together`), not one each.
+                self.mask_together(mesh, p, dab, reach);
+            } else {
+                settling = self.together(mesh, p, dab, reach, settling, scratch);
+            }
+        }
+    }
+
+    /// The walk for a list of copies that is not a group: a radial axis
+    /// tilted against a mirror plane, whose images of images never close.
+    /// There is no subgroup to go by, so the copies that can meet are found
+    /// by where they land: any two within `within` of each other are of one
+    /// set, and so are two that a third joins. Each set is then shared out
+    /// as a coset is. (They were once applied in turn, each on the surface
+    /// the one before left: twice the strength down the centre line, as many
+    /// times as there were copies at the axis, and a result that leaned
+    /// toward whichever copy came last.) Every set works out its own
+    /// sharing: with no symmetry between the sets, one's is not another's.
+    fn in_clusters(&mut self, mesh: &mut Mesh, p: &Params, dab: &Dab, reach: f32, within: f32, scratch: &mut Scratch) {
+        let ops: Vec<SymOp> = self.group.iter().map(|&op| SymOp::from(op)).collect();
+        let centres: Vec<Vec3> = ops.iter().map(|op| op.apply_point(dab.center)).collect();
+        // Which set each copy is of: the lowest copy it can reach, by way
+        // of others or not.
+        let mut of: Vec<usize> = (0..ops.len()).collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for a in 0..ops.len() {
+                for b in a + 1..ops.len() {
+                    if of[a] != of[b] && centres[a].distance_squared(centres[b]) < within * within {
+                        let low = of[a].min(of[b]);
+                        (of[a], of[b]) = (low, low);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        for first in 0..ops.len() {
+            if of[first] != first {
+                continue;
+            }
+            self.set.clear();
+            self.set.extend((first..ops.len()).filter(|&k| of[k] == first).map(|k| ops[k]));
+            if p.mask {
+                self.mask_together(mesh, p, dab, reach);
+            } else {
+                self.together(mesh, p, dab, reach, None, scratch);
+            }
         }
     }
 
@@ -123,7 +198,7 @@ impl Walk {
     /// one before left.
     fn in_turn(&mut self, mesh: &mut Mesh, p: &Params, dab: &Dab, reach: f32, scratch: &mut Scratch) {
         for &op in self.group.iter() {
-            let copy = dab.mirrored(SymOp::from(op));
+            let copy = dab.copied(mesh, p, SymOp::from(op), self.height);
             self.leaves.clear();
             mesh.bvh.leaves_in_sphere(copy.center, reach, &mut self.leaves);
             // Ascending, which is what lets a dab's vertices be shared out
@@ -141,11 +216,30 @@ impl Walk {
         }
     }
 
-    /// The copies of one coset (`representative` times each of the copies
-    /// that can meet), each applied to the surface as it stood before any of
-    /// them, and what they did shared out. `settling` is how, from the coset
-    /// before (for a brush that adds it holds how many dabs the copies count
-    /// as); the first coset works it out, and every coset gives it back.
+    /// Mask painting for the copies of the set in hand: one dab's worth
+    /// between them.
+    fn mask_together(&mut self, mesh: &mut Mesh, p: &Params, dab: &Dab, reach: f32) {
+        let Walk { set, leaves, height, .. } = self;
+        let copies: Vec<Dab> = set.iter().map(|&op| dab.copied(mesh, p, op, *height)).collect();
+        leaves.clear();
+        for copy in &copies {
+            mesh.bvh.leaves_in_sphere(copy.center, reach, leaves);
+        }
+        leaves.sort_unstable();
+        leaves.dedup();
+        if leaves.is_empty() {
+            return;
+        }
+        kernels::mask_paint_together(mesh, p, &copies, leaves);
+        mesh.mask_changed(leaves);
+    }
+
+    /// The copies of the set in hand (a coset: its representative times
+    /// each of the copies that can meet), each applied to the surface as it
+    /// stood before any of them, and what they did shared out. `settling` is
+    /// how, from the coset before (for a brush that adds it holds how many
+    /// dabs the copies count as); the first coset works it out, and every
+    /// coset gives it back.
     ///
     /// A copy works on its own leaves only, and only those are put back
     /// after it. Near the axis that is the same handful for every copy; a
@@ -159,20 +253,17 @@ impl Walk {
         p: &Params,
         dab: &Dab,
         reach: f32,
-        representative: usize,
         settling: Option<Settling>,
         scratch: &mut Scratch,
     ) -> Option<Settling> {
-        let Walk { group, subgroup, reached, ends, leaves, starts, saved, moved, .. } = self;
-        // More than one copy can meet only in a real group (see
-        // `interacting_subgroup`), where every product is another copy.
-        let copy = |h: usize| SymOp::from(group[group.product(representative, h).unwrap_or(representative)]);
+        let Walk { group, set, reached, ends, leaves, starts, saved, moved, height, .. } = self;
+        let copies: Vec<Dab> = set.iter().map(|&op| dab.copied(mesh, p, op, *height)).collect();
 
         reached.clear();
         ends.clear();
-        for &h in subgroup.iter() {
+        for copy in &copies {
             let from = reached.len();
-            mesh.bvh.leaves_in_sphere(copy(h).apply_point(dab.center), reach, reached);
+            mesh.bvh.leaves_in_sphere(copy.center, reach, reached);
             reached[from..].sort_unstable();
             ends.push(reached.len());
         }
@@ -191,20 +282,37 @@ impl Walk {
         moved.resize(total, Shared::default());
         let mut tally = Tally::default();
         let mut from = 0;
-        for (&h, &end) in subgroup.iter().zip(ends.iter()) {
+        for (copy, &end) in copies.iter().zip(ends.iter()) {
             let own = &reached[from..end];
             from = end;
             if own.is_empty() {
                 continue;
             }
-            kernels::apply(mesh, p, &dab.mirrored(copy(h)), own, own, scratch);
+            kernels::apply(mesh, p, copy, own, own, scratch);
             tally.add(share::bank(mesh, own, leaves, starts, saved, moved, sharing));
         }
         // Moves rather than positions, so a vertex no copy touched is not
         // written at all and keeps its position to the bit.
         let (saved, moved) = (&*saved, &*moved);
         let settling = settling.unwrap_or_else(|| Settling::of(sharing, &tally));
-        mesh.move_vertices(leaves, |at, _| settling.step(&moved[at]).map(|step| saved[at] + step));
+        // A vertex the stroke found on the axis, or on a mirror plane among
+        // the copies, stays on it (`share::held_on`).
+        // Any copy but the dab as drawn whose plane or axis passes within
+        // the reach of this set's own dab: a vertex under the dab that such
+        // a copy leaves where it is lies no further from the dab's centre
+        // than its image does, so the centre's image is within twice the
+        // reach.
+        let centre = set[0].apply_point(dab.center);
+        let images: Vec<SymOp> = group
+            .iter()
+            .filter(|op| !op.is_identity() && op.apply_point(centre).distance(centre) <= 2.02 * reach)
+            .map(|&op| SymOp::from(op))
+            .collect();
+        let on_plane = share::on_plane(p.radius);
+        mesh.move_vertices(leaves, |at, vt| {
+            let step = settling.step(&moved[at])?;
+            Some(share::held_on(&images, vt.start, saved[at] + step, on_plane))
+        });
         mesh.positions_changed(leaves);
         Some(settling)
     }

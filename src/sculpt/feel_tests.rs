@@ -290,6 +290,9 @@ fn slab() -> Mesh {
 
 /// With the brushes as they start, a stroke on the front of a thin slab
 /// leaves its back alone; with Front Facing off the back is dragged along.
+/// Not by Clay: it works to a plane fitted to the sheet the dab is on, and
+/// leaves the far sheet alone whichever way Front Facing is set
+/// (`kernels::same_sheet`).
 #[test]
 fn a_stroke_on_the_front_of_a_thin_form_leaves_its_back_alone() {
     for brush in FRONT_FACING {
@@ -323,6 +326,10 @@ fn a_stroke_on_the_front_of_a_thin_form_leaves_its_back_alone() {
         }
         assert!(front > 1e-3, "{brush:?} did nothing to the front");
         assert_eq!(kept, 0.0, "{brush:?} moved the back by {kept} with Front Facing on");
+        if brush == Brush::Clay {
+            assert_eq!(dragged, 0.0, "Clay with Front Facing off moved the back by {dragged}");
+            continue;
+        }
         assert!(dragged > 1e-4, "{brush:?} with it off: the back moved {dragged}; the test reaches nothing");
     }
 }

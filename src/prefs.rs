@@ -419,8 +419,9 @@ pub struct BrushPrefs {
 /// The version of what the brush numbers in the settings file mean (see
 /// `BrushPrefs::feel_version`): 1 from the pen-feel changes of 2026-10-21,
 /// 2 from Accumulate starting off later that day, 3 from Auto Smooth, Even
-/// Out and plain Clay's deeper start, later still.
-pub const FEEL_VERSION: u32 = 3;
+/// Out and plain Clay's deeper start, later still, 4 from Smooth keeping
+/// volume from the start (2026-11-11).
+pub const FEEL_VERSION: u32 = 4;
 
 /// The brushes whose Accumulate started on until version 2.
 const ACCUMULATED: [Brush; 3] = [Brush::Standard, Brush::Inflate, Brush::Clay];
@@ -602,7 +603,21 @@ fn old_feel(brush: &mut BrushPrefs, raw: &serde_json::Value, version: u32) {
     if version < 3 {
         feel_3(brush, raw);
     }
+    if version < 4 {
+        feel_4(brush);
+    }
     brush.feel_version = FEEL_VERSION;
+}
+
+/// Version 4: Smooth keeps volume from the start. Keep Volume at nought was
+/// what it started with, never chosen, and becomes the new start; one that
+/// was turned up is kept.
+fn feel_4(brush: &mut BrushPrefs) {
+    if let Some(tuning) = brush.brushes.get_mut(Brush::Smooth.name()) {
+        if tuning.keep_volume == 0.0 {
+            tuning.keep_volume = crate::sculpt::DEFAULT_KEEP_VOLUME;
+        }
+    }
 }
 
 /// Version 3: plain Clay starts deeper. Clay Depth at its old starting 0.3
@@ -1601,8 +1616,22 @@ mod tests {
         }
         older["brush"]["brushes"]["Smooth"]["strength"] = 0.4.into();
         Prefs::parse(&older.to_string()).brush.apply(&mut back);
-        assert!(back.per_brush.iter().all(|b| options(b) == first_run));
+        let fresh = Settings::default();
+        assert!(back.per_brush.iter().zip(&fresh.per_brush).all(|(b, fresh)| options(b) == options(fresh)));
+        assert_eq!(options(&fresh.per_brush[Brush::Smooth.index()]), (SmoothMode::All, 1.0, FlattenMode::Both, false));
         assert_eq!(back.per_brush[Brush::Smooth.index()].strength, 0.4);
+
+        // A file from before Smooth kept volume from the start (version 3):
+        // Keep Volume at nought was never chosen and becomes the new start;
+        // one that was turned up is kept.
+        for (given, read) in [(0.0, 1.0), (0.4, 0.4)] {
+            let mut file = serde_json::to_value(Prefs::default()).unwrap();
+            file["brush"]["feel_version"] = 3.into();
+            file["brush"]["brushes"]["Smooth"]["keep_volume"] = given.into();
+            let mut back = Settings::default();
+            Prefs::parse(&file.to_string()).brush.apply(&mut back);
+            assert_eq!(back.per_brush[Brush::Smooth.index()].keep_volume, read as f32, "from {given}");
+        }
 
         // A mode from some later version, and numbers no slider could set.
         let odd = serde_json::json!({ "brush": { "feel_version": FEEL_VERSION, "brushes": {

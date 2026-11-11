@@ -288,6 +288,11 @@ pub fn parse(text: &str, fallback_name: &str) -> Result<Read, String> {
         if version < 1 && !prints && strength.is_some() {
             record.settings.strength = crate::sculpt::strength::from_old(kernel, record.settings.strength);
         }
+        // Older than Smooth keeping volume from the start: a saved brush
+        // that does not say did without, and still does.
+        if version < 4 && kernel == Brush::Smooth && !has("keep_volume") {
+            record.settings.keep_volume = 0.0;
+        }
         if version < 2 {
             // Older than Relax Normals and Steady Plane: the brush did
             // without them, and still does (a missing number is otherwise

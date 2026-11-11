@@ -234,6 +234,47 @@ fn held_to(step: DVec3, furthest: f64) -> Vec3 {
     }
 }
 
+/// How near its own image a vertex has to be, as the stroke found it, to
+/// count as lying on the mirror plane (or the axis) between them: the square
+/// of that distance, for a brush of `radius`. A five-hundredth of the radius
+/// between the two, a thousandth off the plane: nothing the eye can find,
+/// and far more than the rounding an imported model's centre line is off by.
+#[inline]
+pub(super) fn on_plane(radius: f32) -> f32 {
+    let between = 2.0e-3 * radius;
+    between * between
+}
+
+/// Where a vertex the copies of a dab moved to `pos` is put: `pos`, unless
+/// the stroke found it (at `start`) on a mirror plane or on the axis of some
+/// of `images`, the copies that can meet at the dab other than the dab as it
+/// was drawn. Then it stays on it.
+///
+/// On a model whose two halves are mirror images to the triangle, what the
+/// copies do to a vertex on the plane cancels across it exactly, and it has
+/// always stayed. On any other (a centre line with different triangles
+/// either side of it: after dynamic topology, a decimation, an import, a
+/// stroke on one side) every copy reads the vertex's own normal and its own
+/// neighbours, which lean the same way for all of them, and pushed it off
+/// the plane a little the same way, stroke after stroke: a seam down the
+/// middle of the model. It is put back by averaging it with its images in
+/// the copies that leave its starting place where it is, which is the
+/// nearest place that all of those leave alone: the plane for one mirror
+/// image, the line two planes meet in, the axis. Sign flips and halvings
+/// are exact, so a vertex that was on a plane to the bit still is.
+/// `on_plane` is [`on_plane`] for the brush.
+#[inline]
+pub(super) fn held_on(images: &[kernels::SymOp], start: Vec3, pos: Vec3, on_plane: f32) -> Vec3 {
+    let (mut sum, mut count) = (pos.as_dvec3(), 1u32);
+    for op in images {
+        if op.apply_point(start).distance_squared(start) <= on_plane {
+            sum += op.apply_point(pos).as_dvec3();
+            count += 1;
+        }
+    }
+    if count == 1 { pos } else { (sum / count as f64).as_vec3() }
+}
+
 /// The same rule for a Move grab, whose copies do not dab. Each takes hold
 /// of the surface once, at the press, and from then on carries every vertex
 /// it holds by its weight there times the pointer's travel as that copy

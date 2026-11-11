@@ -447,7 +447,15 @@ impl SymmetryGroup {
     /// this one.
     pub fn in_object_frame(&self, rotation: Quat, position: Vec3, world_to_local: &Mat4) -> SymmetryGroup {
         let ops = self.ops.iter().map(|op| SymmetryOp::in_object_frame(*op, rotation, position, world_to_local)).collect();
-        SymmetryGroup::from_ops(ops, self.radial_count)
+        // The table is this group's own, carried over, not worked out again
+        // from the new ops: which product is which copy does not change with
+        // where the object stands. Worked out again, two ops were matched
+        // entry for entry to a fixed 1e-4, their offsets included, and on an
+        // object far from the world's origin or scaled far down (offsets in
+        // the thousands of its own units) a product could miss its match by
+        // rounding alone. The list then stopped counting as a group and its
+        // copies stopped sharing where they overlap.
+        SymmetryGroup { ops, product: self.product.clone(), radial_count: self.radial_count, is_group: self.is_group }
     }
 
     /// Signs of the flip mask: bit 0 flips X, bit 1 Y, bit 2 Z.

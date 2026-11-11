@@ -73,6 +73,8 @@ impl Running {
         let good_news = |app: &Running| app.ui.status.1 == crate::ui::theme::OK;
         let press = |app: &mut Running, action: Action| {
             app.act(action);
+            // The repairs run in the background, and a scripted run has no frames to land them in.
+            app.symmetry_repair_wait();
             println!("{}", app.ui.status.0);
         };
         let mut checks = Vec::new();

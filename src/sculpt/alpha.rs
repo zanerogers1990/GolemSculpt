@@ -460,7 +460,7 @@ impl Sculptor {
         }
         stroke.params.radius = radius;
         stroke.params.alpha = stroke.params.alpha.map(|stamp| stamp.sized(radius));
-        let normal = kernels::footprint_normal(mesh, centre, radius, true).unwrap_or(fallback);
+        let normal = kernels::footprint_normal(mesh, centre, radius, true, fallback).unwrap_or(fallback);
         let frame = stroke.aim.frame(stroke.params.alpha.as_ref(), normal, Some(reach), radius);
         // The stroke's one print has the stroke's first draw, the same each
         // time it is remade: Random Rotation must not spin it as it grows.

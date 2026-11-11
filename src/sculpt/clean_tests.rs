@@ -6,7 +6,7 @@
 use glam::{Vec2, Vec3};
 
 use super::kernels::Ring;
-use super::stroke_tests::{across, draw, height, rough_ball, round, sphere, twins, view_of};
+use super::stroke_tests::{across, draw, height, on_ball, rough_ball, round, sphere, twins, view_of};
 use super::*;
 
 const RADIUS: f32 = 0.1;
@@ -61,19 +61,33 @@ fn noisy_ball() -> Mesh {
 }
 
 /// Smooth in Surface mode takes a fine roughness off a ball about as well
-/// as plain smoothing (All) at the same Strength, and none of its volume;
-/// plain smoothing thins the ball with every stroke. A lump as big as the
-/// brush it mostly leaves: that is what All is for, and why Smooth starts
-/// with All.
+/// as plain smoothing (All with Keep Volume at nought) at the same
+/// Strength, and none of its volume; plain smoothing thins the ball with
+/// every stroke. A lump as big as the brush it mostly leaves: that is what
+/// All is for, and why Smooth starts with All. All as Smooth starts, with
+/// Keep Volume, takes the lumps as plain smoothing does and keeps the
+/// volume as Surface does.
 #[test]
 fn surface_smoothing_keeps_the_volume_plain_smoothing_takes() {
+    let kept = |ball: fn() -> Mesh| {
+        let mut mesh = ball();
+        let view = view_of(&mesh);
+        let (volume_before, rough_before) = (volume(&mesh), roughness(&mesh));
+        let line = across(&view, -0.4, 0.4, 60);
+        for _ in 0..10 {
+            draw(&mut mesh, &mut holding(Brush::Smooth, |_| ()), &view, &line, 4, Some(&|_| 1.0));
+        }
+        mesh.recompute_all_normals();
+        ((volume(&mesh) - volume_before) / RADIUS.powi(3) as f64, roughness(&mesh) / rough_before)
+    };
     let run = |mode: SmoothMode, ball: fn() -> Mesh| {
         let mut mesh = ball();
         let view = view_of(&mesh);
         let (volume_before, rough_before) = (volume(&mesh), roughness(&mesh));
         let line = across(&view, -0.4, 0.4, 60);
         for _ in 0..10 {
-            draw(&mut mesh, &mut holding(Brush::Smooth, |b| b.smooth_mode = mode), &view, &line, 4, Some(&|_| 1.0));
+            let plain = |b: &mut BrushSettings| (b.smooth_mode, b.keep_volume) = (mode, 0.0);
+            draw(&mut mesh, &mut holding(Brush::Smooth, plain), &view, &line, 4, Some(&|_| 1.0));
         }
         mesh.recompute_all_normals();
         ((volume(&mesh) - volume_before) / RADIUS.powi(3) as f64, roughness(&mesh) / rough_before)
@@ -89,6 +103,11 @@ fn surface_smoothing_keeps_the_volume_plain_smoothing_takes() {
     let (_, surface_lumps) = run(SmoothMode::Surface, || rough_ball(60_000));
     println!("ten strokes on lumps: All left {all_lumps:.3} of them, Surface {surface_lumps:.3}");
     assert!(all_lumps < surface_lumps * 0.6, "All left {all_lumps} of the lumps, Surface {surface_lumps}");
+    let ((kept_dv, _), (_, kept_lumps)) = (kept(noisy_ball), kept(|| rough_ball(60_000)));
+    println!("as Smooth starts: took {kept_dv:.4} cubic radii, left {kept_lumps:.3} of the lumps");
+    assert!(kept_dv.abs() < 0.05 * all_dv.abs(), "Smooth as it starts took {kept_dv}, plain {all_dv}");
+    assert!(kept_lumps < surface_lumps * 0.6, "Smooth as it starts left {kept_lumps} of the lumps");
+    assert_eq!(Settings::default().per_brush[Brush::Smooth.index()].keep_volume, 1.0);
     assert_eq!(Settings::default().per_brush[Brush::Smooth.index()].smooth_mode, SmoothMode::All);
 }
 
@@ -317,3 +336,189 @@ fn move_evens_out_inside_its_own_undo_step() {
     assert!(changed > 100, "Even Out moved {changed} vertices");
 }
 
+
+/// A soft, light dab of mask on a mirror plane is no darker than the same
+/// dab beside the plane or with no symmetry at all: the dab and its image
+/// lay one dab's worth between them. (Each once laid its own, and the
+/// centre line of a mirrored model masked twice as fast as the rest.)
+#[test]
+fn a_mask_dab_on_a_mirror_plane_is_no_darker_than_one_beside_it() {
+    let darkest = |angle: f32, mirror: bool| {
+        let mut mesh = sphere(60_000);
+        let view = view_of(&mesh);
+        let mut sculptor = holding(Brush::Standard, |_| ());
+        let s = &mut sculptor.settings;
+        (s.mask_mode, s.mask_hardness, s.symmetry) = (true, 0.0, [mirror, false, false]);
+        let at = view.project(on_ball(angle)).unwrap();
+        draw(&mut mesh, &mut sculptor, &view, &[at, at], 4, Some(&|_| 0.05));
+        mesh.mask.iter().copied().fold(0.0f32, f32::max)
+    };
+    let (on, beside, alone) = (darkest(0.0, true), darkest(0.5, true), darkest(0.0, false));
+    println!("darkest mask: on the plane {on:.4}, beside it {beside:.4}, with no symmetry {alone:.4}");
+    assert!(alone > 1e-3 && alone < 0.5, "the dab alone masked {alone}: too little or too much to tell");
+    assert!((on - alone).abs() < 0.02 * alone, "on the plane {on}, alone {alone}");
+    assert!((beside - alone).abs() < 0.05 * alone, "beside the plane {beside}, alone {alone}");
+}
+
+/// The vertices a stroke finds on the mirror plane stay on it, on a model
+/// whose two halves are not mirror images triangle for triangle. Here every
+/// vertex off the plane is slid a little its own way along the ball, so a
+/// vertex on the plane has different neighbours either side of it and its
+/// normal leans off the plane: every copy of a dab then pushes it the same
+/// way, off the plane. (On mirror-image halves the pushes cancel exactly,
+/// which other tests hold to the bit.)
+#[test]
+fn the_centre_line_stays_on_the_mirror_plane_of_a_lopsided_mesh() {
+    for brush in [Brush::Inflate, Brush::Standard, Brush::Smooth, Brush::Clay] {
+        let ball = sphere(60_000);
+        let lopsided: Vec<Vec3> = ball
+            .positions
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| {
+                if p.x == 0.0 {
+                    return p;
+                }
+                let h = ((i as u32).wrapping_mul(2_654_435_761) >> 8 & 0xffff) as f32 / 65535.0 - 0.5;
+                (p + Vec3::new(0.0, 0.004 * h, 0.0)).normalize() * 0.5
+            })
+            .collect();
+        let mut mesh = Mesh::new(lopsided, ball.indices.clone(), None);
+        let centre: Vec<usize> = (0..mesh.vertex_count()).filter(|&v| mesh.positions[v].x == 0.0).collect();
+        assert!(centre.len() > 100, "{} vertices on the plane", centre.len());
+        let view = view_of(&mesh);
+        let mut sculptor = holding(brush, |b| b.strength = b.strength.max(0.5));
+        sculptor.settings.symmetry = [true, false, false];
+        let before = mesh.positions.clone();
+        for _ in 0..3 {
+            draw(&mut mesh, &mut sculptor, &view, &across(&view, -0.3, 0.3, 40), 4, Some(&|_| 1.0));
+        }
+        let moved = centre.iter().map(|&v| mesh.positions[v].distance(before[v])).fold(0.0f32, f32::max);
+        let off = centre.iter().map(|&v| mesh.positions[v].x.abs()).fold(0.0f32, f32::max);
+        println!("{brush:?}: centre line moved up to {moved:.2e}, off the plane {off:.2e}");
+        assert!(moved > 1e-4, "{brush:?} did nothing to the centre line");
+        assert_eq!(off, 0.0, "{brush:?} left the centre line {off} off the plane");
+    }
+}
+
+/// Clay with Front Facing off (as Clay Strips has it) laid on the front of
+/// a thin slab leaves the back of it where it was. The plane a dab works to
+/// is fitted to the sheet the dab is on; with the back in it the plane lay
+/// half way through the slab and the back was pushed out as the front rose.
+#[test]
+fn clay_without_front_facing_leaves_the_back_of_a_thin_form_alone() {
+    let cube = crate::mesh::primitives::build(crate::mesh::primitives::Primitive::Cube, 80_000, 0.5);
+    let thin = cube.positions.iter().map(|&p| Vec3::new(p.x, p.y, p.z * 0.06)).collect();
+    let mut mesh = Mesh::new(thin, cube.indices.clone(), None);
+    let (normals, before) = (mesh.normals.clone(), mesh.positions.clone());
+    let view = view_of(&mesh);
+    let mut sculptor = holding(Brush::Clay, |b| (b.front_facing, b.strength) = (false, 0.5));
+    let at = |x: f32| view.project(Vec3::new(x, 0.0, 0.03)).unwrap();
+    let path: Vec<Vec2> = (0..=60).map(|i| at(-0.15 + 0.3 * i as f32 / 60.0)).collect();
+    draw(&mut mesh, &mut sculptor, &view, &path, 4, Some(&|_| 1.0));
+    let moved = |v: usize| mesh.positions[v].distance(before[v]);
+    let back = (0..before.len()).filter(|&v| normals[v].z < -0.9).map(moved).fold(0.0f32, f32::max);
+    let front = (0..before.len()).filter(|&v| normals[v].z > 0.9).map(moved).fold(0.0f32, f32::max);
+    println!("front moved up to {front:.4}, back {back:.2e}");
+    assert!(front > 1e-3, "the stroke did nothing to the front");
+    assert_eq!(back, 0.0, "the back of the slab moved {back}");
+}
+
+/// Two balls, one in front of the eye and one behind it and to the side,
+/// two diameters further off.
+fn two_balls() -> Mesh {
+    let ball = sphere(60_000);
+    let n = ball.positions.len() as u32;
+    let behind = ball.positions.iter().map(|&p| p + Vec3::new(0.5, 0.0, -2.0));
+    let positions: Vec<Vec3> = ball.positions.iter().copied().chain(behind).collect();
+    let indices: Vec<u32> = ball.indices.iter().copied().chain(ball.indices.iter().map(|&i| i + n)).collect();
+    Mesh::new(positions, indices, None)
+}
+
+/// A stroke that slides off the edge of one form on to another far behind
+/// it is not carried across the gap between them: it lays about as many
+/// dabs as the two parts of it laid as strokes of their own, not a line of
+/// them through the air from the one form to the other.
+#[test]
+fn a_stroke_off_the_edge_of_a_form_does_not_cross_the_gap_to_the_one_behind() {
+    let on_front = |x: f32| Vec3::new(x, 0.0, (0.25 - x * x).sqrt());
+    let on_back = |x: f32| Vec3::new(0.5 + x, 0.0, -2.0 + (0.25 - x * x).sqrt());
+    // One straight line across the screen, from the front ball, over its
+    // edge, on to the back ball where it shows beside the front one.
+    let line = |view: &View| -> Vec<Vec2> {
+        let (a, b) = (view.project(on_front(0.2)).unwrap(), view.project(on_back(0.3)).unwrap());
+        (0..=80).map(|i| a.lerp(b, i as f32 / 80.0)).collect()
+    };
+    // Where along it the pen passes from the one to the other, with no
+    // empty space between them.
+    let crossing = {
+        let mesh = two_balls();
+        let view = view_of(&mesh);
+        let depth: Vec<f32> = line(&view)
+            .iter()
+            .map(|&px| {
+                let (origin, dir) = view.ray(px);
+                mesh.raycast(origin, dir).expect("the line stays on the balls").pos.z
+            })
+            .collect();
+        let first_back = depth.iter().position(|&z| z < -1.0).expect("the line reaches the back ball");
+        assert!(first_back > 8 && first_back < 72, "the line crosses at sample {first_back}");
+        assert!(depth[first_back..].iter().all(|&z| z < -1.0));
+        first_back
+    };
+    let stroke = |samples: std::ops::Range<usize>| {
+        let mut mesh = two_balls();
+        let view = view_of(&mesh);
+        let path = line(&view)[samples].to_vec();
+        let dabs = draw(&mut mesh, &mut holding(Brush::Standard, |_| ()), &view, &path, 4, Some(&|_| 1.0));
+        (dabs, mesh)
+    };
+    let ((whole_dabs, mesh), (front_dabs, _), (back_dabs, _)) = (stroke(0..81), stroke(0..crossing), stroke(crossing..81));
+    println!("dabs: {whole_dabs} in one stroke over both balls; {front_dabs} on the front one alone, {back_dabs} on the back");
+    assert!(front_dabs > 2 && back_dabs > 2, "the strokes laid {front_dabs} and {back_dabs} dabs");
+    // The gap is two diameters: a hundred dabs at this brush's spacing.
+    assert!(whole_dabs <= front_dabs + back_dabs + 4, "{whole_dabs} dabs in one stroke, {front_dabs} + {back_dabs} apart");
+    let fresh = two_balls();
+    let moved = |from: usize, to: usize| (from..to).any(|v| mesh.positions[v] != fresh.positions[v]);
+    let n = fresh.positions.len() / 2;
+    assert!(moved(0, n) && moved(n, 2 * n), "the stroke worked both balls");
+}
+
+/// A ball with a lump on its left side (x below nought), 0.6 of the test
+/// brush's radius high, and nothing like it on the right.
+fn lopsided_ball() -> Mesh {
+    let ball = sphere(120_000);
+    let lump = Vec3::new(-0.25, 0.0, (0.25f32 - 0.0625).sqrt());
+    let lumped = ball
+        .positions
+        .iter()
+        .map(|&p| p * (1.0 + 0.12 * kernels::smooth(1.0 - p.distance(lump) / 0.2)))
+        .collect();
+    Mesh::new(lumped, ball.indices.clone(), None)
+}
+
+/// The mirror image of a dab is set down on its own side's surface. A dab
+/// on the plain side of a lopsided ball has its image, across the mirror
+/// plane, well under the top of a lump there: left where the mirror put it,
+/// the stroke raised the lump far less than it raised the plain side. Set
+/// down on the lump, it raises it about as much.
+#[test]
+fn a_mirrored_dab_is_set_down_on_a_lopsided_side() {
+    let mut mesh = lopsided_ball();
+    let before = mesh.positions.clone();
+    let view = view_of(&mesh);
+    let mut sculptor = holding(Brush::Standard, |b| b.strength = 1.0);
+    sculptor.settings.symmetry = [true, false, false];
+    let at = view.project(Vec3::new(0.25, 0.0, (0.25f32 - 0.0625).sqrt())).unwrap();
+    draw(&mut mesh, &mut sculptor, &view, &[at, at], 4, Some(&|_| 1.0));
+    let rise = |left: bool| {
+        (0..before.len())
+            .filter(|&v| (before[v].x < 0.0) == left)
+            .map(|v| mesh.positions[v].distance(before[v]))
+            .fold(0.0f32, f32::max)
+    };
+    let (plain, lump) = (rise(false), rise(true));
+    println!("raised {plain:.4} on the plain side, {lump:.4} on the lump");
+    assert!(plain > 0.01, "the dab raised {plain}");
+    assert!(lump > 0.8 * plain && lump < 1.25 * plain, "the lump rose {lump}, the plain side {plain}");
+}

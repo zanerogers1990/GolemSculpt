@@ -117,9 +117,16 @@ impl Target {
     }
 }
 
+/// How many triangles the balls are made of: 200,000, or what
+/// `SCULPT_FEEL_TRIANGLES` says, for seeing what a brush does on a finer
+/// mesh (the lumps and the brush stay the size they are).
+fn triangles() -> usize {
+    std::env::var("SCULPT_FEEL_TRIANGLES").ok().and_then(|n| n.trim().parse().ok()).unwrap_or(200_000)
+}
+
 /// A ball, smooth or with fine noise over it.
 fn ball(rough: bool) -> Mesh {
-    let mesh = primitives::build(Primitive::Sphere, 200_000, BALL);
+    let mesh = primitives::build(Primitive::Sphere, triangles(), BALL);
     if !rough {
         return mesh;
     }
@@ -139,7 +146,7 @@ fn ball(rough: bool) -> Mesh {
 /// of a radius across, a hundredth of the ball's radius high): what a
 /// smoothing brush is mostly for.
 fn lumpy() -> Mesh {
-    let mesh = primitives::build(Primitive::Sphere, 200_000, BALL);
+    let mesh = primitives::build(Primitive::Sphere, triangles(), BALL);
     let positions = mesh.positions.iter().map(|&p| p * (1.0 + 0.012 * (p.x * 90.0).sin() * (p.y * 90.0).sin())).collect();
     Mesh::new(positions, mesh.indices.clone(), None)
 }

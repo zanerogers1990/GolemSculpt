@@ -15,7 +15,7 @@ use sculpt_toolkit as kit;
 use winit::event::MouseButton;
 use winit::keyboard::ModifiersState;
 
-use super::masked::{Deform, Mirror};
+use super::masked::{Deform, Mirror, Turns};
 use super::mirror_copies::{place_shown, shown_target};
 use super::{Drag, Running};
 use crate::doc::{Action, Tool};
@@ -233,11 +233,13 @@ impl Running {
                 // mesh, and that mesh is the active object's.
                 let alone = ids == [doc.scene.active_id()];
                 // Under the object's mirror symmetry each half moves as the
-                // other's mirror image (masked.rs).
+                // other's mirror image, and under radial symmetry each copy
+                // round the axis as the others do (masked.rs).
                 let symmetry = doc.scene.active_symmetry();
                 let mirror = Mirror {
                     axes: symmetry.mirror,
                     world: (symmetry.space == Space::World).then(|| doc.scene.active().matrix()),
+                    radial: Some(Turns { radial: symmetry.radial, world: symmetry.world(doc.scene.active()) }),
                 };
                 match alone.then(|| Deform::begin(&mut doc.mesh, mirror)).flatten() {
                     Some(deform) => {
@@ -362,17 +364,13 @@ impl Running {
             }
             Dragged::Surface { deform, .. } => {
                 let doc = &mut self.doc;
-                let mirrored = deform.mirrored();
+                let how = deform.how();
                 if let Some(delta) = deform.end(&mut doc.mesh) {
                     doc.history.push_stroke(delta);
                     // The surface moved out from under the last brush dab.
                     doc.sculptor.last_hit = None;
                     let object = doc.scene.active().name.clone();
                     self.toast(name);
-                    let how = match mirrored {
-                        Some(planes) => format!(", each side the mirror image of the other across {planes}"),
-                        None => String::new(),
-                    };
                     self.status(
                         format!(
                             "Reshaped the unmasked part of \"{object}\"{how}; the masked part stayed where it was. Undo (Ctrl+Z) puts it back."
