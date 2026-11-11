@@ -240,6 +240,15 @@ impl Running {
                 }
             }
         }
+        // Under radial symmetry, a faint dot where each copy of a dragged
+        // point is (radial.rs): only to be seen, not grabbed.
+        if let Some((_, Some(copies))) = &session.radial {
+            for ghost in super::radial::ghosts(cage, &session.bounds, p.axis, span, copies) {
+                let Some(c) = self.view.project(session.frame.to_world(ghost).as_vec3()) else { continue };
+                out.push(Shape::Fill { points: disc(c, 4.0 * ppp), color: [15, 15, 20, 120] });
+                out.push(Shape::Fill { points: disc(c, 3.0 * ppp), color: [245, 245, 245, 140] });
+            }
+        }
         for (i, c) in at.iter().enumerate() {
             let Some(c) = *c else { continue };
             let picked = i == cage.picked;

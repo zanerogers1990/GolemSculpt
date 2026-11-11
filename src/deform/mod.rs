@@ -373,6 +373,19 @@ impl Deformer {
         Some(Deformer { axes, profile, shape })
     }
 
+    /// This deformer with what it does repeated by each of `copies`, the
+    /// copies of a symmetry other than the shape itself, as maps of the
+    /// gizmo's frame. Only the Lattice is repeated (lattice.rs: a cage is a
+    /// box, and a turn of a box is not one); the others are as they were.
+    pub fn repeated(self, copies: &[glam::DAffine3]) -> Deformer {
+        let Deformer { axes, profile, shape } = self;
+        let shape = match shape {
+            Shape::Lattice(cage) => Shape::Lattice(cage.repeated(copies, axes.along)),
+            shape => shape,
+        };
+        Deformer { axes, profile, shape }
+    }
+
     /// Whether `apply` reads the normal it is given (Inflate alone does):
     /// the app then keeps the normals as they were at the start.
     pub fn needs_normals(&self) -> bool {
@@ -407,8 +420,11 @@ impl Deformer {
     /// leaves a point alone, or `None` if it can reach past both ends: the
     /// app passes over parts of the mesh that lie wholly outside it.
     pub fn reach(&self) -> Option<(f64, f64)> {
+        let (lo, hi) = (self.profile.lo, self.profile.hi);
         match &self.shape {
-            Shape::Inflate { .. } | Shape::Lattice(_) => Some((self.profile.lo, self.profile.hi)),
+            // A lattice's copies can reach past the range (a turn of it about another axis).
+            Shape::Lattice(cage) => Some(cage.reach().map_or((lo, hi), |(from, to)| (from.min(lo), to.max(hi)))),
+            Shape::Inflate { .. } => Some((lo, hi)),
             _ => None,
         }
     }

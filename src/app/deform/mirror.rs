@@ -14,17 +14,20 @@
 //! Only a change of one point is mirrored, which is what a drag of a point
 //! or the card's number boxes make. A change of several at once (a new
 //! cage, Reset, the Claude bridge setting a list of moves) is taken as it is.
+//!
+//! Under radial symmetry this has no say: the copies, mirror images among
+//! them, are made by the deformer from what the dragged points do (radial.rs).
 
 use glam::{DAffine3, DMat3, DVec3, Mat4};
 
 use super::super::Running;
-use crate::deform::{Bounds, Frame, Kind, lattice};
+use crate::deform::{Bounds, Frame, Kind, Params, lattice};
 use crate::scene::{Space, Symmetry};
 
 /// How near a point's mirror image has to come to another point for the two
 /// to pair, as a share of the cage's size along each axis. The points of a
 /// cage are a fifth of it apart at the closest.
-const PAIRS: f64 = 0.02;
+pub(super) const PAIRS: f64 = 0.02;
 
 /// The object's mirror planes as reflections of the world, one for each
 /// ticked axis. `model` is the object's placement: its own planes go
@@ -137,16 +140,15 @@ pub(super) fn mirror_point(
 }
 
 impl Running {
-    /// Before the cage's settings are put on the model: if one point of it
-    /// has been moved since, its mirror images across the selected object's
-    /// planes are moved to match.
-    pub(super) fn deform_mirror_lattice(&mut self) {
+    /// The card's settings, cleaned up, if they are the Lattice's and one
+    /// point of its cage has been moved since the model was last shown, and
+    /// which point that is.
+    pub(super) fn lattice_lone_change(&self) -> Option<(usize, Params)> {
         let clean = self.doc.opts.deform.params.sanitized();
         if clean.kind != Kind::Lattice {
-            return;
+            return None;
         }
-        let Some(session) = self.transform.deform.session.as_ref() else { return };
-        let Some(part) = session.parts.first() else { return };
+        let session = self.transform.deform.session.as_ref()?;
         // What the model shows now: the last settings put on it, or a cage at rest.
         let was = match &session.shown {
             Some(shown) if shown.kind == Kind::Lattice && shown.lattice.count == clean.lattice.count => {
@@ -155,7 +157,17 @@ impl Running {
             _ => vec![[0.0; 3]; clean.lattice.len()],
         };
         let mut changed = (0..clean.lattice.len()).filter(|&i| clean.lattice.moved[i] != was[i]);
-        let (Some(moved), None) = (changed.next(), changed.next()) else { return };
+        let (Some(moved), None) = (changed.next(), changed.next()) else { return None };
+        Some((moved, clean))
+    }
+
+    /// Before the cage's settings are put on the model: if one point of it
+    /// has been moved since, its mirror images across the selected object's
+    /// planes are moved to match.
+    pub(super) fn deform_mirror_lattice(&mut self) {
+        let Some((moved, clean)) = self.lattice_lone_change() else { return };
+        let Some(session) = self.transform.deform.session.as_ref() else { return };
+        let Some(part) = session.parts.first() else { return };
         let planes = planes(&self.doc.scene.symmetry(part.object), part.model);
         if planes.is_empty() {
             return;

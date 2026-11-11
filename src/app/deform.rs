@@ -47,7 +47,9 @@
 //! the surface along and leaves it standing (`Ride::Still`).
 //!
 //! **Symmetry.** A point of the Lattice's cage takes its mirror images with
-//! it (mirror.rs). The result is mirror-symmetric when the deformation is: when
+//! it (mirror.rs); under radial symmetry what the dragged points do is
+//! repeated round the axis instead, and across the planes (radial.rs). The
+//! result is mirror-symmetric when the deformation is: when
 //! it maps every point's mirror image to the mirror image of where it maps the
 //! point. That is checked on the model itself for each mirror plane the
 //! object has ticked, the moment the settings change, and the status line
@@ -57,10 +59,11 @@ mod bridge;
 mod handles;
 mod mirror;
 mod play;
+mod radial;
 #[cfg(test)]
 mod tests;
 
-use glam::{DVec3, Mat4};
+use glam::{DAffine3, DVec3, Mat4};
 use rayon::prelude::*;
 
 use super::Running;
@@ -119,6 +122,11 @@ struct Session {
     parts: Vec<Part>,
     /// The settings the parts were last put where, if any.
     shown: Option<Params>,
+    /// And the copies the Lattice was repeated as then, under radial symmetry.
+    shown_copies: Option<Vec<DAffine3>>,
+    /// The copies of the first object's symmetry, in the gizmo's frame, and
+    /// the symmetry they were worked out for (radial.rs).
+    radial: Option<(crate::scene::Symmetry, Option<Vec<DAffine3>>)>,
     /// The mirror planes the status line has said the deformation breaks.
     warned: bool,
 }
@@ -239,18 +247,24 @@ impl Running {
         else {
             return;
         };
-        self.transform.deform.session = Some(Session { key, frame, bounds, parts, shown: None, warned: false });
+        self.transform.deform.session =
+            Some(Session { key, frame, bounds, parts, shown: None, shown_copies: None, radial: None, warned: false });
     }
 
     /// Puts every part where the card's settings have it, if they have
     /// changed since the last time. The first change of a session is where a
     /// deformation can be refused.
     fn deform_preview(&mut self) {
-        // A point of the cage takes its mirror images with it (mirror.rs).
-        self.deform_mirror_lattice();
+        // A point of the cage takes its mirror images with it (mirror.rs),
+        // or under radial symmetry the deformer makes its copies (radial.rs).
+        let copies = self.deform_lattice_copies();
+        match &copies {
+            Some(copies) => self.deform_radial_lattice(copies),
+            None => self.deform_mirror_lattice(),
+        }
         let params = self.doc.opts.deform.params.sanitized();
         let Some(session) = self.transform.deform.session.as_ref() else { return };
-        if session.shown.as_ref() == Some(&params) {
+        if session.shown.as_ref() == Some(&params) && session.shown_copies == copies {
             return;
         }
         if !session.pending() && !params.is_identity() {
@@ -262,7 +276,10 @@ impl Running {
             }
         }
         let Some(session) = self.transform.deform.session.as_mut() else { return };
-        let deformer = Deformer::new(&params, &session.bounds);
+        let deformer = Deformer::new(&params, &session.bounds).map(|d| match &copies {
+            Some(copies) => d.repeated(copies),
+            None => d,
+        });
         for part in &mut session.parts {
             if let Some(mesh) = mesh_of(&mut self.doc, part.mesh) {
                 part.target.apply(mesh, deformer.as_ref(), params.axis);
@@ -271,8 +288,13 @@ impl Running {
         session.shown = Some(params.clone());
         self.doc.sculptor.last_hit = None;
         self.redraw = true;
-        if let Some(deformer) = &deformer {
+        // Repeated by the symmetry's own copies, the Lattice is as symmetric
+        // as that symmetry can be: there is no cage to be uneven.
+        if let Some(deformer) = deformer.as_ref().filter(|_| copies.is_none()) {
             self.deform_check_symmetry(&params, deformer);
+        }
+        if let Some(session) = self.transform.deform.session.as_mut() {
+            session.shown_copies = copies;
         }
     }
 

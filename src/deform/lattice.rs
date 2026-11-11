@@ -18,8 +18,19 @@
 //! the axis; along it, a range narrower than the box leaves the rest of the
 //! shape alone, and the two parts part company where they meet if the end
 //! points of the cage are dragged (as in every free-form deformation tool).
+//!
+//! **Under radial symmetry** (`Cage::repeated`) the cage stays the box it
+//! is, and what its dragged points do is repeated instead: each copy of the
+//! symmetry carries the whole of it, the clay and the way it moves, round
+//! the axis (and across the planes). A turn of the box is not the box, so a
+//! copy of a dragged point is seldom a point of the cage, and moving the
+//! nearest points instead would leave the copies a little unlike each other.
+//! Carried whole, every copy is the drag itself, seen from another place: a
+//! model that was symmetric before is symmetric after, to rounding. The
+//! deformation is then the point plus the sum, over the cage and its
+//! copies, of each one's move, worked out where that copy sees the point.
 
-use glam::DVec3;
+use glam::{DAffine3, DMat3, DVec3};
 
 use super::Bounds;
 
@@ -133,22 +144,58 @@ pub fn moved_for(
     ((at - min) / size.max(DVec3::splat(1e-12)) - grid).as_vec3().to_array()
 }
 
+/// The binomial coefficients the Bernstein polynomials are made of.
+const CHOOSE: [[f64; MAX_POINTS]; MAX_POINTS] = [
+    [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 2.0, 1.0, 0.0, 0.0, 0.0],
+    [1.0, 3.0, 3.0, 1.0, 0.0, 0.0],
+    [1.0, 4.0, 6.0, 4.0, 1.0, 0.0],
+    [1.0, 5.0, 10.0, 10.0, 5.0, 1.0],
+];
+
 /// `Bᵢ(x)` for `i` in `0..n`: the Bernstein polynomials of degree `n - 1`.
 #[inline]
 fn bernstein(n: usize, x: f64, out: &mut [f64; MAX_POINTS]) {
-    const CHOOSE: [[f64; MAX_POINTS]; MAX_POINTS] = [
-        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-        [1.0, 2.0, 1.0, 0.0, 0.0, 0.0],
-        [1.0, 3.0, 3.0, 1.0, 0.0, 0.0],
-        [1.0, 4.0, 6.0, 4.0, 1.0, 0.0],
-        [1.0, 5.0, 10.0, 10.0, 5.0, 1.0],
-    ];
     let degree = n - 1;
     let y = 1.0 - x;
     for i in 0..n {
         out[i] = CHOOSE[degree][i] * x.powi(i as i32) * y.powi((degree - i) as i32);
     }
+}
+
+/// `Bᵢ(x)` alone, worked out as `bernstein` works it, to the bit.
+#[inline]
+fn bernstein_one(n: usize, i: usize, x: f64) -> f64 {
+    let degree = n - 1;
+    CHOOSE[degree][i] * x.powi(i as i32) * (1.0 - x).powi((degree - i) as i32)
+}
+
+/// The Bernstein weights along each side at `at` (fractions of the cage).
+#[inline]
+fn weights_at(count: [usize; 3], at: DVec3) -> [[f64; MAX_POINTS]; 3] {
+    let mut weights = [[0.0f64; MAX_POINTS]; 3];
+    for c in 0..3 {
+        bernstein(count[c], at[c], &mut weights[c]);
+    }
+    weights
+}
+
+/// How far outside its sides, as a share of its size, a cage with copies
+/// still takes a point in, as on the side. A copy carries a point by a turn
+/// worked out in floats, and a mesh is kept in floats: the image of a vertex
+/// on the side of the box can come out a hair outside it, and would then
+/// miss that copy's move, which its twin got. A millionth is a hundred times
+/// what a float rounds off, and the side of a cage is outside the model
+/// across the axis by as much (`cage_box`).
+const SLACK: f64 = 1e-6;
+
+/// One copy of the cage's moves under symmetry (`Cage::repeated`).
+struct Image {
+    /// From the frame to where the cage sees a point this copy reaches.
+    back: DAffine3,
+    /// What the copy does to a way of moving.
+    linear: DMat3,
 }
 
 /// The cage set up for one setting: the dragged points alone.
@@ -158,6 +205,11 @@ pub struct Cage {
     count: [usize; 3],
     /// Each dragged point: its place in the grid and how far it went, in the frame's units.
     moved: Vec<([usize; 3], DVec3)>,
+    /// Every copy of the symmetry but the cage itself; none without one.
+    images: Vec<Image>,
+    /// With copies, the stretch of the deformer's axis that the cage and
+    /// its copies reach between them.
+    reach: Option<(f64, f64)>,
 }
 
 impl Cage {
@@ -168,24 +220,125 @@ impl Cage {
             .filter(|&i| lattice.moved[i] != [0.0; 3])
             .map(|i| (lattice.ijk(i), DVec3::from_array(lattice.moved[i].map(f64::from)) * size))
             .collect();
-        (!moved.is_empty()).then_some(Cage { min, size, count: lattice.count, moved })
+        (!moved.is_empty()).then_some(Cage { min, size, count: lattice.count, moved, images: Vec::new(), reach: None })
+    }
+
+    /// The same cage with what its dragged points do repeated by every one
+    /// of `copies`: the symmetry's copies other than the cage itself, as
+    /// maps of the gizmo's frame. `axis` is the deformer's. See the top of
+    /// this file.
+    ///
+    /// **As strong as one drag.** A point's copies can crowd in on it: round
+    /// the axis, a point's neighbours in a ring of thirty-two are close
+    /// enough for their moves to add up to six times its own, and a point
+    /// on the axis is its own copy every time. Copies on one spot are one
+    /// drag, and copies near each other are not a stronger one (the rule a
+    /// brush's dabs keep, sculpt/share.rs): if the copies between them would
+    /// move the clay at a point's own place further along its way than the
+    /// point moves it alone, every copy of that point is scaled down by the
+    /// same share, until they do not. One share for all the copies of a
+    /// point, so they stay copies of each other. A point clear of its copies
+    /// keeps its whole move, so the corners of the cage go where they are
+    /// dragged as they always have.
+    pub fn repeated(mut self, copies: &[DAffine3], axis: usize) -> Cage {
+        if copies.is_empty() {
+            return self;
+        }
+        let images: Vec<Image> = copies.iter().map(|c| Image { back: c.inverse(), linear: c.matrix3 }).collect();
+        for k in 0..self.moved.len() {
+            let (ijk, by) = self.moved[k];
+            let grid = DVec3::from_array(std::array::from_fn(|c| ijk[c] as f64 / (self.count[c] - 1) as f64));
+            let rest = self.min + grid * self.size;
+            // Its own weight at its own place, from the grid itself: a point
+            // on the side of the box must not be found a hair outside it.
+            let w = weights_at(self.count, grid);
+            let own = w[0][ijk[0]] * w[1][ijk[1]] * w[2][ijk[2]];
+            let together = images.iter().fold(by * own, |sum, image| {
+                let weight = self.near(image.back.transform_point3(rest)).map_or(0.0, |at| {
+                    (0..3).map(|c| bernstein_one(self.count[c], ijk[c], at[c])).product::<f64>()
+                });
+                sum + image.linear * by * weight
+            });
+            let (alone, along) = (own * by.length_squared(), by.dot(together));
+            if along > alone {
+                self.moved[k].1 = by * (alone / along);
+            }
+        }
+        // Where the copies of the box reach along the axis: its corners carried.
+        let corners = (0..8).map(|c| self.min + DVec3::new((c & 1) as f64, (c >> 1 & 1) as f64, (c >> 2) as f64) * self.size);
+        let (mut lo, mut hi) = (self.min[axis], self.min[axis] + self.size[axis]);
+        for copy in copies {
+            for corner in corners.clone() {
+                let x = copy.transform_point3(corner)[axis];
+                (lo, hi) = (lo.min(x), hi.max(x));
+            }
+        }
+        // What `near` takes in past the sides, and a hair for the rounding.
+        let pad = self.size.max_element() * (2.0 * SLACK);
+        self.reach = Some((lo - pad, hi + pad));
+        self.images = images;
+        self
+    }
+
+    /// The stretch of the axis the cage's copies reach, with copies.
+    pub fn reach(&self) -> Option<(f64, f64)> {
+        self.reach
     }
 
     #[inline]
     pub fn apply(&self, q: DVec3) -> Option<DVec3> {
+        if self.images.is_empty() {
+            let at = (q - self.min) / self.size;
+            if !(at.cmpge(DVec3::ZERO).all() && at.cmple(DVec3::ONE).all()) {
+                return None;
+            }
+            return Some(q + self.shift(&weights_at(self.count, at)));
+        }
+        // The cage's own move, then each copy's, as that copy carries it.
+        let mut total = self.near(q).map(|at| self.shift_near(at));
+        for image in &self.images {
+            if let Some(at) = self.near(image.back.transform_point3(q)) {
+                let shift = image.linear * self.shift_near(at);
+                total = Some(total.map_or(shift, |sum| sum + shift));
+            }
+        }
+        total.map(|shift| q + shift)
+    }
+
+    /// How far the dragged points move a point whose weights are `weights`.
+    #[inline]
+    fn shift(&self, weights: &[[f64; MAX_POINTS]; 3]) -> DVec3 {
+        self.moved
+            .iter()
+            .fold(DVec3::ZERO, |sum, &([i, j, k], by)| sum + by * (weights[0][i] * weights[1][j] * weights[2][k]))
+    }
+
+    /// `shift` at `at` (fractions of the cage), for a cage with copies,
+    /// which works it out once a copy. With a few points dragged, only
+    /// their own weights are worked out, not every point's along each side:
+    /// the same numbers, a third of the work for one point of a cage of
+    /// three a side.
+    #[inline]
+    fn shift_near(&self, at: DVec3) -> DVec3 {
+        if self.moved.len() * 3 >= self.count.iter().sum::<usize>() {
+            return self.shift(&weights_at(self.count, at));
+        }
+        let [nx, ny, nz] = self.count;
+        self.moved.iter().fold(DVec3::ZERO, |sum, &([i, j, k], by)| {
+            sum + by * (bernstein_one(nx, i, at.x) * bernstein_one(ny, j, at.y) * bernstein_one(nz, k, at.z))
+        })
+    }
+
+    /// Where `q` is in the cage, as fractions of its sides, for a cage with
+    /// copies, which takes in a point a hair outside its sides as on them
+    /// (`SLACK`); `None` further out.
+    #[inline]
+    fn near(&self, q: DVec3) -> Option<DVec3> {
         let at = (q - self.min) / self.size;
-        if !(at.cmpge(DVec3::ZERO).all() && at.cmple(DVec3::ONE).all()) {
+        if !(at.cmpge(DVec3::splat(-SLACK)).all() && at.cmple(DVec3::splat(1.0 + SLACK)).all()) {
             return None;
         }
-        let mut weights = [[0.0f64; MAX_POINTS]; 3];
-        for c in 0..3 {
-            bernstein(self.count[c], at[c], &mut weights[c]);
-        }
-        let shift = self
-            .moved
-            .iter()
-            .fold(DVec3::ZERO, |sum, &([i, j, k], by)| sum + by * (weights[0][i] * weights[1][j] * weights[2][k]));
-        Some(q + shift)
+        Some(at.clamp(DVec3::ZERO, DVec3::ONE))
     }
 
     /// The textbook form, every control point in the sum: for the test that
