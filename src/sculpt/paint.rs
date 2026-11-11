@@ -300,7 +300,7 @@ fn weight(mesh: &Mesh, p: &Params, d: &Dab, v: u32) -> f32 {
     }
     let w = p.falloff.at(d2.sqrt() / r, kernels::smooth)
         * (1.0 - mesh.mask[i])
-        * kernels::facing(p.front_facing, mesh.normals[i], pos, d.cam)
+        * kernels::facing(p.front_facing, d.sided(mesh.normals[i]), pos, d.cam)
         * p.printed(d, mesh.start_pos(v) - d.center);
     if w <= 0.0 { 0.0 } else { p.share((w * p.e(d.pressure)).clamp(0.0, 1.0)) }
 }

@@ -39,6 +39,8 @@ mod cancel_tests;
 #[cfg(test)]
 mod feel_tests;
 #[cfg(test)]
+mod inside_tests;
+#[cfg(test)]
 mod kernel_tests;
 #[cfg(test)]
 mod stroke_tests;
@@ -766,7 +768,10 @@ pub struct PointerSample {
 #[derive(Clone, Copy)]
 struct Knot {
     pos: Vec3,
+    /// The way the surface faces here, toward the pen: turned round where
+    /// the pen is on the back of it (`side` -1, see `kernels::Dab::side`).
     normal: Vec3,
+    side: f32,
     dir: Vec3,
     /// The pen's pressure as the brushes read it (`input::pen_curve`): 0 to
     /// 1, and always 1 for a mouse.
@@ -929,6 +934,9 @@ struct Stroke {
     print: Option<alpha::Print>,
     /// This frame's dabs, every copy of each, for Clay relax.
     frame_centres: Vec<kernels::Centre>,
+    /// Which side of the surface the stroke landed on (`kernels::Dab::side`):
+    /// what Move takes hold of and a dragged print go by.
+    side: f32,
     grab: Option<Grab>,
     /// Snake hook: point being dragged, and the way it has been going
     /// (eased, zero until it has gone anywhere).
@@ -1395,6 +1403,8 @@ impl Sculptor {
         }
         let (origin, dir) = view.ray(sample.pos);
         let Some(hit) = mesh.raycast(origin, dir) else { return false };
+        // On the back of the surface, in the hollow of an open shell: see `work`.
+        let side = if mesh.hit_from_behind(&hit, dir, false) { -1.0 } else { 1.0 };
 
         let brush = self.effective_brush(smooth_held);
         let mask = self.settings.mask_mode;
@@ -1535,8 +1545,9 @@ impl Sculptor {
             crease_d: Vec3::ZERO,
             plane: None,
             aim: alpha::Aim::default(),
-            print: params.prints().then(|| alpha::Print::begin(hit.pos, mesh.hit_normal(&hit, false), sample.pos)),
+            print: params.prints().then(|| alpha::Print::begin(hit.pos, mesh.hit_normal(&hit, false) * side, side, sample.pos)),
             frame_centres: Vec::new(),
+            side,
             grab: None,
             tip: hit.pos,
             tip_heading: Vec3::ZERO,
@@ -1555,7 +1566,9 @@ impl Sculptor {
             let mut grab = Self::grab(mesh, &stroke, hit.pos, view.pos, connected);
             // Ctrl or the right button: in and out along the surface instead.
             if invert {
-                grab.along = Some(Along::of(Self::facing(mesh, &grab, mesh.hit_normal(&hit, false)), view));
+                // Out is toward the pen, on the back of a surface too.
+                let facing = Self::facing(mesh, &grab, mesh.hit_normal(&hit, false)) * side;
+                grab.along = Some(Along::of(facing, view));
             }
             stroke.grab = Some(grab);
         }
@@ -1575,7 +1588,7 @@ impl Sculptor {
     /// weights stay fixed for the whole drag. `connected` keeps only the
     /// piece of surface under the pointer (see [`keep_connected`]).
     fn grab(mesh: &Mesh, stroke: &Stroke, hit: Vec3, cam: Vec3, connected: bool) -> Grab {
-        let p = &stroke.params;
+        let (p, side) = (&stroke.params, stroke.side);
         let r = p.radius;
         let n_ops = stroke.ops.len();
         // Each copy of the brush: its centre, and the camera as it sees it.
@@ -1600,7 +1613,7 @@ impl Sculptor {
             // strongly curved forms the option is there to protect.
             let w = p.falloff.at(d2.sqrt() / r, kernels::smooth)
                 * (1.0 - mesh.mask[i])
-                * kernels::facing(p.front_facing, mesh.normals[i], pos, cam);
+                * kernels::facing(p.front_facing, mesh.normals[i] * side, pos, cam);
             w.max(0.0)
         };
         if stroke.radial.is_some() {
@@ -1778,6 +1791,7 @@ impl Sculptor {
                     plane: None,
                     copy: SymOp::IDENTITY,
                     heading: if was == Vec3::ZERO { heading } else { turned((s + 1) as f32 / steps as f32) },
+                    side: 1.0,
                 };
                 let p = Params { tidy: stroke.tidy_after(p.dose), ..p };
                 let began = Instant::now();
@@ -1818,13 +1832,19 @@ impl Sculptor {
                 return;
             }
         }
-        let normal = mesh.hit_normal(&hit, from_start);
-        let mut knot = Knot { pos: hit.pos, normal, dir: Vec3::ZERO, pressure, px };
+        // In the hollow of an open shell the pen is on the back of the
+        // surface: the side it is on is taken as the outside, so a stroke
+        // there builds toward the pen and not away from it, and Front Facing
+        // does not turn the whole dab away.
+        let side = if mesh.hit_from_behind(&hit, dir, from_start) { -1.0 } else { 1.0 };
+        let normal = mesh.hit_normal(&hit, from_start) * side;
+        let mut knot = Knot { pos: hit.pos, normal, side, dir: Vec3::ZERO, pressure, px };
         if !p.mask && p.brush.follows_travel() {
             // The groove's frame follows the stroke with a little lag so it
             // neither jitters nor chases its own wall. It is taken over the
             // ring's whole radius however small the pen has made the brush.
-            let foot = kernels::footprint_normal(mesh, hit.pos, p.radius, false, normal).unwrap_or(normal);
+            let foot = kernels::footprint_normal(mesh, hit.pos, p.radius, false, normal * side)
+                .map_or(normal, |foot| foot * side);
             let n = match stroke.crease_n {
                 Some(prev) => slerp_dir(prev, foot, 0.35),
                 None => foot,
@@ -1897,7 +1917,7 @@ impl Sculptor {
                     return false;
                 }
                 let k = stroke.knots[0];
-                Self::emit(mesh, stroke, k.pos, k.normal, dir, k.pressure, false, count);
+                Self::emit(mesh, stroke, k.pos, k.normal, k.side, dir, k.pressure, false, count);
             }
         }
         loop {
@@ -1976,8 +1996,11 @@ impl Sculptor {
                 let t = (seg.piece as f32 - 1.0 + f) / seg.pieces as f32;
                 let pos = seg.from.lerp(q, f);
                 let normal = slerp_dir(seg.k1.normal, seg.k2.normal, t);
+                // Over the rim of an open shell, from its outside to its
+                // hollow: the dab takes the side of the knot it is nearer.
+                let side = if t < 0.5 { seg.k1.side } else { seg.k2.side };
                 let pressure = seg.k1.pressure + (seg.k2.pressure - seg.k1.pressure) * t;
-                Self::emit(mesh, stroke, pos, normal, seg.k2.dir, pressure, false, count);
+                Self::emit(mesh, stroke, pos, normal, side, seg.k2.dir, pressure, false, count);
             }
             stroke.carry += len - seg.walked;
             (seg.from, seg.piece, seg.walked, seg.counted) = (q, seg.piece + 1, 0.0, false);
@@ -1998,6 +2021,7 @@ impl Sculptor {
         stroke: &mut Stroke,
         pos: Vec3,
         normal: Vec3,
+        side: f32,
         dir: Vec3,
         pen: f32,
         resting: bool,
@@ -2053,6 +2077,7 @@ impl Sculptor {
             plane: stroke.plane,
             copy: SymOp::IDENTITY,
             heading,
+            side,
         };
         if bs.lock_plane && stroke.plane.is_none() && !p.mask && p.brush == Brush::Flatten {
             // Lock Plane: the plane this first dab finds is the stroke's.
@@ -2129,7 +2154,7 @@ impl Sculptor {
             for &op in &stroke.ops {
                 let (at, cam) = (op.apply_point(dab.center), op.apply_point(dab.cam));
                 let normal = op.apply_dir(dab.normal);
-                stroke.frame_centres.push(kernels::Centre { at, cam, radius: p.radius, normal });
+                stroke.frame_centres.push(kernels::Centre { at, cam, radius: p.radius, normal, side: dab.side });
             }
         }
         // How high the dab stands over the surface under it, which is how
@@ -2366,7 +2391,7 @@ impl Sculptor {
                     while stroke.carry >= along && stroke.meter.has_room(pace) {
                         stroke.carry -= along;
                         let pressure = stroke.pressure;
-                        Self::emit(mesh, stroke, k.pos, k.normal, k.dir, pressure, true, &mut self.dabs_applied);
+                        Self::emit(mesh, stroke, k.pos, k.normal, k.side, k.dir, pressure, true, &mut self.dabs_applied);
                     }
                     stroke.carry = stroke.carry.min(along);
                 }

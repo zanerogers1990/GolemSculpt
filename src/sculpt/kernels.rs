@@ -183,9 +183,26 @@ pub struct Dab {
     /// Snake Hook's tip is turned from `dir` to this, so that it turns with
     /// the stroke.
     pub heading: Vec3,
+    /// 1 for a dab on the side of the surface its normals face, -1 for one
+    /// on the back of it: in the hollow of an open shell, where the eye sees
+    /// the back of the faces (`Mesh::hit_from_behind`). Behind, the side the
+    /// pen is on is taken as the outside: `normal` already faces the pen,
+    /// and every vertex normal the brush reads is turned round too
+    /// ([`Dab::sided`]), so a stroke there builds toward the pen, Front
+    /// Facing lets it work and the sheet it is on is the one it hit, exactly
+    /// as on the same surface with its faces turned the other way. A mirror
+    /// image of a dab is on the same side of its own surface.
+    pub side: f32,
 }
 
 impl Dab {
+    /// Vertex normal `n` as this dab reads it: turned round for a dab on the
+    /// back of the surface ([`Dab::side`]). On the front it is `n` to the bit.
+    #[inline]
+    pub(super) fn sided(&self, n: Vec3) -> Vec3 {
+        n * self.side
+    }
+
     pub fn mirrored(&self, op: SymOp) -> Dab {
         Dab {
             copy: op,
@@ -199,6 +216,7 @@ impl Dab {
             frame: self.frame.mirrored(op),
             plane: self.plane.map(|(origin, normal)| (op.apply_point(origin), op.apply_dir(normal))),
             heading: op.apply_dir(self.heading),
+            side: self.side,
         }
     }
 }
@@ -928,7 +946,7 @@ fn inflate_weight(p: &Params, d: &Dab, vt: &StrokeVertex) -> f32 {
     }
     p.falloff.at(d2.sqrt() / r, smooth)
         * (1.0 - vt.mask)
-        * facing(p.front_facing, vt.normal, vt.pos, d.cam)
+        * facing(p.front_facing, d.sided(vt.normal), vt.pos, d.cam)
         * p.printed(d, vt.start - d.center)
 }
 
@@ -958,7 +976,7 @@ fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut S
         if relax <= 0.0 {
             return mesh.move_vertices(leaves, |_, vt| {
                 let w = inflate_weight(p, d, vt);
-                (w > 0.0).then(|| vt.pos + vt.normal * (w * rate))
+                (w > 0.0).then(|| vt.pos + d.sided(vt.normal) * (w * rate))
             });
         }
         {
@@ -974,7 +992,7 @@ fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut S
         let normals = &scratch.targets;
         return mesh.move_vertices(leaves, |at, vt| {
             let w = inflate_weight(p, d, vt);
-            (w > 0.0).then(|| vt.pos + normals[at] * (w * rate))
+            (w > 0.0).then(|| vt.pos + d.sided(normals[at]) * (w * rate))
         });
     }
     // Each vertex's normal as the stroke found the surface, evened out with
@@ -997,7 +1015,7 @@ fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut S
         if w <= 0.0 {
             return None;
         }
-        raised(vt.pos, vt.start, Vec3::from_array(normals[vt.index as usize]), height, w * full, k)
+        raised(vt.pos, vt.start, d.sided(Vec3::from_array(normals[vt.index as usize])), height, w * full, k)
     });
 }
 
@@ -1095,7 +1113,11 @@ fn prepare_relaxed_normals(
 fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let r2 = r * r;
-    let dir = start_footprint_normal(mesh, d.center, r, d.normal, &mut scratch.start_normals).unwrap_or(d.normal);
+    // The normals as they are stored, averaged over the sheet facing the
+    // dab's way as they would have it, and turned to face the pen with it.
+    let dir = start_footprint_normal(mesh, d.center, r, d.sided(d.normal), &mut scratch.start_normals)
+        .map(|n| d.sided(n))
+        .unwrap_or(d.normal);
     let weight = |vt: &StrokeVertex| {
         let d2 = vt.start.distance_squared(d.center);
         if d2 >= r2 {
@@ -1103,7 +1125,7 @@ fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut 
         }
         p.falloff.at(d2.sqrt() / r, quintic)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, vt.pos, d.cam)
+            * facing(p.front_facing, d.sided(vt.normal), vt.pos, d.cam)
             * p.printed(d, vt.start - d.center)
     };
     if p.accumulate {
@@ -1132,7 +1154,7 @@ fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut 
 fn print(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
     let r = p.radius;
     let r2 = r * r;
-    let dir = footprint_normal(mesh, d.center, r, true, d.normal).unwrap_or(d.normal);
+    let dir = footprint_normal(mesh, d.center, r, true, d.sided(d.normal)).map(|n| d.sided(n)).unwrap_or(d.normal);
     // At full Strength a print stands half as tall as its radius; taller
     // than that is a spike, not a print.
     let height = p.sign * r * p.strength * 0.5;
@@ -1144,7 +1166,7 @@ fn print(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         }
         let w = p.falloff.at(d2.sqrt() / r, quintic)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, start, d.cam)
+            * facing(p.front_facing, d.sided(vt.normal), start, d.cam)
             * p.printed(d, start - d.center);
         (w > 0.0).then(|| start + dir * (height * w))
     });
@@ -1204,12 +1226,12 @@ fn layer(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scr
         let free = 1.0 - vt.mask;
         let w = p.falloff.at(d2.sqrt() / r, layer_built_in)
             * free
-            * facing(p.front_facing, vt.normal, vt.pos, d.cam)
+            * facing(p.front_facing, d.sided(vt.normal), vt.pos, d.cam)
             * p.printed(d, start - d.center);
         if w <= 0.0 {
             return None;
         }
-        let n = Vec3::from_array(normals[vt.index as usize]);
+        let n = d.sided(Vec3::from_array(normals[vt.index as usize]));
         let share = (vt.pos - start).dot(n) * sign / height;
         if share >= free {
             return None;
@@ -1333,7 +1355,7 @@ fn flatten_weight(p: &Params, d: &Dab, pos: Vec3, normal: Vec3) -> f32 {
     if d2 >= r * r {
         return 0.0;
     }
-    p.falloff.at(d2.sqrt() / r, quintic) * facing(p.front_facing, normal, pos, d.cam)
+    p.falloff.at(d2.sqrt() / r, quintic) * facing(p.front_facing, d.sided(normal), pos, d.cam)
 }
 
 /// The plane a Flatten dab levels to: fitted to the surface under the ring
@@ -1365,7 +1387,7 @@ fn flatten_fit(mesh: &Mesh, p: &Params, d: &Dab, leaves: &[u32], kept: &mut Vec<
             let w = flatten_weight(p, d, mesh.positions[i], mesh.normals[i]);
             if w > 0.0 {
                 // SAFETY: each leaf is totalled by one task, and owns its vertices.
-                sum.add(mesh.start_pos(v), unsafe { start_normal(mesh, &kept, v) }, w);
+                sum.add(mesh.start_pos(v), d.sided(unsafe { start_normal(mesh, &kept, v) }), w);
             }
         },
         PlaneSum::merge,
@@ -1446,6 +1468,7 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], scrat
     // weights, and with the back of a thin form in it the plane lay half way
     // through the form and the stroke pushed front and back toward it.
     let tip_w = |start: Vec3, normal: Vec3, pos: Vec3| {
+        let normal = d.sided(normal);
         clay_weight(&p.falloff, start.distance(d.center) / eff_r, soft)
             * facing(p.front_facing, normal, pos, d.cam)
             * same_sheet(normal, d.normal)
@@ -1463,7 +1486,7 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], scrat
                 if start.distance_squared(d.center) < reach2 {
                     let i = v as usize;
                     let pos = mesh.positions[i];
-                    sum.add(pos, mesh.start_nrm(v), tip_w(start, mesh.normals[i], pos));
+                    sum.add(pos, d.sided(mesh.start_nrm(v)), tip_w(start, mesh.normals[i], pos));
                 }
             },
             PlaneSum::merge,
@@ -1498,8 +1521,8 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], scrat
             return None;
         }
         let mut pos = vt.pos;
-        let guard =
-            (1.0 - vt.mask) * facing(p.front_facing, vt.normal, pos, d.cam) * same_sheet(vt.normal, d.normal);
+        let normal = d.sided(vt.normal);
+        let guard = (1.0 - vt.mask) * facing(p.front_facing, normal, pos, d.cam) * same_sheet(normal, d.normal);
         for s in 1..=steps {
             // The alpha shapes what is laid down, not the plane it is laid
             // on: `fit` above is taken without it.
@@ -1557,8 +1580,8 @@ fn crease(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         // (Dam Standard has Front Facing off).
         let w = p.falloff.at(d2.sqrt() / r, crease_built_in)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam)
-            * same_sheet(vt.normal, n);
+            * facing(p.front_facing, d.sided(vt.normal), pos, d.cam)
+            * same_sheet(d.sided(vt.normal), n);
         if w <= 0.0 {
             return None;
         }
@@ -1794,7 +1817,7 @@ fn level(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], weig
     let Some(cap) = Cap::fit_across(mesh, p, d, fit, out, basis) else { return };
     mesh.move_vertices(leaves, |at, vt| {
         let w = weights[at];
-        let facing = vt.normal.dot(cap.out);
+        let facing = d.sided(vt.normal).dot(cap.out);
         if w <= 0.0 || facing <= 0.0 {
             return None;
         }
@@ -1819,7 +1842,7 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32],
             }
             let w = p.falloff.at(d2.sqrt() / r, smooth)
                 * (1.0 - mesh.mask[i])
-                * facing(p.front_facing, mesh.normals[i], pos, d.cam);
+                * facing(p.front_facing, d.sided(mesh.normals[i]), pos, d.cam);
             w.max(0.0)
         });
     }
@@ -1859,13 +1882,14 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32],
         }
         // Along the normal only, and one way only. What a vertex would have
         // slid sideways is left out, so nothing jumps where the surface
-        // passes from standing up to lying low.
+        // passes from standing up to lying low. A peak is what stands out
+        // toward the pen, on the back of a surface too.
         SmoothMode::Peaks => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
-            let n = mesh.normals[v as usize];
+            let n = d.sided(mesh.normals[v as usize]);
             pos + n * ((mean - pos).dot(n).min(0.0) * k)
         }),
         SmoothMode::Valleys => stepped_passes(mesh, leaves, scratch, amount, 0.0, |mesh, v, pos, mean, k| {
-            let n = mesh.normals[v as usize];
+            let n = d.sided(mesh.normals[v as usize]);
             pos + n * ((mean - pos).dot(n).max(0.0) * k)
         }),
         // Within the surface only: the part of the way to the mean that lies
@@ -2216,7 +2240,9 @@ fn tidy(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scra
         if d2 >= r2 {
             return 0.0;
         }
-        p.falloff.at(d2.sqrt() / r, smooth) * (1.0 - mesh.mask[i]) * facing(p.front_facing, mesh.normals[i], pos, d.cam)
+        p.falloff.at(d2.sqrt() / r, smooth)
+            * (1.0 - mesh.mask[i])
+            * facing(p.front_facing, d.sided(mesh.normals[i]), pos, d.cam)
     };
     // In as few passes as can take it: a pass may go up to half as far
     // again as to the middle of a vertex's neighbours (the smoothing still
@@ -2326,7 +2352,7 @@ fn pinch(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32]) {
         }
         let w = p.falloff.at(d2.sqrt() / r, smooth)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam);
+            * facing(p.front_facing, d.sided(vt.normal), pos, d.cam);
         if w <= 0.0 {
             return None;
         }
@@ -2396,7 +2422,7 @@ impl Cap {
                 let from = mesh.positions[i] - d.center;
                 let d2 = from.length_squared();
                 // The sheet the brush is on, not the far side of a thin form.
-                if d2 >= r2 || mesh.normals[i].dot(out) <= 0.0 {
+                if d2 >= r2 || d.sided(mesh.normals[i]).dot(out) <= 0.0 {
                     return;
                 }
                 let w = smooth(1.0 - d2.sqrt() * per_radius) as f64;
@@ -2508,7 +2534,7 @@ fn nudge(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32]) {
         }
         let w = p.falloff.at(d2.sqrt() / r, smooth)
             * (1.0 - vt.mask)
-            * facing(p.front_facing, vt.normal, pos, d.cam);
+            * facing(p.front_facing, d.sided(vt.normal), pos, d.cam);
         (w > 0.0).then(|| cap.slide(d.center, pos, d.step * (w * follow)))
     });
 }
@@ -2720,6 +2746,8 @@ pub struct Centre {
     pub cam: Vec3,
     pub radius: f32,
     pub normal: Vec3,
+    /// Which side of the surface the dab was on ([`Dab::side`]).
+    pub side: f32,
 }
 
 /// A centre further from a leaf's box than this many of its own radii is
@@ -2824,12 +2852,12 @@ fn relax_weight(mesh: &Mesh, front_facing: bool, centres: &[Centre], first: f32,
     // The dab the vertex is deepest inside: the nearest, or where the
     // dabs are of different sizes, the nearest for its size.
     let mut best = f32::INFINITY;
-    let (mut r, mut cam, mut normal) = (first, Vec3::ZERO, Vec3::ZERO);
+    let (mut r, mut cam, mut normal, mut side) = (first, Vec3::ZERO, Vec3::ZERO, 1.0);
     for c in centres {
         let d2 = start.distance_squared(c.at);
         let deeper = if c.radius == r { d2 < best } else { d2 * r * r < best * c.radius * c.radius };
         if deeper {
-            (best, r, cam, normal) = (d2, c.radius, c.cam, c.normal);
+            (best, r, cam, normal, side) = (d2, c.radius, c.cam, c.normal, c.side);
         }
     }
     if best >= r * r {
@@ -2848,11 +2876,8 @@ fn relax_weight(mesh: &Mesh, front_facing: bool, centres: &[Centre], first: f32,
         return 0.0;
     }
     let gate = relax_gate((raw_curvature(mesh, v, base.scale) - base.mean).abs());
-    let w = band
-        * gate
-        * (1.0 - mesh.mask[i])
-        * facing(front_facing, mesh.normals[i], pos, cam)
-        * same_sheet(mesh.normals[i], normal);
+    let n = mesh.normals[i] * side;
+    let w = band * gate * (1.0 - mesh.mask[i]) * facing(front_facing, n, pos, cam) * same_sheet(n, normal);
     if w > 1e-4 { w } else { 0.0 }
 }
 
@@ -2874,7 +2899,7 @@ mod relax_cull_tests {
             .map(|i| {
                 let a = i as f32 * 0.7;
                 let at = Vec3::new(a.cos() * 0.4, (i as f32 * 0.37).sin() * 0.3, a.sin().abs() * 0.4).normalize() * 0.5;
-                Centre { at, cam: Vec3::new(0.0, 0.0, 3.0), radius: if i % 3 == 0 { 0.06 } else { 0.11 }, normal: Vec3::ZERO }
+                Centre { at, cam: Vec3::new(0.0, 0.0, 3.0), radius: if i % 3 == 0 { 0.06 } else { 0.11 }, normal: Vec3::ZERO, side: 1.0 }
             })
             .collect();
         let first = centres[0].radius;
@@ -2917,7 +2942,7 @@ mod relax_cull_timing {
                 .map(|i| {
                     let at = Vec3::new(0.05 + 0.01 * (i / 2) as f32, 0.0, 0.5).normalize() * 0.5;
                     let at = if i % 2 == 0 { at } else { at * Vec3::new(-1.0, 1.0, 1.0) };
-                    Centre { at, cam: Vec3::new(0.0, 0.0, 3.0), radius: 0.1, normal: Vec3::ZERO }
+                    Centre { at, cam: Vec3::new(0.0, 0.0, 3.0), radius: 0.1, normal: Vec3::ZERO, side: 1.0 }
                 })
                 .collect();
             let mut leaves = Vec::new();

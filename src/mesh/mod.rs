@@ -1272,6 +1272,24 @@ impl Mesh {
         if n == Vec3::ZERO { hit.normal } else { n }
     }
 
+    /// Whether a ray going `dir` met the surface from behind: what the eye
+    /// sees in the hollow of an open shell (a mask, a bowl), and of any form
+    /// from inside it. Both the triangle it hit (the way its corners wind)
+    /// and the smoothed normal there face away from where the ray came from.
+    /// The triangle alone is not enough: one folded over in a crumpled patch
+    /// winds the wrong way among neighbours that all face the eye. Nor is the
+    /// smoothed normal: on the silhouette of a closed form it leans away from
+    /// the eye while the face the ray came in through still faces it.
+    pub fn hit_from_behind(&self, hit: &Hit, dir: Vec3, from_start: bool) -> bool {
+        let i = hit.tri as usize * 3;
+        let at = |c: usize| {
+            let v = self.indices[i + c];
+            if from_start { self.start_pos(v) } else { self.positions[v as usize] }.as_dvec3()
+        };
+        let (a, b, c) = (at(0), at(1), at(2));
+        (b - a).cross(c - a).dot(dir.as_dvec3()) > 0.0 && self.hit_normal(hit, from_start).dot(dir) > 0.0
+    }
+
     // ---- undo --------------------------------------------------------------
 
     pub fn apply_delta(&mut self, delta: &StrokeDelta, undo: bool) {

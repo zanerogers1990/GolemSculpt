@@ -146,7 +146,7 @@ pub(super) fn dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch:
         }
         let w = p.falloff.at(d2.sqrt() / r, kernels::smooth)
             * (1.0 - vt.mask)
-            * kernels::facing(p.front_facing, vt.normal, from, d.cam)
+            * kernels::facing(p.front_facing, d.sided(vt.normal), from, d.cam)
             * p.printed(d, vt.start - d.center);
         if w <= 0.0 {
             return None;

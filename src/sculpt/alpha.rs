@@ -400,9 +400,11 @@ pub struct Print {
     /// Where the pen landed: on the surface, and on the screen.
     centre: Vec3,
     pressed: Vec2,
-    /// The surface's normal there, for when the print is too small to take
-    /// one from the surface under it.
+    /// The surface's normal there, toward the pen, for when the print is too
+    /// small to take one from the surface under it; and which side of the
+    /// surface the pen landed on (`kernels::Dab::side`).
     normal: Vec3,
+    side: f32,
     /// From the centre to the pointer, on the plane through the centre that
     /// faces the camera. Zero until the pointer has left where it landed.
     reach: Vec3,
@@ -417,8 +419,8 @@ impl Print {
     /// tap that was not meant as a drag leaves the surface alone.
     const SLACK: f32 = 3.0;
 
-    pub fn begin(centre: Vec3, normal: Vec3, pressed: Vec2) -> Print {
-        Print { centre, pressed, normal, reach: Vec3::ZERO, cam: Vec3::ZERO, leaves: Vec::new(), dirty: false }
+    pub fn begin(centre: Vec3, normal: Vec3, side: f32, pressed: Vec2) -> Print {
+        Print { centre, pressed, normal, side, reach: Vec3::ZERO, cam: Vec3::ZERO, leaves: Vec::new(), dirty: false }
     }
 
     /// The pointer has moved to `px`.
@@ -451,7 +453,7 @@ impl Sculptor {
             mesh.move_vertices(&last, |_, vt| (vt.pos != vt.start).then_some(vt.start));
             mesh.positions_changed(&last);
         }
-        let (centre, reach, cam, fallback) = (print.centre, print.reach, print.cam, print.normal);
+        let (centre, reach, cam, fallback, side) = (print.centre, print.reach, print.cam, print.normal, print.side);
         // No bigger than reaches right round the model: past that a longer
         // drag changes nothing but the work.
         let radius = reach.length().min(4.0 * stroke.object_size);
@@ -460,7 +462,7 @@ impl Sculptor {
         }
         stroke.params.radius = radius;
         stroke.params.alpha = stroke.params.alpha.map(|stamp| stamp.sized(radius));
-        let normal = kernels::footprint_normal(mesh, centre, radius, true, fallback).unwrap_or(fallback);
+        let normal = kernels::footprint_normal(mesh, centre, radius, true, fallback * side).map_or(fallback, |n| n * side);
         let frame = stroke.aim.frame(stroke.params.alpha.as_ref(), normal, Some(reach), radius);
         // The stroke's one print has the stroke's first draw, the same each
         // time it is remade: Random Rotation must not spin it as it grows.
@@ -479,6 +481,7 @@ impl Sculptor {
             plane: None,
             copy: SymOp::IDENTITY,
             heading: Vec3::ZERO,
+            side,
         };
         let mut leaves = Vec::new();
         for op in &stroke.ops {
