@@ -85,7 +85,8 @@ fn shape_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
     let help = |shape: Shape| match shape {
         Shape::Box => "Drag from one corner to the opposite one.",
         Shape::Lasso => "Draw freehand round what you want; the outline closes itself back to where it began.",
-        Shape::Line => "Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.",
+        Shape::Line => "Drag a straight line; it carries on past both ends. With Snap ticked it goes level, upright or 45 \
+                        for a straight edge; hold Shift to draw it free. Hold Space while dragging to move it.",
     };
     ui.horizontal(|ui| {
         let w = theme::row_width(ui, shapes.len(), 6.0);
@@ -102,14 +103,15 @@ fn shape_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
 /// The Snap tick of a line cut, for a pen with no Shift under the other hand.
 fn snap_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx) {
     let mut on = tool.snap;
-    let help = "For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes \
-                close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite \
-                of this tick while it is held.";
+    let help = "For a straight edge: the line goes level, upright or 45 degrees when it is near them, else in steps \
+                of 15. The cut goes straight back along the way you are looking, so a level line cuts level anywhere \
+                on the screen. Where the line passes close to the middle of the object or to its origin it goes \
+                exactly through it. Shift does the opposite of this tick while it is held.";
     if theme::tip(theme::checkbox(ui, &mut on, "Snap", ACCENT()), cx.tips, help).changed() {
         tool.set_snap(cx, on);
     }
     if tool.snap {
-        theme::hint(ui, "15 degree steps, and through the marked middle or origin when close. Shift frees a line.");
+        theme::hint(ui, "Level, upright, 45 or 15 degree steps, cut straight back; through the marked middle or origin when close. Shift frees a line.");
     }
 }
 
@@ -130,7 +132,7 @@ fn whole_object_row(tool: &mut Region, ui: &mut egui::Ui, cx: &mut Ctx, buttons:
 
 /// Shift does the opposite of the Snap tick.
 fn shift_on_a_line(tool: &Region) -> &'static str {
-    if tool.snap { "Draw it free, no snap" } else { "Snap: 15 degrees, middle" }
+    if tool.snap { "Draw it free, no snap" } else { "Snap: level, upright, 45" }
 }
 
 fn shortcuts(tool: &Region) -> Vec<(&'static str, &'static str)> {
@@ -160,6 +162,7 @@ fn shortcuts(tool: &Region) -> Vec<(&'static str, &'static str)> {
         _ => {}
     }
     rows.push(("Space (hold)", "Shape wheel"));
+    rows.push(("Space (hold, dragging)", "Move the shape"));
     rows.push(("1 - 9", "Back to sculpting"));
     rows.push(("Alt + drag", "Orbit"));
     rows.push(("Ctrl + Z", "Undo"));

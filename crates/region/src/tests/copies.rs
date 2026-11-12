@@ -686,8 +686,8 @@ fn a_split_over_the_outermost_copy_cuts_the_object_there_and_the_piece_is_a_plai
         let place = outermost(&scenes, toward);
         let (from, to) = scenes.line_over(place, toward);
         let steps = scenes.live.doc.undo_steps();
-        scenes.drag_live(Region::split(), from, to);
-        scenes.drag_twin(place, Region::split(), from, to);
+        scenes.drag_live(split_tool(), from, to);
+        scenes.drag_twin(place, split_tool(), from, to);
 
         let what = format!("{} place {place}", layout.name);
         let objects = scenes.live.doc.objects();
@@ -728,8 +728,8 @@ fn a_lasso_split_over_a_copy_matches_the_baked_copys() {
     let place = scenes.copies().end - 1;
     let (c, r) = (scenes.centre(place), scenes.radius(place));
     let bite = circle(c + Vec2::new(0.5 * r, -0.2 * r), 0.55 * r, 40);
-    scenes.stroke_live(lasso_tool(Region::split()), &bite);
-    scenes.stroke_twin(place, lasso_tool(Region::split()), &bite);
+    scenes.stroke_live(lasso_tool(split_tool()), &bite);
+    scenes.stroke_twin(place, lasso_tool(split_tool()), &bite);
     assert_eq!(scenes.live.doc.objects().len(), 2, "{:?}", scenes.live.status);
     let part = scenes.live.doc.objects()[1];
     let scale = scenes.places[place].determinant().abs() as f64;
@@ -796,7 +796,7 @@ fn the_array_demos_draw_a_shape_over_a_copy_and_the_one_mesh_shows_it() {
             "mask" => Region::mask(),
             "hide" => Region::hide(),
             "trim" => Region::trim(),
-            _ => Region::split(),
+            _ => split_tool(),
         };
         scenes.live.enter(&mut tool);
         scenes.live.call(|cx| tool.demo(cx, "array"));

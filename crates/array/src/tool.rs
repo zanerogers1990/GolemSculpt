@@ -14,6 +14,7 @@
 //! | Line, Circle | Make an array of the selected object in one click |
 //! | Draw Curve, then drag | The copies follow the curve you draw; end where you began to close it |
 //! | Drag a point | Move it, on the plane facing you |
+//! | Drop a point on another | Collapse it into that one |
 //! | Click a point | Pick it: the gizmo's arrows sit on it, to slide it along one axis |
 //! | Drag the square start point | Move the object, and its array with it |
 //! | Click the path | Add a point there, and keep dragging it |
@@ -40,7 +41,7 @@
 //! the tool's own history knows of, in order (`pose.rs`).
 
 use glam::Vec3;
-use sculpt_toolkit::{Arrival, Button, Ctx, Draw, Event, GizmoTarget, Info, Key, ObjectId, Placement, Saved, Tool};
+use sculpt_toolkit::{Arrival, Button, Ctx, Draw, Event, GizmoTarget, Info, Key, ObjectId, Placement, PointDrop, Saved, Tool};
 
 use crate::arrays::{Arrays, History};
 use crate::arrows::Pointing;
@@ -62,6 +63,10 @@ pub struct ArrayTool {
     /// Arrays that were made real, kept so Z can hand them back.
     pub(crate) retired: Vec<Retired>,
     pub(crate) gesture: Gesture,
+    /// The point of the path a dragged point is on top of: let go there, it collapses into it.
+    pub(crate) point_drop: PointDrop,
+    /// Collapse Points on Drop is off: a point let go on another just stays there.
+    pub(crate) keep_dropped_points: bool,
     /// While the square start point is dragged: the move so far, shown but
     /// not committed to the scene until the drag ends.
     pub(crate) shift: Option<(ObjectId, Vec3)>,
@@ -221,6 +226,7 @@ impl ArrayTool {
                 picked: self.picked,
                 hovered: self.hover.point.filter(|_| !dragging),
                 insert: self.hover.curve.filter(|_| !dragging).map(|hit| hit.world),
+                drop_target: self.point_drop.over().filter(|_| dragging),
             };
             let size = crate::make::object_size(cx.scene().bounds(object).size());
             picture::draw(cx, draw, &live.state, origin, &Picture::new(&live.state, origin), &marks, size);

@@ -7,7 +7,7 @@
 
 use egui::Color32;
 use glam::{Vec2, Vec3};
-use sculpt_toolkit::{Ctx, Draw, View};
+use sculpt_toolkit::{Ctx, DROP_RADIUS, Draw, View};
 
 use crate::layout::{axis_vector, radial_arc};
 use crate::path::{self, STEPS_PER_SEGMENT};
@@ -53,6 +53,8 @@ pub struct Marks {
     pub hovered: Option<usize>,
     /// Where a click on the path would add a point.
     pub insert: Option<Vec3>,
+    /// The handle a dragged point would collapse into if it were let go now.
+    pub drop_target: Option<usize>,
 }
 
 impl Picture {
@@ -171,6 +173,9 @@ pub fn draw(
 
     if let Some(screen) = marks.insert.and_then(|p| view.project(p)) {
         draw.overlay.dot(screen, 4.0, INSERT, HANDLE_OUTLINE);
+    }
+    if let Some(screen) = marks.drop_target.and_then(|i| state.points.get(i)).and_then(|&p| view.project(origin + p)) {
+        draw.overlay.dot(screen, DROP_RADIUS, INSERT, HANDLE_OUTLINE);
     }
 }
 

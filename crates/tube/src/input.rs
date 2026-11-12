@@ -9,10 +9,10 @@
 
 use glam::{Mat3, Vec2, Vec3};
 use sculpt_geom::SymmetryOp;
-use sculpt_toolkit::{Ctx, Hit, Key, ObjectId, Ray, Scene, View};
+use sculpt_toolkit::{Color32, Ctx, Draw, Hit, Key, ObjectId, PointDrop, Ray, Scene, View};
 
-use crate::curve;
-use crate::live::LiveTube;
+use crate::live::{Frame, LiveTube};
+use crate::{curve, strap, wrap};
 use crate::spine::SURFACE_LIFT;
 use crate::tool::{COALESCE_SECONDS, TubeTool, pixels_for};
 use crate::types::{Kind, TubePoint, TubeSettings};
@@ -41,6 +41,19 @@ const MUSCLE_TOLERANCE: f32 = 0.5;
 /// the pen comes up.
 const LIVE_MUSCLE_TOLERANCE: f32 = 0.15;
 const WHEEL_SIZE_STEP: f32 = 1.1;
+
+/// A strap stroke that ends this close to where it began, in interface points, closes into a loop.
+const CLOSE_REACH: f32 = 24.0;
+/// A wrap line shorter than this, in interface points, is a click.
+const MIN_WRAP_LINE: f32 = 12.0;
+/// A belt laid by Wrap gets a point about every this many strap widths round, within these.
+const WRAP_POINT_SPACING_RADII: f32 = 5.0;
+const MIN_WRAP_POINTS: usize = 8;
+const MAX_WRAP_POINTS: usize = 24;
+
+const WRAP_LINE: Color32 = Color32::from_rgba_premultiplied(230, 207, 80, 230);
+const WRAP_HANDLE: Color32 = Color32::from_rgb(120, 200, 255);
+const WRAP_OUTLINE: Color32 = Color32::from_rgba_premultiplied(23, 23, 28, 230);
 
 /// A point of a copy of a tube.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +140,11 @@ pub(crate) enum Drag {
     /// A radius handle of a point, dragged away from or toward the point: evenly, or one edge of a
     /// muscle (`edge`).
     Ring { tube: usize, point: usize, start_size: f32, centre: Vec2, start_distance: f32, side: i8, edge: Option<EdgeDrag> },
+    /// Wrap: a line across the model, from the press to the pointer.
+    Wrap { from: Vec2, to: Vec2 },
+    /// An end of a wrapped strap's line (0 or 1), or the line itself (2): the belt is laid round the
+    /// body again as the line now is.
+    WrapLine { tube: usize, end: u8, press: Vec2, line: wrap::Line },
 }
 
 /// The stroke being drawn, as it came off the pointer.
@@ -171,6 +189,8 @@ pub(crate) struct Pointer {
     pub stroke: Stroke,
     /// Where the pointer was last seen, for S pressed with nothing held.
     last_px: Vec2,
+    /// The point of its line a dragged point is on top of: let go there, it collapses into it.
+    pub point_drop: PointDrop,
 }
 
 impl Pointer {
@@ -423,6 +443,13 @@ impl TubeTool {
             self.begin_ring_drag(&view, ring, px, extend);
             return true;
         }
+        if let Some((tube, end)) = self.pick_wrap_handle(cx, px) {
+            self.begin_edit("Move Belt Line", 0.0);
+            let line = self.tubes[tube].state.wrap.expect("picked a wrap handle");
+            self.pointer.drag = Drag::WrapLine { tube, end, press: px, line };
+            self.say("Moving the belt's line: it is laid round the body again as you go.");
+            return true;
+        }
         if let Some((hit, _)) = handle {
             self.press_handle(cx, hit, px, extend);
             return true;
@@ -439,6 +466,12 @@ impl TubeTool {
             }
             return true;
         }
+        if self.kind() == Kind::Strap && self.wrap_mode {
+            self.pointer.drag = Drag::Wrap { from: px, to: px };
+            self.active = None;
+            self.selected_point = None;
+            return true;
+        }
         self.begin_draw(cx, px, mid_air)
     }
 
@@ -450,6 +483,7 @@ impl TubeTool {
         self.select_tube(hit.tube, Some(hit.point));
         if again {
             self.pointer.last_click = None;
+            self.hand_edited(hit.tube);
             self.toggle_sharp(hit.tube, hit.point);
             self.pointer.drag = Drag::Idle;
             return;
@@ -462,6 +496,7 @@ impl TubeTool {
             let index = if hit.point == 0 { 0 } else { count };
             let end = self.tubes[hit.tube].state.points[hit.point];
             self.tubes[hit.tube].state.points.insert(index, end);
+            self.hand_edited(hit.tube);
             self.touch();
             self.refresh(cx, false);
             self.select_tube(hit.tube, Some(index));
@@ -490,6 +525,8 @@ impl TubeTool {
         match self.pointer.drag {
             Drag::Point(_) => self.update_point_drag(cx, px),
             Drag::Draw => self.update_draw(cx, px),
+            Drag::Wrap { from, .. } => self.pointer.drag = Drag::Wrap { from, to: px },
+            Drag::WrapLine { .. } => self.update_wrap_line(cx, px),
             Drag::Ring { tube, point, edge: Some(edge), .. } => self.drag_edge(cx, tube, point, &edge, px),
             Drag::Ring { tube, point, start_size, centre, start_distance, edge: None, .. } => {
                 let factor = centre.distance(px) / start_distance;
@@ -503,13 +540,32 @@ impl TubeTool {
     pub(crate) fn release(&mut self, cx: &Ctx) {
         match self.pointer.drag {
             Drag::Draw => self.finish_draw(cx),
+            Drag::Wrap { from, to } => self.finish_wrap(cx, from, to),
             // S is still held: the button was never part of that gesture.
             Drag::Resize { .. } => {}
+            Drag::Point(PointDrag { tube, point, .. }) => match self.pointer.point_drop.over() {
+                Some(into) => self.collapse_point(tube, point, into),
+                None => self.end_gesture(),
+            },
             _ => self.end_gesture(),
         }
     }
 
     // ---- point drag ----------------------------------------------------------
+
+    /// Where each point of copy `copy` of a tube is on screen.
+    fn handle_screens(&self, view: &View, tube: usize, copy: usize) -> Vec<Option<Vec2>> {
+        let Some(live) = self.tubes.get(tube) else { return Vec::new() };
+        let handles = live.copies.get(copy).map_or(&[][..], |c| &c.handle_world);
+        handles.iter().take(live.state.points.len()).map(|world| view.project(*world)).collect()
+    }
+
+    /// Where the point a dragged point would collapse into is in the world, to light it.
+    pub(crate) fn drop_target(&self) -> Option<Vec3> {
+        let Drag::Point(drag) = self.pointer.drag else { return None };
+        let into = self.pointer.point_drop.over()?;
+        self.handle_world(drag.tube, into, drag.copy)
+    }
 
     fn begin_point_drag(&mut self, cx: &Ctx, tube: usize, copy: usize, point: usize, px: Vec2, label: &'static str) {
         self.begin_edit(label, 0.0);
@@ -519,6 +575,27 @@ impl TubeTool {
         let grab_offset = cx.view.project(plane_point).map_or(Vec2::ZERO, |s| s - px);
         let start = live.state.points[point];
         self.pointer.drag = Drag::Point(PointDrag { tube, copy, point, start, press: px, grab_offset, plane_point, moved: false });
+        let points = self.handle_screens(&cx.view, tube, copy);
+        self.pointer.point_drop = PointDrop::begin(point, px + grab_offset, &points, cx.view.pixels_per_point);
+    }
+
+    /// The dragged point was let go on another of its line: it goes, and the other stays as it was. One
+    /// undo step with the drag that got it there. A tube left with a single point goes with it, as it
+    /// does when a point is deleted.
+    fn collapse_point(&mut self, tube: usize, point: usize, into: usize) {
+        self.pointer.drag = Drag::None;
+        self.relabel_edit("Collapse Point");
+        self.hand_edited(tube);
+        self.tubes[tube].state.points.remove(point);
+        if self.tubes[tube].state.points.len() < 2 {
+            self.remove_tube_at(tube);
+            self.say(format!("{} collapsed to one point and deleted. Ctrl+Z brings it back.", self.kind().title()));
+        } else {
+            self.select_tube(tube, Some(PointDrop::after_removing(point, into)));
+            self.say("Point collapsed. Ctrl+Z brings it back.");
+        }
+        self.touch();
+        self.commit_edit();
     }
 
     fn update_point_drag(&mut self, cx: &Ctx, px: Vec2) {
@@ -540,7 +617,7 @@ impl TubeTool {
         // A tube's point on the surface stays on it wherever points are being placed. A muscle's goes
         // by the placement: with Free it lifts off and floats, which is how a muscle on the model is
         // made to bridge a hollow or is taken off the model altogether.
-        let stays = drag.start.is_on_surface() && self.kind() == Kind::Tube;
+        let stays = drag.start.is_on_surface() && self.kind() != Kind::Muscle;
         let on_model = if stays || self.defaults.on_surface {
             raycast_anchor(cx.scene(), live.state.anchor, &cx.view.ray(at))
         } else {
@@ -562,7 +639,12 @@ impl TubeTool {
             placed.facing = drag.start.up();
         }
         self.tubes[drag.tube].state.points[drag.point] = placed;
+        self.hand_edited(drag.tube);
         self.touch();
+        if self.collapse_on_drop {
+            let points = self.handle_screens(&cx.view, drag.tube, drag.copy);
+            self.pointer.point_drop.follow(drag.point, at, &points, cx.view.pixels_per_point);
+        }
     }
 
     // ---- insert point --------------------------------------------------------
@@ -577,19 +659,27 @@ impl TubeTool {
         if points.len() < 2 || copy.controls.len() != points.len() {
             return;
         }
-        let segment = hit.segment.clamp(0, points.len() - 2);
-        let (a, b) = (points[segment], points[segment + 1]);
+        // A closed strap has one more run, from its last point back to its first.
+        let closed = strap::is_closed(&live.state.settings, points.len());
+        let runs = if closed { points.len() } else { points.len() - 1 };
+        let segment = hit.segment.min(runs - 1);
+        let (a, b) = (points[segment], points[(segment + 1) % points.len()]);
 
         // The centre line there, in the copy's frame, taken back to the
         // tube's own space.
         let tension = curve::tension_for(live.state.settings.smoothness);
-        let mut world = live.frame.frame_to_world().transform_point3(curve::evaluate(&copy.controls, tension, segment, hit.t));
+        let on_line = if segment + 1 < copy.controls.len() {
+            curve::evaluate(&copy.controls, tension, segment, hit.t)
+        } else {
+            copy.controls[segment].position.lerp(copy.controls[0].position, hit.t)
+        };
+        let mut world = live.frame.frame_to_world().transform_point3(on_line);
         let mut world_normal = Vec3::ZERO;
         let size = a.size + (b.size - a.size) * hit.t;
 
-        let muscle = live.state.settings.kind == Kind::Muscle;
+        let laid = live.state.settings.kind.lies_on_surface();
         let mut facing = Vec3::ZERO;
-        if muscle {
+        if laid {
             // A muscle's points are on the surface themselves, and so is the place pressed: the
             // station there, with its lift taken off again.
             let nearest = copy.samples.iter().min_by(|x, y| {
@@ -598,7 +688,8 @@ impl TubeTool {
             });
             if let Some(station) = nearest {
                 let settings = &live.state.settings;
-                let ground = station.center - station.up * crate::muscle::lift(settings, station.radius, station.flat);
+                let lift = if settings.kind == Kind::Strap { 0.0 } else { crate::muscle::lift(settings, station.radius, station.flat) };
+                let ground = station.center - station.up * lift;
                 let frame_to_world = live.frame.frame_to_world();
                 world = frame_to_world.transform_point3(ground);
                 if a.is_on_surface() && b.is_on_surface() {
@@ -631,6 +722,7 @@ impl TubeTool {
         inserted.facing = facing;
         self.begin_edit("Add Point", 0.0);
         self.tubes[hit.tube].state.points.insert(segment + 1, inserted);
+        self.hand_edited(hit.tube);
         self.touch();
         self.refresh(cx, false);
         self.select_tube(hit.tube, Some(segment + 1));
@@ -644,6 +736,7 @@ impl TubeTool {
         let size = size.clamp(TubeSettings::MIN_SIZE, TubeSettings::MAX_SIZE);
         if size.is_finite() && size != p.size {
             p.size = size;
+            self.hand_edited(tube);
             self.touch();
         }
     }
@@ -732,6 +825,7 @@ impl TubeTool {
             moved.facing = start.facing;
         }
         self.tubes[tube].state.points[point] = moved;
+        self.hand_edited(tube);
         self.touch();
     }
 
@@ -780,8 +874,8 @@ impl TubeTool {
     /// depth of the selected object, and is then anchored to that.
     fn begin_draw(&mut self, cx: &Ctx, px: Vec2, mid_air: bool) -> bool {
         let scene = cx.scene();
-        let muscle = self.defaults.kind == Kind::Muscle;
-        // A muscle that starts just off the model starts on it.
+        let muscle = self.defaults.kind.lies_on_surface();
+        // A muscle or strap that starts just off the model starts on it.
         let hit = cx.pick(px).or_else(|| snap_to_model(cx, None, px).filter(|_| muscle && self.defaults.on_surface && !mid_air));
         if hit.is_none() && !mid_air {
             return false;
@@ -931,8 +1025,18 @@ impl TubeTool {
             self.simplify_stroke((radius * 0.3).max(length * 0.004), MAX_STROKE_POINTS)
         };
         self.fill_draft(cx, &kept);
+        // A strap stroke that comes back to where it began goes round: its last point is its first.
+        let px = &self.pointer.stroke.px;
+        let came_back = px.len() > 2 && px[0].distance(px[px.len() - 1]) < CLOSE_REACH * cx.view.pixels_per_point;
+        let closes = self.kind() == Kind::Strap && came_back && kept.len() >= 4;
         self.pointer.stroke = Stroke::default();
-        let Some(draft) = self.pointer.draft.take() else { return };
+        let Some(mut draft) = self.pointer.draft.take() else { return };
+        if closes {
+            draft.state.points.pop();
+            draft.state.settings.closed = true;
+        } else if self.kind() == Kind::Strap {
+            draft.state.settings.closed = false;
+        }
 
         let on = draft.state.anchor.and_then(|a| cx.scene().info(a)).map(|info| info.name.to_owned());
         let points = draft.state.points.len();
@@ -958,8 +1062,8 @@ impl TubeTool {
                 self.pointer.draft = None;
                 self.pointer.stroke = Stroke::default();
             }
-            Drag::Point(_) | Drag::Ring { .. } | Drag::Resize { .. } => self.commit_edit(),
-            Drag::None | Drag::Idle => {}
+            Drag::Point(_) | Drag::Ring { .. } | Drag::Resize { .. } | Drag::WrapLine { .. } => self.commit_edit(),
+            Drag::None | Drag::Idle | Drag::Wrap { .. } => {}
         }
     }
 
@@ -971,7 +1075,7 @@ impl TubeTool {
         self.pointer.stroke = Stroke::default();
         match drag {
             Drag::None => false,
-            Drag::Point(_) | Drag::Ring { .. } => {
+            Drag::Point(_) | Drag::Ring { .. } | Drag::WrapLine { .. } => {
                 self.cancel_edit();
                 true
             }
@@ -982,7 +1086,7 @@ impl TubeTool {
                 }
                 true
             }
-            Drag::Draw | Drag::Idle => true,
+            Drag::Draw | Drag::Idle | Drag::Wrap { .. } => true,
         }
     }
 
@@ -1035,7 +1139,208 @@ impl TubeTool {
         }
     }
 
+    // ---- wrap ----------------------------------------------------------------
+
+    /// The selected strap's wrap line on screen and in the world, when it has one: its two ends and
+    /// its middle.
+    fn wrap_handles(&self, view: &View) -> Option<(usize, [Vec3; 3], [Vec2; 3])> {
+        let tube = self.active_tube()?;
+        let live = &self.tubes[tube];
+        let line = live.state.wrap?;
+        let to_world = live.frame.local_to_world();
+        let (a, b) = (to_world.transform_point3(line.a), to_world.transform_point3(line.b));
+        let world = [a, b, a.lerp(b, 0.5)];
+        let screen = [view.project(world[0])?, view.project(world[1])?, view.project(world[2])?];
+        Some((tube, world, screen))
+    }
+
+    /// The wrap line handle under `px`: an end (0, 1) or the middle (2).
+    fn pick_wrap_handle(&self, cx: &Ctx, px: Vec2) -> Option<(usize, u8)> {
+        let (tube, _, screen) = self.wrap_handles(&cx.view)?;
+        let reach = HANDLE_PICK * cx.view.pixels_per_point;
+        let (end, distance) = screen.iter().enumerate().map(|(i, s)| (i as u8, s.distance(px))).min_by(|a, b| a.1.total_cmp(&b.1))?;
+        (distance <= reach).then_some((tube, end))
+    }
+
+    /// The line being drawn, and the selected belt's line with its handles.
+    pub(crate) fn draw_wrap(&self, view: &View, draw: &mut Draw) {
+        if let Drag::Wrap { from, to } = self.pointer.drag {
+            draw.overlay.line(from, to, 2.0, WRAP_LINE);
+            draw.overlay.dot(from, 4.0, WRAP_LINE, WRAP_OUTLINE);
+            draw.overlay.dot(to, 4.0, WRAP_LINE, WRAP_OUTLINE);
+            return;
+        }
+        let Some((_, _, [a, b, middle])) = self.wrap_handles(view) else { return };
+        draw.overlay.line(a, b, 1.5, WRAP_HANDLE);
+        draw.overlay.square(a, 5.5, WRAP_HANDLE, WRAP_OUTLINE);
+        draw.overlay.square(b, 5.5, WRAP_HANDLE, WRAP_OUTLINE);
+        draw.overlay.dot(middle, 5.0, WRAP_HANDLE, WRAP_OUTLINE);
+    }
+
+    /// The plane a line drawn from `from` to `to` on screen makes, through `through` (a place on the
+    /// model it crosses): the line's two ends level with that place, and the plane's normal, all in
+    /// the world. The plane holds the line and the way it was seen.
+    fn wrap_plane(view: &View, from: Vec2, to: Vec2, through: Vec3) -> Option<(Vec3, Vec3, Vec3)> {
+        let a = view.on_facing_plane(from, through)?;
+        let b = view.on_facing_plane(to, through)?;
+        let seen = view.ray(from.lerp(to, 0.5)).dir;
+        let normal = (b - a).cross(seen).normalize_or_zero();
+        (normal != Vec3::ZERO).then_some((a, b, normal))
+    }
+
+    /// A belt round `anchor` where `line` (in its own space) cuts it: its points, evenly spaced round
+    /// the outline nearest `near` (also in its own space), and whether that outline closes. `None`
+    /// when the plane misses the model.
+    fn lay_wrap(cx: &Ctx, anchor: ObjectId, line: &wrap::Line, near: &[Vec3], radius: f32) -> Option<(Vec<TubePoint>, bool)> {
+        let scene = cx.scene();
+        let (info, mesh) = (scene.info(anchor)?, scene.mesh(anchor)?);
+        let hidden = |t: usize| mesh.is_triangle_hidden(t);
+        let outlines = wrap::slice(mesh.positions, mesh.indices, &hidden, line.a, line.normal);
+        let outline = &outlines[wrap::nearest(&outlines, near)?];
+        let to_world = info.placement.matrix();
+        let normal_to_world = Mat3::from_mat4(to_world.inverse()).transpose();
+        let world_length: f32 = {
+            let world: Vec<Vec3> = outline.cuts.iter().map(|c| to_world.transform_point3(c.position)).collect();
+            let open: f32 = world.windows(2).map(|w| w[0].distance(w[1])).sum();
+            open + if outline.closed { world[0].distance(world[world.len() - 1]) } else { 0.0 }
+        };
+        let wanted = (world_length / (radius.max(1e-6) * WRAP_POINT_SPACING_RADII)).round() as usize;
+        let count = wanted.clamp(MIN_WRAP_POINTS, MAX_WRAP_POINTS);
+        // The belt's first point is where the line was drawn over the model, on the side seen.
+        let start = near.get(near.len() / 2).copied().unwrap_or(line.a);
+        let frame = Frame { placement: info.placement };
+        let points = wrap::spaced(outline, count, start)
+            .into_iter()
+            .map(|c| {
+                let world = to_world.transform_point3(c.position);
+                let normal = (normal_to_world * c.normal).normalize_or_zero();
+                frame.to_tube_point(&SymmetryOp::IDENTITY, world, normal, 1.0, false)
+            })
+            .collect::<Vec<_>>();
+        (points.len() >= 3).then_some((points, outline.closed))
+    }
+
+    /// The wrap line let go: a belt round the model where it crossed it.
+    fn finish_wrap(&mut self, cx: &Ctx, from: Vec2, to: Vec2) {
+        self.pointer.drag = Drag::None;
+        if from.distance(to) < MIN_WRAP_LINE * cx.view.pixels_per_point {
+            self.say("Drag a line across the model where the belt goes.");
+            return;
+        }
+        const STEPS: usize = 64;
+        let hits: Vec<Hit> = (0..=STEPS).filter_map(|i| cx.pick(from.lerp(to, i as f32 / STEPS as f32))).collect();
+        // The object the line crosses most of.
+        let anchor = hits
+            .iter()
+            .map(|h| h.object)
+            .max_by_key(|object| hits.iter().filter(|h| h.object == *object).count());
+        let Some(anchor) = anchor else {
+            self.tell("The line has to cross the model: drag it over the part the belt goes round.", false);
+            return;
+        };
+        let on: Vec<Vec3> = hits.iter().filter(|h| h.object == anchor).map(|h| h.position).collect();
+        let through = on[on.len() / 2];
+        let Some((a, b, normal)) = Self::wrap_plane(&cx.view, from, to, through) else { return };
+        let Some(info) = cx.scene().info(anchor) else { return };
+        let to_local = info.placement.matrix().inverse();
+        let local_normal = (Mat3::from_mat4(info.placement.matrix()).transpose() * normal).normalize_or_zero();
+        let line = wrap::Line { a: to_local.transform_point3(a), b: to_local.transform_point3(b), normal: local_normal };
+        let near: Vec<Vec3> = on.iter().map(|p| to_local.transform_point3(*p)).collect();
+        let name = info.name.to_owned();
+        let Some((points, closed)) = Self::lay_wrap(cx, anchor, &line, &near, self.defaults.radius) else {
+            self.tell("Nothing to wrap there: the line's plane does not go round the model.", false);
+            return;
+        };
+        let mut belt = self.new_tube(Some(anchor));
+        let count = points.len();
+        belt.state.points = points;
+        belt.state.settings.closed = closed;
+        belt.state.wrap = Some(line);
+        self.begin_edit("Wrap Strap", 0.0);
+        self.tubes.push(belt);
+        self.touch();
+        self.commit_edit();
+        self.select_tube(self.tubes.len() - 1, None);
+        self.say(if closed {
+            format!(
+                "Belt laid round {name}: {count} points. Drag an end of the blue line to tilt it, its middle to slide \
+                 it; drag a point to shape it by hand."
+            )
+        } else {
+            format!("Strap laid across {name}: the cut does not close round it (an opening in the model), so the strap has ends.")
+        });
+    }
+
+    /// The selected belt's line, an end or its middle dragged to `px`: laid round the body again.
+    fn update_wrap_line(&mut self, cx: &Ctx, px: Vec2) {
+        let Drag::WrapLine { tube, end, press, line } = self.pointer.drag else { return };
+        let Some(live) = self.tubes.get(tube) else { return };
+        let Some(anchor) = live.state.anchor else { return };
+        let Some(info) = cx.scene().info(anchor) else { return };
+        let to_world = info.placement.matrix();
+        let to_local = to_world.inverse();
+        let (a, b) = (to_world.transform_point3(line.a), to_world.transform_point3(line.b));
+        let view = cx.view;
+        let (a, b, normal) = match end {
+            0 | 1 => {
+                let (moving, fixed) = if end == 0 { (a, b) } else { (b, a) };
+                let Some(moved) = view.on_facing_plane(px, moving) else { return };
+                let (a, b) = if end == 0 { (moved, fixed) } else { (fixed, moved) };
+                let seen = view.ray(px).dir;
+                let normal = (b - a).cross(seen).normalize_or_zero();
+                if normal == Vec3::ZERO {
+                    return;
+                }
+                (a, b, normal)
+            }
+            _ => {
+                let middle = a.lerp(b, 0.5);
+                let (Some(now), Some(then)) = (view.on_facing_plane(px, middle), view.on_facing_plane(press, middle)) else { return };
+                let shift = now - then;
+                let normal = (Mat3::from_mat4(to_local).transpose() * line.normal).normalize_or_zero();
+                (a + shift, b + shift, normal)
+            }
+        };
+        let local_normal = (Mat3::from_mat4(to_world).transpose() * normal).normalize_or_zero();
+        let moved = wrap::Line { a: to_local.transform_point3(a), b: to_local.transform_point3(b), normal: local_normal };
+        // Where the line crosses the model now, to pick the outline it is over.
+        let near: Vec<Vec3> = {
+            let (Some(sa), Some(sb)) = (view.project(a), view.project(b)) else { return };
+            let hits: Vec<Vec3> = (0..=32)
+                .filter_map(|i| raycast_anchor(cx.scene(), Some(anchor), &view.ray(sa.lerp(sb, i as f32 / 32.0))))
+                .map(|h| to_local.transform_point3(h.position))
+                .collect();
+            if hits.is_empty() { vec![moved.a.lerp(moved.b, 0.5)] } else { hits }
+        };
+        let radius = live.state.settings.radius;
+        let Some((points, closed)) = Self::lay_wrap(cx, anchor, &moved, &near, radius) else { return };
+        let live = &mut self.tubes[tube];
+        live.state.points = points;
+        live.state.settings.closed = closed;
+        live.state.wrap = Some(moved);
+        self.selected_point = None;
+        self.touch();
+    }
+
     // ---- scripted gestures ---------------------------------------------------
+
+    /// Lays a belt along the line from `from` to `to` exactly as a Wrap drag would. True if one was
+    /// made.
+    pub fn draw_wrap_line(&mut self, cx: &Ctx, from: Vec2, to: Vec2) -> bool {
+        self.cancel_gesture();
+        let (wrap, before) = (self.wrap_mode, self.tubes.len());
+        self.wrap_mode = true;
+        let pressed = self.press(cx, from, false, false);
+        if pressed {
+            for k in 1..=8 {
+                self.drag_to(cx, from.lerp(to, k as f32 / 8.0));
+            }
+            self.release(cx);
+        }
+        self.wrap_mode = wrap;
+        self.refresh(cx, false);
+        self.tubes.len() > before
+    }
 
     /// Draws a tube along `path` exactly as a stroke of the pointer would.
     /// True if a tube was made.

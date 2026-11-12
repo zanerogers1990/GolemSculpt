@@ -105,6 +105,9 @@ pub struct Options {
     /// Export FBX also writes each painted object's material weights into
     /// its UV sets, for game shaders (see io/fbx/paint.rs). Not kept between runs.
     pub fbx_material_weights: bool,
+    /// How many flat faces Export STEP brings the object down to (see
+    /// app/export_step.rs). Not kept between runs.
+    pub step_faces: f32,
     /// The material library and the custom shaders, which the Materials card
     /// edits (see materials/mod.rs). Not part of the scene.
     pub materials: crate::materials::State,
@@ -156,6 +159,7 @@ impl Default for Options {
             deform: Default::default(),
             paint: Default::default(),
             fbx_material_weights: false,
+            step_faces: 25_000.0,
             materials: Default::default(),
         }
     }
@@ -391,6 +395,9 @@ pub enum Action {
     /// Export PLY: the active object, with its paint (see app/exports.rs).
     ExportPly,
     ExportFbx,
+    /// Export STEP: the active object as solids for CAD, decimated to
+    /// `Options::step_faces` first (see app/export_step.rs).
+    ExportStep,
     /// Send the selected objects to Blender, opening it if it is not open
     /// (see app/blender.rs).
     SendToBlender,

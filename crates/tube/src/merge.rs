@@ -153,6 +153,53 @@ pub fn plan(
     MergePlan { resolution, tube_cell, cell, remesh_cell, too_thin: thinnest_radius < cell.max(remesh_cell) }
 }
 
+/// Chooses the resolution of a merge of a ready-made surface (a strap) into a model, as [`plan`]
+/// does for tubes: the model keeps its density. `piece` is in the field's space; `thinnest` is how
+/// thin it is at its thinnest, which a coarser lattice cannot hold.
+pub fn plan_piece(positions: &[Vec3], indices: &[u32], target_to_field: &Mat4, piece: &TriMesh, thinnest: f32) -> MergePlan {
+    let scale = mean_scale(target_to_field);
+    let cell = density_cell(positions, indices) * scale;
+    let mut local = Aabb::of(positions);
+    let field_to_target = target_to_field.inverse();
+    for p in &piece.positions {
+        local.grow(field_to_target.transform_point3(*p));
+    }
+    let extent = local.size().max_element() * scale;
+    let wanted = (extent / cell.max(1e-6)).ceil().clamp(MIN_RESOLUTION as f32, remesh::MAX_RESOLUTION as f32);
+    let resolution = (wanted as u32).clamp(MIN_RESOLUTION, remesh::MAX_RESOLUTION);
+    let remesh_cell = extent / resolution as f32;
+    MergePlan { resolution, tube_cell: remesh_cell, cell, remesh_cell, too_thin: thinnest < cell.max(remesh_cell) }
+}
+
+/// Merges a ready-made closed surface `piece` (in the field's space) into `target`: the two put in
+/// one triangle list and remeshed together, which makes their union. No fillet: a strap meets the
+/// model with a crisp seam. The result is in the target's own space.
+pub fn merge_piece(
+    target: &TriMesh,
+    target_to_field: &Mat4,
+    piece: &TriMesh,
+    plan: &MergePlan,
+    mirror: [bool; 3],
+    stage: &dyn Fn(Stage) -> bool,
+) -> Result<TriMesh, String> {
+    if target.positions.is_empty() || target.indices.len() < 3 {
+        return Err("The object has no geometry.".into());
+    }
+    if piece.indices.is_empty() {
+        return Err("There is nothing to merge.".into());
+    }
+    if !stage(Stage::Union) {
+        return Err("Cancelled.".into());
+    }
+    let mut piece = piece.clone();
+    piece.transform(&target_to_field.inverse());
+    let mut joined = target.clone();
+    joined.append(&piece);
+    drop(piece);
+    let settings = RemeshSettings { mirror, ..RemeshSettings::new(plan.resolution) };
+    Ok(remesh_with(&joined.positions, &joined.indices, &settings)?.mesh)
+}
+
 /// Voxel size for a tube kept as its own object: the anchor's own density
 /// where there is one (`anchor_cell`, its [`density_cell`] in field units),
 /// so the tube sculpts like the body it will likely be joined to, bounded to

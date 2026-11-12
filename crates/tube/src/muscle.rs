@@ -48,7 +48,7 @@ pub fn lift(settings: &TubeSettings, radius: f32, flat: f32) -> f32 {
 
 /// Repeated 1-2-1 averaging, `passes` times. The two ends stay exactly where they are: a muscle's ends
 /// are its points, and they are on the surface.
-fn smooth<T>(values: &mut [T], passes: usize)
+pub(crate) fn smooth<T>(values: &mut [T], passes: usize)
 where
     T: Copy + std::ops::Add<Output = T> + std::ops::Mul<f32, Output = T>,
 {
@@ -197,7 +197,7 @@ const MAX_FILL_RADII: f32 = 2.5;
 /// How far out from a point on the surface the form under it is felt for, as a fraction of the
 /// muscle's half width there: at its edge, so the way up at a point is the lie of what the muscle
 /// covers, not of the wrinkle the point is on.
-const POINT_FEEL: f32 = 1.0;
+pub(crate) const POINT_FEEL: f32 = 1.0;
 
 /// How far the five heights a station feels have to differ before it rests on the highest of them, as
 /// a fraction of the muscle's radius. Detail finer than this is averaged; a ridge taller than this is
@@ -221,7 +221,7 @@ fn rest_on(heights: &[f32], soft: f32) -> f32 {
 /// The way up at a point on the surface: the tilt of the surface felt at four places `step` round it,
 /// along the muscle (`toward`) and across it. Felt twice, the second time along the first answer, so
 /// the face the point was put down on only picks the directions the first four are felt in.
-fn lie_of_form(at: Vec3, up: Vec3, toward: Vec3, step: f32, ground: Ground) -> Vec3 {
+pub(crate) fn lie_of_form(at: Vec3, up: Vec3, toward: Vec3, step: f32, ground: Ground) -> Vec3 {
     let mut normal = up;
     if step <= 0.0 || up == Vec3::ZERO {
         return up;
@@ -282,7 +282,7 @@ where
 /// up as it was) the model is at the deepest under its footprint, near enough: what the muscle is
 /// filled under by. A station of a muscle that is laid on the model somewhere but is itself off it (a
 /// point lifted, or between two such) only looks straight down.
-fn settle(samples: &mut [Sample], up: &mut [Vec3], held: &[f32], reach: &[f32], radius: f32, ground: Ground) -> Vec<Option<f32>> {
+pub(crate) fn settle(samples: &mut [Sample], up: &mut [Vec3], held: &[f32], reach: &[f32], radius: f32, ground: Ground) -> Vec<Option<f32>> {
     let n = samples.len();
     let mut rise: Vec<Option<f32>> = vec![None; n];
     let mut lowest: Vec<Option<f32>> = vec![None; n];

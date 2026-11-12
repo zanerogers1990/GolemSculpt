@@ -113,6 +113,13 @@ impl History {
         self.redo.clear();
     }
 
+    /// What the open edit is called, once a gesture has turned out to be something else.
+    pub fn relabel(&mut self, label: &str) {
+        if let Some(open) = &mut self.open {
+            label.clone_into(&mut open.label);
+        }
+    }
+
     /// Throws the open edit away and returns the pose to put back, if it changed anything: Esc
     /// mid-drag.
     pub fn cancel(&mut self, profile: &LatheProfile, plane: &Plane) -> Option<Pose> {

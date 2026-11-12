@@ -39,13 +39,17 @@
 //! | Esc | Cancel the drag in progress, else put the tool away |
 //! | N / K | Next shape, and after the last put the tool away |
 //! | Space (hold) | Shape wheel |
+//! | Space (hold, while dragging) | Move the shape instead of growing it |
 //! | 1 - 9 | Back to sculpting |
 //!
-//! A snapping line (the panel's Snap tick, or Shift) is for a cut that has to
-//! be exact: it turns in steps of 15 degrees and, where it passes close to
-//! the middle of the selected object or to its origin, is moved sideways to
-//! go exactly through it. Both points are marked while Snap is on, and the
-//! line's angle is read off beside it.
+//! A snapping line (the panel's Snap tick, on to begin with; Shift turns it
+//! the other way) is for a straight edge: it goes level, upright or 45
+//! degrees when within 10 of one, else in steps of 15, and, where it passes
+//! close to the middle of the selected object or to its origin, is moved
+//! sideways to go exactly through it. Both points are marked, and the line's
+//! angle is read off beside it. Its cut goes straight back along the way the
+//! camera looks (`screen::straight_back`) rather than fanning out from the
+//! eye, so a level line cuts level wherever it is drawn on the screen.
 //!
 //! The one place these differ from the rest of the app: with a region tool
 //! up, a drag on empty background draws a region instead of orbiting,
@@ -62,6 +66,7 @@ mod gesture;
 mod hide;
 mod mask;
 mod panel;
+mod quick;
 mod screen;
 mod tool;
 
@@ -73,6 +78,7 @@ mod tests;
 pub use action::Action;
 pub use extract::Extract;
 pub use gesture::Shape;
+pub use quick::QuickBox;
 pub use tool::Region;
 
 use sculpt_toolkit::Tool;

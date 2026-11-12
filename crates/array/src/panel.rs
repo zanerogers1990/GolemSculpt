@@ -87,6 +87,7 @@ pub fn show(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx) {
             ui,
             &[
                 ("Drag a point", "Move it"),
+                ("Drop a point on another", "Collapse it into that one"),
                 ("Square point", "Start of the path"),
                 ("Click the path", "Add a point"),
                 ("Shift + drag last", "Extend the path"),
@@ -200,6 +201,11 @@ fn settings(tool: &mut ArrayTool, ui: &mut egui::Ui, cx: &mut Ctx, state: &Array
             tool.edit(cx, "Array Spacing", false, |a| a.settings.space_by_size = on);
         }
         spacing(tool, ui, cx, state);
+        let help = "On: a point let go on top of another point of the path collapses into that one, which lights up \
+                    green first. Off: points can be left on top of each other.";
+        if let Some(on) = toggle(ui, cx.tips, "Collapse Points on Drop", !tool.keep_dropped_points, help) {
+            tool.keep_dropped_points = !on;
+        }
     }
     if s.kind == ArrayKind::Curve {
         let help = "Joins the end of the curve back to its start and spreads the copies round the whole loop - a \

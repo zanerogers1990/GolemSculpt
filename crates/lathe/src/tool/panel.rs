@@ -18,6 +18,7 @@ const HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 0.02..=5.0;
 
 const SHORTCUTS: &[(&str, &str)] = &[
     ("Drag a handle", "Reshape"),
+    ("Drop a handle on another", "Collapse it into that one"),
     ("Shift + drag", "Straight"),
     ("Drag the curve", "Add a point"),
     ("Click beside it", "Extend the outline"),
@@ -166,6 +167,10 @@ impl Lathe {
         if theme::tip(r, cx.tips, help).changed() {
             self.set_radial_on_create(radial);
         }
+
+        let r = theme::checkbox(ui, &mut self.collapse_on_drop, "Collapse Points on Drop", ACCENT_LATHE);
+        let help = "On: a handle let go on top of another collapses into that one, which lights up green first. Off: points can be left on top of each other.";
+        theme::tip(r, cx.tips, help);
     }
 
     fn sliders(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {

@@ -6,7 +6,7 @@
 //! z-fight with the very surface they shape).
 
 use glam::Vec2;
-use sculpt_toolkit::{Color32, Ctx, Overlay, View};
+use sculpt_toolkit::{Color32, Ctx, DROP_RADIUS, Overlay, View};
 
 use super::{Drag, Lathe};
 use crate::curve;
@@ -36,6 +36,10 @@ impl Lathe {
         self.draw_axis(view, overlay);
         self.draw_curve(view, overlay);
         self.draw_handles(view, overlay);
+        // Let go now, the dragged handle collapses into this one.
+        if let Some(at) = self.drop_target(view) {
+            overlay.dot(at, DROP_RADIUS, INSERT, HANDLE_OUTLINE);
+        }
         if let Some(insert) = self.hover.insert.filter(|_| !self.dragging())
             && let Some(at) = self.plane.screen(view, insert.position, insert.side)
         {

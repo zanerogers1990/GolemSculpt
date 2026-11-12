@@ -219,7 +219,7 @@ impl Running {
     /// What a decimation of the selected object reads: its mesh, without the
     /// points dynamic topology's merges leave, kept mirror-symmetric when it
     /// has a Local mirror on.
-    fn decimate_source(&self) -> Source {
+    pub(super) fn decimate_source(&self) -> Source {
         let doc = &self.doc;
         let tidy = crate::scene::tidied(&doc.mesh);
         let source = Source::of(tidy.as_ref().unwrap_or(&doc.mesh));

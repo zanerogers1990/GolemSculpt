@@ -16,7 +16,7 @@
 //! is let go.
 
 use glam::{Vec2, Vec3};
-use sculpt_toolkit::{Command, Ctx, ObjectId};
+use sculpt_toolkit::{Command, Ctx, ObjectId, PointDrop, View};
 
 use crate::make;
 use crate::picture::{self, CurveHit, Picture};
@@ -172,7 +172,10 @@ impl ArrayTool {
         match std::mem::take(&mut self.gesture) {
             Gesture::None => {}
             Gesture::Drag(drag) if drag.index == 0 => self.end_object_move(cx, drag.index),
-            Gesture::Drag(_) => self.commit_edit(),
+            Gesture::Drag(drag) => match self.point_drop.over() {
+                Some(into) => self.collapse_point(cx, drag, into),
+                None => self.commit_edit(),
+            },
             Gesture::Draw(stroke) => self.finish_stroke(cx, stroke),
         }
     }
@@ -209,6 +212,8 @@ impl ArrayTool {
         }
         let plane_point = origin + state.points[index];
         let grab = cx.view.project(plane_point).map_or(Vec2::ZERO, |screen| screen - px);
+        let points = handle_screens(&cx.view, &state, origin);
+        self.point_drop = PointDrop::begin(index, px + grab, &points, cx.view.pixels_per_point);
         self.gesture = Gesture::Drag(Drag { object, index, press: px, grab, plane_point, moved: false });
     }
 
@@ -221,7 +226,27 @@ impl ArrayTool {
         let Some((origin, _)) = self.subject(cx, drag.object) else { return };
         let mut state = self.arrays.state(drag.object);
         state.set_point_world(drag.index, world, origin);
+        // The same points a right-click could delete: a circle's two and a path's last two have to stay.
+        if !self.keep_dropped_points && state.settings.is_path() && state.points.len() > 2 {
+            let points = handle_screens(&cx.view, &state, origin);
+            self.point_drop.follow(drag.index, px + drag.grab, &points, cx.view.pixels_per_point);
+        }
         self.arrays.set(drag.object, state);
+    }
+
+    /// The dragged point was let go on another of the path: it goes, and the other stays as it was. One
+    /// undo step with the drag that got it there.
+    fn collapse_point(&mut self, cx: &mut Ctx, drag: Drag, into: usize) {
+        if let Some(open) = &mut self.history.open {
+            open.label = "Collapse Array Point";
+        }
+        let mut state = self.arrays.state(drag.object);
+        state.points.remove(drag.index);
+        self.arrays.set(drag.object, state);
+        self.commit_edit();
+        self.picked = Some(PointDrop::after_removing(drag.index, into));
+        self.hover = Hover::default();
+        self.say(cx, "Point collapsed. Ctrl+Z brings it back.", true);
     }
 
     /// The start point (`index`, 0) was let go, by hand or with the gizmo's
@@ -443,6 +468,11 @@ impl ArrayTool {
         }
         self.picked.take().is_some() || self.copy.take().is_some()
     }
+}
+
+/// Where each handle of an array is on screen.
+fn handle_screens(view: &View, state: &crate::state::ArrayState, origin: Vec3) -> Vec<Option<Vec2>> {
+    state.points.iter().take(state.handle_count()).map(|&point| view.project(origin + point)).collect()
 }
 
 /// Adds the point of the plane under pixel `px` to a stroke.

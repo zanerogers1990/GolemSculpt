@@ -23,6 +23,7 @@
 //! | --- | --- |
 //! | Drag from the model | Draw a new tube (Ctrl + drag draws one in mid-air) |
 //! | Drag a point | Move it (a point on the surface slides over the model) |
+//! | Drop a point on another of its line | Collapse it into that one |
 //! | Shift + drag an end point | Extend the tube from that end |
 //! | Click the selected tube's curve | Add a point there, and keep dragging it |
 //! | Click another tube | Select it |
@@ -52,7 +53,19 @@
 //! so a muscle can be widened toward one side without spreading into its neighbour (Shift + drag sizes
 //! both sides evenly).
 //!
-//! In either tool, Show Points: Selected Only hides every other shape's points (and they cannot be
+//! # The Strap tool
+//!
+//! The same tool again, drawing straps and belts, on its own button (E): [`strap()`]. A strap is a
+//! flat band of even width and thickness, its edges square or softened, resting on the model (Gap
+//! off it, never in it) along its whole length; see `strap` for how it is laid and why it is a
+//! swept mesh rather than a field. It lies on the surface between its points as a muscle does, and
+//! is drawn taut over hollows as Tight says. A stroke that ends where it began closes it into a
+//! loop. Its Wrap mode lays a belt all the way round the body from one line drawn across it (see
+//! `wrap`): the line stays on the belt, and dragging an end of it tilts the belt, dragging its
+//! middle slides it, until a point is edited by hand. Keep Separate makes it an object exactly as
+//! shown; Merge sinks it a little into the model and remeshes the two together.
+//!
+//! In each tool, Show Points: Selected Only hides every other shape's points (and they cannot be
 //! grabbed); their curves still show, and a click on one selects it.
 //!
 //! The two tools keep their own shapes, settings and undo steps: a tube is the Tube tool's, a muscle
@@ -72,8 +85,11 @@ pub mod merge;
 pub mod muscle;
 mod panel;
 pub mod spine;
+pub mod strap;
+mod strap_demo;
 mod tool;
 pub mod types;
+pub mod wrap;
 
 use glam::{Vec2, Vec3};
 use sculpt_toolkit::{Arrival, Button, Ctx, Draw, Event, Info, Key, Loss, ObjectId, RadialChange, Saved, Tool};
@@ -81,7 +97,7 @@ use sculpt_toolkit::{Arrival, Button, Ctx, Draw, Event, Info, Key, Loss, ObjectI
 pub use field::TubeField;
 pub use live::{Symmetry, TubeState};
 pub use tool::TubeTool;
-pub use types::{CapStyle, ControlPoint, Kind, Sample, TubePoint, TubeSettings};
+pub use types::{CapStyle, ControlPoint, Kind, Sample, Tip, TubePoint, TubeSettings};
 
 /// The tool, ready to register with the app.
 pub fn tool() -> Box<dyn Tool> {
@@ -93,8 +109,23 @@ pub fn muscle() -> Box<dyn Tool> {
     Box::new(TubeTool::muscle())
 }
 
+/// The Strap tool, ready to register with the app.
+pub fn strap() -> Box<dyn Tool> {
+    Box::new(TubeTool::strap())
+}
+
 impl Tool for TubeTool {
     fn info(&self) -> Info {
+        if self.kind() == Kind::Strap {
+            return Info {
+                id: "strap",
+                name: "Strap",
+                icon: "tool_strap",
+                tip: "Lay straps and belts on the model: flat bands of even width and thickness that rest on it. Draw one \
+                      along the body, or Wrap a belt all the way round it from one line (E).",
+                hotkey: Some(Key::E),
+            };
+        }
         if self.kind() == Kind::Muscle {
             return Info {
                 id: "muscle",
@@ -201,6 +232,9 @@ impl Tool for TubeTool {
     fn demo(&mut self, cx: &mut Ctx, what: &str) {
         if self.kind() == Kind::Muscle {
             return self.demo_muscle(cx, what);
+        }
+        if self.kind() == Kind::Strap {
+            return self.demo_strap(cx, what);
         }
         let scene = cx.scene();
         let bounds = scene.bounds(scene.active());

@@ -238,6 +238,53 @@ fn dragging_the_start_point_moves_the_object_and_its_array_as_one_scene_step() {
     assert_eq!(bench.doc.info(object).unwrap().placement.position, Vec3::ZERO);
 }
 
+/// A line with a point added in the middle of it: three points.
+fn three_points() -> (Bench, ArrayTool, ObjectId) {
+    let (mut bench, mut tool, object) = line();
+    let middle = (point(&tool, object, 0) + point(&tool, object, 1)) * 0.5;
+    bench.click(&mut tool, bench.px(middle), Button::Left);
+    assert_eq!(tool.state(object).points.len(), 3);
+    (bench, tool, object)
+}
+
+#[test]
+fn a_point_dropped_on_another_collapses_into_it_as_one_step() {
+    let (mut bench, mut tool, object) = three_points();
+    let kept = point(&tool, object, 2);
+    let from = bench.px(point(&tool, object, 1));
+    bench.drag(&mut tool, from, bench.px(kept));
+    assert_eq!(tool.state(object).points.len(), 2);
+    assert_eq!(point(&tool, object, 1), kept, "the point dropped on stays where it was");
+    assert_eq!(tool.picked(), Some(1), "and is the one picked");
+
+    assert!(bench.undo(&mut tool));
+    assert_eq!(tool.state(object).points.len(), 3, "one Ctrl+Z brings it back");
+    assert_ne!(point(&tool, object, 1), kept, "where it was before the drag");
+}
+
+#[test]
+fn a_path_keeps_its_last_two_points_and_a_circle_its_two() {
+    let (mut bench, mut tool, object) = line();
+    let (from, to) = (bench.px(point(&tool, object, 1)), bench.px(point(&tool, object, 0)));
+    bench.drag(&mut tool, from, to);
+    assert_eq!(tool.state(object).points.len(), 2);
+    let (mut bench, mut tool, object) = circle();
+    let (from, to) = (bench.px(point(&tool, object, 1)), bench.px(point(&tool, object, 0)));
+    bench.drag(&mut tool, from, to);
+    assert_eq!(tool.state(object).points.len(), 2);
+}
+
+#[test]
+fn with_the_switch_off_a_dropped_point_just_stays_there() {
+    let (mut bench, mut tool, object) = three_points();
+    tool.keep_dropped_points = true;
+    let kept = point(&tool, object, 2);
+    let from = bench.px(point(&tool, object, 1));
+    bench.drag(&mut tool, from, bench.px(kept));
+    assert_eq!(tool.state(object).points.len(), 3);
+    assert!(point(&tool, object, 1).distance(kept) < 0.02);
+}
+
 #[test]
 fn escape_during_a_drag_puts_the_point_back() {
     let (mut bench, mut tool, object) = circle();

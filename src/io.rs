@@ -64,6 +64,7 @@ mod ply_read;
 mod references;
 mod tool_data;
 mod repair;
+mod step;
 mod uvs;
 #[cfg(test)]
 mod damage_tests;
@@ -78,6 +79,7 @@ pub use groups::imported_mesh;
 pub use layers::Lost;
 pub use painted::ExportPaint;
 pub use ply::export_ply_placed;
+pub use step::{StepWritten, export_step_placed};
 pub use repair::{note_saved, notes_opened};
 
 /// A model as read from a file, already in the app's axes and units. A file

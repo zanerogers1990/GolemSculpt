@@ -26,6 +26,35 @@ pub fn world_to_view(view: &View) -> Mat4 {
     )
 }
 
+/// The camera with its perspective taken out at `depth`: a parallel view
+/// looking the same way, that shows everything at that depth exactly where
+/// the camera does.
+///
+/// For a snapped line. Seen in perspective a line on screen is a plane
+/// through the eye, so a level line drawn below the middle of the screen
+/// cuts a face that tilts up toward the camera, and only a line through the
+/// very middle cuts level. Through this view the cut goes straight back
+/// along the way the camera looks, so a level line cuts level wherever it is
+/// drawn, and still passes exactly under the line at `depth` (the object's
+/// middle). An orthographic camera is already that.
+pub fn straight_back(view: &View, depth: f32) -> View {
+    if view.is_orthographic() || depth <= 1e-6 {
+        return *view;
+    }
+    let half_height = depth * view.tan_half_fov;
+    let aspect = view.size.x / view.size.y.max(1.0);
+    // Depth is never read through this matrix (`ScreenProjection::project`
+    // takes x, y and w), but it is kept the reversed way round the app's own
+    // is, near at 1, so nothing that does read it is surprised.
+    let proj = Mat4::from_cols(
+        Vec4::new(1.0 / (half_height * aspect), 0.0, 0.0, 0.0),
+        Vec4::new(0.0, 1.0 / half_height, 0.0, 0.0),
+        Vec4::new(0.0, 0.0, 1.0 / (2.0 * depth), 0.0),
+        Vec4::new(0.0, 0.0, 1.0, 1.0),
+    );
+    View { view_proj: proj * world_to_view(view), ortho_half_height: Some(half_height), ..*view }
+}
+
 /// The camera as it sees an object placed by `model` (its own space into
 /// world space).
 pub fn cut_view(view: &View, model: Mat4) -> CutView {
@@ -135,6 +164,29 @@ mod tests {
                 assert!((depth - view.depth_of(world)).abs() < 1e-4, "{depth} is not {}", view.depth_of(world));
             }
         }
+    }
+
+    #[test]
+    fn straight_back_keeps_the_middle_depth_where_it_was_and_looks_along_the_camera() {
+        let view = views()[0];
+        let middle = Vec3::new(0.2, -0.1, 0.1);
+        let depth = view.depth_of(middle);
+        let straight = straight_back(&view, depth);
+        assert!(straight.is_orthographic());
+        // Anything at the middle's depth lands on the same pixel...
+        for offset in [Vec3::ZERO, view.right * 0.7 + view.up * 0.4, view.up * -0.9, view.right * -1.1] {
+            let p = middle + offset;
+            let (seen, through) = (view.project(p).unwrap(), straight.project(p).unwrap());
+            assert!(seen.distance(through) < 1e-2, "{offset}: {seen} is not {through}");
+        }
+        // ...and a step along the way the camera looks stays on it, where the
+        // perspective view moves it toward the middle of the screen.
+        let low = middle - view.up * 0.6;
+        let further = low + view.forward * 1.5;
+        assert!(straight.project(low).unwrap().distance(straight.project(further).unwrap()) < 1e-2);
+        assert!(view.project(low).unwrap().distance(view.project(further).unwrap()) > 20.0);
+        // An orthographic camera is left as it is.
+        assert_eq!(straight_back(&views()[1], depth).view_proj, views()[1].view_proj);
     }
 
     /// What `sculpt_cut` relies on to lay a cut face out: with the view

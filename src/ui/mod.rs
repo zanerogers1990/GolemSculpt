@@ -904,6 +904,11 @@ fn export_menu(button: &egui::Response, doc: &mut Doc, actions: &mut Vec<Action>
                 Action::ExportStl,
                 "Write the selected object as a binary STL for a slicer: placed as it is in the scene, upright (Z up), in millimetres at real size (1 unit is 10 mm). If the object has holes it says so first, and asks.",
             ),
+            (
+                "STEP Solid for CAD (mm)...",
+                Action::ExportStep,
+                "Write the selected object as a STEP file for Fusion 360, SolidWorks, Onshape, FreeCAD and other CAD programs, which open it as a solid body to cut, join and measure: placed as it is in the scene, upright (Z up), in millimetres at real size. Each triangle becomes a flat face, so a copy of the model is first decimated to STEP Faces (below); the model itself is not changed. A piece with holes arrives as a surface instead of a solid. It works in the background, with its progress and a Cancel at the bottom of the view.",
+            ),
         ];
         for (label, action, help) in formats {
             if sculpt_toolkit::translate::hover(ui.button(label), help).clicked() {
@@ -914,12 +919,27 @@ fn export_menu(button: &egui::Response, doc: &mut Doc, actions: &mut Vec<Action>
         ui.separator();
         let help = "Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.";
         sculpt_toolkit::translate::hover(ui.checkbox(&mut doc.opts.fbx_material_weights, "FBX: material weights in UVs"), help);
+        step_faces(ui, doc);
         // The list that shows the selection is on another tab, so say here what the file would hold.
         let picked = doc.scene.selected().len();
         if picked > 1 {
-            theme::hint(ui, &format!("{picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only."));
+            theme::hint(ui, &format!("{picked} objects are selected. FBX writes them all into one file; OBJ, PLY, STL and STEP write the bright one only."));
         }
     });
+}
+
+/// The Export menu's STEP Faces: how far Export STEP decimates a copy of the
+/// model, on a slider that moves by doublings, as Target Triangles does.
+fn step_faces(ui: &mut egui::Ui, doc: &mut Doc) {
+    let range = crate::app::export_step::STEP_FACES;
+    let mut log = doc.opts.step_faces.clamp(*range.start(), *range.end()).log2();
+    let slider = theme::slider(ui, "STEP Faces", &mut log, range.start().log2()..=range.end().log2(), |v| {
+        crate::printable::grouped((v.exp2() / 1000.0).round() as usize * 1000)
+    });
+    let help = "How many flat faces Export STEP gives the solid. A model with more triangles goes out as a decimated copy, its shape kept where it bends; one with fewer goes out as it is. CAD programs slow down as faces are added: Fusion 360 copes with tens of thousands, and fewer make cuts and joins quicker. 25,000 faces make a file of about 19 MB.";
+    if sculpt_toolkit::translate::hover(slider, help).changed() {
+        doc.opts.step_faces = ((log.exp2() / 1000.0).round() * 1000.0).clamp(*range.start(), *range.end());
+    }
 }
 
 /// The Scene panel's Look tab: material, lighting, backdrop and effects.

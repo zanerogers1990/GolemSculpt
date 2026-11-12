@@ -252,6 +252,79 @@ fn the_scaffold_has_its_own_undo_and_redo() {
     assert_eq!(tool.next_undo_label(), Some("Taper"));
 }
 
+/// A straight tube with a point added in the middle of it: three points.
+fn three_point_tube() -> (Bench, TubeTool) {
+    let (mut bench, mut tool, _) = bench();
+    let z = on_sphere(0.3, 0.0).z;
+    stroke(&mut bench, &mut tool, &[on_sphere(0.3, 0.0), Vec3::new(1.2, 0.0, z)]);
+    bench.click(&mut tool, bench.px(Vec3::new(0.75, 0.0, z)), Button::Left);
+    bench.frame(&mut tool);
+    assert_eq!(tool.point_count(0), 3);
+    (bench, tool)
+}
+
+#[test]
+fn a_point_dropped_on_another_collapses_into_it_as_one_undo_step() {
+    let (mut bench, mut tool) = three_point_tube();
+    let kept = tool.points(0)[2];
+    let (from, to) = (handle_px(&bench, &tool, 0, 1, 0), handle_px(&bench, &tool, 0, 2, 0));
+    bench.press(&mut tool, from, Button::Left);
+    bench.drag_to(&mut tool, to);
+    assert!(tool.drop_target().is_some(), "the point it would go into is lit");
+    bench.release(&mut tool);
+    assert_eq!(tool.point_count(0), 2);
+    assert_eq!(tool.points(0)[1], kept, "the point dropped on stays as it was");
+    assert_eq!(tool.selected_point(), Some(1));
+    assert_eq!(tool.next_undo_label(), Some("Collapse Point"));
+
+    assert!(tool.undo());
+    assert_eq!(tool.point_count(0), 3, "one Ctrl+Z brings it back");
+}
+
+#[test]
+fn a_tube_of_two_points_collapsed_is_deleted_and_comes_back_with_undo() {
+    let (mut bench, mut tool, _) = bench();
+    let z = on_sphere(0.3, 0.0).z;
+    stroke(&mut bench, &mut tool, &[on_sphere(0.3, 0.0), Vec3::new(1.2, 0.0, z)]);
+    bench.frame(&mut tool);
+    let (from, to) = (handle_px(&bench, &tool, 0, 1, 0), handle_px(&bench, &tool, 0, 0, 0));
+    bench.drag(&mut tool, from, to);
+    assert_eq!(tool.tube_count(), 0);
+    assert!(tool.undo());
+    assert_eq!(tool.point_count(0), 2);
+}
+
+#[test]
+fn a_point_dragged_past_another_or_cancelled_over_it_collapses_nothing() {
+    let (mut bench, mut tool) = three_point_tube();
+    let (from, over) = (handle_px(&bench, &tool, 0, 1, 0), handle_px(&bench, &tool, 0, 2, 0));
+    bench.press(&mut tool, from, Button::Left);
+    bench.drag_to(&mut tool, over);
+    bench.drag_to(&mut tool, over + Vec2::new(60.0, 60.0));
+    bench.release(&mut tool);
+    assert_eq!(tool.point_count(0), 3, "it went on past");
+
+    bench.frame(&mut tool);
+    let from = handle_px(&bench, &tool, 0, 1, 0);
+    bench.press(&mut tool, from, Button::Left);
+    bench.drag_to(&mut tool, over);
+    assert!(bench.key(&mut tool, Key::Escape));
+    bench.release(&mut tool);
+    assert_eq!(tool.point_count(0), 3, "Esc");
+}
+
+#[test]
+fn with_the_switch_off_a_dropped_point_just_stays_there() {
+    let (mut bench, mut tool) = three_point_tube();
+    tool.collapse_on_drop = false;
+    let (from, to) = (handle_px(&bench, &tool, 0, 1, 0), handle_px(&bench, &tool, 0, 2, 0));
+    bench.press(&mut tool, from, Button::Left);
+    bench.drag_to(&mut tool, to);
+    assert!(tool.drop_target().is_none(), "nothing is lit");
+    bench.release(&mut tool);
+    assert_eq!(tool.point_count(0), 3);
+}
+
 #[test]
 fn points_are_added_made_sharp_extended_and_deleted() {
     let (mut bench, mut tool, _) = bench();

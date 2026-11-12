@@ -6,12 +6,12 @@
 
 use egui::Color32;
 use glam::Vec2;
-use sculpt_toolkit::{Ctx, Draw, Shape, Style, View};
+use sculpt_toolkit::{Ctx, DROP_RADIUS, Draw, Shape, Style, View};
 
 use crate::finish::Finishing;
 use crate::input::{Drag, Pointer};
 use crate::live::{Frame, LiveTube, Symmetry, TubeState};
-use crate::types::{CapStyle, Kind, TubeSettings};
+use crate::types::{CapStyle, Kind, Tip, TubeSettings};
 
 const MAX_UNDO_STEPS: usize = 128;
 /// Streamed edits (a slider, the wheel) closer together than this are one
@@ -75,6 +75,11 @@ pub struct TubeTool {
     /// Only the selected shape's points are shown, and only they can be grabbed: on a body covered in
     /// muscles the others' points are in the way.
     pub(crate) only_selected_points: bool,
+    /// A point let go on top of another of its line collapses into it.
+    pub(crate) collapse_on_drop: bool,
+    /// The Strap tool lays a belt round the body from a line drawn across it, rather than along a
+    /// stroke.
+    pub(crate) wrap_mode: bool,
     /// The last message, for the panel.
     pub(crate) status: String,
     /// A message not yet passed to the app's status line.
@@ -102,6 +107,8 @@ impl Default for TubeTool {
             finish: Finishing::default(),
             bare: false,
             only_selected_points: false,
+            collapse_on_drop: true,
+            wrap_mode: false,
             status: String::new(),
             outgoing: None,
             scene_stepped: false,
@@ -137,6 +144,11 @@ impl TubeTool {
     /// the Tube tool's.
     pub fn muscle() -> TubeTool {
         TubeTool { defaults: TubeSettings::default().muscle(), ..TubeTool::default() }
+    }
+
+    /// The Strap tool: the same tool, drawing straps and belts. Its shapes are its own.
+    pub fn strap() -> TubeTool {
+        TubeTool { defaults: TubeSettings::default().strap(), ..TubeTool::default() }
     }
 
     /// What this tool draws.
@@ -305,6 +317,63 @@ impl TubeTool {
         }
     }
 
+    /// A strap's thickness, in world units (of its anchor's frame).
+    pub fn set_thickness(&mut self, value: f32) {
+        let v = value.clamp(1e-6, TubeSettings::MAX_RADIUS);
+        if !approximately(v, self.settings().thickness) {
+            self.edit_settings("Thickness", |s| s.thickness = v);
+        }
+    }
+
+    /// How round a strap's edges are, 0 to 1.
+    pub fn set_edge(&mut self, value: f32) {
+        let v = value.clamp(0.0, 1.0);
+        if !approximately(v, self.settings().edge) {
+            self.edit_settings("Edges", |s| s.edge = v);
+        }
+    }
+
+    /// How far a strap stands off the model, as a share of its thickness.
+    pub fn set_gap(&mut self, value: f32) {
+        let v = value.clamp(0.0, TubeSettings::MAX_GAP);
+        if !approximately(v, self.settings().gap) {
+            self.edit_settings("Gap", |s| s.gap = v);
+        }
+    }
+
+    /// How taut a strap is drawn over hollows, 0 to 1.
+    pub fn set_tight(&mut self, value: f32) {
+        let v = value.clamp(0.0, 1.0);
+        if !approximately(v, self.settings().tight) {
+            self.edit_settings("Tight", |s| s.tight = v);
+        }
+    }
+
+    pub fn set_tip(&mut self, value: Tip) {
+        if value != self.settings().tip {
+            self.edit_settings("Ends", |s| s.tip = value);
+            self.commit_edit();
+        }
+    }
+
+    /// Whether the selected strap goes round and joins itself.
+    pub fn set_closed(&mut self, value: bool) {
+        if value != self.settings().closed {
+            self.edit_settings(if value { "Close Strap" } else { "Open Strap" }, |s| s.closed = value);
+            self.commit_edit();
+        }
+    }
+
+    /// Whether a drag on the model lays a belt round it (Wrap) rather than a strap along the stroke.
+    pub fn wrap_mode(&self) -> bool {
+        self.wrap_mode
+    }
+
+    pub fn set_wrap_mode(&mut self, value: bool) {
+        self.wrap_mode = value;
+        self.say(self.invitation());
+    }
+
     /// Fillet size where a merged tube meets the model, as a multiple of the
     /// tube's radius.
     pub fn set_blend(&mut self, value: f32) {
@@ -387,6 +456,9 @@ impl TubeTool {
     /// What to do first, for the status line and the panel.
     pub(crate) fn invitation(&self) -> &'static str {
         match (self.kind(), self.on_surface()) {
+            (Kind::Strap, _) if self.wrap_mode => "Drag a line across the model where the belt goes: it is laid all the way round.",
+            (Kind::Strap, true) => "Drag across the model to lay a strap on it. End where you began to close it into a loop.",
+            (Kind::Strap, false) => "Drag from the model to draw a strap floating in front of it.",
             (Kind::Muscle, true) => "Drag across the model to lay a muscle on it.",
             (Kind::Muscle, false) => "Drag from the model to draw a muscle floating in front of it.",
             (Kind::Tube, true) => "Drag across the model to lay a tube on its surface.",
@@ -396,7 +468,11 @@ impl TubeTool {
 
     /// The name of an undo step that is about a whole shape.
     pub(crate) fn label(&self, tube: &'static str, muscle: &'static str) -> &'static str {
-        if self.kind() == Kind::Muscle { muscle } else { tube }
+        match self.kind() {
+            Kind::Muscle => muscle,
+            Kind::Strap => strap_label(tube),
+            Kind::Tube => tube,
+        }
     }
 
     /// A starting radius in proportion to what is in the scene, so the first
@@ -408,10 +484,23 @@ impl TubeTool {
         }
         self.defaults_sized = true;
         let half = bounds.size() * 0.5;
-        // A muscle is one of many on a body, where a tube is a limb of it.
-        let share = if self.kind() == Kind::Muscle { 0.09 } else { 0.12 };
+        // A muscle is one of many on a body, where a tube is a limb of it, and a strap is narrower
+        // still: a belt on a figure is a few hundredths of its height.
+        let share = match self.kind() {
+            Kind::Muscle => 0.09,
+            Kind::Strap => 0.035,
+            Kind::Tube => 0.12,
+        };
         let radius = (half.x + half.y + half.z) / 3.0 * share;
         self.defaults.radius = radius.clamp(TubeSettings::MIN_RADIUS, TubeSettings::MAX_RADIUS);
+        if self.kind() == Kind::Strap {
+            self.defaults.thickness = self.defaults.radius * 0.3;
+        }
+    }
+
+    /// The defaults have been sized by hand (the demo): entering the tool is not to size them again.
+    pub(crate) fn mark_defaults_sized(&mut self) {
+        self.defaults_sized = true;
     }
 
     pub(crate) fn new_tube(&mut self, anchor: Option<sculpt_toolkit::ObjectId>) -> LiveTube {
@@ -515,6 +604,7 @@ impl TubeTool {
             return;
         }
         self.begin_edit("Delete Point", 0.0);
+        self.hand_edited(tube);
         self.tubes[tube].state.points.remove(point);
         if self.tubes[tube].state.points.len() < 2 {
             self.remove_tube_at(tube);
@@ -538,6 +628,14 @@ impl TubeTool {
         self.touch();
         self.commit_edit();
         self.say(format!("{} deleted.", self.kind().title()));
+    }
+
+    /// A strap's points were edited by hand: it is no longer as Wrap laid it, and the line it was
+    /// drawn with goes.
+    pub(crate) fn hand_edited(&mut self, tube: usize) {
+        if let Some(live) = self.tubes.get_mut(tube) {
+            live.state.wrap = None;
+        }
     }
 
     pub(crate) fn remove_tube_at(&mut self, index: usize) {
@@ -616,6 +714,13 @@ impl TubeTool {
             version: self.edit_version,
             commit_at: (coalesce > 0.0).then_some(self.now + coalesce),
         });
+    }
+
+    /// What the open undo step is called, once a gesture has turned out to be something else.
+    pub(crate) fn relabel_edit(&mut self, label: &'static str) {
+        if let Some(open) = &mut self.pending {
+            open.before.label = label;
+        }
     }
 
     pub(crate) fn commit_edit(&mut self) {
@@ -709,6 +814,10 @@ impl TubeTool {
         for (index, tube) in self.tubes.iter().enumerate() {
             self.draw_tube(view, draw, index, tube);
         }
+        // Let go now, the dragged point collapses into this one.
+        if let Some(px) = self.drop_target().and_then(|world| view.project(world)) {
+            draw.overlay.dot(px, DROP_RADIUS, INSERT, HANDLE_OUTLINE);
+        }
         let stroke = &self.pointer.stroke;
         if matches!(self.pointer.drag, Drag::Draw) && stroke.world.len() > 1 {
             draw.overlay.polyline_3d(view, &stroke.world, 1.5, STROKE);
@@ -728,6 +837,7 @@ impl TubeTool {
             draw.overlay.line(ring.centre, ring.at, 1.0, SIZE_RING);
             draw.overlay.square(ring.at, if lit { 5.5 } else { 4.5 }, if lit { HANDLE } else { SELECTED }, HANDLE_OUTLINE);
         }
+        self.draw_wrap(view, draw);
         self.draw_cursor(cx, draw);
     }
 
@@ -799,12 +909,29 @@ impl TubeTool {
     fn draw_cursor(&self, cx: &Ctx, draw: &mut Draw) {
         let pointer = &self.pointer;
         let busy = !matches!(pointer.drag, Drag::None) || pointer.hover_handle.is_some() || pointer.hover_curve.is_some();
-        if busy || pointer.hover_ring.is_some() || self.finish.is_busy() {
+        let wrapping = self.kind() == Kind::Strap && self.wrap_mode;
+        if busy || wrapping || pointer.hover_ring.is_some() || self.finish.is_busy() {
             return;
         }
         let Some((px, depth_point)) = pointer.cursor else { return };
         let radius = pixels_for(&cx.view, depth_point, self.defaults.radius);
         let dash = (!self.on_surface()).then_some((4.0, 3.0));
         circle(draw, px, radius, 1.2, CURSOR, dash);
+    }
+}
+
+/// A strap's name for an undo step or a line of the panel that names a tube.
+fn strap_label(tube: &'static str) -> &'static str {
+    match tube {
+        "Merge Tubes" => "Merge Straps",
+        "Keep Tubes" => "Keep Straps",
+        "Extend Tube" => "Extend Strap",
+        "Draw Tube" => "Draw Strap",
+        "Delete Tube" => "Delete Strap",
+        "Shows the points of every live tube." => "Shows the points of every live strap.",
+        "Shows only the selected tube's points, so the others are out of the way and cannot be grabbed by          mistake. Click a tube to select it and bring up its points." => {
+            "Shows only the selected strap's points, so the others are out of the way and cannot be grabbed by              mistake. Click a strap to select it and bring up its points."
+        }
+        other => other,
     }
 }

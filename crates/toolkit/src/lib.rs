@@ -16,6 +16,7 @@ pub mod floating;
 mod fonts;
 pub mod jobs;
 pub mod palette;
+pub mod point_drop;
 pub mod saved;
 pub mod scene;
 pub mod testing;
@@ -28,6 +29,7 @@ pub mod view;
 pub use ctx::{Ctx, Env, Outbox, RadialChange};
 pub use draw::{Draw, Label, Look, Overlay, Preview, PreviewData, PreviewDraw, Run, Shape, Style};
 pub use jobs::{Baker, Job, JobCtx, Jobs};
+pub use point_drop::{DROP_RADIUS, PointDrop};
 pub use saved::{Arrival, Saved};
 pub use scene::{
     Baked, Command, Document, Hit, MeshData, MeshId, MeshView, NewObject, ObjectId, ObjectInfo, Placement, Receipt,

@@ -501,8 +501,8 @@ fn a_split_over_a_copy_cuts_the_object_there_and_the_piece_is_a_plain_object_whe
         let c = scenes.centre(flip);
         let (from, to) = line_over(c, axes);
         let steps = scenes.live.doc.undo_steps();
-        scenes.drag_live(Region::split(), from, to);
-        scenes.drag_twin(flip, Region::split(), from, to);
+        scenes.drag_live(split_tool(), from, to);
+        scenes.drag_twin(flip, split_tool(), from, to);
 
         let objects = scenes.live.doc.objects();
         assert_eq!(objects.len(), 2, "axes {axes}: {:?}", scenes.live.status);
@@ -541,8 +541,8 @@ fn a_lasso_split_over_a_copy_matches_the_baked_copys() {
     let mut scenes = Scenes::new(2);
     let c = scenes.centre(2);
     let bite = circle(c + Vec2::new(20.0, -8.0), 22.0, 40);
-    scenes.stroke_live(lasso_tool(Region::split()), &bite);
-    scenes.stroke_twin(2, lasso_tool(Region::split()), &bite);
+    scenes.stroke_live(lasso_tool(split_tool()), &bite);
+    scenes.stroke_twin(2, lasso_tool(split_tool()), &bite);
     assert_eq!(scenes.live.doc.objects().len(), 2, "{:?}", scenes.live.status);
     let part = scenes.live.doc.objects()[1];
     let twin = scenes.twin_of(2);
@@ -558,7 +558,7 @@ fn the_mirror_demos_draw_a_shape_over_the_copy_and_the_one_mesh_shows_it() {
         (Region::mask(), "mask"),
         (Region::hide(), "hide"),
         (Region::trim(), "trim"),
-        (Region::split(), "split"),
+        (split_tool(), "split"),
     ] {
         let (mut bench, _, ball) = super::bench(Region::mask());
         let whole = volume_of(&bench, ball);

@@ -75,6 +75,7 @@ impl Running {
         self.spheres_released();
         self.transform_released();
         self.tools_focus_lost();
+        self.input.mask_box = None;
         let stroke = self.input.drag == Drag::Sculpt;
         let keys = let_go(&mut self.input, &mut self.doc, &self.local);
         if stroke {

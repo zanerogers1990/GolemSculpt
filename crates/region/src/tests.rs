@@ -14,6 +14,7 @@ use crate::{Action, Extract, Region, Shape, hide};
 
 mod copies;
 mod mirror;
+mod quick;
 
 const CENTRE: Vec2 = Vec2::new(400.0, 300.0);
 
@@ -25,9 +26,19 @@ fn bench<T: Tool>(mut tool: T) -> (Bench, T, ObjectId) {
     (bench, tool, ball)
 }
 
+/// A trim tool with the shape, its Snap tick off so a line goes exactly
+/// where the test drags it.
 fn trim_tool(shape: Shape) -> Region {
     let mut tool = Region::trim();
     tool.shape = shape;
+    tool.snap = false;
+    tool
+}
+
+/// A split tool with its Snap tick off, as `trim_tool`.
+fn split_tool() -> Region {
+    let mut tool = Region::split();
+    tool.snap = false;
     tool
 }
 
@@ -456,6 +467,54 @@ fn a_snapping_line_cuts_exactly_through_the_middle_and_shift_frees_it() {
 }
 
 #[test]
+fn a_new_trim_snaps_its_line_and_a_level_line_cuts_level_anywhere_on_the_screen() {
+    let tool = Region::trim();
+    assert!(tool.snap && Region::split().snap, "Snap starts ticked");
+    let (mut bench, mut tool, ball) = bench(tool);
+    tool.shape = Shape::Line;
+    assert!(!bench.env.view.is_orthographic(), "the point is the perspective camera");
+    // Half way down the ball, 5 pixels off level, drawn left to right: it
+    // covers the top, which goes. It turns level about where it began.
+    let y = bench.px(Vec3::new(0.0, -0.5, 0.0)).y;
+    bench.drag(&mut tool, Vec2::new(60.0, y), Vec2::new(740.0, y + 5.0));
+    assert_closed(&bench, ball);
+    // Seen in perspective that line is a plane through the eye, and its cut
+    // would sit lower at the back of the ball than at the front. Snapped, it
+    // goes straight back: the cut face is level, at the height drawn.
+    let points = positions(&bench, ball);
+    let top = |keep: &dyn Fn(Vec3) -> bool| points.iter().filter(|&&p| keep(p)).map(|p| p.y).fold(f32::MIN, f32::max);
+    let (front, back) = (top(&|p| p.z > 0.4), top(&|p| p.z < -0.4));
+    assert!((front + 0.5).abs() < 2e-3 && (back + 0.5).abs() < 2e-3, "front {front}, back {back}");
+
+    // Shift draws it free, and then the perspective plane is back.
+    assert!(bench.undo(&mut tool));
+    bench.env.mods.shift = true;
+    bench.drag(&mut tool, Vec2::new(60.0, y), Vec2::new(740.0, y));
+    let points = positions(&bench, ball);
+    let top = |keep: &dyn Fn(Vec3) -> bool| points.iter().filter(|&&p| keep(p)).map(|p| p.y).fold(f32::MIN, f32::max);
+    let (front, back) = (top(&|p| p.z > 0.4), top(&|p| p.z < -0.4));
+    assert!(front - back > 0.05, "a free line still cuts what the camera sees: front {front}, back {back}");
+}
+
+#[test]
+fn space_held_while_dragging_moves_the_line_instead_of_growing_it() {
+    let (mut bench, mut tool, ball) = bench(trim_tool(Shape::Line));
+    // A line drawn top to bottom well left of the ball, then slid right onto
+    // its middle with Space held: it cuts as if it had been drawn there.
+    let (from, to) = (Vec2::new(CENTRE.x - 300.0, 30.0), Vec2::new(CENTRE.x - 300.0, 570.0));
+    bench.press(&mut tool, from, Button::Left);
+    bench.drag_to(&mut tool, to);
+    assert!(bench.send(&mut tool, Event::KeyDown(Key::Space)), "Space mid-drag is the tool's");
+    bench.drag_to(&mut tool, to + Vec2::new(150.0, 0.0));
+    bench.drag_to(&mut tool, to + Vec2::new(300.0, 0.0));
+    bench.send(&mut tool, Event::KeyUp(Key::Space));
+    bench.release(&mut tool);
+    assert_closed(&bench, ball);
+    assert!(positions(&bench, ball).iter().all(|p| p.x <= 1e-4), "the right-hand half is gone");
+    assert!(!tool.sliding);
+}
+
+#[test]
 fn a_mirrored_trim_cuts_both_sides() {
     let (mut bench, mut tool, ball) = bench(trim_tool(Shape::Box));
     let whole = volume_of(&bench, ball);
@@ -613,7 +672,7 @@ fn a_cut_that_comes_back_to_a_changed_object_is_dropped() {
 
 #[test]
 fn a_lasso_split_gives_two_closed_objects_whose_volumes_add_up() {
-    let (mut bench, mut tool, ball) = bench(Region::split());
+    let (mut bench, mut tool, ball) = bench(split_tool());
     bench.call(|cx| tool.set_shape(cx, Shape::Lasso));
     let (whole, before) = (volume_of(&bench, ball), bench.doc.info(ball).unwrap().mesh);
     // A bite out of the right-hand edge.
@@ -642,7 +701,7 @@ fn a_lasso_split_gives_two_closed_objects_whose_volumes_add_up() {
 
 #[test]
 fn a_lasso_inside_the_outline_splits_a_plug_out_of_the_middle() {
-    let (mut bench, mut tool, ball) = bench(Region::split());
+    let (mut bench, mut tool, ball) = bench(split_tool());
     bench.call(|cx| tool.set_shape(cx, Shape::Lasso));
     let whole = volume_of(&bench, ball);
     stroke(&mut bench, &mut tool, &circle(CENTRE + Vec2::new(7.0, -5.0), 45.0, 40));
@@ -655,7 +714,7 @@ fn a_lasso_inside_the_outline_splits_a_plug_out_of_the_middle() {
 
 #[test]
 fn a_line_split_puts_the_piece_where_the_object_is() {
-    let (mut bench, mut tool, ball) = bench(Region::split());
+    let (mut bench, mut tool, ball) = bench(split_tool());
     assert_eq!(tool.shape(), Shape::Line, "a flat cut is what a split is for");
     let placement = Placement { position: Vec3::new(0.3, 0.2, -0.5), rotation: Quat::from_rotation_z(0.6), scale: Vec3::splat(0.8) };
     bench.call(|cx| cx.commit("Place", vec![Command::Place { object: ball, placement }]));
@@ -678,7 +737,7 @@ fn a_line_split_puts_the_piece_where_the_object_is() {
 /// object has its own; a new one otherwise starts with none.)
 #[test]
 fn a_split_part_starts_with_the_objects_own_symmetry() {
-    let (mut bench, mut tool, ball) = bench(Region::split());
+    let (mut bench, mut tool, ball) = bench(split_tool());
     // Mirror Z: a line cut seen from the front repeats onto itself.
     bench.env.mirror = [false, false, true];
     let own = bench.env.symmetry_settings();
@@ -697,7 +756,7 @@ fn a_split_part_starts_with_the_objects_own_symmetry() {
 
 #[test]
 fn a_split_that_misses_adds_nothing() {
-    let (mut bench, mut tool, _) = bench(Region::split());
+    let (mut bench, mut tool, _) = bench(split_tool());
     bench.drag(&mut tool, Vec2::new(20.0, 30.0), Vec2::new(20.0, 570.0));
     let (text, ok) = status(&bench);
     assert!(!ok && text.starts_with("Nothing split - "), "{text}");
@@ -746,7 +805,7 @@ fn esc_abandons_a_drag_and_is_otherwise_left_to_the_app() {
 
 #[test]
 fn the_tools_key_steps_through_its_shapes_and_then_lets_go() {
-    let (mut bench, mut tool, _) = bench(Region::split());
+    let (mut bench, mut tool, _) = bench(split_tool());
     assert!(bench.key(&mut tool, Key::K));
     assert_eq!(tool.shape(), Shape::Lasso);
     assert!(bench.key(&mut tool, Key::K));
@@ -1035,7 +1094,7 @@ fn the_demos_reach_their_states_through_the_gestures() {
     assert!(tool.is_dragging() && tool.shape() == Shape::Line);
 
     // A split with the piece moved aside.
-    let (mut bench, mut tool, ball) = self::bench(Region::split());
+    let (mut bench, mut tool, ball) = self::bench(split_tool());
     bench.call(|cx| tool.demo(cx, ""));
     let objects = bench.doc.objects();
     assert_eq!(objects.len(), 2);

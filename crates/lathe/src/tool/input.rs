@@ -6,7 +6,7 @@
 //! drive exactly the code the pointer does.
 
 use glam::Vec2;
-use sculpt_toolkit::{Ctx, View};
+use sculpt_toolkit::{Ctx, PointDrop, View};
 
 use super::{
     AXIS_PICK, AXIS_SNAP, CURVE_PICK, DOUBLE_CLICK_SECONDS, DRAG_THRESHOLD, Drag, HANDLE_PICK, Hover, Insert, Lathe,
@@ -223,7 +223,10 @@ impl Lathe {
                     self.extend_profile(cx, press);
                 }
             }
-            Drag::Point { .. } => self.commit_edit(),
+            Drag::Point { index, .. } => match self.point_drop.over() {
+                Some(into) => self.collapse_point(cx, index, into),
+                None => self.commit_edit(),
+            },
         }
     }
 
@@ -261,6 +264,18 @@ impl Lathe {
 
     // ------------------------------------------------------------------------ point drags
 
+    /// Where each control point is drawn on `side` of the axis.
+    fn handle_screens(&self, view: &View, side: f32) -> Vec<Option<Vec2>> {
+        self.profile.points().iter().map(|point| self.plane.screen(view, point.position, side)).collect()
+    }
+
+    /// The handle a dragged one would collapse into if it were let go now, and where it is drawn.
+    pub(super) fn drop_target(&self, view: &View) -> Option<Vec2> {
+        let Drag::Point { side, .. } = self.drag else { return None };
+        let into = self.point_drop.over()?;
+        self.handle_screens(view, side).get(into).copied().flatten()
+    }
+
     pub(super) fn begin_point_drag(
         &mut self,
         now: f64,
@@ -278,6 +293,9 @@ impl Lathe {
             Some(signed) => start - Vec2::new(signed.x * side, signed.y),
             None => Vec2::ZERO,
         };
+        let points = self.handle_screens(view, side);
+        let at = points[index].unwrap_or(press);
+        self.point_drop = PointDrop::begin(index, at, &points, view.pixels_per_point);
         self.drag = Drag::Point { index, side, press, start, grab, moved: false };
     }
 
@@ -308,6 +326,10 @@ impl Lathe {
             target = self.snap_to_axis(view, target);
         }
         self.profile.set(index, target);
+        let points = self.handle_screens(view, side);
+        if let Some(at) = points[index].filter(|_| self.collapse_on_drop) {
+            self.point_drop.follow(index, at, &points, view.pixels_per_point);
+        }
     }
 
     // ------------------------------------------------------------------------- axis drags

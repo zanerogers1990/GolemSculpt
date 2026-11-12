@@ -9,7 +9,7 @@ use sculpt_toolkit::{Hit, MeshId, ObjectId, Placement, Preview, PreviewData, Ray
 use crate::field::TubeField;
 use crate::merge::{CELLS_ACROSS_RADIUS, RESOLVED_TIP_FRACTION};
 use crate::types::{ControlPoint, Kind, Sample, TubePoint, TubeSettings};
-use crate::{muscle, spine};
+use crate::{muscle, spine, strap, wrap};
 
 /// The preview lattice: this many cells per tube radius.
 const PREVIEW_CELLS_ACROSS_RADIUS: f32 = 5.0;
@@ -34,6 +34,8 @@ pub struct TubeState {
     pub anchor: Option<ObjectId>,
     pub points: Vec<TubePoint>,
     pub settings: TubeSettings,
+    /// A strap laid by Wrap, while it is as the wrap laid it: the line it was drawn with.
+    pub wrap: Option<wrap::Line>,
 }
 
 /// Where a tube's anchor stands, and the spaces that gives.
@@ -167,6 +169,11 @@ pub struct TubeCopy {
     /// for drawing and picking.
     pub handle_world: Vec<Vec3>,
     pub curve_world: Vec<Vec3>,
+    /// A strap's copy as laid on the model, in the tube's frame.
+    pub laid: Option<strap::Laid>,
+    /// A strap's copy that is the strap itself again, or an earlier copy: a belt round a mirrored
+    /// body is its own mirror image. It is drawn as a line but makes no surface.
+    pub duplicate: bool,
 }
 
 impl TubeCopy {
@@ -226,7 +233,7 @@ pub struct LiveTube {
 
 impl LiveTube {
     pub fn new(id: u64, anchor: Option<ObjectId>, settings: TubeSettings) -> LiveTube {
-        LiveTube::from_state(TubeState { id, anchor, points: Vec::new(), settings })
+        LiveTube::from_state(TubeState { id, anchor, points: Vec::new(), settings, wrap: None })
     }
 
     pub fn from_state(state: TubeState) -> LiveTube {
@@ -251,7 +258,7 @@ impl LiveTube {
     /// follows its points, its anchor's placement and a new mesh in its anchor's place; after the
     /// anchor has been reshaped it has to be asked ([`Self::lay_again`]).
     pub fn build(&mut self, frame: Frame, symmetry: Symmetry, cast: Option<Cast>, ground: Option<Ground>) {
-        let ground = ground.filter(|_| self.state.settings.kind == Kind::Muscle);
+        let ground = ground.filter(|_| self.state.settings.kind.lies_on_surface());
         if self.built.as_ref().is_some_and(|b| b.matches(&self.state, frame, symmetry, ground)) {
             return;
         }
@@ -265,22 +272,39 @@ impl LiveTube {
             let hit = cast.and_then(|cast| cast(&ray)).filter(|hit| hit.distance <= 2.0 * reach)?;
             Some((world_to_frame.transform_point3(hit.position), world_to_frame.transform_vector3(hit.normal)))
         };
-        let muscle = self.state.settings.kind == Kind::Muscle;
+        let kind = self.state.settings.kind;
         self.copies = group
             .iter()
             .map(|op| {
                 let (points, settings) = (&self.state.points, &self.state.settings);
-                let (controls, samples) = if muscle {
-                    let surface: Option<muscle::Ground> = if cast.is_some() { Some(&surface) } else { None };
-                    muscle::sample(points, settings, &local_to_frame, op, surface)
-                } else {
-                    spine::sample(points, settings, &local_to_frame, op)
+                let surface: Option<muscle::Ground> = if cast.is_some() { Some(&surface) } else { None };
+                let (controls, samples, laid) = match kind {
+                    Kind::Muscle => {
+                        let (controls, samples) = muscle::sample(points, settings, &local_to_frame, op, surface);
+                        (controls, samples, None)
+                    }
+                    Kind::Strap => {
+                        let (controls, samples, laid) = strap::sample(points, settings, &local_to_frame, op, surface);
+                        (controls, samples, Some(laid))
+                    }
+                    Kind::Tube => {
+                        let (controls, samples) = spine::sample(points, settings, &local_to_frame, op);
+                        (controls, samples, None)
+                    }
                 };
                 let handle_world = controls.iter().map(|c| frame_to_world.transform_point3(c.position)).collect();
                 let curve_world = samples.iter().map(|s| frame_to_world.transform_point3(s.center)).collect();
-                TubeCopy { op: *op, controls, samples, handle_world, curve_world }
+                TubeCopy { op: *op, controls, samples, handle_world, curve_world, laid, duplicate: false }
             })
             .collect();
+        if kind == Kind::Strap {
+            let radius = self.state.settings.radius;
+            for k in 1..self.copies.len() {
+                let (before, rest) = self.copies.split_at_mut(k);
+                let copy = &mut rest[0];
+                copy.duplicate = before.iter().any(|earlier| strap::same_strap(&copy.samples, &earlier.samples, radius));
+            }
+        }
         self.built = Some(Built {
             points: self.state.points.clone(),
             shape: shape_of(&self.state.settings),
@@ -296,7 +320,7 @@ impl LiveTube {
     /// The surface under the muscle may have changed shape: lay it on it afresh at the next build.
     /// Nothing to a tube, which only touches the surface at its points.
     pub fn lay_again(&mut self) {
-        if self.state.settings.kind == Kind::Muscle && self.state.anchor.is_some() {
+        if self.state.settings.kind.lies_on_surface() && self.state.anchor.is_some() {
             self.built = None;
         }
     }
@@ -308,10 +332,26 @@ impl LiveTube {
         field
     }
 
+    /// A strap has no field: it is a mesh (see [`Self::strap_mesh`]).
     pub fn add_to(&self, field: &mut TubeField) {
+        if self.state.settings.kind == Kind::Strap {
+            return;
+        }
         for copy in self.copies.iter().filter(|c| c.is_valid()) {
             field.add_tube(&copy.samples, self.state.settings.caps);
         }
+    }
+
+    /// A strap's surface, every copy that is not the strap again, in the tube's frame. `gap`
+    /// overrides how far it stands off the model (see `strap::Laid::mesh`).
+    pub fn strap_mesh(&self, gap: Option<f32>) -> sculpt_geom::TriMesh {
+        let mut mesh = sculpt_geom::TriMesh::default();
+        for copy in self.copies.iter().filter(|c| c.is_valid() && !c.duplicate) {
+            if let Some(laid) = copy.laid.as_ref().filter(|l| !l.is_empty()) {
+                mesh.append(&laid.mesh(gap));
+            }
+        }
+        mesh
     }
 
     /// Rebuilds the preview if the copies changed since it was made.
@@ -328,6 +368,18 @@ impl LiveTube {
             return;
         }
         self.preview_current = true;
+        if self.state.settings.kind == Kind::Strap {
+            let mesh = self.strap_mesh(None);
+            if mesh.indices.is_empty() {
+                self.preview.clear();
+                return;
+            }
+            let frame_to_world = self.frame.frame_to_world();
+            let positions: Vec<Vec3> = mesh.positions.iter().map(|p| frame_to_world.transform_point3(*p)).collect();
+            let normals = vertex_normals(&positions, &mesh.indices);
+            self.preview.set_parts(PreviewData { positions, normals, indices: mesh.indices });
+            return;
+        }
         let field = self.field();
         if field.is_empty() {
             self.preview.clear();
@@ -357,4 +409,17 @@ impl LiveTube {
         }
         self.preview.set_parts(PreviewData { positions: surface.positions, normals: surface.normals, indices: surface.indices });
     }
+}
+
+/// Area-weighted vertex normals.
+pub(crate) fn vertex_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
+    let mut normals = vec![Vec3::ZERO; positions.len()];
+    for tri in indices.chunks_exact(3) {
+        let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+        let n = (positions[b] - positions[a]).cross(positions[c] - positions[a]);
+        normals[a] += n;
+        normals[b] += n;
+        normals[c] += n;
+    }
+    normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect()
 }

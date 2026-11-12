@@ -18,6 +18,7 @@
 //! | Input | Action |
 //! | --- | --- |
 //! | Drag a handle | Move that point (Shift: only along the dominant direction) |
+//! | Drop a handle on another | Collapse it into that one |
 //! | Drag the curve | Insert a point there, and keep dragging it |
 //! | Click empty space | Extend the profile from its nearer end |
 //! | Ctrl + drag | Sketch a whole new profile in one stroke |
@@ -44,7 +45,7 @@ use glam::{Vec2, Vec3};
 use sculpt_geom::Aabb;
 use sculpt_toolkit::{
     Button, Color32, Command, Ctx, Draw, Event, Info, Job, Key, Loss, MeshData, NewObject, ObjectId, Placement,
-    Preview, PreviewData, RadialChange, Style, Tool, View,
+    PointDrop, Preview, PreviewData, RadialChange, Style, Tool, View,
 };
 
 use crate::history::{COALESCE_SECONDS, History};
@@ -159,6 +160,10 @@ pub struct Lathe {
     /// How big the scene's main object is, which presets and the axis are sized from.
     reference: f32,
     drag: Drag,
+    /// The point a dragged handle is on top of: let go there, it collapses into it.
+    point_drop: PointDrop,
+    /// A handle let go on top of another collapses into it.
+    collapse_on_drop: bool,
     hover: Hover,
     /// The handle last pressed and when, for the double click.
     last_click: Option<(usize, f64)>,
@@ -250,6 +255,8 @@ impl Lathe {
             reseat: false,
             reference: 1.0,
             drag: Drag::None,
+            point_drop: PointDrop::default(),
+            collapse_on_drop: true,
             hover: Hover::default(),
             last_click: None,
             builder: LatheBuilder::new(),
@@ -490,6 +497,19 @@ impl Lathe {
         }
         self.selected = None;
         self.commit_edit();
+    }
+
+    /// The dragged handle was let go on another: its point goes, and the other stays as it was. One undo
+    /// step with the drag that got it there.
+    fn collapse_point(&mut self, cx: &mut Ctx, index: usize, into: usize) {
+        self.history.relabel("Collapse Point");
+        self.profile.remove(index);
+        if self.profile.closed_loop() && self.profile.len() < 3 {
+            self.profile.set_closed_loop(false);
+        }
+        self.selected = Some(PointDrop::after_removing(index, into));
+        self.commit_edit();
+        cx.status("Point collapsed. Ctrl+Z brings it back.", true);
     }
 
     fn delete_selected(&mut self, cx: &mut Ctx) {

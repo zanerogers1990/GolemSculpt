@@ -2062,12 +2062,21 @@ under **From the Surface**:
 | --- | --- |
 | Drag, anywhere on the viewport | Draw the shape; it acts when you let go |
 | Ctrl + drag, or right drag | The reverse: unmask; show what was hidden; trim keeps what the shape covers |
-| Shift | Box, lasso: everything outside the shape. Line: turn it in steps of 15 degrees |
+| Shift | Box, lasso: everything outside the shape. Line: draw it free, without snapping (or, with Snap unticked, snap it) |
 | Click | Mask: clear the mask. Hide: show everything |
 | N / K | The next shape, then put the tool away |
 | Space (hold) | Shape wheel (Mask adds Clear and Invert, Hide adds Show All and Invert) |
+| Space (hold, while dragging) | Move the shape instead of growing it; let go of Space to carry on drawing |
 | Esc | Cancel the drag, else put the tool away |
 | 1 to 9 | Back to sculpting |
+
+A Trim or Split line snaps to begin with (the Snap tick on the panel), for a
+straight edge: it goes level, upright or 45 degrees when it is within 10 of
+one, else in steps of 15, and where it passes close to the middle of the
+object or its origin it goes exactly through it. Its cut goes straight back
+along the way you are looking instead of fanning out from the camera, so a
+level line cuts level wherever on the screen you draw it, not only through
+the middle. Hold Shift, or untick Snap, to draw a line free.
 
 While Mask, Hide, Trim or Split is up, a drag on the background draws a shape
 instead of orbiting, because a box or a cut line has to be able to start
@@ -2373,7 +2382,8 @@ pair; after that they can be moved apart and the joints stay on them.
   How the Unity app's axes map onto this app's is set out in
   `src/unity_import.rs`.
 - **Export...** in the File card opens a menu of the formats: OBJ, FBX,
-  PLY and STL for Printing, and the FBX material weights setting.
+  PLY, STL for Printing and STEP Solid for CAD, the FBX material weights
+  setting, and STEP Faces.
 - **Export OBJ / Export STL for Printing** write the selected object where it
   stands in the scene, with its position, rotation and scale baked in, so an
   instance exports as its own placed copy. The STL is binary, in millimetres,
@@ -2390,6 +2400,17 @@ pair; after that they can be moved apart and the joints stay on them.
   lives in one place, `crates/geom/src/units.rs`. **Export STL for Printing**
   looks the object over first, and asks before writing one with holes in it
   (see Checking a model for printing).
+- **Export STEP Solid for CAD** writes the selected object (and its live
+  copies) as a STEP file that Fusion 360, SolidWorks, Onshape, FreeCAD and
+  SolidCraft open as solid bodies to cut, join and measure: placed, in
+  millimetres and Z up like the STL. A sculpt has no curves to hand over, so
+  each triangle is a flat face; a closed piece of the surface is a solid, and
+  a piece with holes is a surface body CAD can show but not cut with. CAD
+  programs slow down as faces are added, so a copy of the model is first
+  decimated to **STEP Faces** (the slider under the formats, 25,000 at
+  first, 1,000 to 500,000), with a mirror kept as Decimate keeps one; the
+  model itself is not changed. It works in the background, with a Cancel.
+  The writer is `src/io/step.rs`, the export `src/app/export_step.rs`.
 - **Export PLY** writes the selected object (and its live copies) as a binary
   PLY, in the app's own units and axes like the OBJ: the format most programs
   read painted colour from (MeshLab, CloudCompare, colour 3D printing).

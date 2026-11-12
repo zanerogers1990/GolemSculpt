@@ -44,6 +44,7 @@ mod echo;
 mod escape;
 mod export_fbx;
 mod exports;
+pub(crate) mod export_step;
 mod recording;
 mod faces;
 mod file_arrays;
@@ -57,6 +58,7 @@ pub(crate) mod keys;
 mod layers;
 mod levels;
 mod live_copies;
+mod mask_gestures;
 mod mask_shape;
 mod materials;
 mod paint;
@@ -311,6 +313,8 @@ struct Input {
     held: Vec<KeyCode>,
     /// The point on the model the turn of the view under way goes about (app/turn.rs).
     turn_about: Option<Vec3>,
+    /// The box a Shift + drag is drawing while mask painting (app/mask_gestures.rs).
+    mask_box: Option<sculpt_region::QuickBox>,
 }
 
 struct Running {
@@ -354,6 +358,8 @@ struct Running {
     apply_scale: apply_scale::State,
     /// A Bake Maps at work in the background (see app/bake.rs).
     bake: Option<bake::Pending>,
+    /// An Export STEP at work in the background (see app/export_step.rs).
+    export_step: Option<export_step::Pending>,
     /// A screenshot the Claude bridge is waiting for.
     capture: Option<bridge::Capture>,
     transform: transform::State,
@@ -520,7 +526,7 @@ fn wait_for(frame_asked: bool, repaint_at: Option<Instant>, copy_at: Option<Inst
 
 impl Running {
     fn new(event_loop: &ActiveEventLoop, args: Args) -> Result<Running, String> {
-        let mut attrs = Window::default_attributes().with_title("GolemSculpt");
+        let mut attrs = Window::default_attributes().with_title("GolemSculpt").with_window_icon(window_icon());
         attrs = match args.size {
             Some((w, h)) => attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)),
             None => attrs
@@ -664,6 +670,7 @@ impl Running {
                 hover_last: Default::default(),
                 held: Vec::new(),
                 turn_about: None,
+                mask_box: None,
             },
             view,
             local: view,
@@ -682,6 +689,7 @@ impl Running {
             symmetry_repair: Default::default(),
             apply_scale: Default::default(),
             bake: None,
+            export_step: None,
             capture: None,
             transform: Default::default(),
             flash: Default::default(),
@@ -967,7 +975,7 @@ impl Running {
         let delta = pos - self.input.pointer;
         self.input.pointer = pos;
         self.redraw = true;
-        if self.spheres_moved(pos) || self.transform_moved(pos) || self.tools_moved(pos, pressure) {
+        if self.mask_box_moved() || self.spheres_moved(pos) || self.transform_moved(pos) || self.tools_moved(pos, pressure) {
             return;
         }
         if let Some(g) = self.input.gauge {
@@ -1041,6 +1049,8 @@ impl Running {
             MouseButton::Left | MouseButton::Right if self.tools_active() => self.tools_pressed(button, pressure),
             MouseButton::Left | MouseButton::Right if self.spheres_active() => self.spheres_pressed(button),
             MouseButton::Left | MouseButton::Right if self.transform_active() => self.transform_pressed(button),
+            // Shift + drag while mask painting: a box mask (app/mask_gestures.rs).
+            MouseButton::Left | MouseButton::Right if self.mask_box_takes_press(button) => self.mask_box_pressed(button),
             MouseButton::Left | MouseButton::Right => {
                 let invert = mods.control_key() || button == MouseButton::Right;
                 let sample = PointerSample { pos, pressure, time: self.time() };
@@ -1071,8 +1081,8 @@ impl Running {
                     Drag::Sculpt
                 } else if button == MouseButton::Left {
                     // Off the active object: a second click picks the object
-                    // under it or, on empty space, frames the model. A drag
-                    // orbits.
+                    // under it or, on empty space, frames the model (or, while
+                    // mask painting, inverts the mask). A drag orbits.
                     let now = Instant::now();
                     let double = self.input.last_click.is_some_and(|(t, p)| {
                         now - t < DOUBLE_CLICK && p.distance(pos) < DOUBLE_CLICK_PX
@@ -1082,6 +1092,7 @@ impl Running {
                         self.input.last_click = None;
                         match picked {
                             Some(id) if !on_active => self.act(Action::SelectObject(id)),
+                            None if self.mask_double_tap() => {}
                             _ => self.frame_view(),
                         }
                     }
@@ -1109,6 +1120,7 @@ impl Running {
         if self.input.drag == Drag::Sculpt {
             self.finish_stroke();
         }
+        self.mask_box_released();
         self.spheres_released();
         self.transform_released();
         self.tools_released();
@@ -1636,6 +1648,8 @@ impl Running {
             Action::ExportObj => self.export_obj_action(),
             Action::ExportPly => self.export_ply_action(),
             Action::ExportFbx => self.export_fbx_action(),
+            // Solids for CAD are in app/export_step.rs.
+            Action::ExportStep => self.export_step_action(),
             // The Blender link is in app/blender.rs.
             Action::SendToBlender => self.send_to_blender(),
             // Checking and exporting for printing are in app/print_check.rs.
@@ -2019,6 +2033,8 @@ impl Running {
         self.symmetry_repair_frame();
         // A Bake Maps that has finished says where its files went (app/bake.rs).
         self.bake_frame();
+        // So does an Export STEP (app/export_step.rs).
+        self.export_step_frame();
 
         // The hosted tools' frame: before the interface, which draws their overlay.
         self.tools_frame();
@@ -2404,6 +2420,17 @@ fn monitor_numbered(event_loop: &ActiveEventLoop, number: u32) -> Option<winit::
     let named = format!("DISPLAY{number}");
     let by_name = event_loop.available_monitors().find(|m| m.name().is_some_and(|name| name.ends_with(&named)));
     by_name.or_else(|| event_loop.available_monitors().nth((number as usize).checked_sub(1)?))
+}
+
+/// The picture on the taskbar button and the window's title bar: the same
+/// golem as the desktop shortcut (assets/GolemSculpt.png, 512 px, which
+/// Windows shrinks to whatever size it needs). A picture that cannot be read
+/// leaves the window with the default icon rather than stopping the app.
+fn window_icon() -> Option<winit::window::Icon> {
+    let png = include_bytes!("../assets/GolemSculpt.png");
+    let rgba = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
+    let (w, h) = rgba.dimensions();
+    winit::window::Icon::from_rgba(rgba.into_raw(), w, h).ok()
 }
 
 /// Windows shows a "press and hold for right-click" ring under a resting pen

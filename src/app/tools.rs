@@ -37,6 +37,7 @@ fn registry() -> Vec<Box<dyn kit::Tool>> {
         sculpt_measure::tool(),
         sculpt_tube::tool(),
         sculpt_tube::muscle(),
+        sculpt_tube::strap(),
         sculpt_array::tool(),
         sculpt_lathe::tool(),
         sculpt_hands::tool(),
@@ -1000,6 +1001,10 @@ impl Running {
             if idle && has_wheel && self.doc.tools.radial.is_none() {
                 let ppp = self.egui_ctx.pixels_per_point();
                 self.doc.tools.radial = Some(egui::pos2(self.input.pointer.x / ppp, self.input.pointer.y / ppp));
+            } else if !idle {
+                // Mid-drag it is the tool's: the region tools slide the
+                // shape being dragged out while it is held.
+                self.tools_event(Event::KeyDown(kit::Key::Space), None);
             }
             return true;
         }
@@ -1109,6 +1114,7 @@ impl Running {
                 places.entry(object.0).or_default().extend(copies.iter().copied());
             }
             self.doc.scene.set_tool_places(places);
+            self.mask_box_draw(&env.view, &mut draw);
             self.doc.tools.draw = draw;
         }
         self.renderer.previews.show(&self.gpu, &self.view, self.doc.tools.draw.previews());

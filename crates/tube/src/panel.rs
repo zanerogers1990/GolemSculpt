@@ -8,10 +8,11 @@ use sculpt_toolkit::theme::{self, ACCENT, ButtonStyle};
 use sculpt_toolkit::{Command, Ctx, Env, ObjectId};
 
 use crate::tool::TubeTool;
-use crate::types::{CapStyle, Kind, TubeSettings};
+use crate::types::{CapStyle, Kind, Tip, TubeSettings};
 
 const ACCENT_TUBE: Color32 = Color32::from_rgb(255, 163, 56);
 const ACCENT_MUSCLE: Color32 = Color32::from_rgb(226, 104, 92);
+const ACCENT_STRAP: Color32 = Color32::from_rgb(176, 132, 88);
 
 /// The radius slider works on a log scale: tubes run from threads to trunks.
 const MIN_LOG_RADIUS: f32 = -7.0;
@@ -70,22 +71,47 @@ fn pair(ui: &mut egui::Ui, cx: &Ctx, first_on: bool, labels: [&str; 2], tips: [&
     clicked
 }
 
+/// Three buttons side by side, the one that is on lit. Returns which was clicked.
+fn three(ui: &mut egui::Ui, cx: &Ctx, on: usize, labels: [&str; 3], tips: [&str; 3]) -> Option<usize> {
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        let w = theme::row_width(ui, 3, 6.0);
+        for (i, (label, tip)) in labels.into_iter().zip(tips).enumerate() {
+            let style = ButtonStyle { active: (i == on).then_some(ACCENT()), height: 24.0, ..Default::default() };
+            if theme::tip(theme::button(ui, w, label, style), cx.tips, tip).clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
+}
+
 impl TubeTool {
     pub(crate) fn show_panel(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
         self.now = cx.time;
         let kind = self.kind();
         let muscle = kind == Kind::Muscle;
+        let strap = kind == Kind::Strap;
         let (one, title) = (kind.one(), kind.title());
-        let key = if muscle { "B" } else { "T" };
+        let key = match kind {
+            Kind::Muscle => "B",
+            Kind::Strap => "E",
+            Kind::Tube => "T",
+        };
         let count = self.tube_count();
         let summary = if count == 0 { String::new() } else { format!("{count} live") };
-        theme::category(ui, title, if muscle { ACCENT_MUSCLE } else { ACCENT_TUBE }, &summary, true, |ui| {
+        let accent = match kind {
+            Kind::Muscle => ACCENT_MUSCLE,
+            Kind::Strap => ACCENT_STRAP,
+            Kind::Tube => ACCENT_TUBE,
+        };
+        theme::category(ui, title, accent, &summary, true, |ui| {
             self.finish_rows(ui, cx);
             self.mirror_row(ui, cx);
-            if muscle {
-                self.muscle_controls(ui, cx);
-            } else {
-                self.shape_controls(ui, cx);
+            match kind {
+                Kind::Muscle => self.muscle_controls(ui, cx),
+                Kind::Strap => self.strap_controls(ui, cx),
+                Kind::Tube => self.shape_controls(ui, cx),
             }
             self.point_controls(ui, cx);
             self.edit_rows(ui, cx);
@@ -103,25 +129,37 @@ impl TubeTool {
             let size = format!("Size point, else {one}");
             let delete = format!("Delete point, else {one}");
             let history = format!("Undo / redo the {}", kind.many());
-            let (from, mid_air) = if muscle {
+            let (from, mid_air) = if muscle || strap {
                 ("Drag across the model", "Draw floating, anywhere")
             } else {
                 ("Drag from the model", "Draw in mid-air")
             };
             let squares: &[(&str, &str)] = if muscle {
                 &[("Drag a square", "Move that edge, not the other"), ("Shift + drag a square", "Wider / narrower evenly")]
+            } else if strap {
+                &[("Drag the square", "Wider / narrower there")]
             } else {
                 &[("Drag the square", "Thicker / thinner there")]
             };
-            let mut keys = vec![
-                (from, draw.as_str()),
+            let mut keys = vec![(from, draw.as_str())];
+            if strap {
+                keys.extend([
+                    ("End where you began", "Close it into a loop"),
+                    ("Wrap: drag across the model", "A belt all the way round"),
+                    ("Wrap: drag a blue square", "Tilt the belt"),
+                    ("Wrap: drag the blue dot", "Slide the belt"),
+                    ("Wrap: Alt + drag", "Turn the view"),
+                ]);
+            }
+            keys.extend([
                 ("Ctrl + drag", mid_air),
                 ("Drag a point", "Move it"),
+                ("Drop a point on another", "Collapse it into that one"),
                 ("Shift + drag an end", extend.as_str()),
                 (add.as_str(), "Add a point"),
                 ("Double-click a point", "Sharp / smooth"),
                 ("Right-click a point", "Delete it"),
-            ];
+            ]);
             keys.extend_from_slice(squares);
             keys.extend([
                 ("Wheel over a point", "Thicker / thinner"),
@@ -418,6 +456,98 @@ impl TubeTool {
         theme::tip(r, cx.tips, help);
     }
 
+    /// A strap's way of being laid and its shape. They edit the selected strap, and always the next
+    /// one.
+    fn strap_controls(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
+        let settings = self.settings();
+        let percent = |v: f32| format!("{:.0}%", v * 100.0);
+        let unit = cx.unit;
+
+        theme::heading(ui, "Lay");
+        let tips = [
+            "Draw the strap along the model: it lies on the surface between its points. End the stroke where it began \
+             to close it into a loop.",
+            "Drag one line across the model where the belt goes: it is laid all the way round, the back too. Drag an end \
+             of its blue line to tilt it, the middle to slide it. Alt + drag turns the view.",
+        ];
+        if let Some(i) = pair(ui, cx, !self.wrap_mode(), ["Draw", "Wrap"], tips) {
+            self.set_wrap_mode(i == 1);
+        }
+
+        theme::heading(ui, "Shape");
+        let label = if self.active_tube().is_some() { "Width" } else { "Width (next strap)" };
+        let mut log_radius = settings.radius.max(TubeSettings::MIN_RADIUS).ln();
+        let r = theme::slider(ui, label, &mut log_radius, MIN_LOG_RADIUS..=MAX_LOG_RADIUS, |v| {
+            units::format(2.0 * v.exp(), unit, true)
+        });
+        if r.changed() {
+            self.set_radius(log_radius.exp());
+        }
+        let help = "How wide the selected strap is (and the next one you draw). Hold S and move sideways in the viewport \
+                    for the same.";
+        theme::tip(r, cx.tips, help);
+
+        let mut log_thickness = settings.strap_thickness().max(1e-6).ln();
+        let r = theme::slider(ui, "Thickness", &mut log_thickness, MIN_LOG_RADIUS..=MAX_LOG_RADIUS, |v| {
+            units::format(v.exp(), unit, true)
+        });
+        if r.changed() {
+            self.set_thickness(log_thickness.exp());
+        }
+        theme::tip(r, cx.tips, "How thick the strap is: the same all along it, however wide it is.");
+
+        let mut edge = settings.edge;
+        let r = theme::slider(ui, "Edges", &mut edge, 0.0..=1.0, |v| if v <= 0.005 { "square".to_owned() } else { percent(v) });
+        if r.changed() {
+            self.set_edge(edge);
+        }
+        theme::tip(r, cx.tips, "How round the strap's edges are: 0 is cut square, 100% is fully rounded.");
+
+        let mut gap = settings.gap;
+        let r = theme::slider(ui, "Gap", &mut gap, 0.0..=TubeSettings::MAX_GAP, |v| {
+            if v <= 0.005 { "touching".to_owned() } else { format!("{:.0}% of thickness", v * 100.0) }
+        });
+        if r.changed() {
+            self.set_gap(gap);
+        }
+        theme::tip(r, cx.tips, "How far the strap stands off the skin, so that it never dips into it.");
+
+        let mut tight = settings.tight;
+        let r = theme::slider(ui, "Tight", &mut tight, 0.0..=1.0, |v| if v <= 0.005 { "loose".to_owned() } else { percent(v) });
+        if r.changed() {
+            self.set_tight(tight);
+        }
+        let help = "How taut the strap is drawn: 0 follows every dip of the body, 100% bridges hollows as a tight belt does \
+                    across the small of the back.";
+        theme::tip(r, cx.tips, help);
+
+        theme::heading(ui, "Ends");
+        let on = match settings.tip {
+            Tip::Square => 0,
+            Tip::Round => 1,
+            Tip::Point => 2,
+        };
+        let tips = ["Ends cut straight across.", "Ends rounded off, a half circle as wide as the strap.", "Ends coming to a point, as a belt's tip does."];
+        if let Some(i) = three(ui, cx, on, ["Square", "Round", "Point"], tips) {
+            self.set_tip([Tip::Square, Tip::Round, Tip::Point][i]);
+        }
+        let mut closed = settings.closed;
+        let r = theme::checkbox(ui, &mut closed, "Closed Loop", ACCENT());
+        if r.changed() {
+            self.set_closed(closed);
+        }
+        theme::tip(r, cx.tips, "The strap runs on from its last point back to its first, with no ends: a belt, a band, a collar.");
+
+        let mut smoothness = settings.smoothness;
+        let r = theme::slider(ui, "Smoothness", &mut smoothness, 0.0..=1.0, percent);
+        if r.changed() {
+            self.set_smoothness(smoothness);
+        }
+        let help = "How the strap flows between its points: low is straight runs with a kink at each point, high is \
+                    loose, round curves. Never moves a point.";
+        theme::tip(r, cx.tips, help);
+    }
+
     fn point_controls(&mut self, ui: &mut egui::Ui, cx: &mut Ctx) {
         let one = self.kind().one();
         theme::heading(ui, "Show Points");
@@ -433,6 +563,10 @@ impl TubeTool {
         if let Some(i) = pair(ui, cx, !self.only_selected_points(), ["All", "Selected Only"], tips) {
             self.set_only_selected_points(i == 1);
         }
+        let r = theme::checkbox(ui, &mut self.collapse_on_drop, "Collapse Points on Drop", ACCENT());
+        let help = "On: a point let go on top of another point of its line collapses into that one, which lights up \
+                    green first. Off: points can be left on top of each other.";
+        theme::tip(r, cx.tips, help);
 
         theme::heading(ui, "Selected Point");
         let selected = self.selected_point().is_some();
@@ -450,7 +584,11 @@ impl TubeTool {
             if r.changed() {
                 self.set_selected_point_size(log_size.exp());
             }
-            let help = if self.kind() == Kind::Muscle {
+            let help = if self.kind() == Kind::Strap {
+                "Width at the selected point, as a multiple of the strap's own. Dragging the point's square handle, or \
+                 the wheel over the point, does the same."
+                    .to_owned()
+            } else if self.kind() == Kind::Muscle {
                 "Width at the selected point, as a multiple of the muscle's own there, on both sides evenly. The wheel \
                  over the point, or Shift + dragging one of its squares, does the same. Dragging a square on its own \
                  moves that edge and leaves the other where it is."

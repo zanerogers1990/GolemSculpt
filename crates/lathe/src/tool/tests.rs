@@ -287,6 +287,44 @@ fn dragging_a_handle_moves_that_point_and_is_one_undo_step() {
 }
 
 #[test]
+fn a_handle_dropped_on_another_collapses_into_it_as_one_undo_step() {
+    let (mut bench, mut tool) = bench();
+    let count = tool.profile.len();
+    let (from, kept) = (handle(&bench, &tool, 2), position(&tool, 3));
+    bench.press(&mut tool, from, Button::Left);
+    drag_handle_to(&mut bench, &mut tool, 3, Vec2::ZERO);
+    assert!(tool.drop_target(&bench.env.view).is_some(), "the handle it would go into is lit");
+    bench.release(&mut tool);
+    assert_eq!(tool.profile.len(), count - 1);
+    assert_eq!(position(&tool, 2), kept, "the handle dropped on stays where it was");
+    assert_eq!(tool.selected(), Some(2));
+    assert_eq!(tool.history.steps(), 1);
+
+    assert!(bench.undo(&mut tool));
+    assert_eq!(tool.profile.len(), count);
+}
+
+#[test]
+fn esc_over_another_handle_collapses_nothing_and_with_the_switch_off_nor_does_letting_go() {
+    let (mut bench, mut tool) = bench();
+    let count = tool.profile.len();
+    let (from, original) = (handle(&bench, &tool, 2), position(&tool, 2));
+    bench.press(&mut tool, from, Button::Left);
+    drag_handle_to(&mut bench, &mut tool, 3, Vec2::ZERO);
+    assert!(bench.key(&mut tool, Key::Escape));
+    bench.release(&mut tool);
+    assert_eq!((tool.profile.len(), position(&tool, 2)), (count, original));
+
+    tool.collapse_on_drop = false;
+    // Not the second half of a double click.
+    bench.env.time += 1.0;
+    let to = handle(&bench, &tool, 3);
+    bench.drag(&mut tool, from, to);
+    assert_eq!(tool.profile.len(), count);
+    assert!(position(&tool, 2).distance(position(&tool, 3)) < 0.02);
+}
+
+#[test]
 fn the_handle_stays_where_it_was_grabbed() {
     let (mut bench, mut tool) = bench();
     let original = position(&tool, 3);

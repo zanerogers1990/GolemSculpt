@@ -5,5 +5,6 @@ mod geometry;
 mod jumpy;
 mod muscle;
 mod radial;
+mod strap;
 mod timing;
 mod tool;

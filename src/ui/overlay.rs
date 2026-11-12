@@ -130,6 +130,28 @@ pub fn transform_gizmo(ctx: &egui::Context, shapes: &[crate::gizmo::Shape]) {
     }
 }
 
+/// How far from a bubble's centre a press still takes it, in points: half as wide again as the bubble
+/// is drawn, so it does not take a steady hand. The bubbles are too far apart for two to want one press.
+const BUBBLE_REACH: f32 = 16.0;
+/// How far a press on a bubble can wander and still be a tap on it, in points: a pen lands and lifts
+/// with a wobble. Further than that, it turns the view.
+const BUBBLE_TAP_SLOP: f32 = 12.0;
+
+/// An end of an axis on the view gizmo: the axis, which end, and the way it points in view space.
+type Bubble = (usize, bool, Vec3);
+
+/// The bubble a pointer at `q` means: the nearest in reach, and of two on top of each other the one in
+/// front, as a view down an axis has them.
+fn bubble_under(bubbles: &[Bubble], center: Pos2, q: Pos2) -> Option<(usize, bool)> {
+    let distance = |v: Vec3| q.distance(center + vec2(v.x, -v.y) * 37.0);
+    let score = |v: Vec3| distance(v) - v.z * 4.0;
+    bubbles
+        .iter()
+        .filter(|b| distance(b.2) < BUBBLE_REACH)
+        .min_by(|a, b| score(a.2).total_cmp(&score(b.2)))
+        .map(|b| (b.0, b.1))
+}
+
 pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mut Vec<Action>) {
     egui::Area::new(Id::new("view_gizmo")).order(Order::Middle).fade_in(false).fixed_pos(origin).show(ctx, |ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
@@ -140,15 +162,10 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
         if response.hovered() || response.dragged() {
             p.circle_filled(center, 52.0, Color32::from_black_alpha(102));
         }
-        if response.dragged() {
-            // Same feel as orbiting in the viewport, and about the model as there.
-            let d = response.drag_delta() * ui.ctx().pixels_per_point();
-            actions.push(Action::Turn { by: [d.x, d.y], begins: response.drag_started() });
-        }
 
         let inv = doc.camera.rotation().inverse();
         // (axis, positive?, view-space direction)
-        let mut bubbles: Vec<(usize, bool, Vec3)> = Vec::new();
+        let mut bubbles: Vec<Bubble> = Vec::new();
         for axis in 0..3 {
             let mut dir = Vec3::ZERO;
             dir[axis] = 1.0;
@@ -157,17 +174,44 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
         }
         // Far ones first so near ones draw over them.
         bubbles.sort_by(|a, b| a.2.z.total_cmp(&b.2.z));
-        let pointer = response.hover_pos();
-        let mut clicked = None;
+        let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
+        let under = pointer.and_then(|q| bubble_under(&bubbles, center, q));
+
+        // A press on a bubble is the bubble's until it has wandered too far to be a tap: egui's own click
+        // gives up on a pen's wobble or a slow press, and the wobble would turn the view as well.
+        let tap_id = response.id.with("tap");
+        let (pressed, released, latest) =
+            ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.latest_pos()));
+        let mut tap: Option<((usize, bool), Pos2)> = ui.data(|d| d.get_temp(tap_id)).flatten();
+        if pressed && response.contains_pointer() {
+            tap = under.zip(pointer);
+        }
+        let mut turn_begins = response.drag_started();
+        if let Some((_, press)) = tap
+            && latest.is_some_and(|q| q.distance(press) > BUBBLE_TAP_SLOP)
+        {
+            tap = None;
+            turn_begins = true;
+        }
+        let clicked = tap.filter(|_| released).map(|(bubble, _)| bubble);
+        if released {
+            tap = None;
+        }
+        ui.data_mut(|d| d.insert_temp(tap_id, tap));
+        if response.dragged() && tap.is_none() && clicked.is_none() {
+            // Same feel as orbiting in the viewport, and about the model as there.
+            let d = response.drag_delta() * ui.ctx().pixels_per_point();
+            actions.push(Action::Turn { by: [d.x, d.y], begins: turn_begins });
+        }
+
         let mut named = None;
         for &(axis, positive, v) in &bubbles {
             let at = center + vec2(v.x, -v.y) * 37.0;
             let depth = v.z * 0.5 + 0.5;
             let mut scale = 0.84 + (1.08 - 0.84) * depth;
-            let hovered = pointer.is_some_and(|q| q.distance(at) < 10.0 * scale);
+            let hovered = under == Some((axis, positive));
             if hovered {
                 scale *= 1.14;
-                // The nearest bubble under the pointer is the last one drawn.
                 named = Some(match (axis, positive) {
                     (0, true) => "Right view",
                     (0, false) => "Left view",
@@ -176,9 +220,6 @@ pub fn view_gizmo(ctx: &egui::Context, doc: &mut Doc, origin: Pos2, actions: &mu
                     (_, true) => "Front view",
                     (_, false) => "Back view",
                 });
-                if response.clicked() {
-                    clicked = Some((axis, positive));
-                }
             }
             let color = theme::AXIS[axis].gamma_multiply(0.55 + 0.45 * depth);
             let letter = ["X", "Y", "Z"][axis];
@@ -680,6 +721,70 @@ mod tests {
 
     fn button(pos: Pos2, pressed: bool) -> Event {
         Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::default() }
+    }
+
+    /// Bubbles for a view from the front: +X right, +Y up, +Z toward the viewer.
+    fn front_view() -> Vec<Bubble> {
+        [(0, Vec3::X), (1, Vec3::Y), (2, Vec3::Z)].into_iter().flat_map(|(a, d)| [(a, true, d), (a, false, -d)]).collect()
+    }
+
+    #[test]
+    fn a_bubble_is_taken_from_well_outside_where_it_is_drawn_and_the_front_one_wins() {
+        let bubbles = front_view();
+        let center = pos2(100.0, 100.0);
+        let right = center + vec2(37.0, 0.0);
+        assert_eq!(bubble_under(&bubbles, center, right + vec2(15.0, 0.0)), Some((0, true)));
+        assert_eq!(bubble_under(&bubbles, center, right + vec2(0.0, -14.0)), Some((0, true)));
+        assert_eq!(bubble_under(&bubbles, center, right + vec2(17.0, 0.0)), None);
+        assert_eq!(bubble_under(&bubbles, center, center), Some((2, true)), "+Z is in front of -Z");
+        assert_eq!(bubble_under(&bubbles, center, center + vec2(-37.0, -6.0)), Some((0, false)));
+        assert_eq!(bubble_under(&bubbles, center, center + vec2(18.5, 0.0)), None, "the space between is for turning");
+    }
+
+    /// Drives the gizmo from a press at `path[0]` through the rest of `path` to a release at the last,
+    /// the camera looking from the front. What it asked for.
+    fn gizmo_gesture(path: &[Pos2]) -> Vec<Action> {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut doc = wheel_doc();
+        doc.camera.yaw = 0.0;
+        doc.camera.pitch = 0.0;
+        let mut actions = Vec::new();
+        let origin = pos2(200.0, 200.0);
+        let mut step = |events: Vec<Event>| frame(&ctx, events, |ctx| view_gizmo(ctx, &mut doc, origin, &mut actions));
+        step(vec![Event::PointerMoved(path[0])]);
+        step(vec![Event::PointerMoved(path[0])]);
+        step(vec![button(path[0], true)]);
+        for &q in &path[1..] {
+            step(vec![Event::PointerMoved(q)]);
+        }
+        step(vec![button(path[path.len() - 1], false)]);
+        step(vec![]);
+        actions
+    }
+
+    /// Where the bubble that points right on screen is drawn, for the gizmo of `gizmo_gesture`.
+    fn right_bubble() -> Pos2 {
+        pos2(200.0 + 54.0 + 37.0, 200.0 + 54.0)
+    }
+
+    #[test]
+    fn a_tap_near_a_bubble_snaps_even_with_a_wobble_and_never_turns_the_view() {
+        let at = right_bubble() + vec2(12.0, 5.0);
+        let actions = gizmo_gesture(&[at, at + vec2(8.0, -5.0), at + vec2(-3.0, 7.0), at + vec2(6.0, 2.0)]);
+        assert_eq!(actions.len(), 1, "one thing happens");
+        assert!(matches!(actions[0], Action::Snap(yaw, pitch) if yaw == -90.0 && pitch == 0.0));
+    }
+
+    #[test]
+    fn a_drag_from_a_bubble_turns_the_view_and_snaps_nothing() {
+        let at = right_bubble();
+        let path: Vec<Pos2> = (0..8).map(|i| at + vec2(0.0, i as f32 * 6.0)).collect();
+        let actions = gizmo_gesture(&path);
+        assert!(!actions.iter().any(|a| matches!(a, Action::Snap(..))));
+        let turns: Vec<bool> =
+            actions.iter().filter_map(|a| if let Action::Turn { begins, .. } = a { Some(*begins) } else { None }).collect();
+        assert!(turns.len() >= 2 && turns[0], "the turn starts as a turn does: {turns:?}");
     }
 
     #[test]

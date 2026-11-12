@@ -94,6 +94,9 @@ struct Work {
     target: TriMesh,
     to_field: glam::Mat4,
     field: TubeField,
+    /// Straps: their surface, sunk a little into the model so the union holds them, in place of a
+    /// field.
+    piece: Option<TriMesh>,
     plan: MergePlan,
     blend: f32,
     /// The coordinate planes the tubes are exactly symmetric across.
@@ -156,6 +159,7 @@ fn stage_text(stage: Stage, kind: Kind) -> &'static str {
     match (stage, kind) {
         (Stage::Tubes, Kind::Tube) => "Building the tubes",
         (Stage::Tubes, Kind::Muscle) => "Building the muscles",
+        (Stage::Tubes, Kind::Strap) => "Building the straps",
         (Stage::Union, _) => "Fusing into the model",
         (Stage::Blend, _) => "Smoothing the join",
     }
@@ -212,6 +216,33 @@ impl TubeTool {
             // frame and symmetry.
             let first = &self.tubes[tubes[0]];
             let (to_field, mirror) = (first.frame.local_to_frame(), first.symmetry.exact_planes());
+            if kind == Kind::Strap {
+                let mut piece = TriMesh::default();
+                let mut thinnest = f32::MAX;
+                for &index in &tubes {
+                    let tube = &self.tubes[index];
+                    let thickness = tube.state.settings.strap_thickness();
+                    // Sunk a quarter of its thickness into the model, so that the union holds it on
+                    // wherever it rests, rather than leaving it floating at its gap.
+                    piece.append(&tube.strap_mesh(Some(-0.25 * thickness)));
+                    thinnest = thinnest.min(0.5 * thickness);
+                }
+                if piece.indices.is_empty() {
+                    failure = Some(format!("{}: the {} have no length.", info.name, kind.many()));
+                    continue;
+                }
+                let plan = merge::plan_piece(mesh.positions, mesh.indices, &to_field, &piece, thinnest);
+                targets.push(Target {
+                    object,
+                    name: info.name.to_owned(),
+                    mesh: info.mesh,
+                    checksum: checksum(mesh.positions),
+                    tubes: tubes.iter().map(|&i| self.tubes[i].state.clone()).collect(),
+                    too_thin: plan.too_thin,
+                });
+                work.push(Work { target: mesh.to_tri_mesh(), to_field, field: TubeField::new(), piece: Some(piece), plan, blend: 0.0, mirror });
+                continue;
+            }
             let mut field = TubeField::new();
             let (mut blend, mut max_radius, mut thinnest) = (0.0f32, 0.0f32, f32::MAX);
             for &index in &tubes {
@@ -236,7 +267,7 @@ impl TubeTool {
                 too_thin: plan.too_thin,
             });
             // The job cannot borrow from the scene: it gets a copy.
-            work.push(Work { target: mesh.to_tri_mesh(), to_field, field, plan, blend, mirror });
+            work.push(Work { target: mesh.to_tri_mesh(), to_field, field, piece: None, plan, blend, mirror });
         }
         if work.is_empty() {
             self.tell(failure.unwrap_or_else(|| "Nothing to merge.".into()), false);
@@ -255,8 +286,10 @@ impl TubeTool {
                     job.progress(format!("{}{which}", stage_text(stage, kind)));
                     !job.cancelled()
                 };
-                let merged =
-                    merge::merge(&work.target, &work.to_field, &work.field, &work.plan, work.blend, work.mirror, &stage);
+                let merged = match &work.piece {
+                    Some(piece) => merge::merge_piece(&work.target, &work.to_field, piece, &work.plan, work.mirror, &stage),
+                    None => merge::merge(&work.target, &work.to_field, &work.field, &work.plan, work.blend, work.mirror, &stage),
+                };
                 if job.cancelled() {
                     return Err("Cancelled.".into());
                 }
@@ -403,15 +436,24 @@ impl TubeTool {
         let mut commands = Vec::new();
         let mut kept = Vec::new();
         for tube in &self.tubes {
-            let field = tube.field();
-            if field.is_empty() {
-                continue;
-            }
-            let planes = tube.symmetry.exact_planes();
-            let Ok(built) = field.voxelize(self.separate_cell(cx, tube, &field), planes, MAX_VOXEL_SAMPLES) else {
-                continue;
+            let mut mesh = if kind == Kind::Strap {
+                // A strap is its own swept surface, exactly as the preview shows it.
+                let mesh = tube.strap_mesh(None);
+                if mesh.indices.is_empty() {
+                    continue;
+                }
+                mesh
+            } else {
+                let field = tube.field();
+                if field.is_empty() {
+                    continue;
+                }
+                let planes = tube.symmetry.exact_planes();
+                let Ok(built) = field.voxelize(self.separate_cell(cx, tube, &field), planes, MAX_VOXEL_SAMPLES) else {
+                    continue;
+                };
+                built.surface.into_mesh()
             };
-            let mut mesh = built.surface.into_mesh();
             // The object sits at the tube's frame (the anchor's position and
             // rotation at its own size), where the field was built; with no
             // anchor, at the tube's own centre.

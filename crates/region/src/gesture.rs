@@ -9,7 +9,6 @@
 use egui::Color32;
 use glam::Vec2;
 use sculpt_cut::ScreenRegion;
-use sculpt_cut::region::snap_line_end;
 use sculpt_toolkit::{Label, Overlay, Run};
 
 /// Outline width, in points. Thin and translucent on purpose: the marquee is
@@ -30,6 +29,12 @@ const CLOSING_DASH: (f32, f32) = (5.0, 4.0);
 const ANCHOR_RADIUS: f32 = 5.0;
 /// How far (points) the angle reading stands off the end of a snapping line.
 const READING_GAP: f32 = 14.0;
+/// A snapping line turns in steps of this many degrees...
+const SNAP_STEP: f32 = 15.0;
+/// ...except within this many degrees of level, upright or 45, where it goes
+/// to that. Those are the edges people want, and a pen wobbles more than
+/// the half step (7.5) the plain steps would leave to catch them in.
+const SNAP_CATCH: f32 = 10.0;
 
 /// What is dragged out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -129,9 +134,22 @@ impl Drag {
         }
     }
 
-    /// The two ends of a line drag. With `snap` on the line is turned to the
-    /// nearest 15 degrees about its start, then moved sideways, keeping that
-    /// angle, onto the nearest anchor it passes within reach of.
+    /// The pointer moved to `at` with Space held: the whole shape goes with
+    /// it, unchanged, instead of growing. Let go of Space and the drag carries
+    /// on from where the shape now is.
+    pub fn slide_to(&mut self, at: Vec2) {
+        let by = at - self.current;
+        self.start += by;
+        self.current = at;
+        for point in &mut self.path {
+            *point += by;
+        }
+    }
+
+    /// The two ends of a line drag. With `snap` on the line is turned about
+    /// its start to level, upright or 45 when near one, else to the nearest
+    /// 15 degrees, then moved sideways, keeping that angle, onto the nearest
+    /// anchor it passes within reach of.
     pub fn line(&self, snap: LineSnap) -> (Vec2, Vec2) {
         let (a, b, _) = self.snapped_line(snap);
         (a, b)
@@ -142,7 +160,7 @@ impl Drag {
         if !snap.on {
             return (self.start, self.current, None);
         }
-        let (a, b) = (self.start, snap_line_end(self.start, self.current));
+        let (a, b) = (self.start, snap_end(self.start, self.current));
         let Some(along) = (b - a).try_normalize() else { return (a, b, None) };
         let across = Vec2::new(along.y, -along.x);
         // How far to the side of the line each anchor is; the nearest wins.
@@ -209,6 +227,21 @@ impl Drag {
             }
         }
     }
+}
+
+/// `end` turned about `start` to the angle a snapping line takes, at the same
+/// length: level, upright or a diagonal when within [`SNAP_CATCH`] of one,
+/// else the nearest [`SNAP_STEP`].
+fn snap_end(start: Vec2, end: Vec2) -> Vec2 {
+    let d = end - start;
+    let length = d.length();
+    if length < 1e-3 {
+        return end;
+    }
+    let degrees = d.y.atan2(d.x).to_degrees();
+    let eighth = (degrees / 45.0).round() * 45.0;
+    let snapped = if (degrees - eighth).abs() <= SNAP_CATCH { eighth } else { (degrees / SNAP_STEP).round() * SNAP_STEP };
+    start + Vec2::from_angle(snapped.to_radians()) * length
 }
 
 /// The cut line from `a` to `b`: its covered half shaded, the whole line
@@ -360,6 +393,47 @@ mod tests {
         assert_eq!(a, Vec2::new(100.0, 100.0));
         assert!((b.y - 100.0).abs() < 1e-3, "three degrees off level snaps level: {b}");
         assert_eq!(line.line(LineSnap::OFF).1, Vec2::new(300.0, 110.0));
+    }
+
+    #[test]
+    fn level_upright_and_diagonal_catch_from_further_than_the_other_steps() {
+        let start = Vec2::new(400.0, 300.0);
+        // Screen angles (y down) dragged, and where each lands.
+        for (dragged, lands) in [
+            (9.0, 0.0),
+            (-9.5, 0.0),
+            (12.0, 15.0),
+            (20.0, 15.0),
+            (23.0, 30.0),
+            (33.0, 30.0),
+            (36.0, 45.0),
+            (54.0, 45.0),
+            (81.0, 90.0),
+            (-100.0, -90.0),
+            (171.0, 180.0),
+        ] {
+            let end = start + Vec2::from_angle(f32::to_radians(dragged)) * 200.0;
+            let d = snap_end(start, end) - start;
+            assert!((d.length() - 200.0).abs() < 1e-3, "keeps its length");
+            let got = d.y.atan2(d.x).to_degrees();
+            let off = (got - lands).rem_euclid(360.0);
+            assert!(off < 1e-3 || off > 360.0 - 1e-3, "{dragged} went to {got}, not {lands}");
+        }
+        assert_eq!(snap_end(start, start), start);
+    }
+
+    #[test]
+    fn space_slides_the_whole_shape_and_the_drag_carries_on_from_there() {
+        let mut lasso = drag(Shape::Lasso, &[Vec2::new(100.0, 100.0), Vec2::new(200.0, 100.0), Vec2::new(200.0, 200.0)]);
+        lasso.slide_to(Vec2::new(250.0, 180.0));
+        assert_eq!(lasso.start, Vec2::new(150.0, 80.0));
+        assert_eq!(lasso.path, [Vec2::new(150.0, 80.0), Vec2::new(250.0, 80.0), Vec2::new(250.0, 180.0)]);
+        lasso.move_to(Vec2::new(150.0, 180.0), 4.0);
+        assert_eq!(lasso.path.len(), 4, "drawing goes on from the moved shape");
+
+        let mut line = drag(Shape::Line, &[Vec2::new(100.0, 300.0), Vec2::new(500.0, 310.0)]);
+        line.slide_to(Vec2::new(500.0, 210.0));
+        assert_eq!(line.line(LineSnap::OFF), (Vec2::new(100.0, 200.0), Vec2::new(500.0, 210.0)), "same length and angle");
     }
 
     #[test]

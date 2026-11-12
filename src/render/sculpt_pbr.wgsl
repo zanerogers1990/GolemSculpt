@@ -193,18 +193,37 @@ fn hash33(p_in: vec3<f32>) -> vec3<f32> {
     return fract((p.xxy + p.yxx) * p.zyx);
 }
 
+// A lattice corner's value, 0..1, in whole-number arithmetic. The cells on
+// either side of a grid plane each work out the corners they share, and
+// they must get the same bits: `hash13` amplifies rounding (its last step
+// takes fract of a number in the thousands), so a corner worked out from two
+// cells could land either side of its wrap, 0.002 in one and 0.999 in the
+// other, and the noise stepped there - a one-pixel bright line along the
+// plane wherever a finish bumped the normal with it.
+fn hash_corner(c: vec3<i32>) -> f32 {
+    let u = bitcast<vec3<u32>>(c);
+    var x = (u.x * 0x8da6b343u) ^ (u.y * 0xd8163841u) ^ (u.z * 0xcb1ab31fu);
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return f32(x >> 8u) * (1.0 / 16777216.0);
+}
+
 fn value_noise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    var f = fract(p);
+    let cell = floor(p);
+    let i = vec3<i32>(cell);
+    var f = p - cell;
     f = f * f * (3.0 - 2.0 * f);
-    let n000 = hash13(i + vec3<f32>(0.0, 0.0, 0.0));
-    let n100 = hash13(i + vec3<f32>(1.0, 0.0, 0.0));
-    let n010 = hash13(i + vec3<f32>(0.0, 1.0, 0.0));
-    let n110 = hash13(i + vec3<f32>(1.0, 1.0, 0.0));
-    let n001 = hash13(i + vec3<f32>(0.0, 0.0, 1.0));
-    let n101 = hash13(i + vec3<f32>(1.0, 0.0, 1.0));
-    let n011 = hash13(i + vec3<f32>(0.0, 1.0, 1.0));
-    let n111 = hash13(i + vec3<f32>(1.0, 1.0, 1.0));
+    let n000 = hash_corner(i + vec3<i32>(0, 0, 0));
+    let n100 = hash_corner(i + vec3<i32>(1, 0, 0));
+    let n010 = hash_corner(i + vec3<i32>(0, 1, 0));
+    let n110 = hash_corner(i + vec3<i32>(1, 1, 0));
+    let n001 = hash_corner(i + vec3<i32>(0, 0, 1));
+    let n101 = hash_corner(i + vec3<i32>(1, 0, 1));
+    let n011 = hash_corner(i + vec3<i32>(0, 1, 1));
+    let n111 = hash_corner(i + vec3<i32>(1, 1, 1));
     let nxy0 = mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y);
     let nxy1 = mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y);
     return mix(nxy0, nxy1, f.z);

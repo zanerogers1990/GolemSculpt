@@ -1150,7 +1150,8 @@ impl Running {
                 self.export_stl_to(&path)
             }
             "fbx" => self.export_fbx_to(&path),
-            _ => Err("The path must end in .sclp (the whole scene), .obj, .ply or .stl (the active object), or .fbx (every selected object).".into()),
+            "step" | "stp" => self.export_step_to(&path),
+            _ => Err("The path must end in .sclp (the whole scene), .obj, .ply, .stl or .step (the active object), or .fbx (every selected object).".into()),
         }
     }
 

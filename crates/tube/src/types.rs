@@ -22,21 +22,53 @@ pub enum Kind {
     /// Thin at both ends and full in between, wider than it is deep, and laid along the surface between
     /// its points rather than only at them.
     Muscle,
+    /// A flat band of even width and thickness with square or softened edges, resting on the surface
+    /// along its whole length: a belt, a strap, a band. Built as a swept mesh, not a field (see `strap`).
+    Strap,
 }
 
 impl Kind {
     /// What the tool calls one of its shapes, and several, in a sentence and at the start of one.
     pub(crate) fn one(self) -> &'static str {
-        if self == Kind::Muscle { "muscle" } else { "tube" }
+        match self {
+            Kind::Tube => "tube",
+            Kind::Muscle => "muscle",
+            Kind::Strap => "strap",
+        }
     }
 
     pub(crate) fn many(self) -> &'static str {
-        if self == Kind::Muscle { "muscles" } else { "tubes" }
+        match self {
+            Kind::Tube => "tubes",
+            Kind::Muscle => "muscles",
+            Kind::Strap => "straps",
+        }
     }
 
     pub(crate) fn title(self) -> &'static str {
-        if self == Kind::Muscle { "Muscle" } else { "Tube" }
+        match self {
+            Kind::Tube => "Tube",
+            Kind::Muscle => "Muscle",
+            Kind::Strap => "Strap",
+        }
     }
+
+    /// Laid along the surface between its points, not only touching it at them.
+    pub fn lies_on_surface(self) -> bool {
+        self != Kind::Tube
+    }
+}
+
+/// How a strap's two ends are shaped, seen from above.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Tip {
+    /// Cut straight across.
+    #[default]
+    Square,
+    /// A half round, as wide as the strap.
+    Round,
+    /// Narrowing to a point, as a belt's tip does.
+    Point,
 }
 
 /// One control point of a tube as the artist edits it, in the space of the
@@ -129,20 +161,64 @@ pub struct TubeSettings {
     /// How far a muscle on the surface is sunk into it: 0 rests on top, 0.5 is buried to its widest, 1
     /// is gone.
     pub depth: f32,
+    /// A strap's thickness, in the same units as `radius` (its half width): the same however wide it
+    /// is.
+    pub thickness: f32,
+    /// How round a strap's edges are: 0 square, 1 as round as its thickness allows.
+    pub edge: f32,
+    /// How far a strap stands off the skin, as a fraction of its thickness, so that it never dips
+    /// into it.
+    pub gap: f32,
+    /// How taut a strap is drawn: 0 follows every dip of the body, 1 bridges hollows as a tight belt
+    /// does across the small of the back.
+    pub tight: f32,
+    pub tip: Tip,
+    /// A strap that goes round and joins itself: its last point runs on to its first.
+    pub closed: bool,
 }
 
 impl TubeSettings {
     pub const MIN_FLATTEN: f32 = 0.2;
     pub const MAX_DEPTH: f32 = 0.9;
+    /// A strap is never thinner than this share of its half width, nor thicker than this many half
+    /// widths.
+    pub const MIN_THICKNESS_SHARE: f32 = 0.01;
+    pub const MAX_THICKNESS_SHARE: f32 = 2.0;
+    pub const MAX_GAP: f32 = 1.0;
 
     /// What a muscle starts as, at the radius the tool has.
     pub fn muscle(self) -> TubeSettings {
         TubeSettings { kind: Kind::Muscle, taper: 0.8, on_surface: true, blend: 0.2, ..self }
     }
 
-    /// A muscle's depth as a fraction of its width, within the limits; 1 for a tube.
+    /// What a strap starts as, at the radius the tool has: a belt about a sixth as thick as it is wide,
+    /// edges softened a little, drawn fairly taut.
+    pub fn strap(self) -> TubeSettings {
+        TubeSettings {
+            kind: Kind::Strap,
+            taper: 0.0,
+            on_surface: true,
+            blend: 0.0,
+            smoothness: 0.7,
+            thickness: self.radius * 0.3,
+            ..self
+        }
+    }
+
+    /// A strap's thickness within its limits for its width.
+    pub fn strap_thickness(&self) -> f32 {
+        let r = self.radius.clamp(TubeSettings::MIN_RADIUS, TubeSettings::MAX_RADIUS);
+        self.thickness.clamp(r * TubeSettings::MIN_THICKNESS_SHARE, r * TubeSettings::MAX_THICKNESS_SHARE)
+    }
+
+    /// A muscle's depth as a fraction of its width, within the limits; a strap's thickness as one of
+    /// its width; 1 for a tube.
     pub fn flat(&self) -> f32 {
-        if self.kind == Kind::Muscle { self.flatten.clamp(TubeSettings::MIN_FLATTEN, 1.0) } else { 1.0 }
+        match self.kind {
+            Kind::Muscle => self.flatten.clamp(TubeSettings::MIN_FLATTEN, 1.0),
+            Kind::Strap => 0.5 * self.strap_thickness() / self.radius.max(TubeSettings::MIN_RADIUS),
+            Kind::Tube => 1.0,
+        }
     }
 
     /// Half the least thickness of the shape at its fullest: what a lattice has to hold.
@@ -152,12 +228,12 @@ impl TubeSettings {
 
     /// How far the shape stands proud of the model it lies on, at its fullest: what the fillet of a
     /// merge is sized by. A tube's is its radius. A muscle is wide and low, and a fillet sized by its
-    /// width would swallow it: its own is its height off the surface.
+    /// width would swallow it: its own is its height off the surface. A strap's is its thickness.
     pub fn proud(&self) -> f32 {
-        if self.kind == Kind::Muscle {
-            self.thin_radius() * (2.0 - 2.0 * self.depth.clamp(0.0, TubeSettings::MAX_DEPTH))
-        } else {
-            self.radius
+        match self.kind {
+            Kind::Muscle => self.thin_radius() * (2.0 - 2.0 * self.depth.clamp(0.0, TubeSettings::MAX_DEPTH)),
+            Kind::Strap => self.strap_thickness(),
+            Kind::Tube => self.radius,
         }
     }
 
@@ -183,6 +259,12 @@ impl Default for TubeSettings {
             belly: 0.5,
             flatten: 0.55,
             depth: 0.35,
+            thickness: 0.024,
+            edge: 0.35,
+            gap: 0.1,
+            tight: 0.7,
+            tip: Tip::Square,
+            closed: false,
         }
     }
 }
