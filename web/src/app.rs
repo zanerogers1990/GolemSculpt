@@ -42,6 +42,15 @@ mod radial;
 // Several objects, the Objects card and the Transform tool (the gizmo).
 #[path = "objects.rs"]
 mod objects;
+// The welcome card for a first visit, and Help (F1).
+#[path = "welcome.rs"]
+mod welcome;
+// Sculpt layers: the Layers card and its undo steps.
+#[path = "layers.rs"]
+mod layers;
+// Subdivision levels: the Subdivision card, Ctrl+D, Page Up and Page Down.
+#[path = "levels.rs"]
+mod levels;
 
 /// How many undo steps are kept, and how many of them may hold a whole mesh
 /// (a Remesh, a Subdivide, a new shape), which cost far more memory.
@@ -55,6 +64,8 @@ const STORE_AFTER: f64 = 2.0;
 /// objects (W02).
 const SCENE_MAGIC: &[u8; 8] = b"GOLEMW01";
 const SCENE_MAGIC_2: &[u8; 8] = b"GOLEMW02";
+/// W02 with each mesh's hidden faces, subdivision levels and sculpt layers.
+const SCENE_MAGIC_3: &[u8; 8] = b"GOLEMW03";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Drag {
@@ -83,6 +94,12 @@ enum Step {
     /// the scene, `None` while it is in; undo and redo each put it in or
     /// take it out.
     Exists { index: usize, id: u64, held: Option<Box<Object>> },
+    /// The sculpt layers, and the positions they moved, on the other side
+    /// of a Layers card command (layers.rs).
+    Layers(u64, crate::mesh::layers::LayersStep),
+    /// The subdivision levels on the other side of Delete Lower or Delete
+    /// Higher; the mesh itself is unchanged (levels.rs).
+    Levels(u64, Option<Box<crate::mesh::levels::MeshLevels>>),
 }
 
 impl Step {
@@ -174,6 +191,8 @@ pub struct GolemApp {
     brush_keys: brush_keys::BrushKeys,
     /// The quick mask gestures (`masking.rs`).
     gestures: masking::Gestures,
+    /// The welcome card (welcome.rs).
+    welcome: welcome::Welcome,
 }
 
 impl GolemApp {
@@ -238,6 +257,7 @@ impl GolemApp {
             last_time: 0.0,
             brush_keys: Default::default(),
             gestures: Default::default(),
+            welcome: Default::default(),
         };
         app.frame_model(false);
         browser::ready();
@@ -259,15 +279,21 @@ impl GolemApp {
 
     /// Swaps in a new mesh for the active object as one undo step.
     pub(crate) fn replace_mesh(&mut self, mesh: Mesh, what: &str) {
+        self.layer_strength_done();
         let before = std::mem::replace(&mut self.mesh, mesh);
+        let note = Self::rebuilt_note(&before, &self.mesh);
         self.push_undo(Step::Mesh(self.active, Box::new(before)));
         self.upload_whole = true;
         self.mark_changed();
-        self.status = format!("{what}: {} triangles.", group_digits(self.mesh.live_triangle_count()));
+        self.status = format!("{what}: {} triangles.{note}", group_digits(self.mesh.live_triangle_count()));
     }
 
     /// A tool replaced the model (`before` is what it was): one undo step.
     pub(crate) fn mesh_replaced(&mut self, before: Mesh) {
+        let note = Self::rebuilt_note(&before, &self.mesh);
+        if !note.is_empty() {
+            self.status = format!("{}{note}", self.status.trim_end());
+        }
         self.push_undo(Step::Mesh(self.active, Box::new(before)));
         self.upload_whole = true;
         self.mark_changed();
@@ -305,6 +331,8 @@ impl GolemApp {
         if self.sculptor.is_active() {
             return;
         }
+        // A Strength slider still held is its own step, closed before this one.
+        self.layer_strength_done();
         // The tool that is up undoes its own steps first (a tube's point moved, say).
         if self.mode == Mode::Tubes && self.tool_undo(!undo) {
             self.status = if undo { "Undone." } else { "Redone." }.into();
@@ -318,7 +346,9 @@ impl GolemApp {
         // A step that changes a mesh is undone on its own object, which
         // becomes the active one (as on the desktop).
         let on = match &step {
-            Step::Stroke(id, _) | Step::Mesh(id, _) | Step::Faces(id, _) => Some(*id),
+            Step::Stroke(id, _) | Step::Mesh(id, _) | Step::Faces(id, _) | Step::Layers(id, _) | Step::Levels(id, _) => {
+                Some(*id)
+            }
             _ => None,
         };
         if on.is_some_and(|id| !self.activate(id)) {
@@ -343,6 +373,14 @@ impl GolemApp {
             Step::Exists { index, id, held } => {
                 let held = self.toggle_exists(index, id, held);
                 Step::Exists { index, id, held }
+            }
+            Step::Layers(id, mut step) => {
+                step.swap(&mut self.mesh);
+                Step::Layers(id, step)
+            }
+            Step::Levels(id, mut levels) => {
+                std::mem::swap(&mut self.mesh.levels, &mut levels);
+                Step::Levels(id, levels)
             }
         };
         if undo {
@@ -468,33 +506,6 @@ impl GolemApp {
         }
     }
 
-    fn subdivide(&mut self) {
-        if self.mesh.live_triangle_count() * 4 > MAX_TRIANGLES {
-            self.status = format!(
-                "Subdividing would make more than {} million triangles, too many for a browser.",
-                MAX_TRIANGLES / 1_000_000
-            );
-            return;
-        }
-        let tidied = self.tidied();
-        let m = tidied.as_ref().unwrap_or(&self.mesh);
-        let level = sculpt_multires::LevelMesh {
-            positions: m.positions.clone(),
-            mask: m.mask.clone(),
-            triangles: m.indices.clone(),
-            polys: None,
-        };
-        let split = if self.subdivide_smooth { sculpt_multires::Split::Smooth } else { sculpt_multires::Split::Flat };
-        let began = web_time::Instant::now();
-        match sculpt_multires::subdivide(&level, split) {
-            Ok(fine) => {
-                let mesh = Mesh::new(fine.mesh.positions, fine.mesh.triangles, Some(fine.mesh.mask));
-                self.replace_mesh(mesh, &format!("Subdivided in {:.1} s", began.elapsed().as_secs_f32()));
-            }
-            Err(e) => self.status = e,
-        }
-    }
-
     /// Decimate (the desktop's `decimate.rs`): fewer triangles, the shape
     /// kept, the mirror kept exactly, fully masked surface left alone.
     fn decimate(&mut self) {
@@ -525,7 +536,7 @@ impl GolemApp {
     /// symmetry and the view as W01 had them.
     fn scene_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        out.extend_from_slice(SCENE_MAGIC_2);
+        out.extend_from_slice(SCENE_MAGIC_3);
         out.extend_from_slice(&(self.objects.len() as u32).to_le_bytes());
         let active = self.objects.iter().position(|o| o.id == self.active).unwrap_or(0);
         out.extend_from_slice(&(active as u32).to_le_bytes());
@@ -545,6 +556,15 @@ impl GolemApp {
             out.extend_from_slice(bytemuck::cast_slice(&m.positions));
             out.extend_from_slice(bytemuck::cast_slice(&m.indices));
             out.extend_from_slice(bytemuck::cast_slice(&m.mask));
+            // W03: the hidden faces, then the levels and layers as the desktop's file blocks.
+            let hidden = m.hidden_triangles().unwrap_or(&[]);
+            out.extend_from_slice(&(hidden.len() as u32).to_le_bytes());
+            out.extend(hidden.iter().map(|&h| h as u8));
+            let (lvls, layr) = crate::io::level_blocks(m);
+            for block in [lvls, layr] {
+                out.extend_from_slice(&(block.len() as u64).to_le_bytes());
+                out.extend_from_slice(&block);
+            }
         }
         let s = self.sculptor.settings.symmetry;
         out.extend_from_slice(&[s[0] as u8, s[1] as u8, s[2] as u8]);
@@ -558,10 +578,15 @@ impl GolemApp {
     }
 
     fn restore_scene(&mut self, bytes: &[u8]) -> Option<()> {
-        let (two, rest) = match bytes.strip_prefix(SCENE_MAGIC_2) {
-            Some(rest) => (true, rest),
-            None => (false, bytes.strip_prefix(SCENE_MAGIC)?),
+        let (two, three, rest) = if let Some(rest) = bytes.strip_prefix(SCENE_MAGIC_3) {
+            (true, true, rest)
+        } else if let Some(rest) = bytes.strip_prefix(SCENE_MAGIC_2) {
+            (true, false, rest)
+        } else {
+            (false, false, bytes.strip_prefix(SCENE_MAGIC)?)
         };
+        // Meshes whose levels or layers could not be put back on them.
+        let mut lost = 0;
         let mut reader = Reader { bytes: rest, at: 0 };
         let mut objects: Vec<(Props, Mesh)> = Vec::new();
         let mut active = 0;
@@ -583,7 +608,14 @@ impl GolemApp {
                     rotation: glam::Quat::from_xyzw(p[3], p[4], p[5], p[6]).normalize(),
                     scale: Vec3::new(p[7], p[8], p[9]),
                 };
-                objects.push((props, reader.mesh()?));
+                let mesh = if three {
+                    let (mesh, dropped) = reader.mesh_with_levels()?;
+                    lost += dropped as usize;
+                    mesh
+                } else {
+                    reader.mesh()?
+                };
+                objects.push((props, mesh));
             }
         } else {
             let props = Props { name: "Model".into(), visible: true, position: Vec3::ZERO, rotation: glam::Quat::IDENTITY, scale: Vec3::ONE };
@@ -635,6 +667,9 @@ impl GolemApp {
         } else {
             format!("Your last {} objects are back.", self.objects.len())
         };
+        if lost > 0 {
+            self.status += " Some subdivision levels or layers could not be read back, and are part of the shape now.";
+        }
         Some(())
     }
 
@@ -790,6 +825,7 @@ impl GolemApp {
     }
 
     fn press(&mut self, px: Vec2, button: PointerButton, mods: Modifiers, pressure: Option<f32>, time: f64) {
+        self.layer_strength_done();
         self.drag = match button {
             PointerButton::Middle => Drag::Pan,
             PointerButton::Primary if mods.alt && mods.ctrl => Drag::Zoom,
@@ -808,7 +844,14 @@ impl GolemApp {
                 let sample = PointerSample { pos: px, pressure, time };
                 let view = self.local_view();
                 let shown = self.active_object().visible;
-                if shown && self.sculptor.begin(&mut self.mesh, &view, sample, invert, mods.shift) {
+                // A layer that records but does not show takes no stroke, nor
+                // does Erase Layer with nothing to rub out (layers.rs).
+                let on_active = shown && self.pick(px).is_some_and(|(id, _)| id == self.active);
+                let refused = if on_active { self.layer_stroke_refusal(mods.shift) } else { None };
+                if let Some(why) = refused {
+                    self.status = why;
+                    Drag::None
+                } else if shown && self.sculptor.begin(&mut self.mesh, &view, sample, invert, mods.shift) {
                     self.sculptor.pace = Pace::LIVE;
                     Drag::Sculpt
                 } else if button == PointerButton::Primary && mods.shift {
@@ -903,6 +946,9 @@ impl GolemApp {
             self.undo_redo(false);
         } else if undo {
             self.undo_redo(true);
+        }
+        if self.mode == Mode::Sculpt && self.drag == Drag::None && !self.sculptor.is_active() {
+            self.level_keys(ctx);
         }
         let viewport_h = self.view.size.y;
         let mut picked_tool = None;
@@ -1138,7 +1184,19 @@ impl Unsent {
 /// shrunk to points, vertices no triangle uses), when it has any: what goes
 /// to a file or the browser's storage, as on the desktop (`scene::tidied`).
 fn tidy(mesh: &Mesh) -> Option<Mesh> {
-    mesh.has_tombstones().then(|| Mesh::new(mesh.positions.clone(), mesh.indices.clone(), Some(mesh.mask.clone())))
+    mesh.has_tombstones().then(|| copy_of(mesh))
+}
+
+/// A copy of `mesh`, numbered afresh, with its hidden faces, face groups,
+/// subdivision levels and sculpt layers carried through the renumbering
+/// (the desktop's `scene::copy_of`).
+pub(crate) fn copy_of(mesh: &Mesh) -> Mesh {
+    let hidden = mesh.hidden_triangles().unwrap_or(&[]);
+    let (mut copy, numbering) = Mesh::new_numbered(mesh.positions.clone(), mesh.indices.clone(), Some(mesh.mask.clone()), hidden);
+    copy.levels = mesh.levels.as_ref().and_then(|levels| levels.renumbered(&copy, &numbering));
+    copy.layers = mesh.layers_renumbered(&numbering.vertex);
+    copy.set_group_ids(crate::mesh::groups::renumbered(mesh.group_ids(), &numbering.triangle));
+    copy
 }
 
 /// Reads the scene kept in the browser, part by part.
@@ -1169,6 +1227,30 @@ impl<'a> Reader<'a> {
             return None;
         }
         Some(Mesh::new(positions, indices, Some(mask)))
+    }
+
+    /// One mesh as W03 keeps it: as `mesh`, then its hidden faces, levels
+    /// and layers. The second value: some of those could not be put back.
+    fn mesh_with_levels(&mut self) -> Option<(Mesh, bool)> {
+        let n = self.u32()?;
+        let i = self.u32()?;
+        let positions: Vec<Vec3> = bytemuck::pod_collect_to_vec(self.take(n.checked_mul(12)?)?);
+        let indices: Vec<u32> = bytemuck::pod_collect_to_vec(self.take(i.checked_mul(4)?)?);
+        let mask: Vec<f32> = bytemuck::pod_collect_to_vec(self.take(n * 4)?);
+        if indices.is_empty() || indices.iter().any(|&v| v as usize >= n) {
+            return None;
+        }
+        let h = self.u32()?;
+        let hidden: Vec<bool> = self.take(h)?.iter().map(|&b| b != 0).collect();
+        let lvls = self.block()?;
+        let layr = self.block()?;
+        Some(crate::io::build_mesh(positions, indices, mask, hidden, lvls, layr))
+    }
+
+    /// A length (u64) and that many bytes.
+    fn block(&mut self) -> Option<&'a [u8]> {
+        let len = u64::from_le_bytes(self.take(8)?.try_into().ok()?);
+        self.take(usize::try_from(len).ok()?)
     }
 }
 
@@ -1221,6 +1303,9 @@ impl eframe::App for GolemApp {
         // The panels float over the viewport, as on the desktop. They come
         // first, so what is changed on them is drawn in this same frame.
         self.interface(root);
+        self.welcome(ctx);
+        // A Strength slider the card stopped drawing while held is let go.
+        self.layers_watch();
 
         egui::CentralPanel::no_frame().show(root, |ui| {
             let ppp = ctx.pixels_per_point();

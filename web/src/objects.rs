@@ -289,7 +289,8 @@ impl GolemApp {
             return;
         }
         let m = &self.mesh;
-        let copy = Mesh::new(m.positions.clone(), m.indices.clone(), Some(m.mask.clone()));
+        // With its levels, layers and hidden faces, as on the desktop.
+        let copy = super::copy_of(m);
         let props = self.active_object().props();
         let name = props.name.clone();
         self.add_object(copy, props, true);

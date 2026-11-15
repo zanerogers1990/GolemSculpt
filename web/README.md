@@ -58,6 +58,11 @@ Upload everything in `web\dist` except `serve.py` (the `snippets` folder
 too) to one folder on the site, say `/sculpt/`, and link to
 `/sculpt/index.html`.
 
+`THIRD-PARTY-LICENSES.txt` must go up with it: the libraries' licences ask
+for their notices to travel with the program, and the Settings tab's About
+card opens it. `build.ps1` writes it fresh each build (`web\licences.py`,
+from `cargo metadata`), so it always matches what was built.
+
 What the server needs to do, which almost every host already does:
 
 - Send `.wasm` files as `application/wasm` (else the browser cannot compile

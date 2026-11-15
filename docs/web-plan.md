@@ -14,7 +14,11 @@ Phases 1 to 3 are done; phase 4 (shipping) is left.
   alphas (Drag to Place too), pen pressure from every pen sample, the
   Space brush wheel, number keys and S/F/D hold keys, masking (brush,
   Masking card, box and tap gestures), X/Y/Z and radial symmetry, undo.
-- **Mesh:** dynamic topology, Remesh, Subdivide, Decimate.
+- **Mesh:** dynamic topology, Remesh, Decimate; subdivision levels (the
+  desktop's Subdivision card: Subdivide, step between levels with Page Up /
+  Page Down, Delete Lower / Higher) and sculpt layers (the desktop's Layers
+  card, and the Erase Layer brush). Both are kept with the scene in the
+  browser (store layout W03, the desktop's own LVLS/LAYR file blocks).
 - **Objects:** several objects (Objects card: add, copy, hide, delete), each
   with its own place, turn and size; the desktop's transform gizmo (W),
   with masked posing (the desktop's `app/masked.rs`); brushes and tools
@@ -32,9 +36,12 @@ Phases 1 to 3 are done; phase 4 (shipping) is left.
   Only the changed parts of the mesh are sent to the graphics card, and a
   big mesh is drawn only where it is in view.
 
-Not done: a third-party licence file, testing with a real pen and in
-Firefox/Safari, and cavity and mask tint on objects other than the active
-one. Lure and resin finishes were left out at Zane's word.
+- **First visit:** a welcome card with the essentials (F1 or Help brings it
+  back); Settings > About opens `THIRD-PARTY-LICENSES.txt`, which the build
+  writes (`web/licences.py`).
+
+Not done: testing with a real pen and in Firefox/Safari, and cavity and
+mask tint on objects other than the active one. Lure and resin finishes were left out at Zane's word.
 
 ## What was checked (2026-11-15)
 
@@ -69,7 +76,7 @@ interface, and getting meshes in and out through the browser.
 
 Blender link, Claude bridge (MCP), STEP / FBX / glTF / .sclp, bake and UVs,
 ray-traced renders, the Lure and Resin finishes, timelapse and turntable,
-Unity import, the Keys and Mask Fit tools, layers, vertex paint, reference
+Unity import, the Keys and Mask Fit tools, vertex paint, Pose, reference
 images, recovery copies and older versions, the shortcut editor, tooltip
 languages, WinTab.
 

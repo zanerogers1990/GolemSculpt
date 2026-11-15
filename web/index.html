@@ -48,6 +48,19 @@
     }
     // Right button is the brush's opposite, not the browser's menu.
     window.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Keys the app uses that the browser would take for itself first:
+    // Ctrl+D (bookmark: the app's Subdivide), F1 (the browser's help: the
+    // app's welcome card), Page Up / Page Down (scrolling: the app's levels).
+    // The app still sees them; only the browser's own action is stopped.
+    window.addEventListener('keydown', (e) => {
+      const typing = e.target && (e.target.isContentEditable || /^(INPUT|TEXTAREA)$/.test(e.target.tagName));
+      if (typing && e.key !== 'F1') return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      if ((ctrl && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D'))
+          || e.key === 'F1' || e.key === 'PageUp' || e.key === 'PageDown') {
+        e.preventDefault();
+      }
+    }, { capture: true });
 
     const DB = 'golemsculpt', STORE = 'scene', KEY = 'last';
     const openDb = () => new Promise((resolve, reject) => {

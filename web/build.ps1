@@ -122,6 +122,9 @@ try {
     $page = $page.Replace($marker, "const SIZES = { mt: $mt, gpu: $gpu, full: $full }; // GOLEM_SIZES")
     [IO.File]::WriteAllText((Join-Path $dist 'index.html'), $page, (New-Object Text.UTF8Encoding $false))
     Copy-Item (Join-Path $web 'serve.py') $dist -Force
+    # The libraries, pictures and fonts that are someone else's, with their licences (licences.py).
+    python (Join-Path $web 'licences.py') (Join-Path $dist 'THIRD-PARTY-LICENSES.txt')
+    if ($LASTEXITCODE -ne 0) { throw 'licences.py failed: the folder has no licence file' }
 
     Write-Host ("Built {0} (MB of WebAssembly):" -f $dist)
     Write-Host ("  golem_web      {0,5:N1}  WebGPU or WebGL2, one thread" -f ($full / 1MB))

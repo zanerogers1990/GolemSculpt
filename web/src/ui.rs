@@ -60,12 +60,13 @@ pub mod tabs;
 use panels::{Part, Side};
 
 /// The kinds the Brushes card sorts brushes into, as on the desktop, less
-/// the brushes the web version has not got (sculpt layers, paint, Pose).
-const GROUPS: [(&str, &[Brush]); 4] = [
+/// the brushes the web version has not got (paint, Pose).
+const GROUPS: [(&str, &[Brush]); 5] = [
     ("Clay & Build", &[Brush::Clay, Brush::Standard, Brush::Layer, Brush::Inflate]),
     ("Smooth & Flatten", &[Brush::Smooth, Brush::Flatten]),
     ("Cut & Pinch", &[Brush::Crease, Brush::Pinch]),
     ("Move", &[Brush::Move, Brush::SnakeHook, Brush::Nudge]),
+    ("Layers", &[Brush::EraseLayer]),
 ];
 const COLUMNS: usize = 2;
 const GAP: f32 = 4.0;
@@ -100,7 +101,7 @@ macro_rules! icons {
 
 const ICONS: &[(&str, &[u8])] = icons![
     "brush_move", "brush_clay", "brush_smooth", "brush_crease", "brush_inflate", "brush_flatten",
-    "brush_standard", "brush_layer", "brush_snakehook", "brush_pinch", "brush_nudge", "brush_mask",
+    "brush_standard", "brush_layer", "brush_snakehook", "brush_pinch", "brush_nudge", "brush_mask", "brush_erase_layer",
     "polarity_add", "polarity_sub", "undo", "redo", "tool_transform", "eye", "eye_off", "trash", "prim_sphere", "prim_cube", "prim_cylinder",
     "prim_capsule", "prim_cone", "tool_sculpt", "tool_tube", "tool_muscle", "tool_strap", "mirror",
     "tool_lathe", "tool_hands", "tool_array", "tool_measure", "check", "close", "region_box_mask",
@@ -526,27 +527,12 @@ impl GolemApp {
             // Dynamic topology sits here, as on the desktop: the other way to
             // get triangles where they are wanted.
             dyntopo::section(ui, &mut self.sculptor.dyntopo, tips);
+            self.dyntopo_levels_note(ui);
         });
 
-        theme::category(ui, "Subdivide", Color32::from_rgb(120, 160, 240), "", true, |ui| {
-            ui.horizontal(|ui| {
-                let w = theme::row_width(ui, 2, 4.0);
-                for (smooth, name, help) in
-                    [(true, "Smooth", "Rounds the model as it divides."), (false, "Flat", "Cuts each triangle in four and moves nothing.")]
-                {
-                    let style = ButtonStyle { active: (self.subdivide_smooth == smooth).then_some(ACCENT()), ..Default::default() };
-                    if tip(theme::button(ui, w, name, style), tips, help).clicked() {
-                        self.subdivide_smooth = smooth;
-                    }
-                }
-            });
-            let full = ui.available_width();
-            if tip(theme::button(ui, full, "Subdivide", ButtonStyle::default()), tips, "Four times the triangles, for finer detail.")
-                .clicked()
-            {
-                self.subdivide();
-            }
-        });
+        // Subdivision levels and sculpt layers, as the desktop's cards (levels.rs, layers.rs).
+        self.levels_card(ui);
+        self.layers_card(ui);
 
         // Decimate, as the desktop's card (without its preview).
         theme::category(ui, "Decimate", Color32::from_rgb(232, 120, 120), "", false, |ui| {
@@ -722,8 +708,21 @@ impl GolemApp {
                         "Hold Space: the brush wheel. 1 to 0: brushes. M: mask. X: mirror across X.",
                         "T, B, E: Tube, Muscle, Strap. Y: Array. N: Mask. K: Split. L: Measure. Esc: back to sculpting.",
                         "Ctrl+Z, Ctrl+Shift+Z: undo, redo.",
+                        "Page Up, Page Down: subdivision levels. Ctrl+D: subdivide. F1: the welcome card.",
                     ] {
                         theme::hint(ui, line);
+                    }
+                    ui.add_space(4.0);
+                    let full = ui.available_width();
+                    if tip(theme::button(ui, full, "Show the Welcome Card", ButtonStyle::default()), tips, "The short guide shown on a first visit.").clicked() {
+                        self.open_welcome();
+                    }
+                });
+                theme::category(ui, "About", Color32::from_rgb(150, 150, 170), "", false, |ui| {
+                    theme::hint(ui, "GolemSculpt for the web. It is built with open-source libraries and uses Ben Simonds' matcaps (CC BY 3.0); their licences are in the file below.");
+                    let full = ui.available_width();
+                    if tip(theme::button(ui, full, "Third-Party Licences", ButtonStyle::default()), tips, "Opens the licences of the libraries, pictures and fonts GolemSculpt uses, in a new tab.").clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab("THIRD-PARTY-LICENSES.txt"));
                     }
                 });
             }
@@ -927,6 +926,10 @@ impl GolemApp {
                     tip(r, tips, "Draw the edges of the mesh's triangles over it.");
                     if wire != self.look.wire {
                         self.set_wire(wire);
+                    }
+                    let help = ui.add(egui::Label::new(egui::RichText::new("Help").font(theme::font(12.0)).color(ACCENT())).sense(Sense::click()));
+                    if tip(help.on_hover_cursor(egui::CursorIcon::PointingHand), tips, "How to get started (F1).").clicked() {
+                        self.open_welcome();
                     }
                 });
             });
