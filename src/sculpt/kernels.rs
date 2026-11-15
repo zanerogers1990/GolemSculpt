@@ -1547,12 +1547,19 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], scrat
         for s in 1..=steps {
             // The alpha shapes what is laid down, not the plane it is laid
             // on: `fit` above is taken without it.
-            let w = if steps == 1 {
-                tip_w(start, vt.normal, vt.pos) * (1.0 - vt.mask) * p.printed(d, start - d.center)
+            // The alpha is looked up only where the tip gives weight: with
+            // none it could only multiply nothing. (The same weight to the
+            // bit: the tip's share times the alpha's, as before.)
+            let (tip, centre) = if steps == 1 {
+                (tip_w(start, vt.normal, vt.pos) * (1.0 - vt.mask), d.center)
             } else {
                 let centre = prev.lerp(d.center, s as f32 / steps as f32);
-                clay_weight(&p.falloff, start.distance(centre) / eff_r, soft) * guard * p.printed(d, start - centre)
+                (clay_weight(&p.falloff, start.distance(centre) / eff_r, soft) * guard, centre)
             };
+            if tip <= 0.0 {
+                continue;
+            }
+            let w = tip * p.printed(d, start - centre);
             if w <= 0.0 {
                 continue;
             }
