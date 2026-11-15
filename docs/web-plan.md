@@ -30,7 +30,10 @@ Phases 1 to 3 are done; phase 4 (shipping) is left.
   the Clay, Metal and Wood finishes (lighter than the desktop's: no shadows
   or ambient occlusion), cavity, wireframe, backdrop, lens, Save Picture.
 - **Files:** open OBJ/STL/PLY, save OBJ (each object named) and STL; the
-  scene is kept in the browser across a refresh.
+  scene is kept in the browser across a refresh. Save Scene downloads the
+  whole scene as a `.golem` file (the same bytes the browser keeps: objects,
+  places, masks, hidden faces, levels, layers, symmetry, view); Open or a
+  drop takes one back after asking, since it replaces the scene.
 - **Speed:** three builds, picked by the page: many threads (WebGPU, needs
   the two headers in `web/README.md`), one thread WebGPU, one thread WebGL2.
   Only the changed parts of the mesh are sent to the graphics card, and a

@@ -659,8 +659,13 @@ impl GolemApp {
             tabs::Scene::File => {
                 theme::category(ui, "File", theme::lit(ACCENT()), "", true, |ui| {
                     let full = ui.available_width();
-                    if tip(theme::button(ui, full, "Open...", ButtonStyle::default()), tips, "Open an OBJ, STL or PLY file.").clicked() {
+                    if tip(theme::button(ui, full, "Open...", ButtonStyle::default()), tips, "Open a scene saved with Save Scene, or an OBJ, STL or PLY file (as a new object).").clicked() {
                         self.open_picker();
+                    }
+                    let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
+                    let help = "Downloads the whole scene as one .golem file: every object with its place, mask, subdivision levels and layers, and the view. Open it here again, in any browser, to carry on.";
+                    if tip(theme::button(ui, full, "Save Scene", style), tips, help).clicked() {
+                        self.save_scene();
                     }
                     ui.horizontal(|ui| {
                         let w = theme::row_width(ui, 2, 6.0);
@@ -673,7 +678,8 @@ impl GolemApp {
                             self.save_file(true);
                         }
                     });
-                    theme::hint(ui, "Or drop an OBJ, STL or PLY file anywhere on the page.");
+                    theme::hint(ui, "Save Scene keeps everything; OBJ and STL keep only the shapes, for other programs.");
+                    theme::hint(ui, "Or drop a .golem, OBJ, STL or PLY file anywhere on the page.");
                 });
             }
             tabs::Scene::Settings => {

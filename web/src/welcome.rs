@@ -43,7 +43,7 @@ const PARTS: [(&str, &[&str]); 4] = [
         "Keep it",
         &[
             "Your work is kept in this browser between visits. Ctrl+Z undoes.",
-            "File tab: open OBJ, STL or PLY (or drop one on the page), save OBJ or STL.",
+            "File tab: Save Scene downloads everything to carry on elsewhere; OBJ and STL are for other programs.",
         ],
     ),
 ];

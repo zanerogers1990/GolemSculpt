@@ -51,6 +51,9 @@ mod layers;
 // Subdivision levels: the Subdivision card, Ctrl+D, Page Up and Page Down.
 #[path = "levels.rs"]
 mod levels;
+// The whole scene as a file: Save Scene, and opening one.
+#[path = "scene_file.rs"]
+mod scene_file;
 
 /// How many undo steps are kept, and how many of them may hold a whole mesh
 /// (a Remesh, a Subdivide, a new shape), which cost far more memory.
@@ -193,6 +196,8 @@ pub struct GolemApp {
     gestures: masking::Gestures,
     /// The welcome card (welcome.rs).
     welcome: welcome::Welcome,
+    /// A scene file picked or dropped, waiting for "Open this scene?" (scene_file.rs).
+    pending_scene: Option<scene_file::Pending>,
 }
 
 impl GolemApp {
@@ -258,6 +263,7 @@ impl GolemApp {
             brush_keys: Default::default(),
             gestures: Default::default(),
             welcome: Default::default(),
+            pending_scene: None,
         };
         app.frame_model(false);
         browser::ready();
@@ -431,6 +437,11 @@ impl GolemApp {
 
     /// A file opened is a new object.
     fn open_file(&mut self, name: &str, bytes: &[u8]) {
+        // A whole scene (Save Scene) asks first: it replaces what is here.
+        if scene_file::is_scene(name, bytes) {
+            self.scene_file_picked(name, bytes);
+            return;
+        }
         match files::read(name, bytes) {
             Ok(t) => {
                 let mesh = Mesh::new(t.positions, t.indices, None);
@@ -1298,6 +1309,8 @@ impl eframe::App for GolemApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
+        // "Open this scene?" first, so its Enter and Escape are its own.
+        self.scene_question(ctx);
         self.keys(ctx);
 
         // The panels float over the viewport, as on the desktop. They come
