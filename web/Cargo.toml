@@ -1,0 +1,80 @@
+[package]
+name = "golem-web"
+version = "0.1.0"
+edition = "2024"
+description = "GolemSculpt in the browser: the desktop's sculpting engine with a small interface."
+
+# Its own workspace, so the app's workspace and Cargo.toml stay untouched.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+# "wgpu_no_default_features" rather than "wgpu": the latter switches on egui-wgpu's
+# "fragile-send-sync-non-atomic-wasm", which the many-threads build cannot have
+# (wgpu's browser objects may not be shared between threads there). The page
+# only ever touches them from its one main thread, so nothing is lost.
+eframe = { version = "0.36", default-features = false, features = ["wgpu_no_default_features", "default_fonts"] }
+egui = "0.36"
+glam = { version = "0.34", features = ["bytemuck"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+log = "0.4"
+rayon = "1.12.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+web-time = "1.1"
+# WebGPU always; WebGL2 too with the "webgl" feature (on by default, see [features]).
+wgpu = { version = "30", default-features = false, features = ["webgpu", "wgsl"] }
+sculpt-array = { path = "../crates/array" }
+sculpt-cut = { path = "../crates/cut" }
+sculpt-geom = { path = "../crates/geom" }
+sculpt-multires = { path = "../crates/multires" }
+sculpt-symmetry = { path = "../crates/symmetry" }
+sculpt-volume = { path = "../crates/volume" }
+sculpt-tube = { path = "../crates/tube" }
+sculpt-toolkit = { path = "../crates/toolkit" }
+sculpt-region = { path = "../crates/region" }
+sculpt-lathe = { path = "../crates/lathe" }
+sculpt-measure = { path = "../crates/measure" }
+sculpt-hands = { path = "../crates/hands" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
+# Only in the many-threads build (`--features threads`, see build.ps1): runs
+# rayon's workers as Web Workers sharing the module's memory.
+wasm-bindgen-rayon = { version = "1.3", features = ["no-bundler"], optional = true }
+
+[features]
+default = ["webgl"]
+# Drawing with WebGL2 where the browser has no WebGPU. It costs a fifth of
+# the download (wgpu's own WebGPU implementation and shader translator come
+# with it), so build.ps1 also makes builds without it, which index.html
+# loads where the browser has WebGPU.
+webgl = ["wgpu/webgl"]
+# The many-threads build. It also needs the nightly compiler and the flags in
+# build.ps1; index.html loads it only where the page is cross-origin isolated.
+threads = ["dep:wasm-bindgen-rayon"]
+
+# egui's default fonts with the two the interface does not need left out
+# (slim-fonts/src/lib.rs says which and why).
+[patch.crates-io]
+epaint_default_fonts = { path = "slim-fonts" }
+
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# The page as it is put on the website: small and fast.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

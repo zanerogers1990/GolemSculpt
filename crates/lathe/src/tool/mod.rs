@@ -39,7 +39,10 @@ mod panel;
 #[cfg(test)]
 mod tests;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use wasm_clock::Instant;
 
 use glam::{Vec2, Vec3};
 use sculpt_geom::Aabb;
@@ -869,5 +872,22 @@ impl Tool for Lathe {
     /// same with Radial Symmetry on Create ticked.
     fn demo(&mut self, cx: &mut Ctx, what: &str) {
         self.run_demo(cx, what);
+    }
+}
+
+/// A browser page has no clock the standard library can read (the web build, `web/`): there a rebuild
+/// is timed as instant, so the preview never drops to draft detail. Nothing changes on the desktop.
+#[cfg(target_arch = "wasm32")]
+mod wasm_clock {
+    pub struct Instant;
+
+    impl Instant {
+        pub fn now() -> Instant {
+            Instant
+        }
+
+        pub fn elapsed(&self) -> std::time::Duration {
+            std::time::Duration::ZERO
+        }
     }
 }

@@ -79,19 +79,34 @@ impl Language {
 
 const COUNT: usize = 12;
 
+/// A language's tooltips. The web build (web/) shows English only, and
+/// leaves the other languages' files out of what a visitor downloads.
+#[cfg(not(target_arch = "wasm32"))]
+macro_rules! tooltips {
+    ($file:literal) => {
+        include_str!($file)
+    };
+}
+#[cfg(target_arch = "wasm32")]
+macro_rules! tooltips {
+    ($file:literal) => {
+        ""
+    };
+}
+
 pub static LANGUAGES: [Language; COUNT] = [
     Language { code: "en", name: "English", english: "English", script: Script::Latin, file: "" },
-    Language { code: "es", name: "Español", english: "Spanish", script: Script::Latin, file: include_str!("../translations/es.txt") },
-    Language { code: "pt", name: "Português (Brasil)", english: "Portuguese", script: Script::Latin, file: include_str!("../translations/pt.txt") },
-    Language { code: "fr", name: "Français", english: "French", script: Script::Latin, file: include_str!("../translations/fr.txt") },
-    Language { code: "de", name: "Deutsch", english: "German", script: Script::Latin, file: include_str!("../translations/de.txt") },
-    Language { code: "it", name: "Italiano", english: "Italian", script: Script::Latin, file: include_str!("../translations/it.txt") },
-    Language { code: "pl", name: "Polski", english: "Polish", script: Script::Latin, file: include_str!("../translations/pl.txt") },
-    Language { code: "tr", name: "Türkçe", english: "Turkish", script: Script::Latin, file: include_str!("../translations/tr.txt") },
-    Language { code: "ru", name: "Русский", english: "Russian", script: Script::Latin, file: include_str!("../translations/ru.txt") },
-    Language { code: "ja", name: "日本語", english: "Japanese", script: Script::Japanese, file: include_str!("../translations/ja.txt") },
-    Language { code: "zh", name: "简体中文", english: "Chinese (Simplified)", script: Script::Chinese, file: include_str!("../translations/zh.txt") },
-    Language { code: "ko", name: "한국어", english: "Korean", script: Script::Korean, file: include_str!("../translations/ko.txt") },
+    Language { code: "es", name: "Español", english: "Spanish", script: Script::Latin, file: tooltips!("../translations/es.txt") },
+    Language { code: "pt", name: "Português (Brasil)", english: "Portuguese", script: Script::Latin, file: tooltips!("../translations/pt.txt") },
+    Language { code: "fr", name: "Français", english: "French", script: Script::Latin, file: tooltips!("../translations/fr.txt") },
+    Language { code: "de", name: "Deutsch", english: "German", script: Script::Latin, file: tooltips!("../translations/de.txt") },
+    Language { code: "it", name: "Italiano", english: "Italian", script: Script::Latin, file: tooltips!("../translations/it.txt") },
+    Language { code: "pl", name: "Polski", english: "Polish", script: Script::Latin, file: tooltips!("../translations/pl.txt") },
+    Language { code: "tr", name: "Türkçe", english: "Turkish", script: Script::Latin, file: tooltips!("../translations/tr.txt") },
+    Language { code: "ru", name: "Русский", english: "Russian", script: Script::Latin, file: tooltips!("../translations/ru.txt") },
+    Language { code: "ja", name: "日本語", english: "Japanese", script: Script::Japanese, file: tooltips!("../translations/ja.txt") },
+    Language { code: "zh", name: "简体中文", english: "Chinese (Simplified)", script: Script::Chinese, file: tooltips!("../translations/zh.txt") },
+    Language { code: "ko", name: "한국어", english: "Korean", script: Script::Korean, file: tooltips!("../translations/ko.txt") },
 ];
 
 /// The language tooltips are in, as an index into [`LANGUAGES`].

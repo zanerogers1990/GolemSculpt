@@ -35,7 +35,12 @@
 //! stroke a frame's worth at a time. So the tail of a stroke that fell
 //! behind is made the way its body was.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+// std's clock panics in a browser; the web build (web/) reads the page's.
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 /// How a stroke is paced.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
