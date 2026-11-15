@@ -1379,6 +1379,8 @@ impl eframe::App for GolemApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
+        // The cards over the page, as they stand before this frame's input.
+        let cards_were = (self.welcome.open, self.pending_scene.is_some());
         // "Open this scene?" first, so its Enter and Escape are its own.
         self.scene_question(ctx);
         self.keys(ctx);
@@ -1387,6 +1389,13 @@ impl eframe::App for GolemApp {
         // first, so what is changed on them is drawn in this same frame.
         self.interface(root);
         self.welcome(ctx);
+        // A card that closed (or opened) needs a frame drawn without (with)
+        // it at once: egui finds what a click lands on from the last frame
+        // drawn, so otherwise the next click lands on the card's invisible
+        // backdrop, and a press on a tab or button seems to do nothing.
+        if (self.welcome.open, self.pending_scene.is_some()) != cards_were {
+            ctx.request_repaint();
+        }
         // A Strength slider the card stopped drawing while held is let go.
         self.layers_watch();
 

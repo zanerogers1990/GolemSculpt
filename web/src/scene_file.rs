@@ -11,7 +11,7 @@
 //! Opening one replaces the scene, and the undo list goes with it, so it
 //! asks first (`scene_question`).
 
-use eframe::egui::{self, Align2, Color32, Id, Key, Modifiers, Order, RichText};
+use eframe::egui::{self, Color32, Id, Key, Modifiers, RichText};
 
 use super::ui::theme::{self, ACCENT, ButtonStyle};
 use super::{GolemApp, Mode};
@@ -76,59 +76,46 @@ impl GolemApp {
         let Some(pending) = &self.pending_scene else { return };
         let name = pending.name.clone();
         let mb = pending.bytes.len() as f64 / (1 << 20) as f64;
-        let (mut open, mut cancel) = ctx.input_mut(|i| {
-            (i.consume_key(Modifiers::NONE, Key::Enter), i.consume_key(Modifiers::NONE, Key::Escape))
-        });
+        let mut open = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
         let screen = ctx.content_rect();
-        let shade = egui::Area::new(Id::new("scene_question_shade"))
-            .order(Order::Foreground)
-            .fixed_pos(screen.min)
-            .show(ctx, |ui| {
-                let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
-                ui.painter().rect_filled(rect, 0.0, Color32::from_black_alpha(110));
-                response
-            });
-        cancel |= shade.inner.clicked();
         let width = (screen.width() - 32.0).clamp(240.0, 400.0);
         let count = self.objects.len();
-        let card = egui::Area::new(Id::new("scene_question_card"))
-            .order(Order::Foreground)
-            .pivot(Align2::CENTER_CENTER)
-            .fixed_pos(screen.center())
+        // egui's own modal (as the welcome card): it dims the page, keeps
+        // clicks off what is under it, and closes on Escape or a click on
+        // the dimmed page.
+        let frame = egui::Frame::new()
+            .fill(theme::PANEL())
+            .stroke(egui::Stroke::new(1.0, theme::CONTROL()))
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::same(18));
+        let modal = egui::Modal::new(Id::new("scene_question_card"))
+            .backdrop_color(Color32::from_black_alpha(110))
+            .frame(frame)
             .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(theme::PANEL())
-                    .stroke(egui::Stroke::new(1.0, theme::CONTROL()))
-                    .corner_radius(10.0)
-                    .inner_margin(egui::Margin::same(18))
-                    .show(ui, |ui| {
-                        ui.set_width(width);
-                        ui.spacing_mut().item_spacing.y = 6.0;
-                        ui.label(RichText::new("Open this scene?").font(theme::font(18.0)).color(theme::TEXT()));
-                        ui.add(egui::Label::new(RichText::new(format!("{name} ({mb:.1} MB)")).font(theme::font(12.0)).color(theme::HINT())).wrap());
-                        let (now, them) = match count {
-                            1 => ("the object you have now".to_owned(), "it"),
-                            n => (format!("the {n} objects you have now"), "them"),
-                        };
-                        let text = format!(
-                            "It takes the place of {now}, and Ctrl+Z cannot bring {them} back. To keep {them}, cancel \
-                             and press Save Scene first."
-                        );
-                        ui.add(egui::Label::new(RichText::new(text).font(theme::font(12.0)).color(theme::TEXT())).wrap());
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            let w = theme::row_width(ui, 2, 6.0);
-                            if theme::button(ui, w, "Cancel", ButtonStyle::default()).clicked() {
-                                cancel = true;
-                            }
-                            let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
-                            if theme::button(ui, w, "Open Scene", style).clicked() {
-                                open = true;
-                            }
-                        });
-                    });
+                ui.set_width(width);
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.label(RichText::new("Open this scene?").font(theme::font(18.0)).color(theme::TEXT()));
+                ui.add(egui::Label::new(RichText::new(format!("{name} ({mb:.1} MB)")).font(theme::font(12.0)).color(theme::HINT())).wrap());
+                let (now, them) = match count {
+                    1 => ("the object you have now".to_owned(), "it"),
+                    n => (format!("the {n} objects you have now"), "them"),
+                };
+                let text = format!(
+                    "It takes the place of {now}, and Ctrl+Z cannot bring {them} back. To keep {them}, cancel and press Save Scene first."
+                );
+                ui.add(egui::Label::new(RichText::new(text).font(theme::font(12.0)).color(theme::TEXT())).wrap());
+                ui.add_space(6.0);
+                let mut pressed = (false, false);
+                ui.horizontal(|ui| {
+                    let w = theme::row_width(ui, 2, 6.0);
+                    pressed.1 = theme::button(ui, w, "Cancel", ButtonStyle::default()).clicked();
+                    let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
+                    pressed.0 = theme::button(ui, w, "Open Scene", style).clicked();
+                });
+                pressed
             });
-        ctx.move_to_top(card.response.layer_id);
+        open |= modal.inner.0;
+        let cancel = modal.inner.1 || modal.should_close();
         if open {
             self.open_pending_scene();
         } else if cancel {
