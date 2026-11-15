@@ -3,21 +3,27 @@
 //
 // Clay, Metal and Wood: the desktop's own finish functions (sculpt_pbr.wgsl),
 // copied as they are below, lit by a lighter rig than the desktop's so they
-// run on WebGL2 too: three lights turned with the camera, the sky, equator
-// and ground light all round, and a reflected sky worked out here rather
-// than read from an HDRI. No shadow map and no ambient occlusion: the mesh's
-// own curvature puts the wash in the recesses and the wear on the ridges.
+// run on WebGL2 too: the Lighting card's preset (three or five lights,
+// turned with the camera or left where they were), the sky, equator and
+// ground light all round, and a reflected sky worked out here rather than
+// read from an HDRI. No shadow map and no ambient occlusion: the mesh's own
+// curvature puts the wash in the recesses and the wear on the ridges.
 
 struct FinishU {
-    // x: the finish (0 matcap, 1 clay, 2 metal, 3 wood), y: how strongly the
-    // sky is reflected.
+    // x: the finish (0 matcap, 1 clay, 2 metal, 3 wood, 4 plain), y: how
+    // strongly the sky is reflected, z: how many lights (3 or 5), w: how
+    // wide they look from the model, in radians (the Lighting card's Light
+    // Size: it spreads the highlights, as a bigger softbox does).
     kind: vec4<f32>,
-    light_dir: array<vec4<f32>, 3>,
+    light_dir: array<vec4<f32>, 5>,
     // Linear colour times intensity (pi is in it, as on the desktop).
-    light_color: array<vec4<f32>, 3>,
+    light_color: array<vec4<f32>, 5>,
     sky: vec4<f32>,
     equator: vec4<f32>,
     ground: vec4<f32>,
+    // x: exposure (times), y: the tone curve (0 none, 1 neutral, 2 ACES,
+    // 3 PBR Neutral, 4 AgX), z: film grain (applied as the picture is copied).
+    tone: vec4<f32>,
     // The finish's own settings, laid out as its function reads them.
     v: array<vec4<f32>, 12>,
 };
@@ -224,14 +230,20 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
     var color = finish_ambient(n) * diffuse * (1.0 - reflected) * occlusion
         + finish_environment(r, perceptual_roughness) * reflected * energy * (hidden * horizon * horizon);
     let direct_diffuse = diffuse * (1.0 - 0.04);
-    for (var i = 0; i < 3; i++) {
+    // A light that looks wide from the surface spreads its highlight: the
+    // roughness widened by half its angle, the peak lowered to keep the
+    // light's energy (Karis's sphere-light normalisation).
+    let a_light = min(a + 0.5 * fin.kind.w, 1.0);
+    let spread = (a / a_light) * (a / a_light);
+    let count = i32(fin.kind.z + 0.5);
+    for (var i = 0; i < count; i++) {
         let l = fin.light_dir[i].xyz;
         let nl = saturate(dot(n, l));
         let h = normalize(l + s.v);
         let nh = saturate(dot(n, h));
         let lh = saturate(dot(l, h));
         let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - lh);
-        let spec = fresnel * (d_ggx(nh, a) * v_smith(nv, nl, a) * 3.14159265) * energy;
+        let spec = fresnel * (d_ggx(nh, a_light) * spread * v_smith(nv, nl, a) * 3.14159265) * energy;
         color += (direct_diffuse + spec) * fin.light_color[i].rgb * nl;
     }
     return color;
@@ -244,7 +256,8 @@ fn light_sample(s: Surface, m: MaterialSample) -> vec3<f32> {
     if (m.sheen_amount != 0.0 || any(m.scatter_color != vec3<f32>(0.0))) {
         var sheen = vec3<f32>(0.0);
         var scatter = vec3<f32>(0.0);
-        for (var i = 0; i < 3; i++) {
+        let count = i32(fin.kind.z + 0.5);
+        for (var i = 0; i < count; i++) {
             let l = fin.light_dir[i].xyz;
             let c = fin.light_color[i].rgb;
             let ndl = dot(m.normal, l);
@@ -277,6 +290,76 @@ fn pbr_neutral_tonemap(c_in: vec3<f32>) -> vec3<f32> {
     c *= new_peak / peak;
     let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
     return mix(c, vec3<f32>(new_peak), g);
+}
+
+fn neutral_curve(x: vec3<f32>) -> vec3<f32> {
+    let a = 0.2;
+    let b = 0.29;
+    let c = 0.24;
+    let d = 0.272;
+    let e = 0.02;
+    let f = 0.3;
+    return (x * (a * x + c * b) + d * e) / (x * (a * x + b) + d * f) - e / f;
+}
+
+// The desktop's "Neutral": a gentle shoulder that keeps hue.
+fn neutral_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let white_scale = vec3<f32>(1.0) / neutral_curve(vec3<f32>(5.3));
+    return neutral_curve(x * white_scale) * white_scale;
+}
+
+// A close fit of the ACES film curve.
+fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let m1 = mat3x3<f32>(
+        vec3<f32>(0.59719, 0.07600, 0.02840),
+        vec3<f32>(0.35458, 0.90834, 0.13383),
+        vec3<f32>(0.04823, 0.01566, 0.83777));
+    let m2 = mat3x3<f32>(
+        vec3<f32>(1.60475, -0.10208, -0.00327),
+        vec3<f32>(-0.53108, 1.10813, -0.07276),
+        vec3<f32>(-0.07367, -0.00605, 1.07602));
+    let v = m1 * x;
+    let a = v * (v + 0.0245786) - 0.000090537;
+    let b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    return clamp(m2 * (a / b), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// AgX (Troy Sobotka's, in Benjamin Wrensch's fit), returned linear.
+fn agx_tonemap(c: vec3<f32>) -> vec3<f32> {
+    let inset = mat3x3<f32>(
+        vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
+        vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
+        vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
+    let outset = mat3x3<f32>(
+        vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
+        vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
+        vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
+    let min_ev = -12.47393;
+    let max_ev = 4.026069;
+    var v = inset * max(c, vec3<f32>(1e-10));
+    v = clamp(log2(v), vec3<f32>(min_ev), vec3<f32>(max_ev));
+    v = (v - min_ev) / (max_ev - min_ev);
+    let v2 = v * v;
+    let v4 = v2 * v2;
+    v = 15.5 * v4 * v2 - 40.14 * v4 * v + 31.96 * v4 - 6.868 * v2 * v + 0.4298 * v2 + 0.1191 * v - 0.00232;
+    v = outset * v;
+    return pow(max(v, vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
+// The Effects card's exposure and tone curve on a lit colour.
+fn tone_map(c_in: vec3<f32>) -> vec3<f32> {
+    let c = c_in * fin.tone.x;
+    let curve = fin.tone.y;
+    if (curve > 3.5) {
+        return agx_tonemap(c);
+    } else if (curve > 2.5) {
+        return pbr_neutral_tonemap(c);
+    } else if (curve > 1.5) {
+        return aces_tonemap(c);
+    } else if (curve > 0.5) {
+        return neutral_tonemap(c);
+    }
+    return c;
 }
 
 fn to_display(c: vec3<f32>) -> vec3<f32> {
@@ -587,6 +670,17 @@ fn finish_wood(s: Surface) -> MaterialSample {
     return m;
 }
 
+// One colour, how metal and how smooth: the lights and nothing else, but
+// the deepest recesses see a little less of the sky.
+fn finish_plain(s: Surface) -> MaterialSample {
+    var m = material(s, fin.v[0].rgb);
+    m.metallic = fin.v[1].x;
+    m.smoothness = fin.v[1].y;
+    let recess = saturate((s.curv - 0.5) * 2.0);
+    m.occlusion = 1.0 - 0.5 * recess;
+    return m;
+}
+
 // The finish in use, lit, tone mapped and encoded for the display.
 fn finish_shade(s: Surface) -> vec3<f32> {
     var m: MaterialSample;
@@ -595,8 +689,10 @@ fn finish_shade(s: Surface) -> vec3<f32> {
         m = finish_clay(s);
     } else if (kind < 2.5) {
         m = finish_metal(s);
-    } else {
+    } else if (kind < 3.5) {
         m = finish_wood(s);
+    } else {
+        m = finish_plain(s);
     }
-    return to_display(pbr_neutral_tonemap(light_sample(s, m)));
+    return to_display(tone_map(light_sample(s, m)));
 }

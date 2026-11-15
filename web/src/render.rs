@@ -34,6 +34,8 @@ pub mod chunks;
 pub mod still;
 #[path = "finish.rs"]
 pub mod finish;
+#[path = "lighting.rs"]
+pub mod lighting;
 
 const SAMPLES: u32 = 4;
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -98,6 +100,12 @@ pub struct Globals {
     pub look: [f32; 4],
     /// xyz: 1 where that mirror plane's guide is drawn.
     pub guides: [f32; 4],
+    /// The Effects card, applied as the picture goes into the page:
+    /// saturation and contrast (1 unchanged), the vignette's strength (0
+    /// none) and smoothness.
+    pub grade: [f32; 4],
+    /// x: film grain (0 none).
+    pub extras: [f32; 4],
 }
 
 impl Globals {

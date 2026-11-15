@@ -9,13 +9,14 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use eframe::egui::{self, Color32, Ui};
-use glam::Vec2;
+use eframe::egui::{self, Color32, Ui, pos2};
+use glam::{Vec2, Vec3};
 
 use super::GolemApp;
 use super::ui::theme::{self, ACCENT, ButtonStyle};
 use super::ui::tip;
 use crate::render::finish::{self, Finish, Finishes};
+use crate::render::lighting::{LIGHTING, Tonemap};
 use crate::render::still::{self, Request};
 use crate::render::{Culling, Globals, Viewport};
 
@@ -48,6 +49,9 @@ pub struct Look {
     still: Option<Arc<Request>>,
     /// The lens kept from the last visit is put on the camera on the first frame.
     lens_restored: bool,
+    /// The view's right, up and forward when Follow Camera went off: the
+    /// lights stay turned to them.
+    frozen: Option<[Vec3; 3]>,
 }
 
 impl Look {
@@ -66,6 +70,7 @@ impl Look {
             still_transparent: pref("still_clear") == "on",
             still: None,
             lens_restored: false,
+            frozen: None,
         }
     }
 }
@@ -122,6 +127,8 @@ impl GolemApp {
             up,
             look: [self.look.gradient as u8 as f32, self.look.gradient_bias, 0.0, WIRE_OPACITY],
             guides,
+            grade: self.look.finishes.effects.grade(),
+            extras: [self.look.finishes.effects.film_grain.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
         };
         let upload = self.upload();
         let culled = if self.look.cull {
@@ -132,7 +139,13 @@ impl GolemApp {
             None
         };
         let model_size = self.mesh.bounds().size().max_element();
-        let finish = self.look.finishes.uniform(self.view.right, self.view.up, self.view.forward, model_size);
+        let [right, up, forward] = if self.look.finishes.lighting.follow_camera {
+            self.look.frozen = None;
+            [self.view.right, self.view.up, self.view.forward]
+        } else {
+            *self.look.frozen.get_or_insert([self.view.right, self.view.up, self.view.forward])
+        };
+        let finish = self.look.finishes.uniform(right, up, forward, model_size);
 
         // A picture asked for: once it is back, made into a PNG and handed over.
         let still = self.look.still.clone();
@@ -218,6 +231,8 @@ impl GolemApp {
     /// lens, the display switches and Save Picture.
     pub(super) fn look_cards(&mut self, ui: &mut Ui) {
         self.finish_card(ui);
+        self.lighting_card(ui);
+        self.effects_card(ui);
         self.backdrop_card(ui);
         self.lens_card(ui);
         self.display_card(ui);
@@ -232,6 +247,7 @@ impl GolemApp {
         let names = finish::preset_names(f.finish);
         let summary = match f.finish {
             Finish::Matcap => "Matcap".to_owned(),
+            Finish::Plain => "Plain".to_owned(),
             Finish::Clay => names[f.clay.preset.min(names.len() - 1)].to_owned(),
             Finish::Metal => names[f.metal.preset.min(names.len() - 1)].to_owned(),
             Finish::Wood => names[f.wood.preset.min(names.len() - 1)].to_owned(),
@@ -245,6 +261,7 @@ impl GolemApp {
                     let style = ButtonStyle { active: (f.finish == kind).then_some(ACCENT()), ..Default::default() };
                     let help = match kind {
                         Finish::Matcap => "Shade the model with the matcap above: quick and even, for judging form.",
+                        Finish::Plain => "One colour under the Lighting card's lights: pick how metal and how smooth.",
                         Finish::Clay => "Sculptor's oil clay: a satin sheen, a wet highlight, richer colour in the recesses.",
                         Finish::Metal => "Aged metal: bare metal on the raised edges, a coat in the hollows, a dark wash in the deepest.",
                         Finish::Wood => "Carved wood: growth rings round a log, grime in the recesses, edges rubbed back, a wax shine.",
@@ -256,7 +273,18 @@ impl GolemApp {
                 }
             });
             if f.finish == Finish::Matcap {
-                theme::hint(ui, "A finish lights the model with three lights that turn with the view.");
+                theme::hint(ui, "A finish lights the model with the Lighting card's lights.");
+                return;
+            }
+            let two = |v: f32| format!("{v:.2}");
+            if f.finish == Finish::Plain {
+                let p = &mut f.plain;
+                ui.horizontal(|ui| {
+                    ui.color_edit_button_rgb(&mut p.color);
+                    ui.label(egui::RichText::new("Colour").font(theme::font(12.0)).color(theme::TEXT()));
+                });
+                tip(theme::slider(ui, "Metallic", &mut p.metallic, 0.0..=1.0, two), tips, "0 is clay, plastic or stone; 1 is bare metal, which takes its colour into its reflections.");
+                tip(theme::slider(ui, "Smoothness", &mut p.smoothness, 0.0..=1.0, two), tips, "Rough and matte at 0, polished at 1: tight bright highlights.");
                 return;
             }
             // The preset, a button each, two to a row.
@@ -279,7 +307,6 @@ impl GolemApp {
                     }
                 });
             }
-            let two = |v: f32| format!("{v:.2}");
             match f.finish {
                 Finish::Clay => {
                     let c = &mut f.clay;
@@ -322,8 +349,6 @@ impl GolemApp {
                     tip(theme::slider(ui, "Variation", &mut w.seed, 0.0..=1.0, two), tips, "Moves the heart of the log, and the rings with it.");
                 }
             }
-            tip(theme::slider(ui, "Brightness", &mut f.brightness, 0.2..=2.5, two), tips, "How bright the lights are.");
-            theme::hint(ui, "Three lights turn with the view. The desktop adds shadows, an HDRI and softboxes.");
         });
         if froze {
             // Patterns are sized to the model as it is now, and stay that
@@ -331,6 +356,152 @@ impl GolemApp {
             self.look.finishes.freeze(model_size);
         }
         if self.look.finishes != before {
+            crate::browser::set_pref("finish", &self.look.finishes.to_pref());
+        }
+    }
+
+    /// The Lighting card: the desktop's presets, 3- or 5-point, brightness,
+    /// rotation, Follow Camera and Light Size. No shadows, softboxes or HDRI
+    /// in the browser.
+    fn lighting_card(&mut self, ui: &mut Ui) {
+        let tips = self.ui.tips;
+        let before = self.look.finishes.clone();
+        let matcap = self.look.finishes.finish == Finish::Matcap;
+        let f = &mut self.look.finishes;
+        let summary = f.lighting.preset().name;
+        let mut lit = false;
+        theme::category(ui, "Lighting", Color32::from_rgb(255, 196, 110), summary, false, |ui| {
+            if matcap {
+                theme::hint(ui, "A matcap carries its own lighting. Pick a finish to see these lights.");
+                let w = ui.available_width();
+                if tip(theme::button(ui, w, "Use the Plain Finish", ButtonStyle::default()), tips, "Shade the model in one colour under these lights.").clicked() {
+                    lit = true;
+                }
+                ui.add_space(4.0);
+            }
+            let l = &mut f.lighting;
+            for (row, pair) in LIGHTING.chunks(2).enumerate() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let w = theme::row_width(ui, 2, 6.0);
+                    for (column, p) in pair.iter().enumerate() {
+                        let i = row * 2 + column;
+                        let style = ButtonStyle { active: (l.preset == i).then_some(ACCENT()), ..Default::default() };
+                        let response = theme::button(ui, w, p.name, style);
+                        // A dot of the key light's colour, as on the desktop.
+                        let c = p.lights[0].color;
+                        let dot = pos2(response.rect.left() + 9.0, response.rect.center().y);
+                        let color = Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8);
+                        ui.painter().circle_filled(dot, 4.5, color);
+                        ui.painter().circle_stroke(dot, 4.5, egui::Stroke::new(1.0, Color32::from_black_alpha(90)));
+                        if tip(response, tips, p.description).clicked() {
+                            l.preset = i;
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let w = theme::row_width(ui, 2, 6.0);
+                for (five, name, help) in [
+                    (false, "3-Point", "Key, fill and rim."),
+                    (true, "5-Point", "Key, fill and rim, with a kicker from behind and a light from above."),
+                ] {
+                    let style = ButtonStyle { active: (l.five_point == five).then_some(ACCENT()), ..Default::default() };
+                    if tip(theme::button(ui, w, name, style), tips, help).clicked() {
+                        l.five_point = five;
+                    }
+                }
+            });
+            let two = |v: f32| format!("{v:.2}");
+            tip(theme::slider(ui, "Brightness", &mut f.brightness, 0.0..=2.0, two), tips, "How bright the lights are.");
+            let l = &mut f.lighting;
+            tip(
+                theme::slider(ui, "Rotation", &mut l.rotation, -180.0..=180.0, |v| format!("{v:.0}\u{b0}")),
+                tips,
+                "Turns the lights round the model.",
+            );
+            tip(
+                theme::checkbox(ui, &mut l.follow_camera, "Follow Camera", ACCENT()),
+                tips,
+                "Keep the key light at the upper left of the view. Off freezes the lights where they are.",
+            );
+            tip(
+                theme::slider(ui, "Light Size", &mut l.light_size, 0.0..=4.0, two),
+                tips,
+                "How big the lights are: bigger spreads the highlights. 1 is the preset's own, 0 is hard points.",
+            );
+            theme::hint(ui, "The desktop adds shadows, softboxes and an HDRI.");
+        });
+        if lit {
+            self.look.finishes.finish = Finish::Plain;
+        }
+        if self.look.finishes != before {
+            crate::browser::set_pref("finish", &self.look.finishes.to_pref());
+        }
+    }
+
+    /// The Effects card: a reduced set of the desktop's Backdrop & Effects.
+    fn effects_card(&mut self, ui: &mut Ui) {
+        let tips = self.ui.tips;
+        let before = self.look.finishes.effects.clone();
+        let matcap = self.look.finishes.finish == Finish::Matcap;
+        let e = &mut self.look.finishes.effects;
+        theme::category(ui, "Effects", Color32::from_rgb(150, 205, 240), "", false, |ui| {
+            let percent = |v: f32| format!("{:.0}%", v * 100.0);
+            theme::heading(ui, "Tone Curve");
+            if matcap {
+                theme::hint(ui, "Exposure and the tone curve work on a finish; the matcap is shown as it is.");
+            }
+            tip(
+                theme::slider(ui, "Exposure", &mut e.exposure, -4.0..=4.0, |v| format!("{v:+.1} EV")),
+                tips,
+                "Brightens or darkens the lit model in camera stops: +1 is twice the light.",
+            );
+            let at = Tonemap::ALL.iter().position(|&t| t == e.tonemap).unwrap_or(0);
+            let labels = Tonemap::ALL.map(Tonemap::label);
+            for (start, end) in [(0, 2), (2, 5)] {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let w = theme::row_width(ui, end - start, 6.0);
+                    for i in start..end {
+                        let style = ButtonStyle { active: (at == i).then_some(ACCENT()), ..Default::default() };
+                        if theme::button(ui, w, labels[i], style).clicked() {
+                            e.tonemap = Tonemap::ALL[i];
+                        }
+                    }
+                });
+            }
+            let note = match e.tonemap {
+                Tonemap::PbrNeutral => "Keeps colours true: the one for product shots.",
+                Tonemap::Agx => "Filmic: rolls bright colours off gently.",
+                _ => "",
+            };
+            if tips && !note.is_empty() {
+                theme::hint(ui, note);
+            }
+            theme::heading(ui, "Colour");
+            theme::slider(ui, "Saturation", &mut e.saturation, -100.0..=100.0, |v| format!("{v:.0}"));
+            theme::slider(ui, "Contrast", &mut e.contrast, -100.0..=100.0, |v| format!("{v:.0}"));
+            tip(
+                theme::slider(ui, "Film Grain", &mut e.film_grain, 0.0..=1.0, percent),
+                tips,
+                "A fine grain over the picture, as film has: strongest in the mid tones.",
+            );
+            theme::heading(ui, "Vignette");
+            theme::checkbox(ui, &mut e.vignette, "Enabled", ACCENT());
+            if e.vignette {
+                let two = |v: f32| format!("{v:.2}");
+                theme::slider(ui, "Intensity", &mut e.vignette_intensity, 0.0..=1.0, two);
+                theme::slider(ui, "Smoothness", &mut e.vignette_smoothness, 0.01..=1.0, two);
+            }
+            ui.add_space(4.0);
+            if theme::button(ui, ui.available_width(), "Reset Effects", ButtonStyle::default()).clicked() {
+                *e = Default::default();
+            }
+        });
+        if self.look.finishes.effects != before {
             crate::browser::set_pref("finish", &self.look.finishes.to_pref());
         }
     }

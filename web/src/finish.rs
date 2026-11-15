@@ -15,6 +15,8 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
+use super::lighting::{Effects, Lighting, light_angle, rig};
+
 pub type Rgb = [f32; 3];
 
 fn lin1(c: f32) -> f32 {
@@ -48,10 +50,12 @@ pub enum Finish {
     Clay,
     Metal,
     Wood,
+    /// One colour, smooth or rough, metal or not: the lights alone.
+    Plain,
 }
 
 impl Finish {
-    pub const ALL: [Finish; 4] = [Finish::Matcap, Finish::Clay, Finish::Metal, Finish::Wood];
+    pub const ALL: [Finish; 5] = [Finish::Matcap, Finish::Plain, Finish::Clay, Finish::Metal, Finish::Wood];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -59,6 +63,7 @@ impl Finish {
             Finish::Clay => "Clay",
             Finish::Metal => "Metal",
             Finish::Wood => "Wood",
+            Finish::Plain => "Plain",
         }
     }
 
@@ -69,30 +74,15 @@ impl Finish {
             Finish::Clay => 1.0,
             Finish::Metal => 2.0,
             Finish::Wood => 3.0,
+            Finish::Plain => 4.0,
         }
     }
 
     /// Whether it reads the mesh's curvature (the recess wash, the wear).
     pub fn needs_curvature(self) -> bool {
-        self != Finish::Matcap
+        !matches!(self, Finish::Matcap | Finish::Plain)
     }
 }
-
-// ---- the lights -------------------------------------------------------------
-
-/// The desktop's Studio preset, three-point (its default): azimuth from the
-/// viewer (0 from the camera, +90 from screen right), elevation above the
-/// horizon, colour, intensity.
-const LIGHTS: [(f32, f32, Rgb, f32); 3] = [
-    (-40.0, 40.0, [1.00, 0.97, 0.92], 1.56),
-    (50.0, 10.0, [0.86, 0.91, 1.00], 0.4),
-    (150.0, 35.0, [1.00, 1.00, 1.00], 1.08),
-];
-const AMBIENT_SKY: Rgb = [0.42, 0.44, 0.48];
-const AMBIENT_EQUATOR: Rgb = [0.30, 0.30, 0.31];
-const AMBIENT_GROUND: Rgb = [0.16, 0.15, 0.14];
-/// The Studio preset's reflection strength.
-const REFLECTION: f32 = 0.6;
 
 // ---- the presets (copied from src/look.rs) ---------------------------------------
 
@@ -666,6 +656,21 @@ pub struct ClaySettings {
     pub reference: f32,
 }
 
+/// The Plain finish: a colour (sRGB), how metal it is and how smooth.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlainSettings {
+    pub color: Rgb,
+    pub metallic: f32,
+    pub smoothness: f32,
+}
+
+impl Default for PlainSettings {
+    fn default() -> Self {
+        PlainSettings { color: [0.78, 0.76, 0.74], metallic: 0.0, smoothness: 0.35 }
+    }
+}
+
 impl Default for ClaySettings {
     fn default() -> Self {
         ClaySettings { preset: 3, gloss: 1.0, wetness: 1.0, subsurface: 1.0, recess: 1.0, detail: 1.0, grain: 1.0, reference: 0.0 }
@@ -716,8 +721,13 @@ pub struct Finishes {
     pub clay: ClaySettings,
     pub metal: MetalSettings,
     pub wood: WoodSettings,
+    pub plain: PlainSettings,
     /// How bright the lights are (the desktop's Brightness).
     pub brightness: f32,
+    /// The Lighting card: the preset rig and how it is turned.
+    pub lighting: Lighting,
+    /// The Effects card: exposure, tone curve, colour, vignette, grain.
+    pub effects: Effects,
 }
 
 /// The settings a finish's shader function reads: twelve slots, the
@@ -745,7 +755,7 @@ impl Finishes {
     /// The model size the finish in use was frozen against, or 0.
     pub fn reference(&self) -> f32 {
         match self.finish {
-            Finish::Matcap => 0.0,
+            Finish::Matcap | Finish::Plain => 0.0,
             Finish::Clay => self.clay.reference,
             Finish::Metal => self.metal.reference,
             Finish::Wood => self.wood.reference,
@@ -755,7 +765,7 @@ impl Finishes {
     /// Freezes the finish in use against a model `size` across.
     pub fn freeze(&mut self, size: f32) {
         match self.finish {
-            Finish::Matcap => {}
+            Finish::Matcap | Finish::Plain => {}
             Finish::Clay => self.clay.reference = size,
             Finish::Metal => self.metal.reference = size,
             Finish::Wood => self.wood.reference = size,
@@ -772,6 +782,10 @@ impl Finishes {
             Finish::Clay => self.pack_clay(size).to_vec(),
             Finish::Metal => self.pack_metal(size).to_vec(),
             Finish::Wood => self.pack_wood(size).to_vec(),
+            Finish::Plain => {
+                let p = &self.plain;
+                vec![rgba(p.color, 1.0), [clamp01(p.metallic), clamp01(p.smoothness), 0.0, 0.0]]
+            }
         };
         out[..slots.len()].copy_from_slice(&slots);
         out
@@ -854,34 +868,21 @@ impl Finishes {
         ]
     }
 
-    /// The uniform the shader reads: the finish, the lights turned to the
-    /// camera (`right`, `up`, `forward`) and its settings.
+    /// The uniform the shader reads: the finish, the lights turned to a view
+    /// whose axes are `right`, `up` and `forward`, the tone settings and the
+    /// finish's own settings.
     pub fn uniform(&self, right: Vec3, up: Vec3, forward: Vec3, size: f32) -> Uniform {
-        let brightness = self.brightness.clamp(0.0, 3.0);
-        let mut u = Uniform {
-            kind: [self.finish.code(), REFLECTION, 0.0, 0.0],
-            light_dir: [[0.0; 4]; 3],
-            light_color: [[0.0; 4]; 3],
-            sky: [0.0; 4],
-            equator: [0.0; 4],
-            ground: [0.0; 4],
+        let rig = rig(&self.lighting, self.brightness.clamp(0.0, 3.0), right, up, forward);
+        Uniform {
+            kind: [self.finish.code(), rig.reflection, rig.count as f32, light_angle(&self.lighting)],
+            light_dir: rig.dir,
+            light_color: rig.color,
+            sky: rig.ambient[0],
+            equator: rig.ambient[1],
+            ground: rig.ambient[2],
+            tone: self.effects.tone(),
             v: self.params(size),
-        };
-        for (i, &(azimuth, elevation, color, intensity)) in LIGHTS.iter().enumerate() {
-            let (se, ce) = elevation.to_radians().sin_cos();
-            let (sa, ca) = azimuth.to_radians().sin_cos();
-            let d = (right * (ce * sa) + up * se - forward * (ce * ca)).normalize_or(Vec3::Y);
-            let c = linear(color);
-            let k = intensity * brightness;
-            u.light_dir[i] = [d.x, d.y, d.z, 0.0];
-            u.light_color[i] = [c[0] * k, c[1] * k, c[2] * k, 0.0];
         }
-        let amb = |c: Rgb| {
-            let c = linear(c);
-            [c[0] * brightness, c[1] * brightness, c[2] * brightness, 0.0]
-        };
-        (u.sky, u.equator, u.ground) = (amb(AMBIENT_SKY), amb(AMBIENT_EQUATOR), amb(AMBIENT_GROUND));
-        u
     }
 }
 
@@ -889,14 +890,17 @@ impl Finishes {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniform {
-    /// x: the finish (0 matcap, 1 clay, 2 metal, 3 wood), y: how strongly
-    /// the sky is reflected.
+    /// x: the finish (0 matcap, 1 clay, 2 metal, 3 wood, 4 plain), y: how
+    /// strongly the sky is reflected, z: how many lights, w: how wide they
+    /// look (radians).
     pub kind: [f32; 4],
-    pub light_dir: [[f32; 4]; 3],
-    pub light_color: [[f32; 4]; 3],
+    pub light_dir: [[f32; 4]; 5],
+    pub light_color: [[f32; 4]; 5],
     pub sky: [f32; 4],
     pub equator: [f32; 4],
     pub ground: [f32; 4],
+    /// x: exposure (times), y: the tone curve, z: film grain.
+    pub tone: [f32; 4],
     pub v: Params,
 }
 
@@ -909,7 +913,7 @@ impl Default for Uniform {
 /// The preset names of a finish, for its menu.
 pub fn preset_names(finish: Finish) -> Vec<&'static str> {
     match finish {
-        Finish::Matcap => Vec::new(),
+        Finish::Matcap | Finish::Plain => Vec::new(),
         Finish::Clay => CLAYS.iter().map(|p| p.name).collect(),
         Finish::Metal => METALS.iter().map(|p| p.name).collect(),
         Finish::Wood => WOODS.iter().map(|p| p.name).collect(),
@@ -919,7 +923,7 @@ pub fn preset_names(finish: Finish) -> Vec<&'static str> {
 /// What a preset of a finish looks like, in a sentence.
 pub fn preset_about(finish: Finish, i: usize) -> &'static str {
     match finish {
-        Finish::Matcap => "",
+        Finish::Matcap | Finish::Plain => "",
         Finish::Clay => CLAYS[idx(i, CLAYS.len())].description,
         Finish::Metal => METALS[idx(i, METALS.len())].description,
         Finish::Wood => WOODS[idx(i, WOODS.len())].description,

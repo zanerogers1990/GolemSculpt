@@ -26,6 +26,11 @@ struct Globals {
     look: vec4<f32>,
     // xyz: 1 where that mirror plane's guide is shown.
     guides: vec4<f32>,
+    // The Effects card: saturation, contrast (1 unchanged), the vignette's
+    // strength (0 none) and smoothness.
+    grade: vec4<f32>,
+    // x: film grain (0 none).
+    extras: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -231,8 +236,55 @@ fn fs_blit(in: BlitOut) -> @location(0) vec4<f32> {
     // The model was drawn over nothing (alpha 0), so its edges are
     // premultiplied by how much of each pixel it covers.
     var color = model.rgb + bg * (1.0 - model.a);
+    color = effects(color, model.a, in.uv, in.pos.xy);
     if (g.params.y > 0.5) {
         color = to_linear(color);
     }
     return vec4<f32>(color, 1.0);
+}
+
+// A number in -0.5..0.5 with no pattern in it, for film grain.
+fn grain_noise(p: vec2<f32>) -> f32 {
+    let q = fract(p * vec2<f32>(0.1031, 0.1030));
+    let r = q + dot(q, q.yx + 33.33);
+    return fract((r.x + r.y) * r.x) - 0.5;
+}
+
+fn to_display_srgb(c: vec3<f32>) -> vec3<f32> {
+    let x = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    let lo = x * 12.92;
+    let hi = 1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, x <= vec3<f32>(0.0031308));
+}
+
+// The Effects card on a display colour (the desktop's post shader, in its
+// order): the vignette over everything, saturation and contrast on the model
+// only (a backdrop colour stays as picked), then film grain over everything.
+fn effects(display: vec3<f32>, coverage: f32, uv: vec2<f32>, pos: vec2<f32>) -> vec3<f32> {
+    let grading = g.grade.x != 1.0 || g.grade.y != 1.0;
+    if (g.grade.z <= 0.0 && !grading && g.extras.x <= 0.0) {
+        return display;
+    }
+    var color = to_linear(display);
+    if (g.grade.z > 0.0) {
+        let dist = abs(uv - 0.5) * g.grade.z;
+        color *= pow(saturate(1.0 - dot(dist, dist)), g.grade.w);
+    }
+    if (grading && coverage > 0.0) {
+        let as_picked = color;
+        // Contrast pivots on mid grey in a log encoding, as film does.
+        let lg = 0.244161 * log(5.555556 * max(color, vec3<f32>(0.0)) + 0.047996) / log(10.0) + 0.386036;
+        let contrasted = (lg - 0.4135884) * g.grade.y + 0.4135884;
+        var graded = (pow(vec3<f32>(10.0), (contrasted - 0.386036) / 0.244161) - 0.047996) / 5.555556;
+        let luma = dot(graded, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
+        graded = max(vec3<f32>(luma) + g.grade.x * (graded - luma), vec3<f32>(0.0));
+        color = mix(as_picked, graded, coverage);
+    }
+    if (g.extras.x > 0.0) {
+        // Film grain: strongest in the mid tones, as on film.
+        let luma = dot(color, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
+        let amount = g.extras.x * 0.12 * (1.0 - 0.7 * abs(saturate(luma) * 2.0 - 1.0));
+        color = max(color * (1.0 + grain_noise(pos) * amount * 4.0) + grain_noise(pos.yx + 7.7) * amount * 0.25, vec3<f32>(0.0));
+    }
+    return to_display_srgb(color);
 }
