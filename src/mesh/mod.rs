@@ -91,6 +91,10 @@ pub struct Mesh {
     dirty_nrm: BitSet,
     dirty_mask: BitSet,
     dirty_curv: BitSet,
+    /// How many times [`Self::take_dirty`] has found vertices moved or the
+    /// mask changed: a count that goes up whenever the surface or its mask
+    /// does, for anything that works something out from them and keeps it.
+    edits: u64,
 
     /// What dynamic topology keeps for this mesh (see dyntopo.rs).
     topo: dyntopo::State,
@@ -385,6 +389,7 @@ impl Mesh {
             dirty_nrm: BitSet::with_len(leaf_count),
             dirty_mask: BitSet::with_len(leaf_count),
             dirty_curv: BitSet::with_len(leaf_count),
+            edits: 0,
             topo: dyntopo::State::default(),
             levels: None,
             layers: None,
@@ -1208,6 +1213,13 @@ impl Mesh {
         out
     }
 
+    /// Goes up each time the renderer is sent moved vertices or a changed
+    /// mask (see the `edits` field). A new mesh starts again from 0, with a
+    /// new `uid`.
+    pub fn edits(&self) -> u64 {
+        self.edits
+    }
+
     /// Whether vertices have moved since the last [`Self::take_dirty`]: a
     /// change the renderer has not been sent yet.
     pub fn moved_since_upload(&self) -> bool {
@@ -1217,6 +1229,9 @@ impl Mesh {
     /// Vertex ranges whose GPU copies are stale. Clears the dirty state.
     pub fn take_dirty(&mut self) -> DirtyRanges {
         self.flush_normals();
+        if self.dirty_pos.any() || self.dirty_mask.any() {
+            self.edits += 1;
+        }
         // Before the mask's dirty leaves are cleared: layers masked by it read them.
         let paint = if self.paint.is_some() { self.paint_take_dirty(&self.dirty_mask.clone()) } else { Vec::new() };
         let out = DirtyRanges {

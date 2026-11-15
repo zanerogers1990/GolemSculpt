@@ -392,6 +392,132 @@ impl Sides {
     }
 }
 
+/// Along which mirror axes the minus half is the one that follows the gizmo:
+/// where it holds more than `LEADS` times the free surface of the plus half.
+/// `verts` are the vertices that are not fully masked, and `world` the mesh's
+/// own space into the planes' space, for World planes.
+fn minus_leads(mesh: &Mesh, verts: &[u32], axes: [bool; 3], world: Option<Mat4>) -> [bool; 3] {
+    // How much free surface each half holds, by vertex: [plus, minus] per axis.
+    let free = verts
+        .par_iter()
+        .with_min_len(1 << 14)
+        .fold(
+            || [[0.0f64; 2]; 3],
+            |mut free, &v| {
+                let p = mesh.positions[v as usize];
+                let q = world.map_or(p, |m| m.transform_point3(p));
+                for a in 0..3 {
+                    if q[a] != 0.0 {
+                        free[a][usize::from(q[a] < 0.0)] += f64::from(1.0 - mesh.mask[v as usize]);
+                    }
+                }
+                free
+            },
+        )
+        .reduce(|| [[0.0; 2]; 3], |a, b| std::array::from_fn(|i| [a[i][0] + b[i][0], a[i][1] + b[i][1]]));
+    std::array::from_fn(|a| axes[a] && free[a][1] > free[a][0] * LEADS)
+}
+
+/// A triangle with a corner masked at least this much and a corner masked
+/// less is on the border between the free surface and the mask.
+const BORDER: f32 = 0.5;
+
+/// The free surface crosses a mirror plane, and the joint is put on the
+/// plane, when the free triangles across it come to more than this share of
+/// the border's area. A freed head has a whole strip of them down its middle;
+/// a freed pair of legs has none, and a stray free triangle or two at the
+/// fork is far too little.
+const STRADDLES: f64 = 0.05;
+
+/// Where a masked drag turns and stretches about, in the mesh's own space:
+/// the joint, the middle of the border between the free surface and the
+/// mask. Mask the body and free the legs, and it is the hip.
+///
+/// Under mirror symmetry it is the joint on the half that follows the gizmo
+/// (as `Deform` picks it), and the other halves turn about its mirror
+/// images, as their mirror images: both legs swing from their own hips, out
+/// or in alike. The borders on every half are counted, each reflected onto
+/// that half, so a model a little uneven still gets one joint between its
+/// two. Where the free surface runs across a plane (a freed head), the joint
+/// is put on that plane instead, so the two halves turn about one line and
+/// stay together.
+///
+/// `None` with no border to find (no mask, or a mask that is faint
+/// everywhere), and under radial symmetry, whose copies keep turning about
+/// the object's own pivot: the gizmo then stays on the pivot.
+pub fn joint(mesh: &Mesh, mirror: Mirror) -> Option<Vec3> {
+    if mirror.radial.is_some_and(|turns| turns.radial.repeats() >= Radial::MIN_COUNT) {
+        return None;
+    }
+    let mask = &mesh.mask;
+    if !mask.par_iter().with_min_len(1 << 16).any(|&m| m >= BORDER) {
+        return None;
+    }
+    let world = mirror.world.filter(|_| mirror.axes != [false; 3]);
+    let lead: [f64; 3] = if mirror.axes == [false; 3] {
+        [1.0; 3]
+    } else {
+        let verts: Vec<u32> =
+            (0..mask.len() as u32).into_par_iter().with_min_len(1 << 14).filter(|&v| mask[v as usize] < 1.0).collect();
+        minus_leads(mesh, &verts, mirror.axes, world).map(|minus| if minus { -1.0 } else { 1.0 })
+    };
+    let plane = |p: Vec3| world.map_or(p, |m| m.transform_point3(p)).as_dvec3();
+    // [border centre weighted by area (xyz), border area, free area across X, Y, Z]
+    let sums = mesh
+        .indices
+        .par_chunks_exact(3)
+        .with_min_len(1 << 12)
+        .fold(
+            || [0.0f64; 7],
+            |mut s, t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|v| v as usize);
+                let held = [a, b, c].iter().filter(|&&v| mask[v] >= BORDER).count();
+                if held == 3 {
+                    return s;
+                }
+                let p = [a, b, c].map(|v| mesh.positions[v]);
+                let area = f64::from((p[1] - p[0]).cross(p[2] - p[0]).length() * 0.5);
+                if area == 0.0 {
+                    return s;
+                }
+                let q = p.map(plane);
+                if held > 0 {
+                    let mut centre = (q[0] + q[1] + q[2]) / 3.0;
+                    for axis in 0..3 {
+                        if mirror.axes[axis] {
+                            centre[axis] = centre[axis].abs() * lead[axis];
+                        }
+                    }
+                    s[0] += centre.x * area;
+                    s[1] += centre.y * area;
+                    s[2] += centre.z * area;
+                    s[3] += area;
+                } else {
+                    for axis in 0..3 {
+                        let (low, high) = (q[0][axis].min(q[1][axis]).min(q[2][axis]), q[0][axis].max(q[1][axis]).max(q[2][axis]));
+                        if mirror.axes[axis] && low <= 0.0 && high >= 0.0 {
+                            s[4 + axis] += area;
+                        }
+                    }
+                }
+                s
+            },
+        )
+        .reduce(|| [0.0; 7], |a, b| std::array::from_fn(|i| a[i] + b[i]));
+    let border = sums[3];
+    if border <= 0.0 {
+        return None;
+    }
+    let mut at = DVec3::new(sums[0], sums[1], sums[2]) / border;
+    for axis in 0..3 {
+        if mirror.axes[axis] && sums[4 + axis] > border * STRADDLES {
+            at[axis] = 0.0;
+        }
+    }
+    let at = at.as_vec3();
+    Some(world.map_or(at, |m| m.inverse().transform_point3(at)))
+}
+
 /// One gizmo drag on the unmasked part of a mesh, press to release.
 pub struct Deform {
     /// `Mesh::uid` of the mesh the stroke was opened on.
@@ -430,25 +556,7 @@ impl Deform {
         let copies = mirror.radial.and_then(|turns| Copies::new(mesh, &verts, mirror.axes, turns));
         let mut sides = if copies.is_some() { None } else { Sides::new(mirror) };
         if let Some(sides) = &mut sides {
-            // How much free surface each half holds, by vertex: [plus, minus] per axis.
-            let free = verts
-                .par_iter()
-                .with_min_len(1 << 14)
-                .fold(
-                    || [[0.0f64; 2]; 3],
-                    |mut free, &v| {
-                        let p = mesh.positions[v as usize];
-                        let q = sides.world.map_or(p, |m| m.transform_point3(p));
-                        for a in 0..3 {
-                            if q[a] != 0.0 {
-                                free[a][usize::from(q[a] < 0.0)] += f64::from(1.0 - mesh.mask[v as usize]);
-                            }
-                        }
-                        free
-                    },
-                )
-                .reduce(|| [[0.0; 2]; 3], |a, b| std::array::from_fn(|i| [a[i][0] + b[i][0], a[i][1] + b[i][1]]));
-            sides.minus_leads = std::array::from_fn(|a| sides.axes[a] && free[a][1] > free[a][0] * LEADS);
+            sides.minus_leads = minus_leads(mesh, &verts, sides.axes, sides.world);
         }
         let leaves = mesh.leaves_of(&verts);
         mesh.begin_stroke();
@@ -1068,6 +1176,94 @@ mod tests {
         assert!(results[0] == results[1], "radial symmetry that is off changed the drag");
     }
 
+    /// A ball with the two ends across X left free, as a body with its legs
+    /// freed: `left` and `right` say which ends are.
+    fn legs_ball(left: bool, right: bool) -> Mesh {
+        let mut mesh = primitives::build(Primitive::Sphere, 40_000, 0.5);
+        for v in 0..mesh.vertex_count() {
+            let x = mesh.positions[v].x;
+            let free = (x > 0.3 && right) || (x < -0.3 && left);
+            mesh.mask[v] = if free { 0.0 } else { 1.0 };
+        }
+        mesh
+    }
+
+    /// Where the border of `legs_ball` is: the ring round an end at |x| = 0.3,
+    /// whose middle is on the X axis.
+    fn near(joint: Vec3, x: f32) -> bool {
+        (joint.x - x).abs() < 0.02 && joint.y.abs() < 0.01 && joint.z.abs() < 0.01
+    }
+
+    #[test]
+    fn the_joint_of_two_freed_legs_is_the_hip_of_the_one_that_follows_the_gizmo() {
+        let mesh = legs_ball(true, true);
+        let joint = joint(&mesh, ACROSS_X).unwrap();
+        assert!(near(joint, 0.3), "{joint}");
+        // With no symmetry the two hips count alike, and the joint is between them.
+        let between = super::joint(&mesh, Mirror::default()).unwrap();
+        assert!(near(between, 0.0), "{between}");
+        // One leg left free on the minus side: that side follows, and its hip is the joint.
+        let one = super::joint(&legs_ball(true, false), ACROSS_X).unwrap();
+        assert!(near(one, -0.3), "{one}");
+    }
+
+    #[test]
+    fn a_freed_head_turns_about_the_mirror_plane() {
+        // The free top runs across X: the joint is put on the plane, at the
+        // height of the border, so the two halves turn about one line.
+        let mesh = masked_ball(40_000);
+        let joint = joint(&mesh, ACROSS_X).unwrap();
+        assert_eq!(joint.x, 0.0);
+        assert!((joint.y - 0.1).abs() < 0.03 && joint.z.abs() < 0.01, "{joint}");
+    }
+
+    #[test]
+    fn with_no_border_or_radial_symmetry_there_is_no_joint() {
+        let mut mesh = primitives::build(Primitive::Sphere, 2_000, 0.5);
+        assert!(joint(&mesh, ACROSS_X).is_none());
+        mesh.mask.fill(0.3);
+        assert!(joint(&mesh, ACROSS_X).is_none());
+        let mesh = legs_ball(true, true);
+        let radial = Mirror { radial: Some(round_y(6)), ..ACROSS_X };
+        assert!(joint(&mesh, radial).is_none());
+        let off = Turns { radial: Radial { on: false, ..round_y(6).radial }, world: None };
+        assert!(joint(&mesh, Mirror { radial: Some(off), ..ACROSS_X }).is_some());
+    }
+
+    #[test]
+    fn turned_about_the_joint_both_legs_swing_from_their_own_hips_as_mirror_images() {
+        let mut mesh = legs_ball(true, true);
+        let before = mesh.positions.clone();
+        let hip = joint(&mesh, ACROSS_X).unwrap().as_dvec3();
+        let deform = Deform::begin(&mut mesh, ACROSS_X).unwrap();
+        // A turn about Y through the plus hip, as the gizmo there makes it.
+        let turn = DMat4::from_translation(hip) * DMat4::from_rotation_y(0.4) * DMat4::from_translation(-hip);
+        deform.apply(&mut mesh, Mat4::IDENTITY, turn);
+        let flip = DMat4::from_scale(DVec3::new(-1.0, 1.0, 1.0));
+        let mirrored = flip * turn * flip;
+        let (mut plus, mut minus) = (0, 0);
+        for v in 0..before.len() {
+            let (was, now) = (before[v], mesh.positions[v]);
+            if mesh.mask[v] >= 1.0 {
+                assert_eq!(now, was);
+            } else if was.x > 0.0 {
+                assert!(now.distance(turn.transform_point3(was.as_dvec3()).as_vec3()) < 1e-5);
+                plus += 1;
+            } else {
+                assert!(now.distance(mirrored.transform_point3(was.as_dvec3()).as_vec3()) < 1e-5);
+                minus += 1;
+            }
+        }
+        assert!(plus > 1000 && minus > 1000, "{plus} {minus}");
+        // The minus leg turned about the minus hip: the hip itself stayed put.
+        let other = DVec3::new(-hip.x, hip.y, hip.z);
+        assert!(mirrored.transform_point3(other).distance(other) < 1e-9);
+        // And the far ends went the mirror image of each other's way.
+        let (tip, far) = (DVec3::new(0.5, 0.0, 0.0), DVec3::new(-0.5, 0.0, 0.0));
+        let (a, b) = (turn.transform_point3(tip), mirrored.transform_point3(far));
+        assert!((a.x + b.x).abs() < 1e-9 && (a.z - b.z).abs() < 1e-9 && a.z.abs() > 0.05, "{a} {b}");
+    }
+
     /// `cargo test --release masked -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -1092,5 +1288,8 @@ mod tests {
             mesh.vertex_count(),
             t.elapsed()
         );
+        let t = std::time::Instant::now();
+        let _ = joint(&mesh, ACROSS_X);
+        println!("joint {:?}", t.elapsed());
     }
 }
