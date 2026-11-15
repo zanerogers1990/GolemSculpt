@@ -47,10 +47,25 @@ $dist = Join-Path $web "dist$suffix"
 # The release build leaves out the function names (4 MB) only a debugger reads.
 $strip = if ($Dev) { @() } else { @('--remove-name-section', '--remove-producers-section') }
 
+# The compiler writes source file paths into the program for its error
+# messages, and the downloaded libraries (and, for the many-threads build,
+# Rust's own standard library) live under the user's home folder, so the
+# public files would carry the Windows user name (C:\Users\<name>\.cargo\...).
+# This writes the home folder as ~ instead.
+$remap = "--remap-path-prefix=$env:USERPROFILE=~"
+
 # One build: cargo into its own target folder, then wasm-bindgen into the
-# output folder as <name>.js and <name>_bg.wasm.
-function Build-One([string]$OutName, [string]$TargetDir, [string[]]$CargoArgs) {
-    cargo @CargoArgs --lib --target wasm32-unknown-unknown --profile $profile --target-dir $TargetDir
+# output folder as <name>.js and <name>_bg.wasm. $Flags go to the compiler;
+# they are passed as CARGO_ENCODED_RUSTFLAGS (one flag per item) so a home
+# folder with a space in it stays one flag.
+function Build-One([string]$OutName, [string]$TargetDir, [string[]]$CargoArgs, [string[]]$Flags = @()) {
+    $old = $env:CARGO_ENCODED_RUSTFLAGS
+    $env:CARGO_ENCODED_RUSTFLAGS = (@($remap) + $Flags) -join [char]0x1f
+    try {
+        cargo @CargoArgs --lib --target wasm32-unknown-unknown --profile $profile --target-dir $TargetDir
+    } finally {
+        $env:CARGO_ENCODED_RUSTFLAGS = $old
+    }
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($OutName)" }
     $wasm = Join-Path $TargetDir "wasm32-unknown-unknown\$folder\golem_web.wasm"
     wasm-bindgen $wasm --out-dir $dist --out-name $OutName --target web --no-typescript @strip
@@ -88,18 +103,13 @@ try {
         # one), to let it grow to 4 GB as the one-thread builds' can (a
         # shared memory must say its largest size up front), and to export
         # what wasm-bindgen needs to give each thread its own thread-locals.
-        $oldFlags = $env:RUSTFLAGS
-        $env:RUSTFLAGS = @(
-            '-C target-feature=+atomics,+bulk-memory,+mutable-globals',
-            '-C link-arg=--shared-memory', '-C link-arg=--import-memory', '-C link-arg=--max-memory=4294967296',
-            '-C link-arg=--export=__wasm_init_tls', '-C link-arg=--export=__tls_size',
-            '-C link-arg=--export=__tls_align', '-C link-arg=--export=__tls_base'
-        ) -join ' '
-        try {
-            Build-One 'golem_web_mt' "$target-mt" @('+nightly', 'build', '--no-default-features', '--features', 'threads', '-Z', 'build-std=std,panic_abort')
-        } finally {
-            $env:RUSTFLAGS = $oldFlags
-        }
+        $mtFlags = @(
+            '-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals',
+            '-Clink-arg=--shared-memory', '-Clink-arg=--import-memory', '-Clink-arg=--max-memory=4294967296',
+            '-Clink-arg=--export=__wasm_init_tls', '-Clink-arg=--export=__tls_size',
+            '-Clink-arg=--export=__tls_align', '-Clink-arg=--export=__tls_base'
+        )
+        Build-One 'golem_web_mt' "$target-mt" @('+nightly', 'build', '--no-default-features', '--features', 'threads', '-Z', 'build-std=std,panic_abort') $mtFlags
         # wasm-bindgen-rayon's worker script starts each worker with the old
         # form of wasm-bindgen's start call, which works but prints a warning
         # per worker in the browser's console; this gives it the new form.
