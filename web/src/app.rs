@@ -126,7 +126,6 @@ pub enum Mode {
 #[derive(Clone, Copy)]
 struct HoverHit {
     pos: Vec3,
-    normal: Vec3,
     local: Vec3,
 }
 
@@ -215,6 +214,14 @@ impl GolemApp {
         let mut sculptor = Sculptor::default();
         sculptor.library.select_named("Clay Strips", &mut sculptor.settings);
         sculptor.settings.symmetry = [true, false, false];
+        // Move as Zane has it on the desktop (his settings, 2026-11-15): the
+        // surface follows 44% of the pen's travel, not all of it, with the
+        // falloff a touch softer. The built-in 100% pulls a long horn out of
+        // a drag that makes a broad bump on the desktop. The web keeps no
+        // brush settings between visits, so this is where Move starts.
+        let moving = &mut sculptor.settings.per_brush[crate::sculpt::Brush::Move.index()];
+        moving.strength = 0.44;
+        moving.focal_shift = -0.03;
         let mut app = GolemApp {
             mesh: primitives::build(Primitive::Sphere, 120_000, 1.0),
             objects: vec![Object::new(1, "Sphere".into(), None)],
@@ -1140,37 +1147,100 @@ impl GolemApp {
         }))
     }
 
-    fn draw_cursor(&self, painter: &egui::Painter, ppp: f32) {
+    /// The brush ring, as the desktop draws it (`app.rs` `cursor` and
+    /// `ui/overlay.rs` `cursor`): a flat ring facing the screen at the
+    /// pointer, with a dark halo, green when the brush builds, red when it
+    /// digs (Ctrl, the right button, or Sub), blue and dashed for Smooth,
+    /// orange for the mask; a fainter inner ring where the brush is at half
+    /// weight; a dot in the middle. During a stroke it is the size the
+    /// stroke works at, where the brush is. S, F and D held draw their own
+    /// (`brush_keys.rs`).
+    fn draw_cursor(&self, ui: &egui::Ui, hovered: bool, ppp: f32) {
+        use crate::sculpt::Brush;
+        const ADD: Color32 = Color32::from_rgb(51, 255, 102);
+        const SUBTRACT: Color32 = Color32::from_rgb(255, 76, 76);
+        const SMOOTH: Color32 = Color32::from_rgb(76, 166, 255);
+        const MASK: Color32 = Color32::from_rgb(242, 166, 38);
+
+        let stroking = self.sculptor.stroke_cursor();
+        let navigating = matches!(self.drag, Drag::Orbit | Drag::Pan | Drag::Zoom);
+        let shown = stroking.is_some()
+            || (self.mode == Mode::Sculpt && hovered && self.drag == Drag::None && self.pointer_px.is_some());
+        if !shown || navigating || self.brush_keys.wheel_up || self.brush_keys.gauging() {
+            return;
+        }
         // The brush's alpha, faintly inside the ring (alpha.rs).
+        let painter = ui.painter();
         self.paint_alpha_preview(painter, ppp);
-        let to_pt = |px: Vec2| Pos2::new(px.x / ppp, px.y / ppp);
-        let color = if self.sculptor.settings.mask_mode {
-            Color32::from_rgb(120, 170, 255)
+
+        let (mods, right) = ui.input(|i| (i.modifiers, i.pointer.secondary_down()));
+        let s = &self.sculptor.settings;
+        let brush = self.sculptor.effective_brush(mods.shift);
+        // With Shift held the ring is the brush Shift smooths with.
+        let shift = mods.shift && !s.mask_mode;
+        let (bs, _) = s.in_use(brush, shift);
+        let mut negative = !bs.positive && brush.has_polarity();
+        if (mods.ctrl || mods.command || right) && (brush.has_polarity() || s.mask_mode) {
+            negative = !negative;
+        }
+        let mut tint = if s.mask_mode {
+            if negative { SUBTRACT } else { MASK }
+        } else if brush == Brush::Smooth {
+            SMOOTH
+        } else if negative {
+            SUBTRACT
         } else {
-            Color32::from_rgb(235, 235, 235)
+            ADD
         };
-        if let Some((px, _, _)) = self.sculptor.stroke_cursor() {
-            painter.circle_stroke(to_pt(px), self.sculptor.settings.radius_px / ppp, Line::new(1.5, color));
-            return;
+
+        let mut center = self.pointer_px.unwrap_or_default();
+        let mut radius = s.radius_px;
+        let mut tether = None;
+        if let Some((rope, world_radius, sign)) = stroking {
+            // During a stroke the world size is frozen: show it where the brush is.
+            if rope.distance(center) > 1.0 && self.pointer_px.is_some() {
+                tether = Some(center);
+            }
+            center = rope;
+            let view = self.local_view();
+            let depth = self.sculptor.last_hit.map_or(self.camera.distance, |h| view.depth_of(h));
+            radius = world_radius / view.world_per_pixel(depth.max(1e-6));
+            if sign < 0.0 && brush.has_polarity() {
+                tint = SUBTRACT;
+            }
         }
-        if self.mode != Mode::Sculpt {
-            return;
+        let to_pt = |px: Vec2| Pos2::new(px.x / ppp, px.y / ppp);
+        let c = to_pt(center);
+        let r = (radius / ppp).max(7.0);
+        let halo = Line::new(4.0, Color32::from_black_alpha(110));
+        let ring = Line::new(1.75, tint);
+        if brush == Brush::Smooth && !s.mask_mode {
+            let dashes = 14;
+            for i in 0..dashes {
+                let a0 = i as f32 / dashes as f32 * std::f32::consts::TAU;
+                let a1 = a0 + 0.6 / dashes as f32 * std::f32::consts::TAU;
+                let arc: Vec<Pos2> =
+                    (0..=6).map(|k| { let a = a0 + (a1 - a0) * k as f32 / 6.0; c + egui::vec2(a.cos(), a.sin()) * r }).collect();
+                painter.line(arc.clone(), halo);
+                painter.line(arc, ring);
+            }
+        } else {
+            painter.circle_stroke(c, r, halo);
+            painter.circle_stroke(c, r, ring);
         }
-        let Some(hit) = self.hover else { return };
-        // A ring lying on the surface, the brush's size on the model.
-        let radius = self.sculptor.settings.radius_px * self.view.world_per_pixel(self.view.depth_of(hit.pos).max(1e-6));
-        let n = hit.normal.normalize_or(Vec3::Y);
-        let u = n.any_orthonormal_vector();
-        let v = n.cross(u);
-        let points: Vec<Pos2> = (0..=48)
-            .filter_map(|i| {
-                let a = i as f32 / 48.0 * std::f32::consts::TAU;
-                self.view.project(hit.pos + (u * a.cos() + v * a.sin()) * radius).map(to_pt)
-            })
-            .collect();
-        painter.add(egui::Shape::line(points, Line::new(1.5, color)));
-        if let Some(c) = self.view.project(hit.pos) {
-            painter.circle_filled(to_pt(c), 1.5, color);
+        let inner = if s.mask_mode {
+            s.mask_hardness + (1.0 - s.mask_hardness) * 0.5
+        } else {
+            s.half_weight_radius_in_use(brush, shift)
+        };
+        if inner > 0.0 && inner < 0.99 {
+            painter.circle_stroke(c, (r * inner).max(4.0), Line::new(1.5, tint.gamma_multiply(0.6)));
+        }
+        painter.circle_filled(c, 2.0, tint);
+        if let Some(raw) = tether {
+            let raw = to_pt(raw);
+            painter.line_segment([c, raw], Line::new(1.5, tint.gamma_multiply(0.5)));
+            painter.circle_filled(raw, 2.5, tint.gamma_multiply(0.5));
         }
     }
 }
@@ -1347,7 +1417,7 @@ impl eframe::App for GolemApp {
             // The globals, what changed of the mesh, the runs in view (look.rs).
             let viewport = self.viewport(ctx, size);
             ui.painter().add(render::callback(rect, viewport));
-            self.draw_cursor(ui.painter(), ppp);
+            self.draw_cursor(ui, response.contains_pointer(), ppp);
             self.draw_transform(ui.painter(), ppp);
             tubes::paint_overlay(ui.painter(), &self.tubes.draw, self.view.origin, ppp);
 

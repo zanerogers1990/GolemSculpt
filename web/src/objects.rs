@@ -15,7 +15,7 @@
 //! posed out of a body. Each drag is one undo step.
 
 use eframe::egui::{self, Color32, Modifiers, PointerButton, Pos2, Stroke as Line, Ui};
-use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use sculpt_toolkit::theme::{self, ACCENT, ButtonStyle};
 
 use super::ui::tip;
@@ -94,13 +94,6 @@ impl GolemApp {
         if out.min.x > out.max.x { self.active_object().world_bounds(&self.mesh) } else { out }
     }
 
-    /// The active object's own point `local`, and its normal there, in the world.
-    pub(crate) fn to_world(&self, local: Vec3, normal: Vec3) -> (Vec3, Vec3) {
-        let m = self.model();
-        let n = Mat3::from_mat4(m).inverse().transpose() * normal;
-        (m.transform_point3(local), n.normalize_or(normal))
-    }
-
     /// The active object under pixel `px`, as the brushes see it.
     pub(super) fn hit(&self, px: Vec2) -> Option<HoverHit> {
         if !self.active_object().visible {
@@ -109,8 +102,8 @@ impl GolemApp {
         let view = self.local_view();
         let (o, d) = view.ray(px);
         let h = self.mesh.raycast(o, d)?;
-        let (pos, normal) = self.to_world(h.pos, self.mesh.hit_normal(&h, false));
-        Some(HoverHit { pos, normal, local: h.pos })
+        let pos = self.model().transform_point3(h.pos);
+        Some(HoverHit { pos, local: h.pos })
     }
 
     /// The nearest object shown under pixel `px`, and where on it (world).
