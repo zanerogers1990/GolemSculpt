@@ -14,6 +14,11 @@ Phases 1 to 3 are done; phase 4 (shipping) is left.
   alphas (Drag to Place too), pen pressure from every pen sample, the
   Space brush wheel, number keys and S/F/D hold keys, masking (brush,
   Masking card, box and tap gestures), X/Y/Z and radial symmetry, undo.
+- **Mirror tools:** the desktop's Symmetry Repair (Check Symmetry, Make
+  Symmetric, Cut & Mirror, Symmetry Cleanup, Match Tolerance), folded under
+  the Symmetry card; and Live Mirror in the Objects card (live copies across
+  the world X/Y/Z planes, strokes on either side, Validate, Remove; kept with
+  the scene and in saved OBJ/STL). Not ported: the gizmo on a copy.
 - **Mesh:** dynamic topology, Remesh, Decimate; subdivision levels (the
   desktop's Subdivision card: Subdivide, step between levels with Page Up /
   Page Down, Delete Lower / Higher) and sculpt layers (the desktop's Layers

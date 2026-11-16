@@ -592,7 +592,7 @@ impl GolemApp {
         let mut first_made = None;
         for m in made {
             let (scale, rotation, position) = (model * m.place).to_scale_rotation_translation();
-            let props = crate::scene::Props { name: m.name, visible: true, position, rotation, scale };
+            let props = crate::scene::Props { name: m.name, visible: true, position, rotation, scale, mirror: None };
             let id = self.add_object(m.mesh, props, false);
             if m.select && maker {
                 first_made.get_or_insert(id);

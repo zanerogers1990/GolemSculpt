@@ -64,7 +64,12 @@ impl Object {
     fn at(model: glam::Mat4, tint: [f32; 4]) -> Object {
         let normal = model.inverse().transpose();
         let normal = if normal.is_finite() { normal } else { model };
-        Object { model: model.to_cols_array_2d(), normal: normal.to_cols_array_2d(), tint }
+        let mut normal = normal.to_cols_array_2d();
+        // Normals are turned with w = 0, so this corner is free to say that
+        // the place mirrors, and the shader takes the back of a triangle for
+        // its front there (shader.wgsl).
+        normal[3][3] = if model.determinant() < 0.0 { -1.0 } else { 1.0 };
+        Object { model: model.to_cols_array_2d(), normal, tint }
     }
 }
 
@@ -234,6 +239,8 @@ pub struct Gpu {
     still: Option<PendingStill>,
     /// The active object is shown (it can be hidden like any other).
     show_model: bool,
+    /// The slots of the model's live mirror copies: the model drawn again there.
+    copy_slots: Vec<u32>,
 }
 
 impl Gpu {
@@ -470,6 +477,7 @@ impl Gpu {
             lines: None,
             still: None,
             show_model: true,
+            copy_slots: Vec::new(),
         }
     }
 
@@ -554,6 +562,7 @@ impl Gpu {
         queue: &wgpu::Queue,
         previews: &[PreviewDraw],
         model: glam::Mat4,
+        copies: &[glam::Mat4],
         others: &[Other],
     ) -> Vec<(u64, u32)> {
         for p in self.previews.values_mut() {
@@ -562,12 +571,20 @@ impl Gpu {
         // The active object where it stands; a tool works in its space, so
         // the tool's previews stand where it does too.
         let mut slots = vec![Object::at(model, [1.0, 1.0, 1.0, 0.0])];
+        self.copy_slots.clear();
+        for &copy in copies {
+            self.copy_slots.push(slots.len() as u32);
+            slots.push(Object::at(copy, [1.0, 1.0, 1.0, 0.0]));
+        }
         let mut draws = Vec::new();
         for other in others {
             let d = &other.drawn;
             let id = d.id | OTHER;
             if !self.previews.contains_key(&id) {
                 let zeros = vec![0u8; d.vertices * 4];
+                // Curvature 0.5 is neither recess nor ridge: cavity leaves the
+                // object as it is (0 would read as a ridge everywhere and light it up).
+                let level: Vec<u8> = bytemuck::cast_slice(&vec![0.5f32; d.vertices]).to_vec();
                 let make = |label, contents: &[u8], usage| {
                     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some(label),
@@ -579,7 +596,7 @@ impl Gpu {
                     positions: make("object positions", &d.positions, wgpu::BufferUsages::VERTEX),
                     normals: make("object normals", &d.normals, wgpu::BufferUsages::VERTEX),
                     mask: make("object mask", &zeros, wgpu::BufferUsages::VERTEX),
-                    curv: make("object curvature", &zeros, wgpu::BufferUsages::VERTEX),
+                    curv: make("object curvature", &level, wgpu::BufferUsages::VERTEX),
                     indices: make("object indices", &d.indices, wgpu::BufferUsages::INDEX),
                     index_count: d.index_count,
                 };
@@ -708,6 +725,11 @@ impl Gpu {
             for run in runs {
                 pass.draw_indexed(run.clone(), 0, 0..1);
             }
+            // Its live mirror copies stand elsewhere, out of the culling's reckoning: drawn whole.
+            for &slot in &self.copy_slots {
+                bind(pass, mesh, slot);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
         }
         for &(id, slot) in draws {
             if let Some(p) = self.previews.get(&id).filter(|p| p.mesh.index_count > 0) {
@@ -727,6 +749,11 @@ impl Gpu {
                 if start < end {
                     pass.draw_indexed(start..end, 0, 0..1);
                 }
+            }
+            let all = (mesh.index_count / 3 * per).min(room);
+            for &slot in &self.copy_slots {
+                pass.set_bind_group(1, &self.object_group, &[slot * OBJECT_STRIDE as u32]);
+                pass.draw_indexed(0..all, 0, 0..1);
             }
         }
     }
@@ -1005,6 +1032,8 @@ pub struct Viewport {
     /// Where the active object stands, and whether it is shown.
     pub model: glam::Mat4,
     pub show_model: bool,
+    /// Where the model's live mirror copies stand.
+    pub copies: Vec<glam::Mat4>,
     /// Every other object that is shown.
     pub others: Vec<Other>,
 }
@@ -1037,7 +1066,7 @@ impl CallbackTrait for Viewport {
             gpu.matcap = self.matcap;
         }
         gpu.show_model = self.show_model;
-        let draws = gpu.prepare_objects(device, queue, &self.previews, self.model, &self.others);
+        let draws = gpu.prepare_objects(device, queue, &self.previews, self.model, &self.copies, &self.others);
         self.has.store(gpu.generation, Ordering::Relaxed);
         let size = [self.size[0].max(1), self.size[1].max(1)];
         gpu.ensure_target(device, size);

@@ -186,11 +186,16 @@ impl GolemApp {
             finish,
             model: self.model(),
             show_model: self.active_object().visible,
+            copies: self.active_copies(),
+            // Every other object shown, at each of its places (its live mirror copies too).
             others: self
                 .objects
                 .iter()
                 .filter(|o| o.visible && o.id != self.active)
-                .filter_map(|o| o.drawn.clone().map(|drawn| crate::render::Other { drawn, model: o.matrix() }))
+                .filter_map(|o| o.drawn.clone().map(|drawn| (o, drawn)))
+                .flat_map(|(o, drawn)| {
+                    o.placements().into_iter().map(move |(_, model)| crate::render::Other { drawn: drawn.clone(), model })
+                })
                 .collect(),
         }
     }

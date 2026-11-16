@@ -71,8 +71,9 @@ impl GolemApp {
 
     /// The view as the active object sees it: brushes, the tools and the
     /// cursor work in its own coordinates (`View::local_to`, as the desktop).
+    /// A stroke on one of its live mirror copies sees it through the copy.
     pub(crate) fn local_view(&self) -> crate::camera::View {
-        let model = self.model();
+        let model = if self.mode == Mode::Sculpt { self.work_matrix() } else { self.model() };
         if model == Mat4::IDENTITY { self.view } else { self.view.local_to(model) }
     }
 
@@ -85,7 +86,7 @@ impl GolemApp {
     pub(crate) fn scene_bounds(&self) -> Aabb {
         let mut out = Aabb { min: Vec3::INFINITY, max: Vec3::NEG_INFINITY };
         for o in self.objects.iter().filter(|o| o.visible) {
-            let b = o.world_bounds(self.mesh_of(o));
+            let b = o.shown_bounds(self.mesh_of(o));
             if !b.is_empty() {
                 out.min = out.min.min(b.min);
                 out.max = out.max.max(b.max);
@@ -94,35 +95,47 @@ impl GolemApp {
         if out.min.x > out.max.x { self.active_object().world_bounds(&self.mesh) } else { out }
     }
 
-    /// The active object under pixel `px`, as the brushes see it.
+    /// The active object under pixel `px`, as the brushes see it: on the
+    /// object itself or on one of its live mirror copies (`side`), whichever
+    /// is nearer.
     pub(super) fn hit(&self, px: Vec2) -> Option<HoverHit> {
-        if !self.active_object().visible {
+        let o = self.active_object();
+        if !o.visible {
             return None;
         }
-        let view = self.local_view();
-        let (o, d) = view.ray(px);
-        let h = self.mesh.raycast(o, d)?;
-        let pos = self.model().transform_point3(h.pos);
-        Some(HoverHit { pos, local: h.pos })
+        let mut best: Option<(HoverHit, f32)> = None;
+        for (side, m) in o.placements() {
+            let view = if m == Mat4::IDENTITY { self.view } else { self.view.local_to(m) };
+            let (lo, ld) = view.ray(px);
+            let Some(h) = self.mesh.raycast(lo, ld) else { continue };
+            let pos = m.transform_point3(h.pos);
+            let along = (pos - self.view.ray(px).0).dot(self.view.ray(px).1);
+            if best.as_ref().is_none_or(|(_, b)| along < *b) {
+                best = Some((HoverHit { pos, local: h.pos, side }, along));
+            }
+        }
+        best.map(|(hit, _)| hit)
     }
 
-    /// The nearest object shown under pixel `px`, and where on it (world).
+    /// The nearest object shown under pixel `px` (itself or one of its live
+    /// mirror copies), and where on it (world).
     pub(crate) fn pick(&self, px: Vec2) -> Option<(u64, Vec3)> {
         let (origin, dir) = self.view.ray(px);
         let mut best: Option<(u64, Vec3, f32)> = None;
         for o in self.objects.iter().filter(|o| o.visible) {
-            let m = o.matrix();
-            let inv = m.inverse();
-            let (lo, ld) = (inv.transform_point3(origin), inv.transform_vector3(dir));
-            let len = ld.length();
-            if len < 1e-12 {
-                continue;
-            }
-            let Some(h) = self.mesh_of(o).raycast(lo, ld / len) else { continue };
-            let pos = m.transform_point3(h.pos);
-            let along = (pos - origin).dot(dir);
-            if best.is_none_or(|(_, _, b)| along < b) {
-                best = Some((o.id, pos, along));
+            for (_, m) in o.placements() {
+                let inv = m.inverse();
+                let (lo, ld) = (inv.transform_point3(origin), inv.transform_vector3(dir));
+                let len = ld.length();
+                if len < 1e-12 || !len.is_finite() {
+                    continue;
+                }
+                let Some(h) = self.mesh_of(o).raycast(lo, ld / len) else { continue };
+                let pos = m.transform_point3(h.pos);
+                let along = (pos - origin).dot(dir);
+                if best.is_none_or(|(_, _, b)| along < b) {
+                    best = Some((o.id, pos, along));
+                }
             }
         }
         best.map(|(id, pos, _)| (id, pos))
@@ -142,6 +155,7 @@ impl GolemApp {
                 o.set_aside(old);
             }
             self.active = id;
+            self.side = 0;
             self.upload_whole = true;
             // The last dab was on the other object's surface.
             self.sculptor.last_hit = None;
@@ -249,7 +263,7 @@ impl GolemApp {
     }
 
     /// Changes object `id`'s props with `f`, as one undo step.
-    fn change_props(&mut self, id: u64, f: impl FnOnce(&mut Props)) {
+    pub(super) fn change_props(&mut self, id: u64, f: impl FnOnce(&mut Props)) {
         let Some(o) = self.object_mut(id) else { return };
         let before = o.props();
         let mut after = before.clone();
@@ -517,6 +531,7 @@ impl GolemApp {
         let mut chosen: Option<(u64, bool)> = None;
         let mut flip: Option<u64> = None;
         let mut delete: Option<u64> = None;
+        let mut mirror_command = None;
         theme::category(ui, "Objects", theme::lit(ACCENT()), &summary, true, |ui| {
             let shift = ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command);
             for o in &self.objects {
@@ -562,7 +577,13 @@ impl GolemApp {
                     self.toggle_transform();
                 }
             });
+            ui.add_space(4.0);
+            let active = self.active_object();
+            mirror_command = super::live_mirror::section(ui, &active.name, active.mirror, self.ui.pictures.icon("mirror"), tips);
         });
+        if let Some(command) = mirror_command {
+            self.mirror_command(command);
+        }
         if let Some((id, add)) = chosen {
             self.select(id, add);
         }

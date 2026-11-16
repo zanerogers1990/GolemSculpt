@@ -483,6 +483,7 @@ impl GolemApp {
         if summary.is_empty() {
             summary = "Off".to_owned();
         }
+        let mut repair_pressed = None;
         theme::category(ui, "Symmetry", Color32::from_rgb(242, 166, 38), &summary, true, |ui| {
             ui.horizontal(|ui| {
                 let w = theme::row_width(ui, 3, 4.0);
@@ -500,7 +501,12 @@ impl GolemApp {
                 }
             });
             super::radial::section(ui, &mut s.radial, tips, down_the_view);
+            // Mending a model whose sides no longer match (symmetry_repair.rs).
+            repair_pressed = super::symmetry_repair::section(ui, &mut self.repair, tips);
         });
+        if let Some(pressed) = repair_pressed {
+            self.symmetry_repair(pressed);
+        }
 
         // Invert, Clear, Blur, Sharpen, Grow, Shrink and masks from the surface (masking.rs).
         self.masking_card(ui);

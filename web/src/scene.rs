@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use glam::{Mat4, Quat, Vec3};
+use sculpt_symmetry::{MirrorCopy, MirrorRepeater};
 
 use crate::mesh::Mesh;
 use crate::mesh::bvh::Aabb;
@@ -32,6 +33,9 @@ pub struct Object {
     pub mesh: Option<Mesh>,
     /// What the renderer draws of it while another is active.
     pub drawn: Option<Arc<Drawn>>,
+    /// Its live mirror copies across the world's planes, if it has any: the
+    /// same mesh drawn again, reflected (the desktop's Live Mirror).
+    pub mirror: Option<MirrorRepeater>,
 }
 
 /// What can change of an object without touching its mesh: what an undo
@@ -43,6 +47,14 @@ pub struct Props {
     pub position: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
+    pub mirror: Option<MirrorRepeater>,
+}
+
+impl Props {
+    /// An object shown, in the middle of the scene, upright and its own size.
+    pub fn named(name: impl Into<String>) -> Props {
+        Props { name: name.into(), visible: true, position: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE, mirror: None }
+    }
 }
 
 impl Object {
@@ -56,6 +68,7 @@ impl Object {
             scale: Vec3::ONE,
             mesh: None,
             drawn: None,
+            mirror: None,
         };
         if let Some(mesh) = mesh {
             object.set_aside(mesh);
@@ -75,11 +88,13 @@ impl Object {
             position: self.position,
             rotation: self.rotation,
             scale: self.scale,
+            mirror: self.mirror,
         }
     }
 
     pub fn set_props(&mut self, p: Props) {
-        (self.name, self.visible, self.position, self.rotation, self.scale) = (p.name, p.visible, p.position, p.rotation, p.scale);
+        (self.name, self.visible, self.position, self.rotation, self.scale, self.mirror) =
+            (p.name, p.visible, p.position, p.rotation, p.scale, p.mirror);
     }
 
     /// Keeps `mesh` as this object's own, with what is drawn of it.
@@ -94,14 +109,59 @@ impl Object {
         self.mesh.take()
     }
 
+    /// Whether `copy` (a flip mask) is one of its live mirror copies.
+    pub fn has_copy(&self, copy: u8) -> bool {
+        copy != 0 && self.mirror.is_some_and(|m| copy & !m.axis_mask == 0)
+    }
+
+    /// Every place it is drawn: the flip mask of the copy (0 for the object
+    /// itself, first) and the matrix that puts its mesh there (the desktop's
+    /// `Object::placements`).
+    pub fn placements(&self) -> Vec<(u8, Mat4)> {
+        let model = self.matrix();
+        let mut out = vec![(0, model)];
+        if let Some(m) = self.mirror {
+            out.extend(m.copies().into_iter().map(|c| (c.flip_mask, c.matrix(&model, m.center))));
+        }
+        out
+    }
+
+    /// The matrix of one placement: its own for `copy` 0 (or a copy it does
+    /// not have), else that live copy's.
+    pub fn placed_matrix(&self, copy: u8) -> Mat4 {
+        match self.mirror.filter(|_| self.has_copy(copy)) {
+            Some(m) => MirrorCopy::new(copy).matrix(&self.matrix(), m.center),
+            None => self.matrix(),
+        }
+    }
+
     /// Its box in world space, from `mesh` (its own, or the app's for the
-    /// active object).
+    /// active object): the object alone, which the gizmo is sized to.
     pub fn world_bounds(&self, mesh: &Mesh) -> Aabb {
-        let b = mesh.bounds();
+        box_through(mesh.bounds(), &self.matrix())
+    }
+
+    /// Its box in world space with its live mirror copies: all that is on
+    /// screen of it, which framing goes by.
+    pub fn shown_bounds(&self, mesh: &Mesh) -> Aabb {
+        let local = mesh.bounds();
+        let mut out = box_through(local, &self.matrix());
+        for (_, m) in self.placements().into_iter().skip(1) {
+            let b = box_through(local, &m);
+            if !b.is_empty() {
+                out.min = out.min.min(b.min);
+                out.max = out.max.max(b.max);
+            }
+        }
+        out
+    }
+}
+
+/// The box round `b` once `m` places it.
+fn box_through(b: Aabb, m: &Mat4) -> Aabb {
         if b.is_empty() {
             return b;
         }
-        let m = self.matrix();
         let mut out = Aabb { min: Vec3::INFINITY, max: Vec3::NEG_INFINITY };
         for i in 0..8 {
             let corner = Vec3::new(
@@ -114,7 +174,6 @@ impl Object {
             out.max = out.max.max(p);
         }
         out
-    }
 }
 
 /// An object's mesh as the renderer draws it while it is not the active

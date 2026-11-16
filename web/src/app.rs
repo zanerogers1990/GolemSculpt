@@ -54,6 +54,16 @@ mod levels;
 // The whole scene as a file: Save Scene, and opening one.
 #[path = "scene_file.rs"]
 mod scene_file;
+// Symmetry Repair (Check Symmetry, Make Symmetric, Cut & Mirror, Cleanup)
+// and the Live Mirror copies of an object.
+#[path = "symmetry_repair.rs"]
+mod symmetry_repair;
+#[path = "live_mirror.rs"]
+mod live_mirror;
+
+/// Where the scene kept in the browser carries the objects' live mirrors,
+/// after the view: what comes next is each object's axes and centre.
+const MIRRORS_TAG: &[u8; 4] = b"MIRR";
 
 /// How many undo steps are kept, and how many of them may hold a whole mesh
 /// (a Remesh, a Subdivide, a new shape), which cost far more memory.
@@ -103,12 +113,18 @@ enum Step {
     /// The subdivision levels on the other side of Delete Lower or Delete
     /// Higher; the mesh itself is unchanged (levels.rs).
     Levels(u64, Option<Box<crate::mesh::levels::MeshLevels>>),
+    /// Several steps taken as one (Validate of a live mirror: the new
+    /// objects, and the mirror taken off), in the order they were made.
+    Many(Vec<Step>),
 }
 
 impl Step {
     /// Whether the step holds a whole mesh, which costs far more memory.
     fn heavy(&self) -> bool {
-        matches!(self, Step::Mesh(..) | Step::Exists { held: Some(_), .. })
+        match self {
+            Step::Many(steps) => steps.iter().any(Step::heavy),
+            _ => matches!(self, Step::Mesh(..) | Step::Exists { held: Some(_), .. }),
+        }
     }
 }
 
@@ -127,6 +143,9 @@ pub enum Mode {
 struct HoverHit {
     pos: Vec3,
     local: Vec3,
+    /// Which of the active object's places it is on: 0 the object, else a
+    /// live mirror copy's flip mask.
+    side: u8,
 }
 
 pub struct GolemApp {
@@ -197,6 +216,12 @@ pub struct GolemApp {
     welcome: welcome::Welcome,
     /// A scene file picked or dropped, waiting for "Open this scene?" (scene_file.rs).
     pending_scene: Option<scene_file::Pending>,
+    /// Symmetry Repair's plane and Match Tolerance (symmetry_repair.rs).
+    repair: symmetry_repair::Repair,
+    /// Which of the active object's places the brush is on: 0 the object
+    /// itself, else the flip mask of one of its live mirror copies
+    /// (live_mirror.rs). A stroke begun on a copy works the object through it.
+    side: u8,
 }
 
 impl GolemApp {
@@ -271,6 +296,8 @@ impl GolemApp {
             gestures: Default::default(),
             welcome: Default::default(),
             pending_scene: None,
+            repair: Default::default(),
+            side: 0,
         };
         app.frame_model(false);
         browser::ready();
@@ -286,7 +313,8 @@ impl GolemApp {
     /// Frames the active object.
     fn frame_model(&mut self, animate: bool) {
         let aspect = (self.view.size.x / self.view.size.y.max(1.0)).max(0.1);
-        let bounds = self.active_object().world_bounds(&self.mesh);
+        // With its live mirror copies: all that is on screen of it.
+        let bounds = self.active_object().shown_bounds(&self.mesh);
         self.camera.frame(bounds, if aspect.is_finite() { aspect } else { 1.0 }, animate);
     }
 
@@ -356,6 +384,25 @@ impl GolemApp {
             self.status = if undo { "Nothing to undo." } else { "Nothing to redo." }.into();
             return;
         };
+        let step = match self.flip_step(step, undo) {
+            Ok(step) => step,
+            Err(_) => {
+                self.status = "That step was on an object that is no longer there.".into();
+                return;
+            }
+        };
+        if undo {
+            self.redo.push(step);
+        } else {
+            self.undo.push(step);
+        }
+        self.mark_changed();
+        self.status = if undo { "Undone." } else { "Redone." }.into();
+    }
+
+    /// Undoes (or redoes) one step, and hands back the step that does the
+    /// opposite. `Err` with the step untouched when its object is gone.
+    fn flip_step(&mut self, step: Step, undo: bool) -> Result<Step, Step> {
         // A step that changes a mesh is undone on its own object, which
         // becomes the active one (as on the desktop).
         let on = match &step {
@@ -365,8 +412,7 @@ impl GolemApp {
             _ => None,
         };
         if on.is_some_and(|id| !self.activate(id)) {
-            self.status = "That step was on an object that is no longer there.".into();
-            return;
+            return Err(step);
         }
         let step = match step {
             Step::Stroke(id, delta) => {
@@ -395,14 +441,22 @@ impl GolemApp {
                 std::mem::swap(&mut self.mesh.levels, &mut levels);
                 Step::Levels(id, levels)
             }
+            // Undone last first, redone first first; kept in the order made.
+            Step::Many(steps) => {
+                let mut done = Vec::with_capacity(steps.len());
+                let ordered: Vec<Step> = if undo { steps.into_iter().rev().collect() } else { steps };
+                for step in ordered {
+                    match self.flip_step(step, undo) {
+                        Ok(step) | Err(step) => done.push(step),
+                    }
+                }
+                if undo {
+                    done.reverse();
+                }
+                Step::Many(done)
+            }
         };
-        if undo {
-            self.redo.push(step);
-        } else {
-            self.undo.push(step);
-        }
-        self.mark_changed();
-        self.status = if undo { "Undone." } else { "Redone." }.into();
+        Ok(step)
     }
 
     fn can_undo(&self) -> bool {
@@ -437,6 +491,7 @@ impl GolemApp {
             position: Vec3::ZERO,
             rotation: glam::Quat::IDENTITY,
             scale: Vec3::ONE,
+            mirror: None,
         };
         self.add_object(mesh, props, true);
         self.status = format!("Added a {}. Move it with the Transform tool (W).", self.shape.name().to_lowercase());
@@ -460,6 +515,7 @@ impl GolemApp {
                     position: Vec3::ZERO,
                     rotation: glam::Quat::IDENTITY,
                     scale: Vec3::ONE,
+                    mirror: None,
                 };
                 self.add_object(mesh, props, true);
                 self.frame_model(true);
@@ -484,16 +540,8 @@ impl GolemApp {
             let mesh = self.mesh_of(o);
             let tidied = tidy(mesh);
             let m = tidied.as_ref().unwrap_or(mesh);
-            let place = o.matrix();
-            let positions = m.positions.iter().map(|&p| place.transform_point3(p)).collect();
-            let mut indices = m.visible_indices().into_owned();
-            // A mirrored object's triangles face the other way once placed.
-            if place.determinant() < 0.0 {
-                for t in indices.chunks_exact_mut(3) {
-                    t.swap(1, 2);
-                }
-            }
-            parts.push((o.name.clone(), positions, indices));
+            // The object where it stands, and its live mirror copies where they are shown.
+            parts.extend(Self::placed_parts(&o.name, o, m));
         }
         if parts.is_empty() {
             self.status = "Every object is hidden: show one to save it.".into();
@@ -592,6 +640,15 @@ impl GolemApp {
             out.extend_from_slice(&v.to_le_bytes());
         }
         out.push(c.ortho as u8);
+        // Then each object's live mirror, if any object has one: older saves end above.
+        if self.objects.iter().any(|o| o.mirror.is_some()) {
+            out.extend_from_slice(MIRRORS_TAG);
+            for o in &self.objects {
+                let (axes, center) = o.mirror.map_or((0, Vec3::ZERO), |m| (m.axis_mask, m.center));
+                out.push(axes);
+                out.extend_from_slice(bytemuck::cast_slice(&center.to_array()));
+            }
+        }
         out
     }
 
@@ -625,6 +682,7 @@ impl GolemApp {
                     position: Vec3::new(p[0], p[1], p[2]),
                     rotation: glam::Quat::from_xyzw(p[3], p[4], p[5], p[6]).normalize(),
                     scale: Vec3::new(p[7], p[8], p[9]),
+                    mirror: None,
                 };
                 let mesh = if three {
                     let (mesh, dropped) = reader.mesh_with_levels()?;
@@ -636,7 +694,7 @@ impl GolemApp {
                 objects.push((props, mesh));
             }
         } else {
-            let props = Props { name: "Model".into(), visible: true, position: Vec3::ZERO, rotation: glam::Quat::IDENTITY, scale: Vec3::ONE };
+            let props = Props::named("Model");
             objects.push((props, reader.mesh()?));
         }
         if objects.is_empty() {
@@ -648,6 +706,15 @@ impl GolemApp {
             let f = |k: usize| f32::from_le_bytes(b[k * 4..k * 4 + 4].try_into().unwrap());
             ([f(0), f(1), f(2), f(3), f(4), f(5)], b[24] != 0)
         });
+        // The live mirrors, one for each object, where the save has them.
+        if reader.take(MIRRORS_TAG.len()).is_some_and(|tag| tag == MIRRORS_TAG) {
+            for (props, _) in objects.iter_mut() {
+                let Some(b) = reader.take(13) else { break };
+                let c: Vec<f32> = bytemuck::pod_collect_to_vec(&b[1..]);
+                let center = Vec3::new(c[0], c[1], c[2]);
+                props.mirror = if center.is_finite() { sculpt_symmetry::MirrorRepeater::new(b[0], center) } else { None };
+            }
+        }
         self.sculptor.settings.symmetry = [symmetry[0] != 0, symmetry[1] != 0, symmetry[2] != 0];
         // The objects as kept: the active one's mesh is the app's.
         let active = active.min(objects.len() - 1);
@@ -831,6 +898,11 @@ impl GolemApp {
             (Drag::None, Some(px)) if hovered && self.mode != Mode::Transform => self.hit(px),
             _ => None,
         };
+        // The brush ring sits on whichever side is under the pointer.
+        if let (Some(h), Drag::None) = (self.hover, self.drag) {
+            self.side = h.side;
+        }
+        let view = self.local_view();
         // The brush's size on the surface, in the active object's own units.
         let per_pixel = match self.hover {
             Some(h) => view.world_per_pixel(view.depth_of(h.local).max(1e-6)),
@@ -860,6 +932,8 @@ impl GolemApp {
             PointerButton::Primary | PointerButton::Secondary => {
                 let invert = mods.ctrl || mods.command || button == PointerButton::Secondary;
                 let sample = PointerSample { pos: px, pressure, time };
+                // On the object or one of its live mirror copies: the stroke works it through that one.
+                self.side = self.hit(px).map_or(0, |h| h.side);
                 let view = self.local_view();
                 let shown = self.active_object().visible;
                 // A layer that records but does not show takes no stroke, nor

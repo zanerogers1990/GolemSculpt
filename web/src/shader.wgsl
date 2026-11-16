@@ -77,7 +77,10 @@ fn vs_mesh(in: MeshIn) -> MeshOut {
 }
 
 @fragment
-fn fs_mesh(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn fs_mesh(in: MeshOut, @builtin(front_facing) facing: bool) -> @location(0) vec4<f32> {
+    // A place that mirrors (a live mirror copy) turns the triangles' winding
+    // round, which the object's normal matrix says in its unused corner.
+    let front = facing != (obj.normal[3][3] < 0.0);
     // How the position changes from pixel to pixel, worked out before any
     // branch, for the finishes' patterns and the mirror guides.
     let world_dx = dpdx(in.world);
