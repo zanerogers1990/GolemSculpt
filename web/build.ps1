@@ -132,6 +132,11 @@ try {
     $page = $page.Replace($marker, "const SIZES = { mt: $mt, gpu: $gpu, full: $full }; // GOLEM_SIZES")
     [IO.File]::WriteAllText((Join-Path $dist 'index.html'), $page, (New-Object Text.UTF8Encoding $false))
     Copy-Item (Join-Path $web 'serve.py') $dist -Force
+    # Tooltips in other languages, fetched by the page only when one is picked
+    # (src/languages.rs), and the fonts for Japanese, Chinese and Korean.
+    New-Item -ItemType Directory -Force (Join-Path $dist 'translations'), (Join-Path $dist 'fonts') | Out-Null
+    Copy-Item (Join-Path $web '..\crates\toolkit\translations\*.txt') (Join-Path $dist 'translations') -Force
+    Copy-Item (Join-Path $web 'fonts\*.otf'), (Join-Path $web 'fonts\OFL.txt') (Join-Path $dist 'fonts') -Force
     # The libraries, pictures and fonts that are someone else's, with their licences (licences.py).
     python (Join-Path $web 'licences.py') (Join-Path $dist 'THIRD-PARTY-LICENSES.txt')
     if ($LASTEXITCODE -ne 0) { throw 'licences.py failed: the folder has no licence file' }

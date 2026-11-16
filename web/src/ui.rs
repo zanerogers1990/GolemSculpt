@@ -59,14 +59,13 @@ pub mod tabs;
 
 use panels::{Part, Side};
 
-/// The kinds the Brushes card sorts brushes into, as on the desktop, less
-/// the brushes the web version has not got (paint, Pose).
+/// The kinds the Brushes card sorts brushes into, as on the desktop.
 const GROUPS: [(&str, &[Brush]); 5] = [
     ("Clay & Build", &[Brush::Clay, Brush::Standard, Brush::Layer, Brush::Inflate]),
     ("Smooth & Flatten", &[Brush::Smooth, Brush::Flatten]),
     ("Cut & Pinch", &[Brush::Crease, Brush::Pinch]),
-    ("Move", &[Brush::Move, Brush::SnakeHook, Brush::Nudge]),
-    ("Layers", &[Brush::EraseLayer]),
+    ("Move & Pose", &[Brush::Move, Brush::SnakeHook, Brush::Nudge, Brush::Pose]),
+    ("Paint & Layers", &[Brush::Paint, Brush::EraseLayer]),
 ];
 const COLUMNS: usize = 2;
 const GAP: f32 = 4.0;
@@ -78,7 +77,7 @@ const ROW: f32 = 24.0;
 const TOOLS: [(&str, &[&str]); 3] = [
     ("Make", &["tube", "muscle", "strap", "lathe", "hands", "array", "extract"]),
     ("Mask, Hide & Cut", &["mask", "hide", "trim", "split"]),
-    ("Measure", &["measure"]),
+    ("Print & Measure", &["measure", "maskfit"]),
 ];
 
 /// The matcaps on the Look tab: name, picture, who made it.
@@ -102,12 +101,13 @@ macro_rules! icons {
 const ICONS: &[(&str, &[u8])] = icons![
     "brush_move", "brush_clay", "brush_smooth", "brush_crease", "brush_inflate", "brush_flatten",
     "brush_standard", "brush_layer", "brush_snakehook", "brush_pinch", "brush_nudge", "brush_mask", "brush_erase_layer",
+    "brush_pose", "brush_paint",
     "polarity_add", "polarity_sub", "undo", "redo", "tool_transform", "eye", "eye_off", "trash", "prim_sphere", "prim_cube", "prim_cylinder",
     "prim_capsule", "prim_cone", "tool_sculpt", "tool_tube", "tool_muscle", "tool_strap", "mirror",
     "tool_lathe", "tool_hands", "tool_array", "tool_measure", "check", "close", "region_box_mask",
     "region_lasso_mask", "region_box_hide", "region_lasso_hide", "region_box_trim", "region_lasso_trim",
     "region_line_trim", "region_box_split", "region_lasso_split", "region_line_split", "region_invert",
-    "region_show_all",
+    "region_show_all", "tool_sspheres",
 ];
 
 /// The interface's pictures: the icons and the matcaps, as egui textures.
@@ -268,6 +268,14 @@ impl GolemApp {
         if self.mode == Mode::Transform {
             self.tool_buttons(ui);
             self.transform_card(ui);
+            // Bend, Twist, Lattice and the other deformers the gizmo drives (deformers.rs).
+            self.deform_card(ui);
+            return;
+        }
+        if self.mode == Mode::Spheres {
+            // The SSpheres tool's cards (spheres.rs).
+            self.tool_buttons(ui);
+            self.spheres_panel(ui);
             return;
         }
         match self.ui.sculpt_tab {
@@ -303,15 +311,20 @@ impl GolemApp {
         if tip(theme::button(ui, full, "Sculpt", style), tips, "Back to the brushes (Esc).").clicked() {
             self.mode = Mode::Sculpt;
         }
+        // Its key as the key map has it now (shortcuts.rs).
+        let key = self.shortcut_badge("transform");
         let style = ButtonStyle {
             icon: self.ui.pictures.icon("tool_transform"),
             active: (self.mode == Mode::Transform).then_some(ACCENT()),
-            badge: "W",
+            badge: &key,
             ..Default::default()
         };
-        if tip(theme::button(ui, full, "Transform", style), tips, "Move, turn and scale the selected objects (W).").clicked() {
+        let help = if key.is_empty() { "Move, turn and scale the selected objects.".to_owned() } else { format!("Move, turn and scale the selected objects ({key}).") };
+        if tip(theme::button(ui, full, "Transform", style), tips, &help).clicked() {
             self.toggle_transform();
         }
+        // SSpheres, after Transform as on the desktop's tool row (spheres.rs).
+        self.spheres_tool_button(ui);
         let up = (self.mode == Mode::Tubes).then_some(self.tubes.which);
         let mut picked = None;
         for (title, ids) in TOOLS {
@@ -357,6 +370,8 @@ impl GolemApp {
         let pictures = &self.ui.pictures;
         let icon = |name: &str| pictures.icon(name);
         let (library, s, pen) = (&mut self.sculptor.library, &mut self.sculptor.settings, &self.sculptor.pen_meter);
+        // The model the brush works on: what the Pose and Paint settings speak of.
+        let mesh = &self.mesh;
 
         theme::category(ui, "Stroke", Color32::from_rgb(168, 133, 255), &stroke::summary(s), false, |ui| {
             stroke::card(ui, s, pen, tips)
@@ -429,12 +444,17 @@ impl GolemApp {
                     "How fast the brush builds, on top of Strength.",
                 );
             }
-            let label = if bs.front_facing { "Front Facing Only" } else { "Front Facing Only (Off)" };
-            tip(
-                theme::checkbox(ui, &mut bs.front_facing, label, ACCENT()),
-                tips,
-                "Ignore surface that faces away from the camera, so thin shapes are not hit on the far side.",
-            );
+            // Not for Pose: a limb is posed whole, far side and all.
+            if brush != Brush::Pose {
+                let label = if bs.front_facing { "Front Facing Only" } else { "Front Facing Only (Off)" };
+                tip(
+                    theme::checkbox(ui, &mut bs.front_facing, label, ACCENT()),
+                    tips,
+                    "Ignore surface that faces away from the camera, so thin shapes are not hit on the far side.",
+                );
+            }
+            // Keeps the stroke to the face group it begins on (Mesh tab, Face Groups; groups.rs).
+            GolemApp::stay_in_group_tick(ui, bs, tips);
             match brush {
                 Brush::Clay => {
                     theme::slider(ui, "Clay Depth", &mut s.clay_depth, 0.1..=1.5, |v| format!("{v:.2}"));
@@ -461,6 +481,9 @@ impl GolemApp {
                     theme::checkbox(ui, &mut s.move_connected, "Connected Only", ACCENT());
                     theme::about(ui, "Ctrl or the right button pushes the surface in or pulls it out, the way it faces.");
                 }
+                // The Pose and Paint brushes' own settings (pose.rs, paint.rs).
+                Brush::Pose => super::pose::pose_settings(ui, s, mesh, tips),
+                Brush::Paint => super::paint::brush_settings(ui, &mut s.paint, mesh, tips),
                 _ => {}
             }
             modes::tidy(ui, s.current_mut(), brush, tips);
@@ -534,11 +557,19 @@ impl GolemApp {
             // get triangles where they are wanted.
             dyntopo::section(ui, &mut self.sculptor.dyntopo, tips);
             self.dyntopo_levels_note(ui);
+            // Quad Remesh under it, as on the desktop (quad_remesh.rs).
+            let time = ui.input(|i| i.time);
+            self.quad_rows(ui, time);
         });
 
         // Subdivision levels and sculpt layers, as the desktop's cards (levels.rs, layers.rs).
         self.levels_card(ui);
+        // Project Detail under Subdivision, as on the desktop (project_detail.rs).
+        self.project_card(ui);
         self.layers_card(ui);
+        // Vertex paint and face groups, after the layers as on the desktop (paint.rs, groups.rs).
+        self.paint_card(ui);
+        self.groups_card(ui);
 
         // Decimate, as the desktop's card (without its preview).
         theme::category(ui, "Decimate", Color32::from_rgb(232, 120, 120), "", false, |ui| {
@@ -628,8 +659,12 @@ impl GolemApp {
                             self.new_shape();
                         }
                     });
+                    // Or start from spheres (spheres.rs).
+                    self.new_rig_button(ui);
                     theme::hint(ui, "The objects are kept in this browser between visits.");
                 });
+                // Reference pictures, last on the tab as on the desktop's (reference_images.rs).
+                self.references_card(ui);
             }
             tabs::Scene::Look => {
                 let picked = MATCAPS.get(self.matcap).map_or("", |m| m.0);
@@ -665,7 +700,7 @@ impl GolemApp {
             tabs::Scene::File => {
                 theme::category(ui, "File", theme::lit(ACCENT()), "", true, |ui| {
                     let full = ui.available_width();
-                    if tip(theme::button(ui, full, "Open...", ButtonStyle::default()), tips, "Open a scene saved with Save Scene, or an OBJ, STL or PLY file (as a new object).").clicked() {
+                    if tip(theme::button(ui, full, "Open...", ButtonStyle::default()), tips, "Open a scene saved with Save Scene, or an OBJ, STL, PLY or FBX file (as a new object; each object in an FBX as one of its own).").clicked() {
                         self.open_picker();
                     }
                     let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
@@ -674,7 +709,7 @@ impl GolemApp {
                         self.save_scene();
                     }
                     ui.horizontal(|ui| {
-                        let w = theme::row_width(ui, 2, 6.0);
+                        let w = theme::row_width(ui, 3, 6.0);
                         if tip(theme::button(ui, w, "Save OBJ", ButtonStyle::default()), tips, "Download the model as OBJ.").clicked() {
                             self.save_file(false);
                         }
@@ -683,9 +718,13 @@ impl GolemApp {
                         {
                             self.save_file(true);
                         }
+                        let fbx = "Download every object shown as one Autodesk FBX, for Blender, Unity and the like: each object where it stands, with its live copies.";
+                        if tip(theme::button(ui, w, "Save FBX", ButtonStyle::default()), tips, fbx).clicked() {
+                            self.save_fbx();
+                        }
                     });
-                    theme::hint(ui, "Save Scene keeps everything; OBJ and STL keep only the shapes, for other programs.");
-                    theme::hint(ui, "Or drop a .golem, OBJ, STL or PLY file anywhere on the page.");
+                    theme::hint(ui, "Save Scene keeps everything; OBJ, STL and FBX keep only the shapes, for other programs.");
+                    theme::hint(ui, "Or drop a .golem, OBJ, STL, PLY or FBX file anywhere on the page.");
                 });
             }
             tabs::Scene::Settings => {
@@ -708,7 +747,10 @@ impl GolemApp {
                     theme::hint(ui, "Ctrl + = and Ctrl + - also work.");
                     let label = if self.ui.tips { "Tooltips: On" } else { "Tooltips: Off" };
                     tip(theme::checkbox(ui, &mut self.ui.tips, label, ACCENT()), tips, "Say what a button does when the pointer rests on it.");
+                    self.language_picker(ui, tips);
                 });
+                // The Keyboard Shortcuts card, after Interface as on the desktop (shortcuts.rs).
+                self.shortcuts_card(ui);
                 theme::category(ui, "How to Use", Color32::from_rgb(110, 200, 120), "", true, |ui| {
                     for line in [
                         "Draw on the model to sculpt. A pen's pressure is read.",

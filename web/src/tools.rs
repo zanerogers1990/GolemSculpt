@@ -59,6 +59,7 @@ fn registry() -> Vec<Box<dyn Tool>> {
         sculpt_region::trim(),
         sculpt_region::split(),
         sculpt_measure::tool(),
+        sculpt_maskfit::tool(),
     ]
 }
 
@@ -224,6 +225,9 @@ struct WebDoc<'a> {
     joined: bool,
     replaced: bool,
     changed: bool,
+    /// The scene's other objects, to look at only (Mask Fit's head), placed
+    /// in the active object's space (mask_fit.rs). Empty for other tools.
+    others: Vec<crate::mask_fit::Other<'a>>,
 }
 
 impl WebDoc<'_> {
@@ -261,10 +265,15 @@ fn append_placed(positions: &mut Vec<Vec3>, indices: &mut Vec<u32>, tri: &sculpt
 
 impl Scene for WebDoc<'_> {
     fn objects(&self) -> Vec<ObjectId> {
-        vec![MODEL]
+        let mut ids = vec![MODEL];
+        ids.extend(self.others.iter().map(|o| o.id));
+        ids
     }
 
     fn info(&self, id: ObjectId) -> Option<ObjectInfo<'_>> {
+        if id != MODEL {
+            return crate::mask_fit::info(&self.others, id);
+        }
         (id == MODEL).then(|| ObjectInfo {
             id,
             name: "Model",
@@ -284,6 +293,9 @@ impl Scene for WebDoc<'_> {
     }
 
     fn mesh(&self, id: ObjectId) -> Option<MeshView<'_>> {
+        if id != MODEL {
+            return crate::mask_fit::mesh(&self.others, id);
+        }
         (id == MODEL).then(|| MeshView {
             id: MeshId(self.mesh.uid),
             positions: &self.mesh.positions,
@@ -316,6 +328,9 @@ impl Scene for WebDoc<'_> {
     }
 
     fn bounds(&self, id: ObjectId) -> sculpt_geom::Aabb {
+        if id != MODEL {
+            return crate::mask_fit::bounds(&self.others, id);
+        }
         let b = self.mesh.bounds();
         if id != MODEL || b.is_empty() { sculpt_geom::Aabb::EMPTY } else { sculpt_geom::Aabb::new(b.min, b.max) }
     }
@@ -560,6 +575,7 @@ impl GolemApp {
         let mut out = Outbox::default();
         let Tools { tools, infos, jobs, places, icons, made, .. } = &mut self.tubes;
         let maker = MAKERS.contains(&infos[index].id);
+        let others = crate::mask_fit::others(infos[index].id, &self.objects, self.active);
         let mut doc = WebDoc {
             mesh: &mut self.mesh,
             join: maker && *made == Made::Join,
@@ -574,6 +590,7 @@ impl GolemApp {
             joined: false,
             replaced: false,
             changed: false,
+            others,
         };
         let icon_of = |name: &str| icons.get(name).copied();
         let result = {

@@ -36,6 +36,14 @@ pub mod still;
 pub mod finish;
 #[path = "lighting.rs"]
 pub mod lighting;
+#[path = "shadows.rs"]
+pub mod shadows;
+// The SSpheres tool's armature and skin, drawn after the model (spheres_layer.rs).
+#[path = "spheres_layer.rs"]
+pub mod spheres_layer;
+// Reference pictures, drawn after the model (picture_pass.rs).
+#[path = "picture_pass.rs"]
+pub mod picture_pass;
 
 const SAMPLES: u32 = 4;
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -147,6 +155,11 @@ pub enum Upload {
         index_count: u32,
         vertex_room: u64,
         index_room: u64,
+        /// The paint's colour (sRGB and coverage, a byte each) and the face
+        /// groups' tint (colour and strength), four bytes a vertex; empty
+        /// for none (paint.rs, groups.rs).
+        paint: Vec<u8>,
+        groups: Vec<u8>,
     },
     /// Ranges of an existing mesh's vertex buffers: (byte offset, bytes).
     /// Triangles dynamic topology changed or added come as ranges of the
@@ -159,6 +172,9 @@ pub enum Upload {
         curv: Vec<(u64, Vec<u8>)>,
         indices: Vec<(u64, Vec<u8>)>,
         index_count: Option<u32>,
+        paint: Vec<(u64, Vec<u8>)>,
+        /// The face groups' tint for every vertex, when it changed.
+        groups: Option<Vec<u8>>,
     },
 }
 
@@ -169,6 +185,9 @@ struct MeshBuffers {
     curv: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// Four bytes a vertex each: the paint's colour, the face groups' tint.
+    paint: wgpu::Buffer,
+    groups: wgpu::Buffer,
 }
 
 /// The wireframe's lines on the card: two per triangle of the mesh's index
@@ -241,14 +260,25 @@ pub struct Gpu {
     show_model: bool,
     /// The slots of the model's live mirror copies: the model drawn again there.
     copy_slots: Vec<u32>,
+    /// The finishes' shadows and ambient occlusion: with WebGPU only (shadows.rs).
+    shade: Option<shadows::Shade>,
+    /// The reference pictures' pipelines and images, made when the first is shown.
+    pictures: Option<picture_pass::Pass>,
+    /// The SSpheres tool's layer (spheres_layer.rs).
+    spheres: spheres_layer::Kept,
 }
 
 impl Gpu {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, page_format: wgpu::TextureFormat, matcap: &image::RgbaImage) -> Gpu {
+    /// `webgpu`: the browser draws with WebGPU, so the finishes get their
+    /// shadows and ambient occlusion (`shadows::supported`).
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, page_format: wgpu::TextureFormat, matcap: &image::RgbaImage, webgpu: bool) -> Gpu {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("golem shader"),
-            // The finishes (finish.wgsl) are part of the same module.
-            source: wgpu::ShaderSource::Wgsl(concat!(include_str!("shader.wgsl"), include_str!("finish.wgsl")).into()),
+            // The finishes (finish.wgsl) and their shadows (shade.wgsl, or
+            // shade_off.wgsl with WebGL2) are part of the same module.
+            source: wgpu::ShaderSource::Wgsl(
+                [include_str!("shader.wgsl"), include_str!("finish.wgsl"), shadows::shader_part(webgpu)].concat().into(),
+            ),
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -319,6 +349,8 @@ impl Gpu {
             vertex_buffer(1, wgpu::VertexFormat::Float32x3),
             vertex_buffer(2, wgpu::VertexFormat::Float32),
             vertex_buffer(3, wgpu::VertexFormat::Float32),
+            vertex_buffer(4, wgpu::VertexFormat::Unorm8x4),
+            vertex_buffer(5, wgpu::VertexFormat::Unorm8x4),
         ];
         let attributes: Vec<[wgpu::VertexAttribute; 1]> = layouts
             .iter()
@@ -350,9 +382,10 @@ impl Gpu {
             }],
         });
         let (objects, object_group) = object_buffer(device, &object_layout, 16);
+        let shade = webgpu.then(|| shadows::Shade::new(device, &globals, &object_layout));
         let mesh_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh pipeline layout"),
-            bind_group_layouts: &[Some(&mesh_layout), Some(&object_layout)],
+            bind_group_layouts: &[Some(&mesh_layout), Some(&object_layout), shade.as_ref().map(|s| &s.main_layout)],
             immediate_size: 0,
         });
         let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -478,6 +511,9 @@ impl Gpu {
             still: None,
             show_model: true,
             copy_slots: Vec::new(),
+            shade,
+            pictures: None,
+            spheres: Default::default(),
         }
     }
 
@@ -488,7 +524,7 @@ impl Gpu {
 
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, upload: &Upload) {
         match upload {
-            Upload::Whole { generation, positions, normals, mask, curv, indices, index_count, vertex_room, index_room } => {
+            Upload::Whole { generation, positions, normals, mask, curv, indices, index_count, vertex_room, index_room, paint, groups } => {
                 let make = |label, contents: &[u8], room: u64, usage| {
                     // A buffer may not be empty, and is a whole number of 4 bytes.
                     let size = (room.max(contents.len() as u64).max(16) + 3) & !3;
@@ -511,6 +547,8 @@ impl Gpu {
                     curv: make("curvature", curv, vertex_room * 4, vertex),
                     indices: make("indices", indices, index_room * 4, wgpu::BufferUsages::INDEX),
                     index_count: *index_count,
+                    paint: make("paint", paint, vertex_room * 4, vertex),
+                    groups: make("group colours", groups, vertex_room * 4, vertex),
                 });
                 self.generation = *generation;
                 // The wireframe's lines, with the same room to grow.
@@ -522,7 +560,7 @@ impl Gpu {
                     self.lines = Some(Lines { buffer });
                 }
             }
-            Upload::Parts { generation, positions, normals, mask, curv, indices, index_count } => {
+            Upload::Parts { generation, positions, normals, mask, curv, indices, index_count, paint, groups } => {
                 // Parts of a mesh the card does not hold would land in the wrong one.
                 let Some(mesh) = self.mesh.as_mut().filter(|_| self.generation == *generation) else { return };
                 if let Some(count) = index_count {
@@ -535,6 +573,7 @@ impl Gpu {
                     (&mesh.mask, mask),
                     (&mesh.curv, curv),
                     (&mesh.indices, indices),
+                    (&mesh.paint, paint),
                 ];
                 for (buffer, parts) in lists {
                     for (offset, bytes) in parts {
@@ -542,6 +581,9 @@ impl Gpu {
                             queue.write_buffer(buffer, *offset, bytes);
                         }
                     }
+                }
+                if let Some(groups) = groups.as_ref().filter(|g| !g.is_empty() && g.len() as u64 <= mesh.groups.size()) {
+                    queue.write_buffer(&mesh.groups, 0, groups);
                 }
                 // Triangles that changed change their lines, at the same place.
                 if let Some(lines) = &self.lines {
@@ -599,6 +641,8 @@ impl Gpu {
                     curv: make("object curvature", &level, wgpu::BufferUsages::VERTEX),
                     indices: make("object indices", &d.indices, wgpu::BufferUsages::INDEX),
                     index_count: d.index_count,
+                    paint: make("object paint", if d.paint.is_empty() { &zeros } else { &d.paint }, wgpu::BufferUsages::VERTEX),
+                    groups: make("object group colours", &zeros, wgpu::BufferUsages::VERTEX),
                 };
                 self.previews.insert(id, PreviewBuffers { version: 0, mesh, used: true });
             }
@@ -632,6 +676,8 @@ impl Gpu {
                     curv: make("preview curvature", &zeros, wgpu::BufferUsages::VERTEX),
                     indices: make("preview indices", bytemuck::cast_slice(&data.indices), wgpu::BufferUsages::INDEX),
                     index_count: data.indices.len() as u32,
+                    paint: make("preview paint", &zeros, wgpu::BufferUsages::VERTEX),
+                    groups: make("preview group colours", &zeros, wgpu::BufferUsages::VERTEX),
                 };
                 self.previews.insert(id, PreviewBuffers { version: preview.version(), mesh, used: true });
             }
@@ -712,12 +758,17 @@ impl Gpu {
     fn draw_scene(&self, pass: &mut wgpu::RenderPass<'_>, draws: &[(u64, u32)], runs: &[Range<u32>]) {
         pass.set_pipeline(&self.mesh_pipeline);
         pass.set_bind_group(0, &self.mesh_group, &[]);
+        if let Some(shade) = &self.shade {
+            pass.set_bind_group(2, shade.main_group(), &[]);
+        }
         let bind = |pass: &mut wgpu::RenderPass<'_>, mesh: &MeshBuffers, slot: u32| {
             pass.set_bind_group(1, &self.object_group, &[slot * OBJECT_STRIDE as u32]);
             pass.set_vertex_buffer(0, mesh.positions.slice(..));
             pass.set_vertex_buffer(1, mesh.normals.slice(..));
             pass.set_vertex_buffer(2, mesh.mask.slice(..));
             pass.set_vertex_buffer(3, mesh.curv.slice(..));
+            pass.set_vertex_buffer(4, mesh.paint.slice(..));
+            pass.set_vertex_buffer(5, mesh.groups.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
         };
         if let Some(mesh) = self.mesh.as_ref().filter(|m| m.index_count > 0 && self.show_model) {
@@ -818,6 +869,9 @@ impl Gpu {
             let runs = self.runs(None);
             self.draw_scene(&mut pass, draws, &runs);
         }
+        if let Some(shade) = &self.shade {
+            shade.for_picture(queue, size);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("picture copy"),
@@ -845,6 +899,9 @@ impl Gpu {
             extent,
         );
         queue.submit([encoder.finish()]);
+        if let Some(shade) = &self.shade {
+            shade.restore(queue);
+        }
         let mapped = Arc::new(AtomicU8::new(0));
         let flag = mapped.clone();
         buffer.map_async(wgpu::MapMode::Read, .., move |result| {
@@ -1036,6 +1093,12 @@ pub struct Viewport {
     pub copies: Vec<glam::Mat4>,
     /// Every other object that is shown.
     pub others: Vec<Other>,
+    /// The finishes' shadows and ambient occlusion (WebGPU only).
+    pub shade: shadows::Ask,
+    /// The reference pictures shown (picture_pass.rs).
+    pub pictures: Vec<picture_pass::Draw>,
+    /// The SSpheres tool's armature and skin, while it is up.
+    pub spheres: Option<spheres_layer::Draw>,
 }
 
 impl CallbackTrait for Viewport {
@@ -1077,15 +1140,30 @@ impl CallbackTrait for Viewport {
         queue.write_buffer(&gpu.finish, 0, bytemuck::bytes_of(&self.finish));
 
         // A picture to save: one on its way back is looked for, a new one drawn.
+        // The shadow map and the occlusion, ahead of everything that reads them.
+        if let Some(mut shade) = gpu.shade.take() {
+            let runs = gpu.runs(self.culled.as_ref());
+            shade.prepare(gpu, device, queue, encoder, self, &globals, &draws, &runs, size);
+            gpu.shade = Some(shade);
+        }
         gpu.poll_still(device);
         if let Some(request) = self.still.as_ref().filter(|r| gpu.still.is_none() && r.begin()) {
             gpu.start_still(device, queue, request.clone(), &globals, &draws);
         }
 
         let runs = gpu.runs(self.culled.as_ref());
+        if !self.pictures.is_empty() || gpu.pictures.is_some() {
+            let pictures = gpu.pictures.get_or_insert_with(|| picture_pass::Pass::new(device));
+            pictures.prepare(device, queue, globals.view_proj, &self.pictures);
+        }
+        gpu.spheres.prepare(device, queue, self.spheres.as_ref());
         let target = gpu.target.as_ref().expect("made above");
         let mut pass = begin_scene_pass(encoder, target);
         gpu.draw_scene(&mut pass, &draws, &runs);
+        gpu.spheres.draw(&mut pass);
+        if let Some(pictures) = &gpu.pictures {
+            pictures.draw(&mut pass);
+        }
         Vec::new()
     }
 

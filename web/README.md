@@ -194,5 +194,6 @@ as they do now.
 
 The desktop files carry a few `#[cfg(target_arch = "wasm32")]` lines for
 this build (the clock in `src/sculpt`, tool jobs run in place in
-`crates/toolkit/src/jobs.rs`, tooltip translations left out in
-`crates/toolkit/src/translate.rs`); they change nothing on the desktop.
+`crates/toolkit/src/jobs.rs`, tooltip translations fetched by the
+page rather than built in, `crates/toolkit/src/translate.rs` and
+`fonts.rs`); they change nothing on the desktop.

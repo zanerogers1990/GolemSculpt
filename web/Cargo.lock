@@ -804,15 +804,18 @@ dependencies = [
  "eframe",
  "egui",
  "glam",
+ "golem-winit-keys",
  "image",
  "js-sys",
  "log",
+ "miniz_oxide 0.8.9",
  "rayon",
  "sculpt-array",
  "sculpt-cut",
  "sculpt-geom",
  "sculpt-hands",
  "sculpt-lathe",
+ "sculpt-maskfit",
  "sculpt-measure",
  "sculpt-multires",
  "sculpt-region",
@@ -829,6 +832,10 @@ dependencies = [
  "web-time",
  "wgpu",
 ]
+
+[[package]]
+name = "golem-winit-keys"
+version = "0.1.0"
 
 [[package]]
 name = "guillotiere"
@@ -1941,6 +1948,18 @@ dependencies = [
  "rayon",
  "sculpt-geom",
  "sculpt-toolkit",
+]
+
+[[package]]
+name = "sculpt-maskfit"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "glam",
+ "rayon",
+ "sculpt-geom",
+ "sculpt-toolkit",
+ "sculpt-volume",
 ]
 
 [[package]]

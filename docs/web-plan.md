@@ -24,21 +24,73 @@ Phases 1 to 3 are done; phase 4 (shipping) is left.
   Page Down, Delete Lower / Higher) and sculpt layers (the desktop's Layers
   card, and the Erase Layer brush). Both are kept with the scene in the
   browser (store layout W03, the desktop's own LVLS/LAYR file blocks).
+- **Pose, Paint, Face Groups (2026-11-16):** the Pose brush (key 7, the
+  desktop's Pose card via `ui/pose.rs`, the white chain preview, Works From
+  Brush Ring / Face Group); the Paint brush (P, I eyedropper, Sample mode,
+  swatches, Zadd) with the Paint Layers card (new, duplicate, merge, flatten,
+  reorder, eye, lock, opacity, blend, mask source, fill, clear) and Mask by
+  Paint; the Face Groups card (Group Masked/Visible, Auto, by Angle, Pick,
+  Merge, Isolate, Hide, Mask Group, Ctrl+Shift+click) and Stay in Group.
+  Paint and groups are kept with the scene (layout W04: the desktop's PNTL
+  block and the group ids), follow Remesh and Decimate, and go to and come
+  from OBJ (vertex colours, `g Group_N` lines). Colour only: the desktop's
+  painted materials, roughness and metallic are left out (the web has no
+  Materials card or lit renderer for them). Group colours are blended per
+  vertex (WebGL2 has no storage buffers), so a border is soft by one
+  triangle. Paint shows on objects that are not active; group colours only
+  on the active one.
 - **Objects:** several objects (Objects card: add, copy, hide, delete), each
   with its own place, turn and size; the desktop's transform gizmo (W),
   with masked posing (the desktop's `app/masked.rs`); brushes and tools
   work on the active object in its own space.
+- **Shaping (2026-11-16):** the Deform card under the Transform card (Bend,
+  Bend Arc, Twist, Taper, Flatten, Inflate, Stretch, Lattice, with their
+  handles; the Lattice mirrors and repeats round a radial axis with the
+  brushes' symmetry); Edit Pivot, Pivot to Centre and Align to World in the
+  Transform card; Apply Scale and Set Origin to Mesh in the Objects card
+  (Remesh evens a stretched object first); Subtract, Union, Intersect and
+  Join in the Objects card for two or more selected (resolution up to 512,
+  face groups not carried); Project Detail under Subdivision; Quad Remesh in
+  the Remesh card (on a worker thread in the many-threads build, otherwise
+  the page says it is working and is still until it is done). Files:
+  `web/src/deformers.rs`, `placement.rs`, `combine.rs`, `project_detail.rs`,
+  `quad_remesh.rs`, `shaping.rs`.
 - **Tools:** Tube, Muscle, Strap, Lathe, Hand & Foot, Array, Extract, Mask,
-  Hide, Trim, Split, Measure, hosted through the tool kit; what they make
-  becomes a new object.
+  Hide, Trim, Split, Measure, Mask Fit (2026-11-16: it sees the other
+  objects shown, to pick the head), hosted through the tool kit; what they
+  make becomes a new object.
+- **SSpheres** (2026-11-16): the desktop's blockout tool (`src/ssphere/`,
+  compiled in unchanged, drawn by the desktop's own `render/spheres.rs`):
+  Draw, Move (with the gizmo's arrows on the selected sphere), Scale and
+  Rotate, the live see-through skin and Solid Preview, X symmetry, Attach,
+  its own undo history, Make Skin into a new object, and New SSphere Rig in
+  the New Shape card. Not ported: its part of the hold-Space wheel.
 - **Look:** the desktop's interface and its eight colour themes, matcaps,
-  the Clay, Metal and Wood finishes (lighter than the desktop's: no shadows
-  or ambient occlusion), cavity, wireframe, backdrop, lens, Save Picture.
+  the Clay, Metal and Wood finishes, with the desktop's soft key-light
+  shadow (Lighting card) and ambient occlusion (Effects card) in the WebGPU
+  builds (WebGL2 keeps the lighter look, the two switches greyed out; no
+  softboxes, HDRI or contact shadows), cavity, wireframe, backdrop, lens,
+  Save Picture.
 - **Files:** open OBJ/STL/PLY, save OBJ (each object named) and STL; the
   scene is kept in the browser across a refresh. Save Scene downloads the
   whole scene as a `.golem` file (the same bytes the browser keeps: objects,
   places, masks, hidden faces, levels, layers, symmetry, view); Open or a
   drop takes one back after asking, since it replaces the scene.
+  FBX (2026-11-16): open and Save FBX with the desktop's own reader and
+  writer (`web/src/fbx.rs`); each object in an FBX comes in as its own,
+  quads, UVs and colours kept; Save FBX writes every object shown with its
+  live copies. No glTF, .sclp or STEP, at Zane's word.
+- **Reference pictures (2026-11-16):** the desktop's Reference Images card
+  (last on the Scene tab), Add Picture... or a .png/.jpg dropped on the page;
+  facing, size, place, opacity, Flip, In Front, Show; kept with the scene
+  (browser and `.golem`), drawn in the viewport only.
+- **Shortcuts and languages (2026-11-16):** the desktop's key map
+  (`src/keymap.rs`) and its Keyboard Shortcuts card on the Settings tab
+  (GolemSculpt and ZBrush sets), kept in the browser; the keypad keys cannot
+  be told apart in a browser. Tooltips in the desktop's 11 other languages,
+  with the first-visit language question; a language's file (and for
+  Japanese, Chinese and Korean a cut-down Noto Sans CJK, `web/fonts/`) is
+  fetched only when it is picked.
 - **Speed:** three builds, picked by the page: many threads (WebGPU, needs
   the two headers in `web/README.md`), one thread WebGPU, one thread WebGL2.
   Only the changed parts of the mesh are sent to the graphics card, and a
@@ -80,7 +132,32 @@ interface, and getting meshes in and out through the browser.
 | Look | Matcap shading (GolemSculpt Teal Matte, Ben Simonds), cavity, wireframe toggle |
 | Save | Download OBJ / STL; the scene is kept in the browser so a refresh loses nothing |
 
-## What it leaves out
+## What is left, sorted (2026-11-16)
+
+Checked by comparing the desktop's modules with `web/src` and looking at what
+each leftover one reaches for (other app files, the disk, other programs).
+
+**Can come over (pure engine code plus a card):** Pose brush and Pose by face
+groups; vertex Paint; the Groups card; Deform (Lattice, Bend, Twist; only
+needs `crate::mesh`); Apply Scale, Edit Pivot, Origin; Project All; booleans;
+Keys and Mask Fit (tool kit tools like Tube); Quad Remesh; Unwrap UVs and
+Bake Maps (maps download as PNGs); FBX / glTF / .sclp / STEP in and out
+(through file pick and download); reference images (photo drop); the shortcut
+editor; tooltip languages. Most only need `std::time::Instant` swapped and
+their file writes turned into downloads.
+
+**Partly:** ray-traced Render Picture (WebGPU only, no WebGL2 fallback;
+finish shadows/AO are done, 2026-11-16); turntable/timelapse (as a WebM through the browser's
+recorder, not MP4); older versions and recovery copies (browser storage,
+size-capped); Save over the same file (Chrome/Edge only; others download a
+new copy). Spheres is done (2026-11-16).
+
+**Cannot:** Blender link (starts a local Blender), Claude bridge / MCP (a page
+cannot listen for connections), Unity import (reads project folders), WinTab
+(the browser reads pen pressure itself, so not needed), 10M+ meshes (4 GB page
+memory cap), full 32-core speed.
+
+## What the first version left out
 
 Blender link, Claude bridge (MCP), STEP / FBX / glTF / .sclp, bake and UVs,
 ray-traced renders, the Lure and Resin finishes, timelapse and turntable,

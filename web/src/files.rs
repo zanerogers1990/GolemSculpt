@@ -23,7 +23,7 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<Triangles, String> {
     } else if lower.ends_with(".ply") {
         read_ply(bytes)?
     } else {
-        return Err(format!("{name}: the web version opens OBJ, STL and PLY files."));
+        return Err(format!("{name}: the web version opens OBJ, STL, PLY and FBX files."));
     };
     check(tris, name)
 }

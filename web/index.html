@@ -91,11 +91,12 @@
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       },
 
-      pickFile() {
+      // `accept`: the kinds of file offered (a reference picture's), else a scene's or a model's.
+      pickFile(accept) {
         return new Promise((resolve, reject) => {
           const input = document.createElement('input');
           input.type = 'file';
-          input.accept = '.golem,.obj,.stl,.ply';
+          input.accept = accept || '.golem,.obj,.stl,.ply,.fbx';
           input.onchange = async () => {
             const file = input.files && input.files[0];
             if (!file) { reject('none'); return; }

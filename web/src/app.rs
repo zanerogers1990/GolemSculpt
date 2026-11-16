@@ -60,6 +60,44 @@ mod scene_file;
 mod symmetry_repair;
 #[path = "live_mirror.rs"]
 mod live_mirror;
+// FBX in and out: Open and Save FBX (the desktop's reader and writer).
+#[path = "fbx_app.rs"]
+mod fbx_app;
+// Tooltip languages: the first visit's question and the files they need.
+#[path = "languages.rs"]
+mod languages;
+// The keyboard shortcuts a person can change, and their card.
+#[path = "shortcuts.rs"]
+mod shortcuts;
+// Reference pictures: Add Picture..., a photo dropped, their card.
+#[path = "reference_images.rs"]
+mod reference_images;
+// The Pose brush's preview, vertex paint and its cards, and face groups.
+#[path = "pose.rs"]
+mod pose;
+#[path = "paint.rs"]
+mod paint;
+#[path = "groups.rs"]
+mod groups;
+#[path = "painted_obj.rs"]
+mod painted_obj;
+// The Deform card, Apply Scale, Set Origin and Edit Pivot, Project Detail,
+// the booleans and Join, and Quad Remesh; what they keep is `shaping`.
+#[path = "shaping.rs"]
+mod shaping;
+#[path = "deformers.rs"]
+mod deformers;
+#[path = "placement.rs"]
+mod placement;
+#[path = "project_detail.rs"]
+mod project_detail;
+#[path = "combine.rs"]
+mod combine;
+#[path = "quad_remesh.rs"]
+mod quad_remesh;
+// The SSpheres tool: its gestures, keys, panel and Make Skin.
+#[path = "spheres.rs"]
+mod spheres;
 
 /// Where the scene kept in the browser carries the objects' live mirrors,
 /// after the view: what comes next is each object's axes and centre.
@@ -79,6 +117,8 @@ const SCENE_MAGIC: &[u8; 8] = b"GOLEMW01";
 const SCENE_MAGIC_2: &[u8; 8] = b"GOLEMW02";
 /// W02 with each mesh's hidden faces, subdivision levels and sculpt layers.
 const SCENE_MAGIC_3: &[u8; 8] = b"GOLEMW03";
+/// W03 with each mesh's face groups and paint layers after its layers.
+const SCENE_MAGIC_4: &[u8; 8] = b"GOLEMW04";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Drag {
@@ -113,6 +153,11 @@ enum Step {
     /// The subdivision levels on the other side of Delete Lower or Delete
     /// Higher; the mesh itself is unchanged (levels.rs).
     Levels(u64, Option<Box<crate::mesh::levels::MeshLevels>>),
+    /// The paint layers on the other side of a Paint Layers command (paint.rs).
+    Paint(u64, crate::mesh::paint::PaintStep),
+    /// The face groups (and what else the command changed: the mask, the
+    /// hidden faces) on the other side of a Face Groups command (groups.rs).
+    Groups(u64, crate::mesh::groups::GroupsStep),
     /// Several steps taken as one (Validate of a live mirror: the new
     /// objects, and the mirror taken off), in the order they were made.
     Many(Vec<Step>),
@@ -135,6 +180,8 @@ pub enum Mode {
     Tubes,
     /// The Transform tool: the gizmo on the selected objects (objects.rs).
     Transform,
+    /// The SSpheres tool: a blockout of connected spheres (spheres.rs).
+    Spheres,
 }
 
 /// The active object under the pointer: where in the world, and where on
@@ -222,6 +269,10 @@ pub struct GolemApp {
     /// itself, else the flip mask of one of its live mirror copies
     /// (live_mirror.rs). A stroke begun on a copy works the object through it.
     side: u8,
+    /// The Deform card, the pivot, Project Detail, the booleans and Quad Remesh (shaping.rs).
+    shaping: shaping::Shaping,
+    /// The SSpheres tool and its rig (spheres.rs).
+    spheres: spheres::Spheres,
 }
 
 impl GolemApp {
@@ -232,7 +283,8 @@ impl GolemApp {
         let matcaps: Arc<Vec<image::RgbaImage>> = Arc::new(ui.pictures.matcaps.iter().map(|(_, image)| image.clone()).collect());
         if let Some(state) = &cc.wgpu_render_state {
             let first = matcaps.first().cloned().unwrap_or_else(|| image::RgbaImage::from_pixel(4, 4, image::Rgba([180, 180, 180, 255])));
-            let gpu = Gpu::new(&state.device, &state.queue, state.target_format, &first);
+            let webgpu = crate::render::shadows::supported(state.adapter.get_info().backend);
+            let gpu = Gpu::new(&state.device, &state.queue, state.target_format, &first, webgpu);
             state.renderer.write().callback_resources.insert(gpu);
         }
 
@@ -298,6 +350,8 @@ impl GolemApp {
             pending_scene: None,
             repair: Default::default(),
             side: 0,
+            shaping: Default::default(),
+            spheres: Default::default(),
         };
         app.frame_model(false);
         browser::ready();
@@ -374,6 +428,8 @@ impl GolemApp {
         }
         // A Strength slider still held is its own step, closed before this one.
         self.layer_strength_done();
+        // So is a deformation not yet applied (deformers.rs).
+        self.deform_commit();
         // The tool that is up undoes its own steps first (a tube's point moved, say).
         if self.mode == Mode::Tubes && self.tool_undo(!undo) {
             self.status = if undo { "Undone." } else { "Redone." }.into();
@@ -409,6 +465,7 @@ impl GolemApp {
             Step::Stroke(id, _) | Step::Mesh(id, _) | Step::Faces(id, _) | Step::Layers(id, _) | Step::Levels(id, _) => {
                 Some(*id)
             }
+            Step::Paint(id, _) | Step::Groups(id, _) => Some(*id),
             _ => None,
         };
         if on.is_some_and(|id| !self.activate(id)) {
@@ -440,6 +497,14 @@ impl GolemApp {
             Step::Levels(id, mut levels) => {
                 std::mem::swap(&mut self.mesh.levels, &mut levels);
                 Step::Levels(id, levels)
+            }
+            Step::Paint(id, mut step) => {
+                step.swap(&mut self.mesh);
+                Step::Paint(id, step)
+            }
+            Step::Groups(id, mut step) => {
+                step.swap(&mut self.mesh);
+                Step::Groups(id, step)
             }
             // Undone last first, redone first first; kept in the order made.
             Step::Many(steps) => {
@@ -494,7 +559,7 @@ impl GolemApp {
             mirror: None,
         };
         self.add_object(mesh, props, true);
-        self.status = format!("Added a {}. Move it with the Transform tool (W).", self.shape.name().to_lowercase());
+        self.status = format!("Added a {}. Move it with the Transform tool.", self.shape.name().to_lowercase());
     }
 
     /// A file opened is a new object.
@@ -504,9 +569,24 @@ impl GolemApp {
             self.scene_file_picked(name, bytes);
             return;
         }
-        match files::read(name, bytes) {
-            Ok(t) => {
-                let mesh = Mesh::new(t.positions, t.indices, None);
+        // A photo is a reference picture (reference_images.rs).
+        if reference_images::is_picture(name) {
+            self.add_reference(name, bytes.to_vec());
+            return;
+        }
+        // An FBX may hold several objects, each its own (fbx_app.rs).
+        if fbx_app::is_fbx(name) {
+            self.open_fbx(name, bytes);
+            return;
+        }
+        // An OBJ with colours or face groups keeps them (painted_obj.rs).
+        let painted = name.to_ascii_lowercase().ends_with(".obj").then(|| painted_obj::read(bytes)).flatten();
+        let read = match painted {
+            Some(mesh) => Ok(mesh),
+            None => files::read(name, bytes).map(|t| Mesh::new(t.positions, t.indices, None)),
+        };
+        match read {
+            Ok(mesh) => {
                 let tris = mesh.live_triangle_count();
                 let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
                 let props = Props {
@@ -557,7 +637,9 @@ impl GolemApp {
             (files::write_stl(&positions, &indices), "golem-sculpt.stl", "model/stl")
         } else {
             let named: Vec<(&str, &[Vec3], &[u32])> = parts.iter().map(|(n, p, i)| (n.as_str(), p.as_slice(), i.as_slice())).collect();
-            (files::write_obj_objects(&named), "golem-sculpt.obj", "model/obj")
+            // With paint or face groups, as the desktop writes them (painted_obj.rs).
+            let bytes = self.painted_obj().unwrap_or_else(|| files::write_obj_objects(&named));
+            (bytes, "golem-sculpt.obj", "model/obj")
         };
         browser::download(name, &bytes, mime);
         let what = if parts.len() == 1 { "1 object".to_owned() } else { format!("{} objects", parts.len()) };
@@ -565,9 +647,16 @@ impl GolemApp {
     }
 
     fn remesh(&mut self) {
+        // A noticeably uneven Scale goes into the mesh first, so the voxels are cubes (placement.rs).
+        self.deform_commit();
+        self.even_scale_for_remesh();
         let began = web_time::Instant::now();
         match crate::remesh::voxel_remesh(&self.mesh, self.remesh_resolution, self.sculptor.settings.symmetry) {
-            Ok(mesh) => self.replace_mesh(mesh, &format!("Remeshed in {:.1} s", began.elapsed().as_secs_f32())),
+            Ok(mut mesh) => {
+                // The face groups and the paint go across to the new surface (groups.rs).
+                groups::follow(&self.mesh, &mut mesh);
+                self.replace_mesh(mesh, &format!("Remeshed in {:.1} s", began.elapsed().as_secs_f32()))
+            }
             Err(e) => self.status = e,
         }
     }
@@ -586,8 +675,9 @@ impl GolemApp {
         let source = crate::decimate::Source::of(m).mirrored(symmetry, 1.0);
         let began = web_time::Instant::now();
         match crate::decimate::decimated(&source, target, &mut |_| true) {
-            Ok(Some((mesh, report))) => {
+            Ok(Some((mut mesh, report))) => {
                 let (line, _) = crate::decimate::line("Model", &report, began.elapsed().as_secs_f64());
+                groups::follow(&self.mesh, &mut mesh);
                 self.replace_mesh(mesh, "Decimated");
                 self.status = line;
             }
@@ -602,7 +692,7 @@ impl GolemApp {
     /// symmetry and the view as W01 had them.
     fn scene_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        out.extend_from_slice(SCENE_MAGIC_3);
+        out.extend_from_slice(SCENE_MAGIC_4);
         out.extend_from_slice(&(self.objects.len() as u32).to_le_bytes());
         let active = self.objects.iter().position(|o| o.id == self.active).unwrap_or(0);
         out.extend_from_slice(&(active as u32).to_le_bytes());
@@ -627,7 +717,9 @@ impl GolemApp {
             out.extend_from_slice(&(hidden.len() as u32).to_le_bytes());
             out.extend(hidden.iter().map(|&h| h as u8));
             let (lvls, layr) = crate::io::level_blocks(m);
-            for block in [lvls, layr] {
+            // W04: then the face groups and the paint (groups.rs, paint.rs).
+            let (grps, pntl) = crate::io::paint_blocks(m);
+            for block in [lvls, layr, grps, pntl] {
                 out.extend_from_slice(&(block.len() as u64).to_le_bytes());
                 out.extend_from_slice(&block);
             }
@@ -641,7 +733,9 @@ impl GolemApp {
         }
         out.push(c.ortho as u8);
         // Then each object's live mirror, if any object has one: older saves end above.
-        if self.objects.iter().any(|o| o.mirror.is_some()) {
+        // (Written too, all off, ahead of reference pictures, which follow it.)
+        let pictures = self.picture_bytes();
+        if self.objects.iter().any(|o| o.mirror.is_some()) || !pictures.is_empty() {
             out.extend_from_slice(MIRRORS_TAG);
             for o in &self.objects {
                 let (axes, center) = o.mirror.map_or((0, Vec3::ZERO), |m| (m.axis_mask, m.center));
@@ -649,11 +743,15 @@ impl GolemApp {
                 out.extend_from_slice(bytemuck::cast_slice(&center.to_array()));
             }
         }
+        out.extend_from_slice(&pictures);
         out
     }
 
     fn restore_scene(&mut self, bytes: &[u8]) -> Option<()> {
-        let (two, three, rest) = if let Some(rest) = bytes.strip_prefix(SCENE_MAGIC_3) {
+        let four = bytes.starts_with(SCENE_MAGIC_4);
+        let (two, three, rest) = if let Some(rest) = bytes.strip_prefix(SCENE_MAGIC_4) {
+            (true, true, rest)
+        } else if let Some(rest) = bytes.strip_prefix(SCENE_MAGIC_3) {
             (true, true, rest)
         } else if let Some(rest) = bytes.strip_prefix(SCENE_MAGIC_2) {
             (true, false, rest)
@@ -685,7 +783,7 @@ impl GolemApp {
                     mirror: None,
                 };
                 let mesh = if three {
-                    let (mesh, dropped) = reader.mesh_with_levels()?;
+                    let (mesh, dropped) = reader.mesh_with_levels(four)?;
                     lost += dropped as usize;
                     mesh
                 } else {
@@ -707,6 +805,7 @@ impl GolemApp {
             ([f(0), f(1), f(2), f(3), f(4), f(5)], b[24] != 0)
         });
         // The live mirrors, one for each object, where the save has them.
+        let mut pictures: &[u8] = &[];
         if reader.take(MIRRORS_TAG.len()).is_some_and(|tag| tag == MIRRORS_TAG) {
             for (props, _) in objects.iter_mut() {
                 let Some(b) = reader.take(13) else { break };
@@ -714,6 +813,8 @@ impl GolemApp {
                 let center = Vec3::new(c[0], c[1], c[2]);
                 props.mirror = if center.is_finite() { sculpt_symmetry::MirrorRepeater::new(b[0], center) } else { None };
             }
+            // Then the reference pictures, if the scene has any (reference_images.rs).
+            pictures = reader.bytes.get(reader.at..).unwrap_or(&[]);
         }
         self.sculptor.settings.symmetry = [symmetry[0] != 0, symmetry[1] != 0, symmetry[2] != 0];
         // The objects as kept: the active one's mesh is the app's.
@@ -755,6 +856,7 @@ impl GolemApp {
         if lost > 0 {
             self.status += " Some subdivision levels or layers could not be read back, and are part of the shape now.";
         }
+        self.pictures_restore(pictures);
         Some(())
     }
 
@@ -822,6 +924,10 @@ impl GolemApp {
                         self.transform_moved(px);
                         continue;
                     }
+                    // A sphere dragged, an arrow on one, or S held (spheres.rs).
+                    if self.spheres_moved(px) {
+                        continue;
+                    }
                     if self.mode == Mode::Tubes && self.drag != Drag::None {
                         self.tubes.pressure = pressure;
                         if self.tool_moved(px) {
@@ -869,6 +975,8 @@ impl GolemApp {
         let tool_wheel = self.mode == Mode::Tubes && hovered && self.drag == Drag::None && scroll.y != 0.0;
         if tool_wheel && self.tool_wheel(scroll.y / 50.0) {
             // The tool used the wheel (sizing a tube's point).
+        } else if hovered && self.spheres_wheel(&events) {
+            // Over a sphere the wheel resizes it (spheres.rs).
         } else if hovered && self.drag == Drag::None {
             // Wheel and pinch zoom toward what is under the pointer.
             let anchor = self.hover.map(|h| h.pos).or_else(|| self.pointer_px.and_then(|px| self.pick(px)).map(|(_, pos)| pos));
@@ -895,7 +1003,7 @@ impl GolemApp {
         }
 
         self.hover = match (self.drag, self.pointer_px) {
-            (Drag::None, Some(px)) if hovered && self.mode != Mode::Transform => self.hit(px),
+            (Drag::None, Some(px)) if hovered && !matches!(self.mode, Mode::Transform | Mode::Spheres) => self.hit(px),
             _ => None,
         };
         // The brush ring sits on whichever side is under the pointer.
@@ -921,8 +1029,16 @@ impl GolemApp {
             PointerButton::Primary if mods.alt && mods.ctrl => Drag::Zoom,
             PointerButton::Primary if mods.alt && mods.shift => Drag::Pan,
             PointerButton::Primary if mods.alt => Drag::Orbit,
+            // A click for the Face Groups card: Ctrl + Shift + click on a group, or one the card armed (groups.rs).
+            PointerButton::Primary if self.groups_takes_press(mods) => {
+                self.groups_pressed(px);
+                Drag::None
+            }
             PointerButton::Primary | PointerButton::Secondary if self.mode == Mode::Transform => {
                 self.transform_press(px, button, mods)
+            }
+            PointerButton::Primary | PointerButton::Secondary if self.mode == Mode::Spheres => {
+                self.spheres_press(px, button, mods)
             }
             PointerButton::Primary | PointerButton::Secondary if self.mode == Mode::Tubes => {
                 self.tubes.pressure = pressure;
@@ -940,10 +1056,19 @@ impl GolemApp {
                 // does Erase Layer with nothing to rub out (layers.rs).
                 let on_active = shown && self.pick(px).is_some_and(|(id, _)| id == self.active);
                 let refused = if on_active { self.layer_stroke_refusal(mods.shift) } else { None };
+                // The Paint brush's Sample mode is the eyedropper, a Paint stroke needs a layer to paint
+                // on (made if there is none), and Pose by face groups needs groups (paint.rs, pose.rs).
+                let held = refused.is_none()
+                    && on_active
+                    && (self.paint_samples_press(px, mods.shift)
+                        || self.paint_refuses_stroke(mods.shift)
+                        || self.pose_refuses_stroke(mods.shift));
                 if let Some(why) = refused {
                     self.status = why;
                     Drag::None
-                } else if shown && self.sculptor.begin(&mut self.mesh, &view, sample, invert, mods.shift) {
+                } else if held {
+                    Drag::None
+                } else if shown && self.begin_stroke(&view, sample, invert, mods.shift) {
                     self.sculptor.pace = Pace::LIVE;
                     Drag::Sculpt
                 } else if button == PointerButton::Primary && mods.shift {
@@ -982,6 +1107,12 @@ impl GolemApp {
             Drag::Gizmo => self.transform_released(),
             _ => {}
         }
+        // A sphere let go of, or a click on empty space (spheres.rs).
+        self.spheres_released();
+        if self.mode == Mode::Transform {
+            // A click on the object with Edit Pivot on puts the pivot there (placement.rs).
+            self.pivot_released(self.pointer_px, self.transform_ppp());
+        }
         if self.mode == Mode::Tubes {
             self.tool_released();
         }
@@ -1013,10 +1144,21 @@ impl GolemApp {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        // Space, the number keys, and S, F and D held (brush_keys.rs).
-        self.brush_keys(ctx);
+        if self.mode == Mode::Spheres {
+            // 1-4, S held, F F, A, X, Delete, Esc; the brush keys are put away (spheres.rs).
+            self.spheres_keys(ctx);
+        } else {
+            // Space, the number keys, and S, F and D held (brush_keys.rs).
+            self.brush_keys(ctx);
+            // P for the Paint brush, I for the eyedropper (paint.rs).
+            self.paint_keys(ctx);
+        }
         if self.mode == Mode::Tubes {
             self.tool_keys(ctx);
+        }
+        // Enter applies a deformation, Esc cancels it (deformers.rs).
+        if self.mode == Mode::Transform && self.deform_keys(ctx) {
+            ctx.request_repaint();
         }
         if self.mode == Mode::Transform {
             let (escape, delete) = ctx.input_mut(|i| {
@@ -1034,7 +1176,9 @@ impl GolemApp {
             let redo = i.consume_key(shift_cmd, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y);
             (i.consume_key(Modifiers::COMMAND, Key::Z), redo)
         });
-        if redo {
+        if (undo || redo) && self.spheres_undo(redo) {
+            // The spheres' own history while their tool is up (spheres.rs).
+        } else if redo {
             self.undo_redo(false);
         } else if undo {
             self.undo_redo(true);
@@ -1170,6 +1314,9 @@ impl GolemApp {
                 index_count: shown.len() as u32,
                 vertex_room: self.card_room.0 as u64,
                 index_room: self.card_room.1 as u64,
+                // The paint's colour and the face groups' tint (paint.rs, groups.rs).
+                paint: paint::colour_bytes(m, 0..m.positions.len()),
+                groups: groups::colours_to_send(m, true).unwrap_or_default(),
             }));
         }
         // New vertices go up whole, whatever the dirty ranges say of them.
@@ -1183,7 +1330,19 @@ impl GolemApp {
         let (positions, normals, mask) = (grown(&dirty.positions), grown(&dirty.normals), grown(&dirty.mask));
         let curv = if self.wants_curvature() { grown(&dirty.curv) } else { Vec::new() };
         let corners_changed = corners != self.card_sent.1;
-        let new = Unsent { seq: self.upload_seq, positions, normals, mask, curv, triangles: dirty.triangles };
+        // The face groups' tint goes whole, when it changed (groups.rs).
+        let groups_now = groups::colours_to_send(&self.mesh, false);
+        let paint = if self.mesh.has_paint() { grown(&dirty.paint) } else { Vec::new() };
+        let new = Unsent {
+            seq: self.upload_seq,
+            positions,
+            normals,
+            mask,
+            curv,
+            triangles: dirty.triangles,
+            paint,
+            groups: groups_now.is_some(),
+        };
         if !new.is_empty() || corners_changed {
             self.unsent.push(new);
         }
@@ -1195,6 +1354,8 @@ impl GolemApp {
         };
         let (positions, normals, mask, curv, triangles) =
             (all(|u| &u.positions), all(|u| &u.normals), all(|u| &u.mask), all(|u| &u.curv), all(|u| &u.triangles));
+        let paint_ranges = all(|u| &u.paint);
+        let groups_due = self.unsent.iter().any(|u| u.groups);
         fn parts<T: bytemuck::Pod>(data: &[T], ranges: &[std::ops::Range<u32>], per: usize) -> Vec<(u64, Vec<u8>)> {
             let size = std::mem::size_of::<T>();
             ranges
@@ -1218,6 +1379,12 @@ impl GolemApp {
             indices: parts(&m.indices, &triangles, 3),
             // Always the count as it is now: the upload that changed it may be one that was lost.
             index_count: Some(corners as u32),
+            paint: paint_ranges
+                .iter()
+                .map(|r| (r.start as u64 * 4, paint::colour_bytes(m, r.start as usize..r.end as usize)))
+                .filter(|(_, bytes)| !bytes.is_empty())
+                .collect(),
+            groups: if groups_due { groups_now.or_else(|| groups::colours_to_send(m, true)) } else { None },
         }))
     }
 
@@ -1327,11 +1494,20 @@ struct Unsent {
     mask: Vec<std::ops::Range<u32>>,
     curv: Vec<std::ops::Range<u32>>,
     triangles: Vec<std::ops::Range<u32>>,
+    /// Vertices whose paint changed, and whether the face groups' tint did.
+    paint: Vec<std::ops::Range<u32>>,
+    groups: bool,
 }
 
 impl Unsent {
     fn is_empty(&self) -> bool {
-        self.positions.is_empty() && self.normals.is_empty() && self.mask.is_empty() && self.curv.is_empty() && self.triangles.is_empty()
+        self.positions.is_empty()
+            && self.normals.is_empty()
+            && self.mask.is_empty()
+            && self.curv.is_empty()
+            && self.triangles.is_empty()
+            && self.paint.is_empty()
+            && !self.groups
     }
 }
 
@@ -1351,6 +1527,8 @@ pub(crate) fn copy_of(mesh: &Mesh) -> Mesh {
     copy.levels = mesh.levels.as_ref().and_then(|levels| levels.renumbered(&copy, &numbering));
     copy.layers = mesh.layers_renumbered(&numbering.vertex);
     copy.set_group_ids(crate::mesh::groups::renumbered(mesh.group_ids(), &numbering.triangle));
+    // The paint goes through the renumbering too (paint.rs).
+    copy.paint = mesh.paint_renumbered(&numbering.vertex, copy.vertex_count());
     copy
 }
 
@@ -1385,8 +1563,9 @@ impl<'a> Reader<'a> {
     }
 
     /// One mesh as W03 keeps it: as `mesh`, then its hidden faces, levels
-    /// and layers. The second value: some of those could not be put back.
-    fn mesh_with_levels(&mut self) -> Option<(Mesh, bool)> {
+    /// and layers (and with `four`, as W04, its face groups and paint). The
+    /// second value: some of those could not be put back.
+    fn mesh_with_levels(&mut self, four: bool) -> Option<(Mesh, bool)> {
         let n = self.u32()?;
         let i = self.u32()?;
         let positions: Vec<Vec3> = bytemuck::pod_collect_to_vec(self.take(n.checked_mul(12)?)?);
@@ -1399,7 +1578,8 @@ impl<'a> Reader<'a> {
         let hidden: Vec<bool> = self.take(h)?.iter().map(|&b| b != 0).collect();
         let lvls = self.block()?;
         let layr = self.block()?;
-        Some(crate::io::build_mesh(positions, indices, mask, hidden, lvls, layr))
+        let (grps, pntl) = if four { (self.block()?, self.block()?) } else { (&[][..], &[][..]) };
+        Some(crate::io::build_mesh_painted(positions, indices, mask, hidden, lvls, layr, grps, pntl))
     }
 
     /// A length (u64) and that many bytes.
@@ -1422,6 +1602,11 @@ fn group_digits(n: usize) -> String {
 }
 
 impl eframe::App for GolemApp {
+    /// Each key pressed becomes what the key map has it on (shortcuts.rs).
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.shortcut_keys(ctx, raw_input);
+    }
+
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &root.ctx().clone();
         let now = ctx.input(|i| i.time);
@@ -1458,11 +1643,15 @@ impl eframe::App for GolemApp {
         // "Open this scene?" first, so its Enter and Escape are its own.
         self.scene_question(ctx);
         self.keys(ctx);
+        self.shortcut_commands();
 
         // The panels float over the viewport, as on the desktop. They come
         // first, so what is changed on them is drawn in this same frame.
         self.interface(root);
-        self.welcome(ctx);
+        // The first visit's language question comes before the welcome card.
+        if !self.languages(ctx) {
+            self.welcome(ctx);
+        }
         // A card that closed (or opened) needs a frame drawn without (with)
         // it at once: egui finds what a click lands on from the last frame
         // drawn, so otherwise the next click lands on the card's invisible
@@ -1472,6 +1661,9 @@ impl eframe::App for GolemApp {
         }
         // A Strength slider the card stopped drawing while held is let go.
         self.layers_watch();
+        // An Opacity slider let go unseen; the picked group's count; paint or groups left behind.
+        self.paint_watch();
+        self.groups_watch();
 
         egui::CentralPanel::no_frame().show(root, |ui| {
             let ppp = ctx.pixels_per_point();
@@ -1494,14 +1686,22 @@ impl eframe::App for GolemApp {
             // The pointer may have moved the camera: draw from where it is now.
             self.view = self.camera.view(origin, size, self.view_depth(), scene_size);
             self.tubes_frame(self.mode == Mode::Tubes);
+            // The spheres follow the pointer and keep their skin current (spheres.rs).
+            let alt = ui.input(|i| i.modifiers.alt);
+            self.spheres_frame(response.contains_pointer(), alt, now);
 
             // A masked gizmo drag reshapes the surface once a frame, before it is sent.
             self.transform_apply();
+            // The Deform card's session, the pivot, Quad Remesh at work (shaping.rs).
+            self.shaping_frame(ctx, now);
             // The globals, what changed of the mesh, the runs in view (look.rs).
             let viewport = self.viewport(ctx, size);
             ui.painter().add(render::callback(rect, viewport));
             self.draw_cursor(ui, response.contains_pointer(), ppp);
+            // Where the Pose brush will bend the limb (pose.rs).
+            self.draw_pose(ctx);
             self.draw_transform(ui.painter(), ppp);
+            self.draw_spheres_gizmo(ui.painter(), ppp);
             tubes::paint_overlay(ui.painter(), &self.tubes.draw, self.view.origin, ppp);
 
             if self.drag != Drag::None || animating || self.sculptor.is_active() || self.mode != Mode::Sculpt {

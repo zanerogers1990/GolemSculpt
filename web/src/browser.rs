@@ -18,6 +18,8 @@ mod js {
         pub fn download(name: &str, bytes: &[u8], mime: &str);
         #[wasm_bindgen(js_namespace = golem, js_name = pickFile, catch)]
         pub async fn pick_file() -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(js_namespace = golem, js_name = pickFile, catch)]
+        pub async fn pick_file_of(accept: &str) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(js_namespace = golem, js_name = storeScene, catch)]
         pub async fn store_scene(bytes: &[u8]) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(js_namespace = golem, js_name = loadScene, catch)]
@@ -93,6 +95,26 @@ pub fn pick_file() -> Later<(String, Vec<u8>)> {
             }
         });
     }
+    slot
+}
+
+/// The file picker offering only the kinds `accept` names (".png,.jpg").
+pub fn pick_file_of(accept: &str) -> Later<(String, Vec<u8>)> {
+    let slot: Later<(String, Vec<u8>)> = Rc::default();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let out = slot.clone();
+        let accept = accept.to_owned();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(value) = js::pick_file_of(&accept).await {
+                if let Some(picked) = name_and_bytes(&value) {
+                    *out.borrow_mut() = Some(picked);
+                }
+            }
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = accept;
     slot
 }
 

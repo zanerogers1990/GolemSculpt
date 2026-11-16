@@ -42,7 +42,11 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::f32::consts::FRAC_PI_2;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+// std's clock panics in a browser; the web build (web/) reads the page's.
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use glam::Vec3;
 use rayon::prelude::*;

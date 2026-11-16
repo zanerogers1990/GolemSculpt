@@ -167,6 +167,8 @@ impl GolemApp {
                 "Paint a mask with Mask (M) on the Brush tab. While it is on: double tap empty space to invert the mask, \
                  Shift + tap empty space to clear it.",
             );
+            // Masks made from the paint, for an object with paint (paint.rs).
+            self.paint_masking(ui);
         });
         if let Some(op) = run {
             self.mask_op(op);

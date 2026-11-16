@@ -22,7 +22,11 @@ mod project;
 #[cfg(test)]
 mod tests;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+// std's clock panics in a browser (the web version, web/).
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use glam::Vec3;
 use rayon::prelude::*;

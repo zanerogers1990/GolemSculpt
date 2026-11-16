@@ -2,9 +2,10 @@
 //! (key, fill and rim, plus kicker and top for 5-point) and a reduced set of
 //! its post effects (exposure, tone curve, colour, vignette, film grain).
 //!
-//! What the browser leaves out: shadows, softboxes, the HDRI environment,
-//! bloom, depth of field and ambient occlusion. Light Size widens the
-//! highlights here instead of softening a shadow.
+//! What the browser leaves out: softboxes, the HDRI environment, bloom,
+//! depth of field and contact shadows. The key light's shadow and ambient
+//! occlusion come with WebGPU only (shadows.rs); with WebGL2 Light Size only
+//! widens the highlights.
 //!
 //! The preset table is copied from src/look.rs (`LIGHTING`), which cannot be
 //! compiled here, so a preset changed there should be changed here too.
@@ -186,11 +187,13 @@ pub struct Lighting {
     pub follow_camera: bool,
     /// Times the preset's own light size (0 is hard points).
     pub light_size: f32,
+    /// The key light casts a soft shadow (WebGPU only: shadows.rs).
+    pub shadows: bool,
 }
 
 impl Default for Lighting {
     fn default() -> Self {
-        Lighting { preset: 0, five_point: false, rotation: 0.0, follow_camera: true, light_size: 1.0 }
+        Lighting { preset: 0, five_point: false, rotation: 0.0, follow_camera: true, light_size: 1.0, shadows: true }
     }
 }
 
@@ -251,6 +254,8 @@ pub struct Effects {
     pub vignette_smoothness: f32,
     /// 0..1.
     pub film_grain: f32,
+    /// Soft shadows in creases and where forms meet (WebGPU only: shadows.rs).
+    pub ambient_occlusion: bool,
 }
 
 impl Default for Effects {
@@ -264,6 +269,7 @@ impl Default for Effects {
             vignette_intensity: 0.3,
             vignette_smoothness: 0.4,
             film_grain: 0.0,
+            ambient_occlusion: true,
         }
     }
 }

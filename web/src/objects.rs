@@ -51,6 +51,9 @@ enum Dragged {
     /// The unmasked part of the active object's surface; `stale` once the
     /// pointer has moved since it was last reshaped (done once a frame).
     Surface { deform: Deform, stale: bool },
+    /// The active object's pivot (Edit Pivot, placement.rs): nothing moves
+    /// until the drag ends.
+    Pivot,
 }
 
 impl GolemApp {
@@ -218,7 +221,7 @@ impl GolemApp {
 
     /// Takes object `id` out of the scene and hands it back. The last object
     /// stays: there is always one to sculpt.
-    fn take_object(&mut self, id: u64) -> Option<(usize, Box<Object>)> {
+    pub(super) fn take_object(&mut self, id: u64) -> Option<(usize, Box<Object>)> {
         if self.objects.len() <= 1 {
             return None;
         }
@@ -301,7 +304,7 @@ impl GolemApp {
         let props = self.active_object().props();
         let name = props.name.clone();
         self.add_object(copy, props, true);
-        self.status = format!("Copied {name}. The copy stands where it does: move it with the Transform tool (W).");
+        self.status = format!("Copied {name}. The copy stands where it does: move it with the Transform tool.");
     }
 
     // ---- the gizmo -------------------------------------------------------------
@@ -353,8 +356,16 @@ impl GolemApp {
     }
 
     fn gizmo_frame(&mut self) -> Option<(Vec<u64>, Vec<Target>, Frame)> {
-        if self.mode != Mode::Transform {
+        // A deformer's handles take the arrows' place (deformers.rs).
+        if self.mode != Mode::Transform || self.deform_on() {
             return None;
+        }
+        // With Edit Pivot on, the gizmo is on the active object's pivot (placement.rs).
+        if self.pivot_on() {
+            let target = self.pivot_target()?;
+            let ppp = self.transform.ppp.max(0.5);
+            let frame = Frame::on(&[target], self.transform.orientation, super::placement::PIVOT_HANDLES, &self.view, ppp)?;
+            return Some((Vec::new(), vec![target], frame));
         }
         let (ids, targets) = self.gizmo_targets();
         if targets.is_empty() {
@@ -372,13 +383,18 @@ impl GolemApp {
         if button != PointerButton::Primary {
             return Drag::Orbit;
         }
+        // A press on a deformer's handle (deformers.rs).
+        if let Some(drag) = self.deform_pressed(px, self.transform.ppp.max(0.5)) {
+            return drag;
+        }
         if let Some((ids, targets, frame)) = self.gizmo_frame() {
             if let Some(handle) = frame.pick(&self.view, px, self.transform.ppp.max(0.5)) {
                 let drag = gizmo::Drag::on(handle, frame, &targets, &self.view, px);
                 let mirror = self.masked_mirror();
                 let alone = ids == [self.active];
-                let what = match alone.then(|| Deform::begin(&mut self.mesh, mirror)).flatten() {
+                let what = match (!self.pivot_on() && alone).then(|| Deform::begin(&mut self.mesh, mirror)).flatten() {
                     Some(deform) => Dragged::Surface { deform, stale: false },
+                    None if self.pivot_on() => Dragged::Pivot,
                     None => {
                         let before = ids.iter().filter_map(|id| self.objects.iter().find(|o| o.id == *id)).map(|o| (o.id, o.props())).collect();
                         Dragged::Objects { ids, before }
@@ -388,6 +404,10 @@ impl GolemApp {
                 return Drag::Gizmo;
             }
         }
+        // With Edit Pivot on, a click on the object puts the pivot there when let go.
+        if self.pivot_on() && self.pivot_pressed(px) {
+            return Drag::Orbit;
+        }
         if let Some((id, _)) = self.pick(px) {
             self.select(id, mods.shift || mods.ctrl || mods.command);
         }
@@ -395,6 +415,9 @@ impl GolemApp {
     }
 
     pub(super) fn transform_moved(&mut self, px: Vec2) {
+        if self.deform_moved(px) {
+            return;
+        }
         let Some(mut d) = self.transform.dragging.take() else { return };
         d.drag.update(&self.view, px);
         match &mut d.what {
@@ -406,6 +429,7 @@ impl GolemApp {
                 }
             }
             Dragged::Surface { stale, .. } => *stale = true,
+            Dragged::Pivot => {}
         }
         self.transform.dragging = Some(d);
     }
@@ -422,6 +446,9 @@ impl GolemApp {
 
     /// Ends a handle drag: one undo step if anything moved.
     pub(super) fn transform_released(&mut self) {
+        if self.deform_released() {
+            return;
+        }
         self.transform_apply();
         let Some(d) = self.transform.dragging.take() else { return };
         let name = d.drag.handle.name();
@@ -436,6 +463,10 @@ impl GolemApp {
                     self.mark_changed();
                     self.status = format!("{name}. Ctrl+Z puts it back.");
                 }
+            }
+            Dragged::Pivot => {
+                let to = d.drag.placements()[0];
+                self.place_pivot(to.position, to.rotation);
             }
             Dragged::Surface { deform, .. } => {
                 let how = deform.how();
@@ -474,6 +505,8 @@ impl GolemApp {
         if self.mode != Mode::Transform {
             return;
         }
+        // The deformer's handles, in the arrows' place (deformers.rs).
+        self.draw_deform(painter, ppp);
         let (frame, hot) = match &self.transform.dragging {
             Some(d) => (d.drag.shown_frame(), Some(d.drag.handle)),
             None => {
@@ -567,19 +600,27 @@ impl GolemApp {
                 if tip(theme::button(ui, w, "Copy", ButtonStyle::default()), tips, "A copy of the active object, as a new object").clicked() {
                     self.duplicate_active();
                 }
+                // Its key as the key map has it now (shortcuts.rs).
+                let key = self.shortcut_badge("transform");
                 let style = ButtonStyle {
                     icon: self.ui.pictures.icon("tool_transform"),
                     active: (self.mode == Mode::Transform).then_some(ACCENT()),
-                    badge: "W",
+                    badge: &key,
                     ..Default::default()
                 };
-                if tip(theme::button(ui, w, "Transform", style), tips, "Move, turn and scale the selected objects (W)").clicked() {
+                let help = if key.is_empty() { "Move, turn and scale the selected objects".to_owned() } else { format!("Move, turn and scale the selected objects ({key})") };
+                if tip(theme::button(ui, w, "Transform", style), tips, &help).clicked() {
                     self.toggle_transform();
                 }
             });
             ui.add_space(4.0);
             let active = self.active_object();
             mirror_command = super::live_mirror::section(ui, &active.name, active.mirror, self.ui.pictures.icon("mirror"), tips);
+            // Apply Scale and Set Origin to Mesh, while they would do something (placement.rs).
+            self.placement_rows(ui);
+            // The booleans and Join, for two or more selected (combine.rs).
+            ui.add_space(4.0);
+            self.combine_section(ui);
         });
         if let Some(command) = mirror_command {
             self.mirror_command(command);
@@ -595,6 +636,11 @@ impl GolemApp {
         }
     }
 
+    /// The interface's pixels per point, as the gizmo was last drawn with.
+    pub(super) fn transform_ppp(&self) -> f32 {
+        self.transform.ppp.max(0.5)
+    }
+
     pub(crate) fn toggle_transform(&mut self) {
         if self.drag != Drag::None {
             return;
@@ -602,7 +648,7 @@ impl GolemApp {
         self.mode = if self.mode == Mode::Transform { Mode::Sculpt } else { Mode::Transform };
         if self.mode == Mode::Transform {
             self.status = "Transform: drag an arrow to move, a ring to turn, a cube to scale. Click an object to select it; \
-                           with part of it masked, the drag poses the unmasked part. W or Esc: back to sculpting."
+                           with part of it masked, the drag poses the unmasked part. Esc: back to sculpting."
                 .into();
         }
     }
@@ -626,6 +672,8 @@ impl GolemApp {
                     }
                 }
             });
+            // Edit Pivot, Pivot to Centre, Align to World (placement.rs).
+            self.pivot_rows(ui);
             let full = ui.available_width();
             if tip(theme::button(ui, full, "Reset Placement", ButtonStyle::default()), tips, "Back to the middle, upright, at its own size").clicked() {
                 self.reset_placement();

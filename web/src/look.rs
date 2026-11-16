@@ -52,6 +52,8 @@ pub struct Look {
     /// The view's right, up and forward when Follow Camera went off: the
     /// lights stay turned to them.
     frozen: Option<[Vec3; 3]>,
+    /// Which frames change the picture, for the shadows and the occlusion.
+    motion: crate::render::shadows::Motion,
 }
 
 impl Look {
@@ -71,6 +73,7 @@ impl Look {
             still: None,
             lens_restored: false,
             frozen: None,
+            motion: Default::default(),
         }
     }
 }
@@ -146,6 +149,15 @@ impl GolemApp {
             *self.look.frozen.get_or_insert([self.view.right, self.view.up, self.view.forward])
         };
         let finish = self.look.finishes.uniform(right, up, forward, model_size);
+        // The finishes' shadows and occlusion (WebGPU only) are drawn the
+        // quicker way while the picture changes, so one more frame is asked
+        // for after it stops, to draw them at full quality.
+        let moving = self.look.motion.update(globals.view_proj, upload.is_some());
+        if moving && finish.kind[0] > 0.5 && crate::render::shadows::available() {
+            ctx.request_repaint();
+        }
+        let bounds = self.mesh.bounds();
+        let shade = crate::render::shadows::Ask::of(&self.look.finishes, (bounds.min, bounds.max), moving);
 
         // A picture asked for: once it is back, made into a PNG and handed over.
         let still = self.look.still.clone();
@@ -185,18 +197,24 @@ impl GolemApp {
             still: self.look.still.clone(),
             finish,
             model: self.model(),
-            show_model: self.active_object().visible,
+            // The skin made from the spheres steps aside while they are edited (spheres.rs).
+            show_model: self.active_object().visible && !self.spheres_stand_in_for(self.active),
             copies: self.active_copies(),
             // Every other object shown, at each of its places (its live mirror copies too).
             others: self
                 .objects
                 .iter()
-                .filter(|o| o.visible && o.id != self.active)
+                .filter(|o| o.visible && o.id != self.active && !self.spheres_stand_in_for(o.id))
                 .filter_map(|o| o.drawn.clone().map(|drawn| (o, drawn)))
                 .flat_map(|(o, drawn)| {
                     o.placements().into_iter().map(move |(_, model)| crate::render::Other { drawn: drawn.clone(), model })
                 })
                 .collect(),
+            shade,
+            // The reference pictures shown (references.rs).
+            pictures: self.picture_draws(),
+            // The SSpheres tool's armature and skin (spheres.rs).
+            spheres: self.spheres_draw(),
         }
     }
 
@@ -366,8 +384,8 @@ impl GolemApp {
     }
 
     /// The Lighting card: the desktop's presets, 3- or 5-point, brightness,
-    /// rotation, Follow Camera and Light Size. No shadows, softboxes or HDRI
-    /// in the browser.
+    /// rotation, Follow Camera, Shadows (WebGPU only) and Light Size. No
+    /// softboxes or HDRI in the browser.
     fn lighting_card(&mut self, ui: &mut Ui) {
         let tips = self.ui.tips;
         let before = self.look.finishes.clone();
@@ -432,12 +450,15 @@ impl GolemApp {
                 tips,
                 "Keep the key light at the upper left of the view. Off freezes the lights where they are.",
             );
-            tip(
-                theme::slider(ui, "Light Size", &mut l.light_size, 0.0..=4.0, two),
-                tips,
-                "How big the lights are: bigger spreads the highlights. 1 is the preset's own, 0 is hard points.",
-            );
-            theme::hint(ui, "The desktop adds shadows, softboxes and an HDRI.");
+            let shade = crate::render::shadows::available();
+            shade_switch(ui, &mut l.shadows, "Shadows", tips, "The key light casts a soft shadow.");
+            let size_help = if shade {
+                "How big the lights are: bigger spreads the highlights and softens the shadows, which stay crisp where they touch. 1 is the preset's own, 0 is hard points."
+            } else {
+                "How big the lights are: bigger spreads the highlights. 1 is the preset's own, 0 is hard points."
+            };
+            tip(theme::slider(ui, "Light Size", &mut l.light_size, 0.0..=4.0, two), tips, size_help);
+            theme::hint(ui, if shade { "The desktop adds softboxes and an HDRI." } else { "The desktop adds shadows, softboxes and an HDRI." });
         });
         if lit {
             self.look.finishes.finish = Finish::Plain;
@@ -486,6 +507,14 @@ impl GolemApp {
             if tips && !note.is_empty() {
                 theme::hint(ui, note);
             }
+            ui.add_space(4.0);
+            shade_switch(
+                ui,
+                &mut e.ambient_occlusion,
+                "Ambient Occlusion",
+                tips,
+                "Soft contact shadows in creases and where forms meet (lit shading only).",
+            );
             theme::heading(ui, "Colour");
             theme::slider(ui, "Saturation", &mut e.saturation, -100.0..=100.0, |v| format!("{v:.0}"));
             theme::slider(ui, "Contrast", &mut e.contrast, -100.0..=100.0, |v| format!("{v:.0}"));
@@ -653,5 +682,19 @@ impl GolemApp {
         if save {
             self.save_picture();
         }
+    }
+}
+
+/// A Shadows or Ambient Occlusion switch: as the desktop's where the browser
+/// draws with WebGPU; greyed out and off with WebGL2, which keeps the
+/// lighter look, saying why when the pointer rests on it.
+fn shade_switch(ui: &mut Ui, on: &mut bool, label: &str, tips: bool, help: &str) {
+    if crate::render::shadows::available() {
+        tip(theme::checkbox(ui, on, label, ACCENT()), tips, help);
+    } else {
+        ui.add_enabled_ui(false, |ui| {
+            theme::checkbox(ui, &mut false, label, ACCENT())
+                .on_disabled_hover_text("Needs WebGPU. This browser draws with WebGL2, which keeps the lighter look without it.");
+        });
     }
 }

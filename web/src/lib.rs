@@ -24,8 +24,20 @@ pub mod printable;
 #[path = "../../src"]
 mod desktop {
     pub mod decimate;
+    // The keyboard shortcuts a person can change (keymap.rs, with keymap/tests.rs).
+    pub mod keymap;
+    // Project Detail's maths (project.rs, with project/tests.rs).
+    pub mod project;
 }
 pub use desktop::decimate;
+pub use desktop::keymap;
+pub use desktop::project;
+/// The gizmo's deformers (Bend, Twist, Lattice ...) and Quad Remesh, the
+/// desktop's maths as it is (web/src/deformers.rs, web/src/quad_remesh.rs).
+#[path = "../../src/deform/mod.rs"]
+pub mod deform;
+#[path = "../../src/quadremesh/mod.rs"]
+pub mod quadremesh;
 /// The desktop's transform gizmo (the maths: handles, picking, what a drag
 /// does) and its masked drag (moving the unmasked part of a surface), both
 /// as they are; `scene` is the web version's object list, which the gizmo
@@ -38,12 +50,25 @@ pub mod gizmo;
 pub mod masked;
 pub mod scene;
 pub mod io;
+/// The desktop's SSpheres tool (rig, skin, gestures, armature drawing), as it
+/// is; it finds the web's objects at `crate::scene` and the gizmo above.
+#[path = "../../src/ssphere/mod.rs"]
+#[allow(dead_code)]
+pub mod ssphere;
 
 mod app;
 mod browser;
 pub mod files;
 mod render;
 mod tools;
+mod mask_fit;
+// FBX in and out (the desktop's own reader and writer), and the settings of
+// the desktop's `doc` that desktop files compiled here reach for.
+pub mod fbx;
+// Reference pictures: where one stands, reading its image (the desktop's own).
+#[path = "../../src/references.rs"]
+pub mod references;
+mod doc;
 
 pub use app::GolemApp;
 

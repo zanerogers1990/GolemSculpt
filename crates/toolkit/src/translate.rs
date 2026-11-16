@@ -63,6 +63,8 @@ pub struct Language {
     /// In English, beside it.
     pub english: &'static str,
     pub script: Script,
+    // The web build fetches the file instead (`web`).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     file: &'static str,
 }
 
@@ -203,10 +205,58 @@ pub fn tooltip(english: &str) -> Cow<'_, str> {
     if index == 0 {
         return Cow::Borrowed(english);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     let table = TABLES[index].get_or_init(|| Table::parse(LANGUAGES[index].code, LANGUAGES[index].file));
+    // The web build's files arrive from the page later (`web::supply`): English until then.
+    #[cfg(target_arch = "wasm32")]
+    let Some(table) = TABLES[index].get() else { return Cow::Borrowed(english) };
     match table.translate(english) {
         Some(text) => Cow::Owned(text),
         None => Cow::Borrowed(english),
+    }
+}
+
+/// The web build (web/): a page has neither the tooltip files built in (they
+/// would weigh on every visitor's download) nor the computer's fonts, so the
+/// page fetches a language's file, and the font for its letters, when that
+/// language is picked, and hands them over here.
+#[cfg(target_arch = "wasm32")]
+pub mod web {
+    use std::sync::{Arc, Mutex};
+
+    use super::{LANGUAGES, Script, TABLES, Table};
+
+    static FONTS: Mutex<Vec<(Script, Arc<Vec<u8>>)>> = Mutex::new(Vec::new());
+
+    /// Whether the language with this code has its tooltips (English always has).
+    pub fn has(code: &str) -> bool {
+        LANGUAGES.iter().position(|l| l.code == code).is_none_or(|i| i == 0 || TABLES[i].get().is_some())
+    }
+
+    /// The tooltip file of the language with this code, as `translations/` keeps it.
+    pub fn supply(code: &str, file: &str) {
+        if let Some(i) = LANGUAGES.iter().position(|l| l.code == code).filter(|&i| i > 0) {
+            let _ = TABLES[i].set(Table::parse(code, file));
+        }
+    }
+
+    /// Whether `script` has its font.
+    pub fn has_font(script: Script) -> bool {
+        script == Script::Latin || FONTS.lock().is_ok_and(|f| f.iter().any(|(s, _)| *s == script))
+    }
+
+    /// The font (TrueType or OpenType bytes) for `script`'s letters; the
+    /// interface's fonts are put in again with it.
+    pub fn supply_font(ctx: &egui::Context, script: Script, bytes: Vec<u8>) {
+        if let Ok(mut fonts) = FONTS.lock() {
+            fonts.retain(|(s, _)| *s != script);
+            fonts.push((script, Arc::new(bytes)));
+        }
+        crate::theme::install_fonts(ctx);
+    }
+
+    pub(crate) fn font(script: Script) -> Option<Vec<u8>> {
+        FONTS.lock().ok()?.iter().find(|(s, _)| *s == script).map(|(_, b)| b.as_ref().clone())
     }
 }
 

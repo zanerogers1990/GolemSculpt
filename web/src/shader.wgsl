@@ -54,6 +54,10 @@ struct MeshIn {
     @location(2) mask: f32,
     // Recess (above 0.5) or ridge (below), from the mesh's own curvature.
     @location(3) curv: f32,
+    // The paint: sRGB colour and how much of the surface it covers.
+    @location(4) paint: vec4<f32>,
+    // The face group's colour, and 1 where Show Group Colours tints it.
+    @location(5) group: vec4<f32>,
 };
 
 struct MeshOut {
@@ -62,6 +66,8 @@ struct MeshOut {
     @location(1) world: vec3<f32>,
     @location(2) mask: f32,
     @location(3) curv: f32,
+    @location(4) paint: vec4<f32>,
+    @location(5) group: vec4<f32>,
 };
 
 @vertex
@@ -73,6 +79,8 @@ fn vs_mesh(in: MeshIn) -> MeshOut {
     out.world = world;
     out.mask = in.mask;
     out.curv = in.curv;
+    out.paint = in.paint;
+    out.group = in.group;
     return out;
 }
 
@@ -124,6 +132,7 @@ fn fs_mesh(in: MeshOut, @builtin(front_facing) facing: bool) -> @location(0) vec
         s.smooth_n = select(-normalize(in.normal), normalize(in.normal), front);
         s.n = n;
         s.curv = in.curv;
+        s.pixel = in.clip.xy;
         color = finish_shade(s);
     }
     if (g.params.w > 0.5 && obj.tint.a == 0.0) {
@@ -142,6 +151,13 @@ fn fs_mesh(in: MeshOut, @builtin(front_facing) facing: bool) -> @location(0) vec
         // The inside of an open shell, a little darker so it reads as such.
         color *= 0.6;
     }
+    // The paint multiplies the shading, as the desktop's does under a matcap
+    // (painted.wgsl): uncovered surface keeps its own colour.
+    color *= mix(vec3<f32>(1.0), in.paint.rgb, clamp(in.paint.a, 0.0, 1.0));
+    // Face group colours over the picture, as the desktop's overlay blends
+    // them (groups.rs): the picture tinted by the group's colour, lifted a
+    // little so the colour still reads on a dark material.
+    color = mix(color, in.group.rgb * (0.22 + color), clamp(in.group.a, 0.0, 1.0));
     color = mix(color, color * g.mask_tint.rgb, clamp(in.mask * g.mask_tint.a, 0.0, 1.0));
     if (obj.tint.a == 0.0) {
         // Mirror plane guides, as on the desktop: a thin tinted line where

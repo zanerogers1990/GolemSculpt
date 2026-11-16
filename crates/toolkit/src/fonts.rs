@@ -26,7 +26,11 @@ pub(crate) fn add_scripts(fonts: &mut FontDefinitions) {
     let mut loaded: Vec<(Script, &str)> = Vec::new();
     for script in translate::scripts() {
         for file in script.fonts() {
+            #[cfg(not(target_arch = "wasm32"))]
             let Ok(bytes) = std::fs::read(format!("C:\\Windows\\Fonts\\{file}")) else { continue };
+            // A web page has no fonts of the computer's: the page hands one over (`translate::web`).
+            #[cfg(target_arch = "wasm32")]
+            let Some(bytes) = translate::web::font(script) else { continue };
             let mut data = FontData::from_owned(bytes);
             if let (Some(segoe), Some(own)) = (segoe, line_metrics(&data.font, data.index)) {
                 data.tweak.y_offset_factor = baseline_shift(segoe, own);

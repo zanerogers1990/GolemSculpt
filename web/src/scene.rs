@@ -186,6 +186,8 @@ pub struct Drawn {
     pub indices: Vec<u8>,
     pub index_count: u32,
     pub vertices: usize,
+    /// Its paint's colour, four bytes a vertex; empty without paint.
+    pub paint: Vec<u8>,
 }
 
 impl Drawn {
@@ -199,6 +201,8 @@ impl Drawn {
             indices: bytemuck::cast_slice(&shown).to_vec(),
             index_count: shown.len() as u32,
             vertices: mesh.positions.len(),
+            paint: crate::mesh::paint::export_streams(mesh)
+                .map_or(Vec::new(), |s| s.iter().flat_map(|r| [r[0], r[1], r[2], r[3]]).collect()),
         }
     }
 }

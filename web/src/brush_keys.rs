@@ -99,11 +99,11 @@ impl WheelLayout {
 }
 
 /// The base brushes round the wheel, clockwise from the top: kin beside kin
-/// (the desktop's order, less Pose, Erase Layer and Paint, which the web
-/// version has not got).
-const WHEEL_ORDER: [Brush; 11] = {
+/// (the desktop's order; Erase Layer and Paint have places for when they
+/// are pinned, and start off the wheel).
+const WHEEL_ORDER: [Brush; Brush::COUNT] = {
     use Brush::*;
-    [Move, Clay, Standard, Layer, Smooth, Crease, Pinch, Inflate, Flatten, SnakeHook, Nudge]
+    [Move, Clay, Standard, Layer, Smooth, Crease, Pinch, Inflate, Flatten, Pose, SnakeHook, Nudge, EraseLayer, Paint]
 };
 
 /// The tiles of the brush wheel, clockwise from the top: every pinned brush

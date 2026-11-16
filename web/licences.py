@@ -99,6 +99,11 @@ Fonts (egui's default fonts, carried in the epaint_default_fonts library below)
     Ubuntu Light, under the Ubuntu Font Licence 1.0.
     emoji-icon-font, under the MIT licence.
     Their licence texts are printed with epaint_default_fonts.
+
+Fonts for Japanese, Chinese and Korean tooltips (fonts/cjk-*.otf)
+    Noto Sans CJK DemiLight, Copyright 2014-2021 Adobe (http://www.adobe.com/),
+    cut down to the letters the tooltips use (web/fonts/subset_cjk.py).
+    Under the SIL Open Font License 1.1, whose text follows.
 """
 
 
@@ -133,6 +138,9 @@ def main():
     out.append("used under its own licence, whose text follows the list.")
     out.append("")
     out.append(ASSETS)
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "OFL.txt"), encoding="utf-8") as f:
+        out.append(f.read().strip())
+        out.append("")
     out.append("Libraries")
     out.append("---------")
     out.append("")

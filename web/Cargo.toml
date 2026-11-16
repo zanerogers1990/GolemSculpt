@@ -39,6 +39,12 @@ sculpt-region = { path = "../crates/region" }
 sculpt-lathe = { path = "../crates/lathe" }
 sculpt-measure = { path = "../crates/measure" }
 sculpt-hands = { path = "../crates/hands" }
+sculpt-maskfit = { path = "../crates/maskfit" }
+# The desktop's key map (src/keymap.rs) names its keys as winit's KeyCode;
+# the web build has no winit, so a stand-in with just those names.
+winit = { path = "winit-keys", package = "golem-winit-keys" }
+# Reading packed arrays in FBX files (the desktop's io/fbx_read.rs).
+miniz_oxide = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"

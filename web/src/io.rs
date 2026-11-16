@@ -6,11 +6,21 @@ use serde_json::{Map, Value};
 
 pub mod slot {
     pub const PAINT: &str = "paint";
+    /// The reference pictures' names and places (`references.rs`).
+    pub const REFERENCES: &str = "references";
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Details {
     scene: Map<String, Value>,
+    /// The reference pictures' image files (the desktop's `io/references.rs`).
+    pictures: Vec<std::sync::Arc<[u8]>>,
+}
+
+/// The desktop's `io::read_over`, as much as the web needs: what `file`
+/// holds, read as a `T` (whose missing fields take their defaults).
+pub(crate) fn read_over<T: Serialize + DeserializeOwned>(_base: &T, file: &Value) -> Option<T> {
+    T::deserialize(file).ok()
 }
 
 impl Details {
@@ -22,6 +32,18 @@ impl Details {
 
     pub fn get_over<T: Serialize + DeserializeOwned>(&self, slot: &str, _base: &T) -> Option<T> {
         T::deserialize(self.scene.get(slot)?).ok()
+    }
+
+    pub fn get<T: DeserializeOwned>(&self, slot: &str) -> Option<T> {
+        T::deserialize(self.scene.get(slot)?).ok()
+    }
+
+    pub fn set_pictures(&mut self, images: Vec<std::sync::Arc<[u8]>>) {
+        self.pictures = images;
+    }
+
+    pub fn pictures(&self) -> &[std::sync::Arc<[u8]>] {
+        &self.pictures
     }
 }
 
@@ -51,12 +73,46 @@ mod layers;
 #[path = "../../src/io/levels.rs"]
 #[allow(dead_code)]
 mod levels;
+// A mesh's paint layers as the desktop's file keeps them (`PNTL`).
+#[path = "../../src/io/paint.rs"]
+#[allow(dead_code)]
+mod paint;
 
 use std::io::Read;
 
 use crate::mesh::Mesh;
 use crate::mesh::layers::SavedLayers;
 use crate::mesh::levels::SavedLevels;
+
+/// What an FBX's paint goes out as (the desktop's `io/painted.rs`, mounted
+/// in fbx.rs), where the desktop's FBX writer looks for it.
+#[cfg(not(test))]
+pub(crate) use crate::fbx::painted;
+
+/// A mesh read from a file with its quads, its UVs or its colours, built the
+/// way the desktop builds one (`io::groups::imported_mesh`, fbx.rs).
+pub fn build_imported(
+    positions: Vec<glam::Vec3>,
+    indices: Vec<u32>,
+    polys: Option<crate::mesh::Polys>,
+    uvs: Option<Vec<glam::Vec2>>,
+    paint: Option<crate::mesh::paint::PaintStack>,
+) -> Mesh {
+    let loaded = LoadedMesh {
+        positions,
+        indices,
+        mask: None,
+        polys,
+        hidden: None,
+        levels: None,
+        layers: None,
+        groups: None,
+        paint,
+        uvs,
+        lost: [false; 5],
+    };
+    levels::build(loaded).0
+}
 
 /// The desktop's face groups as a file keeps them; the web version keeps
 /// none, but `levels::build` takes the slot.
@@ -119,7 +175,41 @@ pub fn level_blocks(mesh: &Mesh) -> (Vec<u8>, Vec<u8>) {
 /// [`level_blocks`] made them, empty for none). The second value is whether
 /// any of them had to be left off.
 pub fn build_mesh(positions: Vec<glam::Vec3>, indices: Vec<u32>, mask: Vec<f32>, hidden: Vec<bool>, lvls: &[u8], layr: &[u8]) -> (Mesh, bool) {
+    build_mesh_painted(positions, indices, mask, hidden, lvls, layr, &[], &[])
+}
+
+/// `mesh`'s face groups (one u16 a triangle) and paint (the desktop's
+/// `PNTL` block body, mesh number 0 first), or empty where it has none: what
+/// the browser keeps of them beside [`level_blocks`] (layout W04).
+pub fn paint_blocks(mesh: &Mesh) -> (Vec<u8>, Vec<u8>) {
+    let grps = if mesh.has_groups() { bytemuck::cast_slice(mesh.group_ids()).to_vec() } else { Vec::new() };
+    let mut pntl = Vec::new();
+    if let Some(stack) = mesh.paint_stack() {
+        let _ = paint::write(&mut pntl, 0, &stack);
+    }
+    (grps, pntl)
+}
+
+/// [`build_mesh`] with the face groups and paint [`paint_blocks`] made
+/// (empty for none) put back on the mesh too.
+#[allow(clippy::too_many_arguments)]
+pub fn build_mesh_painted(
+    positions: Vec<glam::Vec3>,
+    indices: Vec<u32>,
+    mask: Vec<f32>,
+    hidden: Vec<bool>,
+    lvls: &[u8],
+    layr: &[u8],
+    grps: &[u8],
+    pntl: &[u8],
+) -> (Mesh, bool) {
     let vertices = positions.len();
+    let triangles = indices.len() / 3;
+    let ids: Vec<u16> = if grps.len() == triangles * 2 { bytemuck::pod_collect_to_vec(grps) } else { Vec::new() };
+    let groups = (!ids.is_empty()).then_some(groups::SavedGroups { ids, levels: Vec::new() });
+    let paint =
+        pntl.get(4..).filter(|_| pntl.len() > 4).and_then(|mut body| paint::read(&mut body, pntl.len() as u64, vertices));
+    let lost_more = (!grps.is_empty() && groups.is_none()) || (!pntl.is_empty() && paint.is_none());
     let mut lost = [false; 5];
     fn block(bytes: &[u8]) -> Option<&[u8]> {
         bytes.get(4..).filter(|_| bytes.len() > 4)
@@ -136,11 +226,11 @@ pub fn build_mesh(positions: Vec<glam::Vec3>, indices: Vec<u32>, mask: Vec<f32>,
         hidden: (!hidden.is_empty()).then_some(hidden),
         levels,
         layers,
-        groups: None,
-        paint: None,
+        groups,
+        paint,
         uvs: None,
         lost,
     };
     let (mesh, lost) = levels::build(loaded);
-    (mesh, lost[0] || lost[1])
+    (mesh, lost[0] || lost[1] || lost[3] || lost_more)
 }

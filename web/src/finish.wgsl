@@ -6,8 +6,10 @@
 // run on WebGL2 too: the Lighting card's preset (three or five lights,
 // turned with the camera or left where they were), the sky, equator and
 // ground light all round, and a reflected sky worked out here rather than
-// read from an HDRI. No shadow map and no ambient occlusion: the mesh's own
-// curvature puts the wash in the recesses and the wear on the ridges.
+// read from an HDRI. The mesh's own curvature puts the wash in the recesses
+// and the wear on the ridges. With WebGPU the key light casts the desktop's
+// soft shadow and the ambient occlusion darkens creases (shade.wgsl, joined
+// on after this file); with WebGL2 shade_off.wgsl lets every light through.
 
 struct FinishU {
     // x: the finish (0 matcap, 1 clay, 2 metal, 3 wood, 4 plain), y: how
@@ -115,6 +117,8 @@ struct Surface {
     n: vec3<f32>,
     // Recess (above 0.5) or ridge (below), from the mesh's own curvature.
     curv: f32,
+    // The pixel being shaded, for the shadow's and the occlusion's look-ups.
+    pixel: vec2<f32>,
 };
 
 struct MaterialSample {
@@ -226,8 +230,12 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
     let energy = 1.0 + f0 * (1.0 / max(dfg.y, 1e-3) - 1.0);
     let r = reflect(-s.v, n);
     let horizon = min(1.0 + dot(r, s.smooth_n), 1.0);
-    let hidden = specular_occlusion(nv, occlusion, a);
-    var color = finish_ambient(n) * diffuse * (1.0 - reflected) * occlusion
+    // The ambient occlusion and the way the open sky lies (shade.wgsl; open
+    // everywhere without it), as the desktop takes them.
+    let ao = min(shade_ao, occlusion);
+    let sky = normalize(n + (shade_bent - s.smooth_n));
+    let hidden = specular_occlusion(nv, ao, a);
+    var color = finish_ambient(sky) * diffuse * (1.0 - reflected) * ao
         + finish_environment(r, perceptual_roughness) * reflected * energy * (hidden * horizon * horizon);
     let direct_diffuse = diffuse * (1.0 - 0.04);
     // A light that looks wide from the surface spreads its highlight: the
@@ -244,7 +252,9 @@ fn physically_shade(s: Surface, n: vec3<f32>, albedo: vec3<f32>, metallic: f32, 
         let lh = saturate(dot(l, h));
         let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - lh);
         let spec = fresnel * (d_ggx(nh, a_light) * spread * v_smith(nv, nl, a) * 3.14159265) * energy;
-        color += (direct_diffuse + spec) * fin.light_color[i].rgb * nl;
+        // Only the key casts a shadow.
+        let shadow = select(1.0, shade_shadow, i == 0);
+        color += (direct_diffuse + spec) * fin.light_color[i].rgb * (shade_ao_direct * shadow * nl);
     }
     return color;
 }
@@ -260,13 +270,14 @@ fn light_sample(s: Surface, m: MaterialSample) -> vec3<f32> {
         for (var i = 0; i < count; i++) {
             let l = fin.light_dir[i].xyz;
             let c = fin.light_color[i].rgb;
+            let shadow = select(1.0, shade_shadow, i == 0);
             let ndl = dot(m.normal, l);
             let h = normalize(l + s.v);
             let spec = pow(saturate(dot(m.normal, h)), m.sheen_power) * (m.sheen_power + 8.0) / 8.0;
             let fresnel = 0.04 + 0.96 * pow(1.0 - saturate(dot(s.v, h)), 5.0);
-            sheen += c * (spec * fresnel * saturate(ndl));
+            sheen += c * shadow * (spec * fresnel * saturate(ndl));
             let wrapped = saturate((ndl + m.scatter_wrap) / (1.0 + m.scatter_wrap));
-            scatter += c * max(wrapped - saturate(ndl), 0.0);
+            scatter += c * mix(1.0, shadow, m.scatter_shadow) * max(wrapped - saturate(ndl), 0.0);
         }
         color += sheen * m.sheen_amount + scatter * m.scatter_color;
     }
@@ -683,6 +694,7 @@ fn finish_plain(s: Surface) -> MaterialSample {
 
 // The finish in use, lit, tone mapped and encoded for the display.
 fn finish_shade(s: Surface) -> vec3<f32> {
+    shade_begin(s.pixel, s.world, s.smooth_n);
     var m: MaterialSample;
     let kind = fin.kind.x;
     if (kind < 1.5) {

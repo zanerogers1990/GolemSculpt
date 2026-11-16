@@ -4,9 +4,10 @@
 //! desktop's so they run in any browser: three lights that turn with the
 //! camera (the desktop's Studio preset, which also follows the camera by
 //! default), its sky, equator and ground light all round, and a reflected
-//! sky worked out in the shader instead of an HDRI. No shadow map, no
-//! softboxes, no ambient occlusion: the mesh's own curvature already puts
-//! the wash in the recesses and the wear on the ridges, as on the desktop.
+//! sky worked out in the shader instead of an HDRI, and no softboxes. The
+//! key light's soft shadow and ambient occlusion come with WebGPU only
+//! (shadows.rs); the mesh's own curvature puts the wash in the recesses and
+//! the wear on the ridges, as on the desktop.
 //!
 //! The preset tables below are copied from src/look.rs (it cannot be
 //! compiled here: it reaches into the desktop's files, scene and renderer),
