@@ -82,7 +82,9 @@
       },
 
       download(name, bytes, mime) {
-        const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        // A copy: the many-threads build's memory is shared, and a Blob
+        // refuses a view of shared memory (it threw, and stopped the app).
+        const url = URL.createObjectURL(new Blob([bytes.slice()], { type: mime }));
         const a = document.createElement('a');
         a.href = url; a.download = name;
         document.body.appendChild(a); a.click(); a.remove();
