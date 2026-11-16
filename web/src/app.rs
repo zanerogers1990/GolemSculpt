@@ -98,6 +98,9 @@ mod quad_remesh;
 // The SSpheres tool: its gestures, keys, panel and Make Skin.
 #[path = "spheres.rs"]
 mod spheres;
+// Finger gestures, and the layout for a phone (mobile.rs).
+#[path = "mobile.rs"]
+mod mobile;
 
 /// Where the scene kept in the browser carries the objects' live mirrors,
 /// after the view: what comes next is each object's axes and centre.
@@ -273,6 +276,8 @@ pub struct GolemApp {
     shaping: shaping::Shaping,
     /// The SSpheres tool and its rig (spheres.rs).
     spheres: spheres::Spheres,
+    /// The fingers, and the phone layout's switches and menu (mobile.rs).
+    touch: mobile::Touch,
 }
 
 impl GolemApp {
@@ -352,6 +357,7 @@ impl GolemApp {
             side: 0,
             shaping: Default::default(),
             spheres: Default::default(),
+            touch: Default::default(),
         };
         app.frame_model(false);
         browser::ready();
@@ -896,6 +902,8 @@ impl GolemApp {
         let mut queued = queued.unwrap_or_default();
         // The brush wheel or a hold key has the pointer: no press is a stroke's.
         let pointer_busy = self.brush_keys.wheel_up || self.brush_keys.gauging();
+        // A second finger takes back what the first began; a tap of two or three undoes or redoes (mobile.rs).
+        self.touch_frame();
 
         for event in &events {
             match *event {
@@ -1046,7 +1054,9 @@ impl GolemApp {
                 if self.tool_press(px, button == PointerButton::Secondary) { Drag::Tool } else { Drag::Orbit }
             }
             PointerButton::Primary | PointerButton::Secondary => {
-                let invert = mods.ctrl || mods.command || button == PointerButton::Secondary;
+                // The phone layout's Sub and Smooth switches count as Ctrl and Shift held (mobile.rs).
+                let invert = mods.ctrl || mods.command || button == PointerButton::Secondary || self.touch.invert;
+                let smooth = self.smooth_held(mods.shift);
                 let sample = PointerSample { pos: px, pressure, time };
                 // On the object or one of its live mirror copies: the stroke works it through that one.
                 self.side = self.hit(px).map_or(0, |h| h.side);
@@ -1055,20 +1065,20 @@ impl GolemApp {
                 // A layer that records but does not show takes no stroke, nor
                 // does Erase Layer with nothing to rub out (layers.rs).
                 let on_active = shown && self.pick(px).is_some_and(|(id, _)| id == self.active);
-                let refused = if on_active { self.layer_stroke_refusal(mods.shift) } else { None };
+                let refused = if on_active { self.layer_stroke_refusal(smooth) } else { None };
                 // The Paint brush's Sample mode is the eyedropper, a Paint stroke needs a layer to paint
                 // on (made if there is none), and Pose by face groups needs groups (paint.rs, pose.rs).
                 let held = refused.is_none()
                     && on_active
-                    && (self.paint_samples_press(px, mods.shift)
-                        || self.paint_refuses_stroke(mods.shift)
-                        || self.pose_refuses_stroke(mods.shift));
+                    && (self.paint_samples_press(px, smooth)
+                        || self.paint_refuses_stroke(smooth)
+                        || self.pose_refuses_stroke(smooth));
                 if let Some(why) = refused {
                     self.status = why;
                     Drag::None
                 } else if held {
                     Drag::None
-                } else if shown && self.begin_stroke(&view, sample, invert, mods.shift) {
+                } else if shown && self.begin_stroke(&view, sample, invert, smooth) {
                     self.sculptor.pace = Pace::LIVE;
                     Drag::Sculpt
                 } else if button == PointerButton::Primary && mods.shift {
@@ -1416,9 +1426,9 @@ impl GolemApp {
 
         let (mods, right) = ui.input(|i| (i.modifiers, i.pointer.secondary_down()));
         let s = &self.sculptor.settings;
-        let brush = self.sculptor.effective_brush(mods.shift);
+        let brush = self.sculptor.effective_brush(self.smooth_held(mods.shift));
         // With Shift held the ring is the brush Shift smooths with.
-        let shift = mods.shift && !s.mask_mode;
+        let shift = self.smooth_held(mods.shift) && !s.mask_mode;
         let (bs, _) = s.in_use(brush, shift);
         let mut negative = !bs.positive && brush.has_polarity();
         if (mods.ctrl || mods.command || right) && (brush.has_polarity() || s.mask_mode) {
@@ -1604,6 +1614,10 @@ fn group_digits(n: usize) -> String {
 impl eframe::App for GolemApp {
     /// Each key pressed becomes what the key map has it on (shortcuts.rs).
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // A pinch is one press, not one a finger (mobile.rs).
+        if self.touch.filter(raw_input) {
+            ctx.request_repaint();
+        }
         self.shortcut_keys(ctx, raw_input);
     }
 

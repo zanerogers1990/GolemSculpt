@@ -149,6 +149,8 @@
     // pressure (-1 for a mouse or a finger), seconds, and 1 for the press.
     let samples = [];
     const keep = (e, down) => {
+      // Of several fingers only the first draws; the rest pinch (src/mobile.rs).
+      if (e.pointerType === 'touch' && !e.isPrimary) return;
       const rect = canvas.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
       const each = !down && e.getCoalescedEvents ? e.getCoalescedEvents() : [];
@@ -160,8 +162,20 @@
       if (samples.length > 100000) samples.splice(0, samples.length - 100000);
     };
     // A press starts the list afresh, so what follows it is that stroke's.
-    window.addEventListener('pointerdown', (e) => { samples = []; keep(e, true); }, { capture: true, passive: true });
+    window.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' && !e.isPrimary) return;
+      samples = []; keep(e, true);
+    }, { capture: true, passive: true });
     window.addEventListener('pointermove', (e) => { if (e.buttons) keep(e, false); }, { capture: true, passive: true });
+    // A finger reaches the app through its touch events alone: eframe reads
+    // both kinds, and a finger's pointer events as well would press twice
+    // and make each extra finger a press of its own (src/mobile.rs sorts the
+    // touch events out). Stopped here, after the lines above have seen them.
+    for (const name of ['pointerdown', 'pointerup', 'pointercancel']) {
+      window.addEventListener(name, (e) => {
+        if (e.pointerType === 'touch') e.stopImmediatePropagation();
+      }, { capture: true });
+    }
     window.golem.takePenSamples = () => {
       const out = new Float64Array(samples);
       samples = [];

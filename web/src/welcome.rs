@@ -48,6 +48,38 @@ const PARTS: [(&str, &[&str]); 4] = [
     ),
 ];
 
+/// The same card on a phone, in fingers rather than keys and buttons (mobile.rs).
+const PHONE_PARTS: [(&str, &[&str]); 4] = [
+    (
+        "Sculpt",
+        &[
+            "Draw on the model with one finger to sculpt.",
+            "Pick a brush on the strip along the bottom; slide it for more.",
+            "Carve makes the brush dig in instead of building up. Smooth softens. Each stays on until tapped again.",
+            "Size and Strength are the two sliders down the left: drag up for more.",
+        ],
+    ),
+    (
+        "Look around",
+        &[
+            "One finger off the model turns the view, as does a drag on the axis ball.",
+            "Two fingers: pinch to zoom, drag to move the view.",
+            "Fit View (top right) brings the model back into view.",
+        ],
+    ),
+    (
+        "Undo",
+        &["Tap with two fingers to undo, with three to redo, or use the buttons at the top."],
+    ),
+    (
+        "Everything else",
+        &[
+            "Menu (top left) holds the rest: saving, finer detail, new shapes, the tools and every setting.",
+            "Your work is kept in this browser between visits.",
+        ],
+    ),
+];
+
 #[derive(Default)]
 pub struct Welcome {
     pub open: bool,
@@ -59,12 +91,22 @@ pub struct Welcome {
 
 impl GolemApp {
     /// Opens the card on a first visit; afterwards only F1 or Help opens it.
-    fn welcome_first_look(&mut self) {
+    fn welcome_first_look(&mut self, ctx: &egui::Context) {
         let w = &mut self.welcome;
         if !w.decided {
             w.decided = true;
             w.open = crate::browser::pref(PREF) != SEEN;
+            // A phone gets the tour that points at things instead (mobile.rs).
+            if w.open && super::mobile::compact(ctx) {
+                w.open = false;
+                self.touch.tour = Some(0);
+            }
         }
+    }
+
+    /// The first visit is over: the welcome does not open by itself again.
+    pub(super) fn welcome_seen(&mut self) {
+        crate::browser::set_pref(PREF, SEEN);
     }
 
     pub(super) fn open_welcome(&mut self) {
@@ -79,7 +121,7 @@ impl GolemApp {
 
     /// Once a frame, after the panels: the card, if it is up.
     pub(super) fn welcome(&mut self, ctx: &egui::Context) {
-        self.welcome_first_look();
+        self.welcome_first_look(ctx);
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
             if self.welcome.open { self.close_welcome() } else { self.open_welcome() }
         }
@@ -111,7 +153,8 @@ impl GolemApp {
                 );
                 let room = (screen.height() - 220.0).max(120.0);
                 egui::ScrollArea::vertical().max_height(room).auto_shrink([false, true]).show(ui, |ui| {
-                    for (heading, lines) in PARTS {
+                    let parts: &[(&str, &[&str])] = if super::mobile::compact(ctx) { &PHONE_PARTS } else { &PARTS };
+                    for &(heading, lines) in parts {
                         ui.add_space(8.0);
                         ui.label(RichText::new(heading).font(theme::font(14.0)).color(ACCENT()));
                         for line in lines {
@@ -127,8 +170,13 @@ impl GolemApp {
                 let style = ButtonStyle { active: Some(ACCENT()), ..Default::default() };
                 let start = theme::button(ui, ui.available_width(), "Start Sculpting", style).clicked();
                 ui.add_space(2.0);
+                let again = if super::mobile::compact(ctx) {
+                    "Help, at the foot of the Menu, brings this back."
+                } else {
+                    "F1 or Help (bottom of the page) brings this back. Settings has every key."
+                };
                 ui.label(
-                    RichText::new("F1 or Help (bottom of the page) brings this back. Settings has every key.")
+                    RichText::new(again)
                         .font(theme::font(11.0))
                         .color(theme::HINT()),
                 );

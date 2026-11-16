@@ -60,7 +60,7 @@ pub mod tabs;
 use panels::{Part, Side};
 
 /// The kinds the Brushes card sorts brushes into, as on the desktop.
-const GROUPS: [(&str, &[Brush]); 5] = [
+pub(super) const GROUPS: [(&str, &[Brush]); 5] = [
     ("Clay & Build", &[Brush::Clay, Brush::Standard, Brush::Layer, Brush::Inflate]),
     ("Smooth & Flatten", &[Brush::Smooth, Brush::Flatten]),
     ("Cut & Pinch", &[Brush::Crease, Brush::Pinch]),
@@ -182,6 +182,11 @@ impl GolemApp {
     pub(super) fn interface(&mut self, root: &mut Ui) {
         let ctx = root.ctx().clone();
         let screen = ctx.content_rect();
+        // A phone: a bar, thumb sliders and a brush strip, the panels in a sheet (mobile.rs).
+        if super::mobile::compact(&ctx) {
+            self.phone_interface(root);
+            return;
+        }
         // Ctrl + = and Ctrl + - change the size too: keep the setting in step.
         let zoom = ctx.zoom_factor();
         if (zoom - self.ui.scale).abs() > 0.001 {
@@ -211,7 +216,7 @@ impl GolemApp {
         }
         self.ui.folded = folded;
 
-        self.view_gizmo(&ctx, panels::gizmo_origin(screen, folded[1]));
+        self.view_gizmo(&ctx, panels::gizmo_origin(screen, folded[1]), true);
         self.bottom_bar(&ctx, panels::bottom_bar_origin(screen, folded[0]), panels::bottom_bar_width(screen, folded));
     }
 
@@ -259,7 +264,7 @@ impl GolemApp {
         }
     }
 
-    fn sculpt_body(&mut self, ui: &mut Ui) {
+    pub(super) fn sculpt_body(&mut self, ui: &mut Ui) {
         if self.mode == Mode::Tubes {
             self.tool_buttons(ui);
             self.tubes_panel(ui);
@@ -615,7 +620,7 @@ impl GolemApp {
 
     // ---- the Scene panel ------------------------------------------------------------
 
-    fn scene_body(&mut self, ui: &mut Ui) {
+    pub(super) fn scene_body(&mut self, ui: &mut Ui) {
         let tips = self.ui.tips;
         match self.ui.scene_tab {
             tabs::Scene::Objects => {
@@ -816,7 +821,8 @@ impl GolemApp {
 
     /// The axis bubbles (a tap turns to that view, a drag orbits), then
     /// Persp / Ortho and Frame, as the desktop's view gizmo.
-    fn view_gizmo(&mut self, ctx: &egui::Context, origin: egui::Pos2) {
+    /// `full`: with Persp / Ortho, the lens and Frame under it (the phone layout has Frame on its bar).
+    pub(super) fn view_gizmo(&mut self, ctx: &egui::Context, origin: egui::Pos2, full: bool) {
         let tips = self.ui.tips;
         egui::Area::new(Id::new("view_gizmo")).order(Order::Middle).fade_in(false).fixed_pos(origin).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
@@ -886,6 +892,9 @@ impl GolemApp {
                     }
                     self.camera.snap_to(yaw, pitch, None);
                 }
+            }
+            if !full {
+                return;
             }
             ui.horizontal(|ui| {
                 ui.add_space(2.0 + view_handles::SIZE + 4.0);
@@ -992,7 +1001,7 @@ impl GolemApp {
 
 /// The brush's way, size, strength and focal shift, always at the top of
 /// the Brush tab (the desktop's `brush_plate`).
-fn brush_plate(ui: &mut Ui, s: &mut Settings, icon: &dyn Fn(&str) -> Option<TextureId>, tips: bool) {
+pub(super) fn brush_plate(ui: &mut Ui, s: &mut Settings, icon: &dyn Fn(&str) -> Option<TextureId>, tips: bool) {
     theme::plate(ui, |ui| {
         ui.horizontal(|ui| {
             let w = theme::row_width(ui, 3, 4.0);

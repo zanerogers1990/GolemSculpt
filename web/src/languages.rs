@@ -195,7 +195,12 @@ impl GolemApp {
                 if kept.is_empty() {
                     // The browser's language to start with, as the desktop starts with Windows'.
                     state.code = translate::find(browser_language()).code;
-                    first_language::ask(ctx);
+                    // Not on a phone: tooltips need a pointer that rests, which a
+                    // finger is not, and the card is wider than the screen. The
+                    // answer is not kept, so a visit on a computer still asks.
+                    if !super::mobile::compact(ctx) {
+                        first_language::ask(ctx);
+                    }
                 } else {
                     state.code = translate::find(&kept).code;
                 }
