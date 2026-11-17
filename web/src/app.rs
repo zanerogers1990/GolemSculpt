@@ -113,6 +113,9 @@ const MIRRORS_TAG: &[u8; 4] = b"MIRR";
 /// (a Remesh, a Subdivide, a new shape), which cost far more memory.
 const UNDO_STEPS: usize = 80;
 const UNDO_MESHES: usize = 4;
+/// The most memory those whole-mesh steps may take together (beyond the
+/// newest, always kept): a browser tab has 4 GB in all.
+const UNDO_MESH_BYTES: usize = 1 << 30;
 /// The most triangles Subdivide makes: past this a browser tab runs short.
 const MAX_TRIANGLES: usize = 4_000_000;
 /// Seconds after the last change before the scene is put in the browser's storage.
@@ -175,6 +178,16 @@ impl Step {
         match self {
             Step::Many(steps) => steps.iter().any(Step::heavy),
             _ => matches!(self, Step::Mesh(..) | Step::Exists { held: Some(_), .. }),
+        }
+    }
+
+    /// The memory of the whole meshes the step holds, near enough.
+    fn mesh_bytes(&self) -> usize {
+        match self {
+            Step::Many(steps) => steps.iter().map(Step::mesh_bytes).sum(),
+            Step::Mesh(_, mesh) => mesh.memory_bytes(),
+            Step::Exists { held: Some(object), .. } => object.mesh.as_ref().map_or(0, Mesh::memory_bytes),
+            _ => 0,
         }
     }
 }
@@ -427,11 +440,44 @@ impl GolemApp {
         self.undo.push(step);
         // The oldest steps go first; a step can only be undone after every
         // later one, so dropping from the front never breaks the rest.
+        // Big meshes also go by their memory, so a few Remeshes at a high
+        // Resolution cannot fill the tab; the newest copy is always kept.
+        let over_memory = |undo: &[Step]| {
+            let heavy = || undo.iter().filter(|s| s.heavy());
+            heavy().count() > 1 && heavy().map(Step::mesh_bytes).sum::<usize>() > UNDO_MESH_BYTES
+        };
         while self.undo.len() > UNDO_STEPS
             || self.undo.iter().filter(|s| s.heavy()).count() > UNDO_MESHES
+            || over_memory(&self.undo)
         {
             self.undo.remove(0);
         }
+    }
+
+    /// How many whole-model copies undo and redo hold, and their memory.
+    pub(crate) fn undo_copies(&self) -> (usize, usize) {
+        let heavy = self.undo.iter().chain(&self.redo).filter(|s| s.heavy());
+        heavy.fold((0, 0), |(n, bytes), s| (n + 1, bytes + s.mesh_bytes()))
+    }
+
+    /// Free Memory (Remesh card, web only): keeps the newest whole-model undo
+    /// step and forgets everything older, and drops redo if it holds a copy.
+    /// Only the front of the history goes, so what is left still undoes right.
+    pub(crate) fn free_undo_memory(&mut self) {
+        let (before, bytes_before) = self.undo_copies();
+        if self.redo.iter().any(Step::heavy) {
+            self.redo.clear();
+        }
+        if let Some(newest) = self.undo.iter().rposition(Step::heavy) {
+            self.undo.drain(..newest);
+        }
+        let (after, bytes_after) = self.undo_copies();
+        self.status = format!(
+            "Freed {} by forgetting {} older undo cop{}.",
+            layers::megabytes(bytes_before - bytes_after),
+            before - after,
+            if before - after == 1 { "y" } else { "ies" }
+        );
     }
 
     fn undo_redo(&mut self, undo: bool) {

@@ -543,7 +543,7 @@ impl GolemApp {
         theme::category(ui, "Remesh", Color32::from_rgb(110, 200, 120), &tris, true, |ui| {
             let mut resolution = self.remesh_resolution as f32;
             if tip(
-                theme::slider(ui, "Resolution", &mut resolution, 64.0..=512.0, |v| format!("{v:.0}")),
+                theme::slider(ui, "Resolution", &mut resolution, 64.0..=1024.0, |v| format!("{v:.0}")),
                 tips,
                 "How fine the new mesh is: voxels along the model's longest side.",
             )
@@ -557,6 +557,23 @@ impl GolemApp {
                 .clicked()
             {
                 self.remesh();
+            }
+            // Undo's whole-model copies, and a way to let them go: a browser
+            // tab has far less memory than the desktop app (app.rs).
+            let (copies, bytes) = self.undo_copies();
+            if copies > 0 {
+                let s = if copies == 1 { "y" } else { "ies" };
+                theme::hint(ui, &format!("Undo keeps {copies} full cop{s} of the model: {}.", super::layers::megabytes(bytes)));
+            }
+            if copies > 1
+                && tip(
+                    theme::button(ui, full, "Free Memory", ButtonStyle::default()),
+                    tips,
+                    "Forget the older undo copies, keeping only the latest. Ctrl+Z will not go back past it. Helps a big model fit in the browser; it does not make brushes faster.",
+                )
+                .clicked()
+            {
+                self.free_undo_memory();
             }
             // Dynamic topology sits here, as on the desktop: the other way to
             // get triangles where they are wanted.
