@@ -195,12 +195,20 @@ impl GolemApp {
             return;
         }
         self.gestures.last_tap = None;
+        // On another object (the brush never lands on one that is not
+        // active), the double tap picks it, as on the desktop.
+        if let Some((id, _)) = self.pick(px).filter(|&(id, _)| id != self.active) {
+            self.select(id, false);
+            return;
+        }
         let masked = self.mesh.mask.iter().any(|&m| m > 0.0);
         if self.sculptor.settings.mask_mode && masked {
             self.mask_op(MaskOp::Invert);
             self.status = "Inverted the mask. Double tap empty space again to swap it back.".into();
         } else {
             self.frame_model(true);
+            // Shows which object the view went to.
+            self.flash.start(self.active);
         }
     }
 

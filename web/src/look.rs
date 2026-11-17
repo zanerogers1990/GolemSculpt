@@ -181,6 +181,11 @@ impl GolemApp {
             }
         }
 
+        // A selection flash running wants the frames that fade it (flash.rs).
+        if self.flash.tick() {
+            ctx.request_repaint();
+        }
+        let flash = &self.flash;
         Viewport {
             globals,
             upload,
@@ -197,6 +202,7 @@ impl GolemApp {
             still: self.look.still.clone(),
             finish,
             model: self.model(),
+            flash: flash.color(self.active),
             // The skin made from the spheres steps aside while they are edited (spheres.rs).
             show_model: self.active_object().visible && !self.spheres_stand_in_for(self.active),
             copies: self.active_copies(),
@@ -207,7 +213,8 @@ impl GolemApp {
                 .filter(|o| o.visible && o.id != self.active && !self.spheres_stand_in_for(o.id))
                 .filter_map(|o| o.drawn.clone().map(|drawn| (o, drawn)))
                 .flat_map(|(o, drawn)| {
-                    o.placements().into_iter().map(move |(_, model)| crate::render::Other { drawn: drawn.clone(), model })
+                    let flash = flash.color(o.id);
+                    o.placements().into_iter().map(move |(_, model)| crate::render::Other { drawn: drawn.clone(), model, flash })
                 })
                 .collect(),
             shade,

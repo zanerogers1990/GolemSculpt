@@ -45,6 +45,8 @@ struct Object {
     normal: mat4x4<f32>,
     // rgb: the colour the matcap is tinted toward; a: how far.
     tint: vec4<f32>,
+    // The selection flash laid over the picture (flash.rs); a: how much.
+    flash: vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> obj: Object;
 
@@ -174,6 +176,8 @@ fn fs_mesh(in: MeshOut, @builtin(front_facing) facing: bool) -> @location(0) vec
             }
         }
     }
+    // An object just picked or framed pulses blue for a moment, as on the desktop.
+    color = mix(color, obj.flash.rgb, clamp(obj.flash.a, 0.0, 1.0));
     return vec4<f32>(color, 1.0);
 }
 

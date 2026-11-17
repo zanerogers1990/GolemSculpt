@@ -66,10 +66,16 @@ struct Object {
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
     tint: [f32; 4],
+    /// The selection flash laid over the picture (flash.rs); alpha 0 for none.
+    flash: [f32; 4],
 }
 
 impl Object {
     fn at(model: glam::Mat4, tint: [f32; 4]) -> Object {
+        Object::flashing(model, tint, [0.0; 4])
+    }
+
+    fn flashing(model: glam::Mat4, tint: [f32; 4], flash: [f32; 4]) -> Object {
         let normal = model.inverse().transpose();
         let normal = if normal.is_finite() { normal } else { model };
         let mut normal = normal.to_cols_array_2d();
@@ -77,7 +83,7 @@ impl Object {
         // the place mirrors, and the shader takes the back of a triangle for
         // its front there (shader.wgsl).
         normal[3][3] = if model.determinant() < 0.0 { -1.0 } else { 1.0 };
-        Object { model: model.to_cols_array_2d(), normal, tint }
+        Object { model: model.to_cols_array_2d(), normal, tint, flash }
     }
 }
 
@@ -90,6 +96,8 @@ const OTHER: u64 = 1 << 63;
 pub struct Other {
     pub drawn: Arc<crate::scene::Drawn>,
     pub model: glam::Mat4,
+    /// Its selection flash (flash.rs).
+    pub flash: [f32; 4],
 }
 
 #[repr(C)]
@@ -604,6 +612,7 @@ impl Gpu {
         queue: &wgpu::Queue,
         previews: &[PreviewDraw],
         model: glam::Mat4,
+        flash: [f32; 4],
         copies: &[glam::Mat4],
         others: &[Other],
     ) -> Vec<(u64, u32)> {
@@ -612,11 +621,11 @@ impl Gpu {
         }
         // The active object where it stands; a tool works in its space, so
         // the tool's previews stand where it does too.
-        let mut slots = vec![Object::at(model, [1.0, 1.0, 1.0, 0.0])];
+        let mut slots = vec![Object::flashing(model, [1.0, 1.0, 1.0, 0.0], flash)];
         self.copy_slots.clear();
         for &copy in copies {
             self.copy_slots.push(slots.len() as u32);
-            slots.push(Object::at(copy, [1.0, 1.0, 1.0, 0.0]));
+            slots.push(Object::flashing(copy, [1.0, 1.0, 1.0, 0.0], flash));
         }
         let mut draws = Vec::new();
         for other in others {
@@ -650,7 +659,7 @@ impl Gpu {
                 p.used = true;
             }
             draws.push((id, slots.len() as u32));
-            slots.push(Object::at(other.model, [1.0, 1.0, 1.0, 0.0]));
+            slots.push(Object::flashing(other.model, [1.0, 1.0, 1.0, 0.0], other.flash));
         }
         for draw in previews {
             let preview = &draw.mesh;
@@ -1088,6 +1097,8 @@ pub struct Viewport {
     pub finish: finish::Uniform,
     /// Where the active object stands, and whether it is shown.
     pub model: glam::Mat4,
+    /// The active object's selection flash, on its copies too (flash.rs).
+    pub flash: [f32; 4],
     pub show_model: bool,
     /// Where the model's live mirror copies stand.
     pub copies: Vec<glam::Mat4>,
@@ -1129,7 +1140,7 @@ impl CallbackTrait for Viewport {
             gpu.matcap = self.matcap;
         }
         gpu.show_model = self.show_model;
-        let draws = gpu.prepare_objects(device, queue, &self.previews, self.model, &self.copies, &self.others);
+        let draws = gpu.prepare_objects(device, queue, &self.previews, self.model, self.flash, &self.copies, &self.others);
         self.has.store(gpu.generation, Ordering::Relaxed);
         let size = [self.size[0].max(1), self.size[1].max(1)];
         gpu.ensure_target(device, size);

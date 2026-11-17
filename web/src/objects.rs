@@ -193,7 +193,12 @@ impl GolemApp {
             }
             self.selected.insert(0, id);
             self.activate(id);
+            self.flash.start(id);
         } else {
+            // Only a new target pulses, not a click on the active object.
+            if id != self.active {
+                self.flash.start(id);
+            }
             self.activate(id);
             self.selected = vec![id];
         }

@@ -101,6 +101,9 @@ mod spheres;
 // Finger gestures, and the layout for a phone (mobile.rs).
 #[path = "mobile.rs"]
 mod mobile;
+// The blue pulse on an object just picked or framed (flash.rs).
+#[path = "flash.rs"]
+mod flash;
 
 /// Where the scene kept in the browser carries the objects' live mirrors,
 /// after the view: what comes next is each object's axes and centre.
@@ -262,6 +265,8 @@ pub struct GolemApp {
     brush_keys: brush_keys::BrushKeys,
     /// The quick mask gestures (`masking.rs`).
     gestures: masking::Gestures,
+    /// The selection flash (flash.rs).
+    pub(crate) flash: flash::Flash,
     /// The welcome card (welcome.rs).
     welcome: welcome::Welcome,
     /// A scene file picked or dropped, waiting for "Open this scene?" (scene_file.rs).
@@ -351,6 +356,7 @@ impl GolemApp {
             last_time: 0.0,
             brush_keys: Default::default(),
             gestures: Default::default(),
+            flash: Default::default(),
             welcome: Default::default(),
             pending_scene: None,
             repair: Default::default(),
