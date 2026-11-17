@@ -1084,7 +1084,7 @@ impl GolemApp {
                     Drag::None
                 } else if held {
                     Drag::None
-                } else if shown && self.begin_stroke(&view, sample, invert, smooth) {
+                } else if shown && !self.press_is_other_objects(px) && self.begin_stroke(&view, sample, invert, smooth) {
                     self.sculptor.pace = Pace::LIVE;
                     Drag::Sculpt
                 } else if button == PointerButton::Primary && mods.shift {

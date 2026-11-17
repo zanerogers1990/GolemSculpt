@@ -144,6 +144,35 @@ impl GolemApp {
         best.map(|(id, pos, _)| (id, pos))
     }
 
+    /// Whether a press at `px` lands on another object standing in front of
+    /// the active one, so it is that object's and not a stroke on what lies
+    /// hidden behind it (a double tap there picks it, masking.rs). Not where
+    /// the two meet, though: working clay into the join puts the middle of
+    /// the brush on the other object as often as not. So the press is still
+    /// the brush's when the active surface lies no more than a brush radius
+    /// behind and shows through somewhere inside the brush ring. The
+    /// desktop's `reach_past` (src/app/selection.rs), the Unity app's rule.
+    pub(super) fn press_is_other_objects(&self, px: Vec2) -> bool {
+        let Some((other, other_pos)) = self.pick(px) else { return false };
+        if other == self.active {
+            return false;
+        }
+        let Some(own) = self.hit(px) else { return true };
+        let (origin, dir) = self.view.ray(px);
+        let ring = self.sculptor.settings.radius_px;
+        let radius = ring * self.view.world_per_pixel(self.view.depth_of(own.pos));
+        if (own.pos - origin).dot(dir) - (other_pos - origin).dot(dir) > radius {
+            return true;
+        }
+        // Two rings of eight points, at half the brush radius and at its edge.
+        let seen = (1..=2).flat_map(|n| (0..8).map(move |i| (n, i))).any(|(n, i)| {
+            let angle = i as f32 * std::f32::consts::FRAC_PI_4;
+            let at = px + Vec2::new(angle.cos(), angle.sin()) * (ring * n as f32 * 0.5);
+            self.pick(at).is_some_and(|(id, _)| id == self.active)
+        });
+        !seen
+    }
+
     /// Makes object `id` the one the brushes work on: its mesh becomes the
     /// app's, and the one that was gives its mesh back to its own object.
     /// It joins the selection, at its head. False if there is no such
