@@ -84,14 +84,72 @@ fn builds(sculptor: impl Fn() -> Sculptor) -> [f32; 3] {
     [tallest(&one), tallest(&three), tallest(&strokes)]
 }
 
-/// Standard and Inflate as they start build a stroke to a height: going over
-/// the same place in the stroke twice more adds little and never passes the
-/// height, and two more strokes build on top. With Accumulate on, every pass
-/// adds as much again.
+/// Standard and Inflate as they start add with every pass, in proportion to
+/// Strength: one pass of Standard stands 0.2 radii at 50% and a tenth of that
+/// at 5%, and three passes three times as tall, in one stroke or in three.
+#[test]
+fn standard_and_inflate_add_with_every_pass() {
+    for (brush, at_half) in [(Brush::Standard, 0.2), (Brush::Inflate, 0.166)] {
+        let [one, three, strokes] = builds(|| holding(brush, |_| {}));
+        println!("{brush:?}: one pass {one:.3}, three passes {three:.3}, three strokes {strokes:.3} radii");
+        assert!((one - at_half).abs() < 0.04, "{brush:?}: one pass at 50% built {one}");
+        assert!(three > one * 2.5 && strokes > one * 2.5, "{brush:?}: {one} {three} {strokes}");
+        let [light, ..] = builds(|| holding(brush, |b| b.strength = 0.05));
+        assert!((light / one - 0.1).abs() < 0.03, "{brush:?}: 5% built {light} where 50% built {one}");
+    }
+}
+
+/// Standard and Inflate as they start stay mirror images of themselves over
+/// many strokes: what they build goes on being built on what they built, so
+/// a difference between the two sides would have every chance to grow.
+#[test]
+fn building_with_every_pass_stays_mirrored() {
+    for brush in [Brush::Standard, Brush::Inflate] {
+        let mut mesh = sphere(80_000);
+        let twin = twins(&mesh);
+        let view = view_of(&mesh);
+        let mut worst = 0.0f32;
+        for stroke in 0..12 {
+            let high = 0.04 * stroke as f32 - 0.2;
+            let mut line = across(&view, -0.35, 0.3, 60);
+            for point in &mut line {
+                point.y += high * 200.0;
+            }
+            let mut sculptor = holding(brush, |_| {});
+            sculptor.settings.symmetry = [true, false, false];
+            draw(&mut mesh, &mut sculptor, &view, &line, 4, Some(&|_| 1.0));
+            let mirrored = |p: Vec3| p * Vec3::new(-1.0, 1.0, 1.0);
+            worst = (0..mesh.positions.len()).map(|v| mesh.positions[v].distance(mirrored(mesh.positions[twin[v] as usize]))).fold(worst, f32::max);
+        }
+        println!("{brush:?}: twelve mirrored strokes, the two sides {worst:.2e} apart");
+        assert!(worst < 2e-5, "{brush:?}: {worst}");
+    }
+}
+
+/// Standard with Accumulate on rides what it has built: its ring goes with
+/// the rising surface, so a stroke over a tall build still moves its top.
+#[test]
+fn standard_rides_what_it_has_built() {
+    let mut mesh = sphere(80_000);
+    let view = view_of(&mesh);
+    let line = across(&view, -0.3, 0.3, 60);
+    let build = |mesh: &mut Mesh| draw(mesh, &mut holding(Brush::Standard, |b| b.strength = 1.0), &view, &line, 4, Some(&|_| 1.0));
+    let mut heights = Vec::new();
+    for _ in 0..5 {
+        build(&mut mesh);
+        heights.push(tallest(&mesh));
+    }
+    println!("five strokes at 100%: {heights:.3?} radii");
+    assert!(heights.windows(2).all(|h| h[1] > h[0] + 0.15), "{heights:?}");
+}
+
+/// Standard and Inflate with Accumulate off build a stroke to a height: going
+/// over the same place in the stroke twice more adds little and never passes
+/// the height, and two more strokes build on top.
 #[test]
 fn standard_and_inflate_build_each_stroke_to_a_height() {
     for brush in [Brush::Standard, Brush::Inflate] {
-        let [one, three, strokes] = builds(|| holding(brush, |_| {}));
+        let [one, three, strokes] = builds(|| holding(brush, |b| b.accumulate = false));
         println!("{brush:?}: one pass {one:.3}, three passes {three:.3}, three strokes {strokes:.3} radii");
         assert!(one > 0.06 && one < 0.16, "{brush:?}: one pass at its own Strength built {one}");
         assert!(three < one * 1.35, "{brush:?}: three passes in one stroke built {three}, one {one}");
@@ -100,7 +158,7 @@ fn standard_and_inflate_build_each_stroke_to_a_height() {
         assert!(three > one * 2.0, "{brush:?} with Accumulate: three passes built {three}, one {one}");
     }
     // At full Strength one stroke stands no taller than its height.
-    let [one, three, _] = builds(|| holding(Brush::Standard, |b| b.strength = 1.0));
+    let [one, three, _] = builds(|| holding(Brush::Standard, |b| (b.strength, b.accumulate) = (1.0, false)));
     assert!(one > 0.25 && three <= 0.35 * 1.001, "Standard at 100%: one pass {one}, three {three}");
 }
 
@@ -134,7 +192,9 @@ fn inflate_raises_each_vertex_along_its_own_normal() {
     let view = view_of(&mesh);
     let line = passes(&across(&view, -0.3, 0.3, 60), 3);
     // The kernel alone: Auto Smooth and Even Out move vertices sideways.
-    let tune = |b: &mut BrushSettings| (b.strength, b.relax_normals, b.auto_smooth, b.even_out) = (1.0, 0.0, 0.0, 0.0);
+    let tune = |b: &mut BrushSettings| {
+        (b.strength, b.accumulate, b.relax_normals, b.auto_smooth, b.even_out) = (1.0, false, 0.0, 0.0, 0.0)
+    };
     draw(&mut mesh, &mut holding(Brush::Inflate, tune), &view, &line, 4, None);
     let mut moved = 0;
     for ((p, p0), n0) in mesh.positions.iter().zip(&before).zip(&normals) {
@@ -203,7 +263,7 @@ fn normals_brought_up_to_date_under_a_dab_are_the_surfaces_own() {
     });
     mesh.positions_changed(&leaves);
     let stale = mesh.normals.clone();
-    mesh.refresh_normals_within(&leaves, centre, 0.1);
+    mesh.refresh_normals_within(centre, 0.1);
     // Each vertex's normal from where its triangles' corners are now, worked
     // out as every normal is: the areas' directions added up in double.
     let now = |v: usize| {
@@ -216,7 +276,7 @@ fn normals_brought_up_to_date_under_a_dab_are_the_surfaces_own() {
     };
     let mut fresh = 0;
     for v in 0..mesh.vertex_count() {
-        if mesh.start_pos(v as u32).distance(centre) < 0.1 {
+        if mesh.positions[v].distance(centre) < 0.1 {
             assert_eq!(mesh.normals[v], now(v), "vertex {v}");
             fresh += usize::from(stale[v] != now(v));
         } else {
@@ -328,7 +388,7 @@ fn the_brushes_start_as_they_should() {
     let s = Settings::default();
     for b in Brush::ALL {
         let bs = s.per_brush[b.index()];
-        assert!(!bs.accumulate, "{}", b.name());
+        assert_eq!(bs.accumulate, matches!(b, Brush::Standard | Brush::Inflate), "{}", b.name());
         let relax = if b == Brush::Inflate { DEFAULT_RELAX_NORMALS } else { 0.0 };
         let steady = if matches!(b, Brush::Clay | Brush::Flatten) { DEFAULT_STEADY_PLANE } else { 0.0 };
         assert_eq!((bs.relax_normals, bs.steady_plane), (relax, steady), "{}", b.name());

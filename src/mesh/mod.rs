@@ -1157,28 +1157,29 @@ impl Mesh {
     }
 
     /// Brings up to date with where the vertices are now the normals of the
-    /// vertices owned by `leaves` whose stroke-start places are within
-    /// `radius` of `center`, on all threads, leaf by leaf: for a brush that
-    /// pushes along the normals dab after dab (Inflate with Accumulate) and
-    /// cannot wait for the frame's [`Self::flush_normals`]. Only the leaves
-    /// something has moved since that flush are looked at, and they are left
-    /// for it to do again, with what hangs on them (the renderer's copy,
-    /// curvature). Summed in double as every normal is, so a vertex and its
-    /// mirror twin agree.
-    pub fn refresh_normals_within(&mut self, leaves: &[u32], center: Vec3, radius: f32) {
-        if !self.pending_normals.any() {
-            return;
-        }
+    /// vertices within `radius` of `center`, on all threads, leaf by leaf: for
+    /// a brush that pushes along the normals dab after dab and rides the
+    /// surface it has built (Standard and Inflate with Accumulate), and cannot
+    /// wait for the frame's [`Self::flush_normals`]. They are left for that
+    /// to do again, with what hangs on them (the renderer's copy, curvature).
+    ///
+    /// Every vertex there, whether or not its leaf has moved since that flush:
+    /// a vertex that has not moved beside a leaf that has still turns, and
+    /// which vertices share a leaf has nothing to do with the mirror, so
+    /// going by the leaves let mirror twins read different normals. Summed in
+    /// double as every normal is, so a vertex and its mirror twin agree.
+    pub fn refresh_normals_within(&mut self, center: Vec3, radius: f32) {
         let r2 = radius * radius;
-        let stale: Vec<u32> = leaves.iter().copied().filter(|&l| self.pending_normals.get(l as usize)).collect();
+        let mut stale = Vec::new();
+        self.bvh.leaves_in_sphere(center, radius, &mut stale);
+        stale.sort_unstable();
+        stale.dedup();
         let (positions, indices, vt, bvh) = (&self.positions, &self.indices, &self.vt, &self.bvh);
-        let (stamp, orig_pos, stroke_id, in_stroke) = (&self.stamp, &self.orig_pos, self.stroke_id, self.in_stroke);
         let out = SharedMut::new(&mut self.normals);
         let refresh = |&l: &u32| {
             let leaf = &bvh.leaves[l as usize];
             for v in leaf.vert_start as usize..leaf.vert_end as usize {
-                let start = if in_stroke && stamp[v] == stroke_id { orig_pos[v] } else { positions[v] };
-                if start.distance_squared(center) >= r2 {
+                if positions[v].distance_squared(center) >= r2 {
                     continue;
                 }
                 // SAFETY: every leaf owns a disjoint vertex range, and each

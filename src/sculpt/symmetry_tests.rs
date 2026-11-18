@@ -609,7 +609,9 @@ impl Tip {
         let mut sculptor = sculptor_with(self.brush());
         sculptor.settings.current_mut().accumulate = matches!(self, Tip::ClayAccumulate | Tip::Inflate);
         if self == Tip::Inflate {
-            sculptor.settings.current_mut().strength = Settings::default().current().strength;
+            // As big a step as these tests were written with.
+            sculptor.settings.current_mut().strength =
+                strength::from_old_piling(Brush::Inflate, Settings::default().current().strength);
         }
         // Front Facing as these tests were written with: off. It has a test
         // of its own (`a_radial_stroke_with_front_facing_only_stays_symmetric`).

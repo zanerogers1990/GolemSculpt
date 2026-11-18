@@ -147,15 +147,21 @@ fn one_pass(brush: Brush, strength: f32) -> f32 {
 }
 
 /// The Strength slider spans its range on the brushes that build: one pass
-/// at full pressure builds about a hundredth of the radius at 10%, a tenth
-/// at 50% and a third at 100% (as `--brush-feel` measures on a finer ball).
+/// of Layer at full pressure builds about a hundredth of the radius at 10%,
+/// a tenth at 50% and a third at 100% (as `--brush-feel` measures on a finer
+/// ball), and Standard and Inflate go in straight proportion to it, about
+/// 0.4 and a third of the radius at 100%.
 #[test]
 fn strength_spans_the_slider_for_the_brushes_that_build() {
-    for brush in [Brush::Standard, Brush::Inflate, Brush::Layer] {
-        let [low, mid, high] = [0.1, 0.5, 1.0].map(|s| one_pass(brush, s));
-        assert!((0.003..0.03).contains(&low), "{brush:?} at 10% built {low}");
-        assert!((0.06..0.16).contains(&mid), "{brush:?} at 50% built {mid}");
-        assert!((0.14..0.4).contains(&high), "{brush:?} at 100% built {high}");
+    let [low, mid, high] = [0.1, 0.5, 1.0].map(|s| one_pass(Brush::Layer, s));
+    assert!((0.003..0.03).contains(&low), "Layer at 10% built {low}");
+    assert!((0.06..0.16).contains(&mid), "Layer at 50% built {mid}");
+    assert!((0.14..0.4).contains(&high), "Layer at 100% built {high}");
+    for (brush, top) in [(Brush::Standard, 0.4), (Brush::Inflate, 0.333)] {
+        for s in [0.1f32, 0.5, 1.0] {
+            let built = one_pass(brush, s);
+            assert!((built - top * s).abs() < 0.25 * top * s + 0.005, "{brush:?} at {s} built {built}");
+        }
     }
 }
 
@@ -183,11 +189,14 @@ fn shipped_brushes_keep_what_their_strength_did() {
         // Rake is Standard without Accumulate, which builds each stroke to a
         // height now: its Strength was set by measuring it (`--brush-feel`),
         // and its lines stand as deep after one pass as they did.
-        ("Surface Noise", 0.045),
         ("Spread", 0.3),
     ] {
         assert!((strength(name) - old).abs() < 0.003, "{name} works at {} where it worked at {old}", strength(name));
     }
+    // Surface Noise is Standard with Accumulate, whose Strength goes straight
+    // through: each print adds what it did when it was made.
+    let noise = library.record(library.named("Surface Noise").unwrap(), &s).settings.strength;
+    assert!((noise * kernels::STANDARD_STEP - 0.5 * 0.045).abs() < 0.001, "{noise}");
     // A dragged print's Strength is its height and was not mapped.
     let scales = library.record(library.named("Scales").unwrap(), &s);
     assert_eq!(scales.settings.strength, 0.5);

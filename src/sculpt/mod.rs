@@ -267,8 +267,14 @@ impl Brush {
     /// it stands over the dab's centre: measured from the surface Flatten
     /// had just cut down, each dab's plane stood higher over its centre than
     /// the last, and the steadied plane cut deeper and deeper.
-    fn uses_start_surface(self) -> bool {
-        matches!(self, Brush::Standard | Brush::Clay | Brush::Flatten)
+    ///
+    /// Standard with Accumulate rides the surface as it is now instead.
+    fn uses_start_surface(self, accumulate: bool) -> bool {
+        match self {
+            Brush::Standard => !accumulate,
+            Brush::Clay | Brush::Flatten => true,
+            _ => false,
+        }
     }
 }
 
@@ -555,10 +561,14 @@ impl Default for Settings {
         for b in Brush::ALL {
             per_brush[b.index()].spacing = b.default_spacing();
         }
-        // Accumulate starts off for every brush that has it (it was on for
-        // Standard, Inflate and Clay until 2026-10-21): a stroke builds to a
-        // height and no further however often it crosses itself, and the
-        // next stroke builds on top, as in Nomad and Blender.
+        // Accumulate starts on for Standard and Inflate: every pass adds in
+        // proportion to Strength, and going over a place again goes on
+        // building (off from 2026-10-21 to 2026-10-31, when the steps were
+        // far too big for it). Off for Clay and Crease, which Clay Strips and
+        // Dam Standard are made of.
+        for b in [Brush::Standard, Brush::Inflate] {
+            per_brush[b.index()].accumulate = true;
+        }
         // Inflate's pushes evened out a little, as Nomad's Relax (Normal).
         per_brush[Brush::Inflate.index()].relax_normals = DEFAULT_RELAX_NORMALS;
         // Clay and Flatten steady their plane along the stroke.
@@ -775,6 +785,12 @@ pub struct PointerSample {
 #[derive(Clone, Copy)]
 struct Knot {
     pos: Vec3,
+    /// Where the distance between dabs is measured from: `pos`, or for a
+    /// brush that rides what it builds, the same place on the surface as the
+    /// stroke found it. Measured over what it had built, a stroke's own rise
+    /// made its path longer, the longer path more dabs, and those a taller
+    /// rise: at 100% a pass stood half as tall again as it should.
+    under: Vec3,
     /// The way the surface faces here, toward the pen: turned round where
     /// the pen is on the back of it (`side` -1, see `kernels::Dab::side`).
     normal: Vec3,
@@ -797,12 +813,16 @@ struct Seg {
     k2: Knot,
     p0: Vec3,
     p3: Vec3,
+    /// The same control points for the `under` of the knots.
+    under0: Vec3,
+    under3: Vec3,
     /// The curve is walked as this many straight pieces.
     pieces: usize,
     /// The piece the walk is on (from 1), where that piece starts, and how
     /// far along it the walk has come.
     piece: usize,
     from: Vec3,
+    under_from: Vec3,
     walked: f32,
     /// Whether that piece's length has been added to the frame's travel.
     counted: bool,
@@ -1379,7 +1399,7 @@ impl Sculptor {
         Some(Params {
             brush: kernel,
             sign,
-            strength: strength::effective(kernel, own.strength),
+            strength: strength::in_stroke(kernel, own.strength, own.accumulate),
             accumulate: own.accumulate,
             build_up: own.build_up,
             smooth_mode: own.smooth_mode,
@@ -1488,7 +1508,7 @@ impl Sculptor {
         // mask is painted at the slider's own number, and a dragged print's
         // Strength is its height.
         if !mask && !params.prints() {
-            params.strength = strength::effective(brush, bs.strength);
+            params.strength = strength::in_stroke(brush, bs.strength, bs.accumulate);
         }
         let zadd = self.zadd_params(&params, invert);
         self.pen_stroke = sample.pressure.is_some();
@@ -1811,7 +1831,7 @@ impl Sculptor {
             return;
         }
 
-        let from_start = !p.mask && p.brush.uses_start_surface();
+        let from_start = !p.mask && p.brush.uses_start_surface(p.accumulate);
         let hit = if from_start { mesh.raycast_start(origin, dir) } else { mesh.raycast(origin, dir) };
         let Some(hit) = hit else {
             // Off the mesh: the stroke pauses and restarts with a fresh first
@@ -1845,7 +1865,8 @@ impl Sculptor {
         // does not turn the whole dab away.
         let side = if mesh.hit_from_behind(&hit, dir, from_start) { -1.0 } else { 1.0 };
         let normal = mesh.hit_normal(&hit, from_start) * side;
-        let mut knot = Knot { pos: hit.pos, normal, side, dir: Vec3::ZERO, pressure, px };
+        let under = if p.rides() { mesh.raycast_start(origin, dir).map_or(hit.pos, |under| under.pos) } else { hit.pos };
+        let mut knot = Knot { pos: hit.pos, under, normal, side, dir: Vec3::ZERO, pressure, px };
         if !p.mask && p.brush.follows_travel() {
             // The groove's frame follows the stroke with a little lag so it
             // neither jitters nor chases its own wall. It is taken over the
@@ -1970,11 +1991,13 @@ impl Sculptor {
         let k2 = stroke.knots[i + 1];
         let p0 = if i > 0 { stroke.knots[i - 1].pos } else { k1.pos * 2.0 - k2.pos };
         let p3 = if i + 2 < n { stroke.knots[i + 2].pos } else { k2.pos * 2.0 - k1.pos };
+        let under0 = if i > 0 { stroke.knots[i - 1].under } else { k1.under * 2.0 - k2.under };
+        let under3 = if i + 2 < n { stroke.knots[i + 2].under } else { k2.under * 2.0 - k1.under };
         let chord = k1.pos.distance(k2.pos);
         // Pieces a quarter as long as the closest the dabs come along it.
         let gap = stroke.gap_at(k1.pressure).min(stroke.gap_at(k2.pressure));
         let pieces = ((chord / (gap * 0.25)).ceil() as usize).clamp(2, 64);
-        Seg { k1, k2, p0, p3, pieces, piece: 1, from: k1.pos, walked: 0.0, counted: false }
+        Seg { k1, k2, p0, p3, under0, under3, pieces, piece: 1, from: k1.pos, under_from: k1.under, walked: 0.0, counted: false }
     }
 
     /// Walks the stretch in hand, laying a dab each time the distance since
@@ -1985,7 +2008,8 @@ impl Sculptor {
         while seg.piece <= seg.pieces {
             let s = seg.piece as f32 / seg.pieces as f32;
             let q = catmull_rom(seg.p0, seg.k1.pos, seg.k2.pos, seg.p3, s);
-            let len = seg.from.distance(q);
+            let under = catmull_rom(seg.under0, seg.k1.under, seg.k2.under, seg.under3, s);
+            let len = seg.under_from.distance(under);
             if !seg.counted {
                 stroke.travel_this_frame += len;
                 seg.counted = true;
@@ -2010,7 +2034,7 @@ impl Sculptor {
                 Self::emit(mesh, stroke, pos, normal, side, seg.k2.dir, pressure, false, count);
             }
             stroke.carry += len - seg.walked;
-            (seg.from, seg.piece, seg.walked, seg.counted) = (q, seg.piece + 1, 0.0, false);
+            (seg.from, seg.under_from, seg.piece, seg.walked, seg.counted) = (q, under, seg.piece + 1, 0.0, false);
         }
         true
     }
@@ -2117,7 +2141,7 @@ impl Sculptor {
         let (across, along) = normal.any_orthonormal_pair();
         let thrown = pos + across * off.x + along * off.y;
         let origin = thrown + normal * p.radius;
-        let from_start = !p.mask && p.brush.uses_start_surface();
+        let from_start = !p.mask && p.brush.uses_start_surface(p.accumulate);
         let hit = if from_start { mesh.raycast_start(origin, -normal) } else { mesh.raycast(origin, -normal) };
         match hit {
             Some(hit) if hit.pos.distance(thrown) <= p.radius => hit.pos,
@@ -2149,6 +2173,14 @@ impl Sculptor {
     fn apply_symmetric(mesh: &mut Mesh, stroke: &mut Stroke, p: &Params, dab: Dab) {
         let p = *p;
         let reach = p.reach(&dab);
+        // The normals every copy will read, all before any copy moves: one
+        // brought up to date after its twin had moved would read what its
+        // twin's did nearby, and the two sides would part.
+        if p.rides() {
+            for &op in &stroke.ops {
+                mesh.refresh_normals_within(op.apply_point(dab.center), p.radius * kernels::REFRESH_REACH);
+            }
+        }
         if !p.mask && p.brush == Brush::Paint {
             // Zadd: the sculpting kernel first, under the same symmetry, then the paint on what it raised.
             if let Some(z) = stroke.zadd {

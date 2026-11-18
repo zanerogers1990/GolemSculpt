@@ -326,6 +326,17 @@ pub fn parse(text: &str, fallback_name: &str) -> Result<Read, String> {
                 }
             }
         }
+        if (2..5).contains(&version) && !has("accumulate") && matches!(kernel, Brush::Standard | Brush::Inflate) {
+            // Accumulate started off then: a file that does not say keeps it so.
+            record.settings.accumulate = false;
+        }
+        if version < 5 && record.settings.accumulate && !prints && strength.is_some() {
+            // Each dab of Standard and Inflate with Accumulate adds a step
+            // in proportion to Strength now: the Strength that builds as
+            // this one did. (Not Accumulate itself: this brush was made to
+            // do what it does, off or on.)
+            record.settings.strength = crate::sculpt::strength::from_old_piling(kernel, record.settings.strength);
+        }
         if version < 3 {
             // Older than Auto Smooth, Even Out and Snake Hook's Thickness:
             // the brush did without them, and still does.

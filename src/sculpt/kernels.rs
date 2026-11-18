@@ -239,7 +239,7 @@ pub fn height_over(mesh: &Mesh, p: &Params, centre: Vec3, normal: Vec3) -> Optio
     if !p.mask && p.brush == Brush::SnakeHook {
         return None;
     }
-    let from_start = !p.mask && p.brush.uses_start_surface();
+    let from_start = !p.mask && p.brush.uses_start_surface(p.accumulate);
     let origin = centre + normal * p.radius;
     let hit = if from_start { mesh.raycast_start(origin, -normal) } else { mesh.raycast(origin, -normal) }?;
     let height = hit.pos.distance(origin) - p.radius;
@@ -291,6 +291,14 @@ impl Params {
     /// here (`input::PenPressure`), which is the cure for jitter.
     fn e_acc(&self, pressure: f32) -> f32 {
         self.strength * pressure * self.build_up
+    }
+
+    /// Whether this brush rides what it builds: its dabs land on the surface
+    /// as it is now, and read the normals there as they are now (Standard and
+    /// Inflate with Accumulate, see [`standard`]). The stroke brings those
+    /// normals up to date before each dab (`Sculptor::apply_symmetric`).
+    pub(super) fn rides(&self) -> bool {
+        !self.mask && self.accumulate && !self.prints() && matches!(self.brush, Brush::Standard | Brush::Inflate)
     }
 
     /// Whether the stroke is one print of the brush's alpha, placed by
@@ -896,10 +904,21 @@ const INFLATE_HEIGHT: f32 = 0.33;
 /// tenths of the way, and a second most of the rest.
 const SEEK_RATE: f32 = 0.35;
 
-/// Inflate brings the normals within this many radii of the dab up to date
-/// before it pushes along them: the ring, and the neighbours just outside it
-/// that Relax Normals reads.
-const REFRESH_REACH: f32 = 1.25;
+/// How far a dab of Standard with Accumulate moves the surface at full
+/// Strength and full pressure under its middle, at the tuned spacing, as a
+/// share of the radius. Five dabs cover each point of a stroke at that
+/// spacing and the falloff's mean across them is a half, so one pass stands
+/// at 0.4 radii at 100%, 0.2 at 50% and 0.04 at 10%; each pass adds as much.
+pub(super) const STANDARD_STEP: f32 = 0.08;
+
+/// The same for Inflate: one pass swells the surface by a third of a radius
+/// at 100%.
+pub(super) const INFLATE_STEP: f32 = 0.0667;
+
+/// Standard and Inflate with Accumulate bring the normals within this many
+/// radii of the dab up to date before they read them: the ring, and the
+/// neighbours just outside it that Relax Normals reads.
+pub(super) const REFRESH_REACH: f32 = 1.25;
 
 /// Where a vertex at `pos` goes under one dab of a brush that raises the
 /// surface to a height for the stroke and no further (Standard and Inflate
@@ -975,32 +994,44 @@ fn inflate_weight(p: &Params, d: &Dab, vt: &StrokeVertex) -> f32 {
         * p.printed(d, vt.start - d.center)
 }
 
+/// A vertex's weight under a dab of a brush that rides the surface as it is
+/// now (Standard and Inflate with Accumulate, see [`standard`]).
+#[inline]
+fn riding_weight(p: &Params, d: &Dab, vt: &StrokeVertex, built_in: impl FnOnce(f32) -> f32) -> f32 {
+    let r = p.radius;
+    let d2 = vt.pos.distance_squared(d.center);
+    if d2 >= r * r {
+        return 0.0;
+    }
+    p.falloff.at(d2.sqrt() / r, built_in)
+        * (1.0 - vt.mask)
+        * facing(p.front_facing, d.sided(vt.normal), vt.pos, d.cam)
+        * p.printed(d, vt.pos - d.center)
+}
+
 /// Inflate: swells the surface out along its own normals.
 ///
-/// Without Accumulate (as it starts) each vertex rises along its own normal
-/// as the stroke found it, evened out with its neighbours' by Relax Normals,
-/// to a height for the stroke and no further, as Standard does
-/// ([`raised`]). (It once drew every vertex toward one point above the dab,
-/// which gathered the surface in under the brush.)
-///
-/// With Accumulate every dab pushes each vertex a step along its normal as
-/// the surface is now. The normals under the dab are brought up to date
-/// first ([`Mesh::refresh_normals_within`]): left for the frame to do, a
-/// push went the way the surface faced several dabs before, and a strong
+/// With Accumulate (as it starts) every dab pushes each vertex a step along
+/// its normal as the surface is now, and the brush rides what it has built
+/// ([`riding_weight`]). The normals under the dab have been brought up to
+/// date ([`Params::rides`]): left for the frame to do, a push went the way
+/// the surface faced several dabs before, and a strong
 /// stroke split the surface into spikes. They are evened out by Relax
 /// Normals too (Nomad's Relax (Normal)), so neighbours do not push apart.
 ///
-/// Either way a vertex is weighed by where the stroke found it, so the
-/// footprint stays where it was laid as the surface swells.
+/// Without Accumulate each vertex rises along its own normal as the stroke
+/// found it, evened out with its neighbours' by Relax Normals, to a height
+/// for the stroke and no further, as Standard does ([`raised`]), weighed by
+/// where the stroke found it. (It once drew every vertex toward one point
+/// above the dab, which gathered the surface in under the brush.)
 fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
     let relax = p.relax_normals.clamp(0.0, 1.0);
     if p.accumulate {
-        mesh.refresh_normals_within(leaves, d.center, r * REFRESH_REACH);
-        let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
+        let rate = p.sign * p.e_acc(d.pressure) * INFLATE_STEP * r * p.dose;
         if relax <= 0.0 {
             return mesh.move_vertices(leaves, |_, vt| {
-                let w = inflate_weight(p, d, vt);
+                let w = riding_weight(p, d, vt, smooth);
                 (w > 0.0).then(|| vt.pos + d.sided(vt.normal) * (w * rate))
             });
         }
@@ -1008,7 +1039,7 @@ fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut S
             let mesh = &*mesh;
             let r2 = r * r;
             fill(mesh, leaves, &mut scratch.starts, &mut scratch.targets, |_, v| {
-                if mesh.start_pos(v).distance_squared(d.center) >= r2 {
+                if mesh.positions[v as usize].distance_squared(d.center) >= r2 {
                     return Vec3::ZERO;
                 }
                 relaxed(mesh, v, relax, |o| mesh.normals[o as usize])
@@ -1016,7 +1047,7 @@ fn inflate(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut S
         }
         let normals = &scratch.targets;
         return mesh.move_vertices(leaves, |at, vt| {
-            let w = inflate_weight(p, d, vt);
+            let w = riding_weight(p, d, vt, smooth);
             (w > 0.0).then(|| vt.pos + d.sided(normals[at]) * (w * rate))
         });
     }
@@ -1124,19 +1155,27 @@ fn prepare_relaxed_normals(
 }
 /// Standard: raises a soft, rounded stroke.
 ///
-/// Every vertex is weighed by where the stroke found it, and each dab has
-/// one direction: the normals under it as the stroke found the surface,
-/// averaged ([`start_footprint_normal`]). Weighed where they are now, the
-/// vertices a dab raised left its ring as they rose, the next dab found the
-/// bump's flank instead, and passes over the same place peaked into a
-/// ridge.
+/// With Accumulate (as it starts) every dab adds a step in proportion to
+/// Strength and the pen's pressure, whichever way the surface faces under it
+/// now ([`Params::rides`]), and the brush rides what it has built
+/// ([`riding_weight`]). So going over a place
+/// again goes on adding, as clay does, and the build narrows as it climbs.
 ///
-/// Without Accumulate (as it starts) a stroke raises the surface to a height
-/// and no further ([`raised`]): Strength and the pen's pressure say how
-/// tall, Build-Up how quickly the stroke gets there. With it every dab adds
-/// a step, as Standard always did.
+/// Without Accumulate a stroke raises the surface to a height and no further
+/// ([`raised`]): Strength and the pen's pressure say how tall, Build-Up how
+/// quickly the stroke gets there. Every vertex is weighed by where the stroke
+/// found it, and each dab has one direction: the normals under it as the
+/// stroke found the surface, averaged ([`start_footprint_normal`]).
 fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut Scratch) {
     let r = p.radius;
+    if p.accumulate {
+        let dir = footprint_normal(mesh, d.center, r, false, d.sided(d.normal)).map(|n| d.sided(n)).unwrap_or(d.normal);
+        let rate = p.sign * p.e_acc(d.pressure) * STANDARD_STEP * r * p.dose;
+        return mesh.move_vertices(leaves, |_, vt| {
+            let w = riding_weight(p, d, vt, smooth);
+            (w > 0.0).then(|| vt.pos + dir * (rate * w))
+        });
+    }
     let r2 = r * r;
     // The normals as they are stored, averaged over the sheet facing the
     // dab's way as they would have it, and turned to face the pen with it.
@@ -1153,13 +1192,6 @@ fn standard(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], scratch: &mut 
             * facing(p.front_facing, d.sided(vt.normal), vt.pos, d.cam)
             * p.printed(d, vt.start - d.center)
     };
-    if p.accumulate {
-        let rate = p.sign * p.e_acc(d.pressure) * 1.25 * 0.1 * (r / REF_RADIUS) * p.dose;
-        return mesh.move_vertices(leaves, |_, vt| {
-            let w = weight(vt);
-            (w > 0.0).then(|| vt.pos + dir * (rate * w))
-        });
-    }
     let height = p.sign * r * STANDARD_HEIGHT;
     let (full, k) = (seek_full(p, d, Brush::Standard), seek_rate(p));
     // No vertex is further from where the stroke found it than the height.

@@ -10,7 +10,7 @@
 
 use super::Record;
 use crate::sculpt::alpha::{self, AlphaSettings};
-use crate::sculpt::strength::from_old;
+use crate::sculpt::strength::{from_old, from_old_piling};
 use crate::sculpt::{Brush, FalloffCurve, FalloffPreset, FlattenMode, OLD_PRESSURE_STRENGTH, SmoothMode};
 
 /// The shipped brushes that start on the hold-Space wheel: Clay Strips, in
@@ -241,7 +241,7 @@ const SHIPPED: [Shipped; 17] = [
             r.alpha = alpha("Noise", AlphaSettings { random_rotation: 180.0, scale: 1.6, ..PLAIN });
             // Light and close: at twice the spacing the prints stood apart
             // as clumps with bare surface between them.
-            r.settings.strength = from_old(Brush::Standard, 0.045);
+            r.settings.strength = from_old_piling(Brush::Standard, from_old(Brush::Standard, 0.045));
             // Accumulate on, as Standard started until 2026-10-21: every
             // print adds its noise to what is there.
             r.settings.accumulate = true;

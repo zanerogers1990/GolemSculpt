@@ -67,7 +67,46 @@ fn version_2_file(settings: &Settings) -> serde_json::Value {
             tuning.remove(key);
         }
     }
+    // Accumulate started off on every brush then.
+    for b in [Brush::Standard, Brush::Inflate] {
+        file["brush"]["brushes"][b.name()]["accumulate"] = false.into();
+    }
     file
+}
+
+/// A settings file from before 2026-10-31: Standard and Inflate come on with
+/// their Strength as it is, one with Accumulate chosen on keeps what it built,
+/// Lazy Mouse goes off on every brush, Move follows the pen all the way, and
+/// that happens once: a Lazy Mouse or a Move set afterwards stays.
+#[test]
+fn a_version_3_file_builds_with_every_pass_once() {
+    let mut chosen = Settings::default();
+    for b in &mut chosen.per_brush {
+        (b.lazy_mouse, b.lazy_radius) = (true, 10.0);
+    }
+    chosen.per_brush[Brush::Standard.index()].strength = 0.5;
+    chosen.per_brush[Brush::Inflate.index()].strength = 0.4;
+    chosen.per_brush[Brush::Move.index()].strength = 0.475;
+    let mut file = serde_json::to_value(Prefs { brush: BrushPrefs::of(&chosen), ..Prefs::default() }).unwrap();
+    file["brush"]["feel_version"] = 3.into();
+    file["brush"]["brushes"]["Standard"]["accumulate"] = false.into();
+    let s = read(&file);
+    let at = |b: Brush| s.per_brush[b.index()];
+    assert_eq!((at(Brush::Standard).accumulate, at(Brush::Standard).strength), (true, 0.5));
+    assert!(at(Brush::Inflate).accumulate);
+    assert_eq!(at(Brush::Inflate).strength, strength::from_old_piling(Brush::Inflate, 0.4), "on was chosen");
+    assert_eq!(at(Brush::Move).strength, 1.0);
+    assert!(Brush::ALL.iter().all(|b| !at(*b).lazy_mouse));
+    assert_eq!(at(Brush::Clay).lazy_radius, 10.0, "the rope's length is kept for when it comes on again");
+
+    let mut again = s.clone();
+    again.per_brush[Brush::Clay.index()].lazy_mouse = true;
+    again.per_brush[Brush::Move.index()].strength = 0.6;
+    let written = serde_json::to_value(Prefs { brush: BrushPrefs::of(&again), ..Prefs::default() }).unwrap();
+    let back = read(&written);
+    assert!(back.per_brush[Brush::Clay.index()].lazy_mouse);
+    assert_eq!(back.per_brush[Brush::Move.index()].strength, 0.6);
+    assert_eq!(back.per_brush[Brush::Standard.index()].strength, 0.5);
 }
 
 /// A version 2 file: Clay Depth's 0.3 was where it started and becomes
@@ -152,9 +191,9 @@ fn a_version_1_file_has_accumulate_go_off_once() {
     chosen.per_brush[Brush::Crease.index()].accumulate = true;
     let s = read(&version_1_file(&chosen));
     let at = |b: Brush| s.per_brush[b.index()];
-    for b in ACCUMULATED {
-        assert!(!at(b).accumulate, "{}", b.name());
-    }
+    // Off once, for Clay; Standard and Inflate came on again at version 4.
+    assert!(!at(Brush::Clay).accumulate);
+    assert!(at(Brush::Standard).accumulate && at(Brush::Inflate).accumulate);
     assert!(at(Brush::Crease).accumulate, "Crease's started off: on was chosen");
     assert_eq!((at(Brush::Standard).strength, at(Brush::Clay).strength), (0.7, 0.35));
     assert!(!at(Brush::Inflate).front_facing);
@@ -167,14 +206,15 @@ fn a_version_1_file_has_accumulate_go_off_once() {
 }
 
 /// Standard with Accumulate chosen off, in a file from before version 2:
-/// its Strength becomes the one that builds a pass about as tall as it did.
+/// its Strength became the one that built a pass about as tall as it did,
+/// and it comes on at version 4 with that number.
 #[test]
 fn a_standard_set_to_build_to_a_height_keeps_its_height() {
     let mut file = old_file();
     file["brush"]["brushes"]["Standard"]["accumulate"] = false.into();
     file["brush"]["brushes"]["Standard"]["strength"] = 0.3.into();
     let got = read(&file).per_brush[Brush::Standard.index()];
-    assert!(!got.accumulate);
+    assert!(got.accumulate);
     assert!((got.strength - strength::from_old_seeking(0.3)).abs() < 1e-6, "{}", got.strength);
     // A version 1 file says it in the slider's units of then.
     let mut s = Settings::default();
@@ -215,7 +255,8 @@ fn an_old_files_chosen_values_keep_what_they_did() {
     assert_eq!(at(Brush::SnakeHook).strength, 1.0);
     assert_eq!(at(Brush::Smooth).pressure_strength, 0.5);
     assert!(at(Brush::Crease).front_facing);
-    assert_eq!(at(Brush::Move).strength, 0.3);
+    // Move's Strength goes to the whole of the pen's travel once, at version 4.
+    assert_eq!(at(Brush::Move).strength, 1.0);
 }
 
 /// Brought over once: what this version writes says so, and reads back as
