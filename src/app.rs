@@ -69,6 +69,7 @@ mod mirror_copies;
 mod new_scene;
 mod older;
 mod apply_scale;
+mod behind;
 mod origin;
 mod pen;
 mod pivot;
@@ -315,6 +316,9 @@ struct Input {
     turn_about: Option<Vec3>,
     /// The box a Shift + drag is drawing while mask painting (app/mask_gestures.rs).
     mask_box: Option<sculpt_region::QuickBox>,
+    /// A press while mask painting that may turn out to be a tap, which
+    /// softens or hardens the mask (app/mask_gestures.rs).
+    mask_tap: Option<mask_gestures::MaskTap>,
 }
 
 struct Running {
@@ -351,6 +355,8 @@ struct Running {
     decimate: decimate::State,
     /// A Remesh at work in the background (see app/remesh_job.rs).
     remesh: remesh_job::State,
+    /// Quad Remesh, Unwrap UVs or Project Detail at work in the background (app/behind.rs).
+    behind: behind::State,
     /// A Check Symmetry, Make Symmetric or Symmetry Cleanup at work in the
     /// background (see app/symmetry_repair.rs).
     symmetry_repair: symmetry_repair::State,
@@ -671,6 +677,7 @@ impl Running {
                 held: Vec::new(),
                 turn_about: None,
                 mask_box: None,
+                mask_tap: None,
             },
             view,
             local: view,
@@ -686,6 +693,7 @@ impl Running {
             print_watch: Default::default(),
             decimate: Default::default(),
             remesh: Default::default(),
+            behind: Default::default(),
             symmetry_repair: Default::default(),
             apply_scale: Default::default(),
             bake: None,
@@ -1034,6 +1042,7 @@ impl Running {
         }
         let mods = self.input.mods;
         let pos = self.input.pointer;
+        let masked_before = self.mask_tap_masked_before(button);
         self.input.drag = match button {
             MouseButton::Middle => Drag::Pan,
             MouseButton::Left if mods.alt_key() && mods.control_key() => Drag::Zoom,
@@ -1103,6 +1112,8 @@ impl Running {
             }
             _ => Drag::Ui,
         };
+        // A tap while mask painting softens the mask, an Alt tap hardens it (app/mask_gestures.rs).
+        self.mask_tap_pressed(button, pos, masked_before);
         if matches!(self.input.drag, Drag::Orbit | Drag::Pan | Drag::Zoom) {
             self.navigation_began();
         }
@@ -1117,7 +1128,9 @@ impl Running {
             let per_point = self.egui_ctx.pixels_per_point();
             self.input.ui_tap = echo::Tap::ending(pressed_at, self.input.pointer, per_point);
         }
-        if self.input.drag == Drag::Sculpt {
+        // A mask tap puts back the dab its press left and softens or hardens instead.
+        let tapped = self.mask_tap_released();
+        if self.input.drag == Drag::Sculpt && !tapped {
             self.finish_stroke();
         }
         self.mask_box_released();
@@ -1477,23 +1490,8 @@ impl Running {
             }
             // In the background (app/remesh_job.rs).
             Action::Remesh => self.remesh_start(),
-            Action::QuadRemesh => {
-                let target = self.doc.opts.quad_target as usize;
-                // A quad remesh keeps the holes a model has, and can leave new ones.
-                let was_closed = crate::printable::census(&self.doc.mesh).is_closed();
-                match crate::quadremesh::quad_remesh_mesh(&self.doc.mesh, target) {
-                    Ok((mesh, report)) => {
-                        self.replace_mesh(mesh, true);
-                        // The quads are the point: show them.
-                        self.doc.opts.wireframe = true;
-                        self.toast("Quad Remesh");
-                        let closed = report.census().is_closed();
-                        let text = format!("Quad remesh: {}.{}", report.summary(), report.advice(was_closed));
-                        self.status(text, closed);
-                    }
-                    Err(e) => self.status(e, false),
-                }
-            }
+            // In the background (app/behind.rs).
+            Action::QuadRemesh => self.quad_remesh_start(),
             Action::CutAndMirror { axis, from_positive } => self.cut_and_mirror(axis, from_positive),
             // The rest of the Symmetry card's repairs are in app/symmetry_repair.rs.
             Action::CheckSymmetry { axis } => self.check_symmetry(axis),
@@ -1528,6 +1526,9 @@ impl Running {
                     }),
                     MaskOp::Grow => self.doc.mesh.remap_mask(|mesh, v, _| mesh.mask_ring_extreme(v, true)),
                     MaskOp::Shrink => self.doc.mesh.remap_mask(|mesh, v, _| mesh.mask_ring_extreme(v, false)),
+                    // A tap and an Alt tap while mask painting (app/mask_gestures.rs, mesh/mask_edge.rs).
+                    MaskOp::Soften => self.doc.mesh.soften_mask(),
+                    MaskOp::Harden => self.doc.mesh.harden_mask(),
                 };
                 if let Some(delta) = delta {
                     self.doc.history.push_stroke(delta);
@@ -1633,7 +1634,8 @@ impl Running {
             Action::Open => self.open_action(),
             Action::Import => self.import_action(),
             Action::Save | Action::SaveAs => {
-                self.save_action(action == Action::SaveAs);
+                // Written in the background (app/files/writing.rs).
+                self.save_action_behind(action == Action::SaveAs);
             }
             Action::OpenRecent(path) => self.open_recent(path),
             Action::OpenAs(path, how) => self.open_as(path, how),
@@ -2029,6 +2031,8 @@ impl Running {
         // A Decimate or a Remesh that has finished in the background takes the model's place.
         self.decimate_frame();
         self.remesh_frame();
+        // So do Quad Remesh, Unwrap UVs and Project Detail (app/behind.rs).
+        self.behind_frame();
         // So do the Symmetry card's repairs (app/symmetry_repair.rs).
         self.symmetry_repair_frame();
         // A Bake Maps that has finished says where its files went (app/bake.rs).

@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use glam::{Vec2, Vec3};
+use glam::{EulerRot, Quat, Vec2, Vec3};
 use sculpt_toolkit::Loss;
 use serde_json::{Value, json};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
@@ -257,6 +257,21 @@ fn round(v: f32) -> f64 {
 
 fn point(v: Vec3) -> [f64; 3] {
     [round(v.x), round(v.y), round(v.z)]
+}
+
+/// An object's turn as three angles in degrees: about the world's x axis
+/// first, then y, then z (what `edit_object` takes as `rotation`).
+fn turn_to_degrees(turn: Quat) -> [f64; 3] {
+    let (z, y, x) = turn.to_euler(EulerRot::ZYX);
+    // Float noise from the angles must not read as -0.
+    let clean = |radians: f32| round(radians.to_degrees()) + 0.0;
+    [clean(x), clean(y), clean(z)]
+}
+
+/// The inverse of [`turn_to_degrees`].
+fn turn_from_degrees(degrees: Vec3) -> Quat {
+    let radians = degrees * (std::f32::consts::PI / 180.0);
+    Quat::from_euler(EulerRot::ZYX, radians.z, radians.y, radians.x).normalize()
 }
 
 /// What `open_file` says instead of opening a sculpt over unsaved work.
@@ -621,6 +636,7 @@ impl Running {
                     "selected": doc.scene.is_selected(o.id),
                     "visible": o.visible,
                     "position": point(o.position),
+                    "rotation": turn_to_degrees(o.rotation),
                     "scale": point(o.scale),
                     "size": point(size),
                     "triangles": mesh.map_or(0, |m| m.live_triangle_count()),
@@ -1037,6 +1053,8 @@ impl Running {
             app.act(action);
             // The reply is about the remesh done, not one begun.
             app.remesh_wait();
+            // So with Quad Remesh, Unwrap UVs and Project Detail (app/behind.rs).
+            app.behind_wait();
         })
     }
 
@@ -1067,6 +1085,11 @@ impl Running {
     fn edit_object(&mut self, args: &Value) -> Result<String, String> {
         let id = self.object(args)?;
         let position = vec3(args, "position")?;
+        let rotation = vec3(args, "rotation")?.map(turn_from_degrees);
+        let scale = vec3(args, "scale")?;
+        if scale.is_some_and(|s| !s.is_finite() || s.abs().min_element() < 1e-4) {
+            return Err("scale must be three non-zero numbers: [x, y, z].".into());
+        }
         let (name, visible) = (text(args, "name"), flag(args, "visible"));
         let changed = self.edit_scene(|scene, _| {
             let name = name.filter(|n| scene.get(id).is_some_and(|o| o.name != *n)).map(|n| scene.unique_name(n));
@@ -1077,10 +1100,15 @@ impl Running {
             }
             object.visible = visible.unwrap_or(object.visible);
             object.position = position.unwrap_or(object.position);
+            object.rotation = rotation.unwrap_or(object.rotation);
+            object.scale = scale.unwrap_or(object.scale);
             *object != before
         });
         let Some(object) = self.doc.scene.get(id) else { return Err("That object is gone.".into()) };
-        let state = json!({ "id": id, "name": object.name, "visible": object.visible, "position": point(object.position) });
+        let state = json!({
+            "id": id, "name": object.name, "visible": object.visible, "position": point(object.position),
+            "rotation": turn_to_degrees(object.rotation), "scale": point(object.scale),
+        });
         Ok(if changed { state.to_string() } else { format!("Nothing changed: {state}") })
     }
 
@@ -1128,7 +1156,11 @@ impl Running {
         let native = is_native(&path);
         let lost = self.scaffolds_at_risk(Loss::SceneReplaced);
         may_open(native, self.unsaved(), &lost, flag(args, "discard").unwrap_or(false))?;
-        self.reported(|app| app.load(path, native))
+        // The reply is about the file put in place, not one being read (app/behind.rs).
+        self.reported(|app| {
+            app.load(path, native);
+            app.behind_wait();
+        })
     }
 
     fn save_file(&mut self, args: &Value) -> Result<String, String> {
@@ -1320,5 +1352,37 @@ mod tests {
         // And the refusal tells Claude what to do about it.
         let says = |words: &str| REPLACING_UNSAVED.contains(words);
         assert!(says("unsaved work") && says("Nothing was opened") && says("Ask the user") && says("discard: true"));
+    }
+
+    /// What `edit_object` takes as `rotation` and `get_state` gives back are
+    /// the same three angles: what is set reads out as set.
+    #[test]
+    fn a_turn_in_degrees_reads_back_as_it_was_given() {
+        for degrees in [[0.0, 0.0, 0.0], [-90.0, 0.0, 0.0], [90.0, 0.0, 0.0], [30.0, -45.0, 120.0], [0.0, 0.0, 180.0]] {
+            let turn = turn_from_degrees(Vec3::new(degrees[0] as f32, degrees[1] as f32, degrees[2] as f32));
+            // 180 and -180 are one turn: compare the turns, not the numbers.
+            let back = turn_to_degrees(turn);
+            let again = turn_from_degrees(Vec3::new(back[0] as f32, back[1] as f32, back[2] as f32));
+            assert!(turn.angle_between(again) < 1e-3, "{degrees:?} read back as {back:?}");
+        }
+    }
+
+    /// The order is the world's x first, then y, then z: a quarter turn about
+    /// x stands a thing that lies on its back (face up along +z, head along
+    /// +y) on its feet (face to -y, the front, head up along +z), and leaves
+    /// what is along x where it is.
+    #[test]
+    fn rotation_turns_about_the_worlds_x_first() {
+        let up = turn_from_degrees(Vec3::new(90.0, 0.0, 0.0));
+        assert!((up * Vec3::Z - Vec3::NEG_Y).length() < 1e-5, "{:?}", up * Vec3::Z);
+        assert!((up * Vec3::Y - Vec3::Z).length() < 1e-5, "{:?}", up * Vec3::Y);
+        assert!((up * Vec3::X - Vec3::X).length() < 1e-5);
+        let then_z = turn_from_degrees(Vec3::new(90.0, 0.0, 90.0));
+        assert!((then_z * Vec3::X - Vec3::Y).length() < 1e-5, "z comes after x: {:?}", then_z * Vec3::X);
+    }
+
+    #[test]
+    fn an_unturned_object_reads_zero_not_minus_zero() {
+        assert_eq!(turn_to_degrees(Quat::IDENTITY).map(f64::to_bits), [0.0_f64.to_bits(); 3]);
     }
 }

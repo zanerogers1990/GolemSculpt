@@ -13,6 +13,10 @@
 //! active one's most: after Clone and Quad Remesh that is the original, sitting
 //! exactly where the copy is. An object that shares the active one's mesh (an
 //! instance) cannot be a source: it is the same surface.
+//!
+//! The projection runs in the background (app/behind.rs), on copies of both
+//! surfaces taken when the button was pressed: the source is built afresh
+//! from its copy there, so it can be searched while the window goes on.
 
 use std::time::Instant;
 
@@ -98,7 +102,37 @@ impl Running {
         let reach = reach(&doc.scene, &doc.mesh, doc.opts.project_reach);
         let started = Instant::now();
         let Some(source_mesh) = doc.scene.mesh(from_mesh, &doc.mesh) else { return };
-        let done = project::project(&doc.mesh, target_place, &[Source { mesh: source_mesh, to_world: from_place }], reach);
+        // What the job reads, copied: the source's surface, and the points it moves.
+        let source = (
+            source_mesh.positions.clone(),
+            source_mesh.indices.clone(),
+            source_mesh.hidden_triangles().map(<[bool]>::to_vec).unwrap_or_default(),
+        );
+        let target = &doc.mesh;
+        let hidden: Option<Vec<bool>> =
+            target.hidden_triangles().is_some().then(|| (0..target.vertex_count() as u32).map(|v| target.is_vertex_hidden(v)).collect());
+        let points = (target.positions.clone(), target.normals.clone(), target.mask.clone(), hidden);
+        self.run_behind("Project", move |cx| {
+            cx.progress("readying the source");
+            let (positions, indices, hidden_tris) = source;
+            let (source_mesh, _) = Mesh::new_numbered(positions, indices, None, &hidden_tris);
+            if cx.cancelled() {
+                return Err("Project was cancelled. The model is as it was.".into());
+            }
+            cx.progress("projecting");
+            let (positions, normals, mask, hidden) = points;
+            let is_hidden = |v: usize| hidden.as_ref().is_some_and(|h| h[v]);
+            let target = project::Points { positions: &positions, normals: &normals, mask: &mask, hidden: &is_hidden };
+            let done = project::project_points(&target, target_place, &[Source { mesh: &source_mesh, to_world: from_place }], reach);
+            Ok(Box::new(move |app: &mut Running| app.project_landed(&from_name, &target_name, reach, started, &done))
+                as super::behind::Land)
+        });
+    }
+
+    /// A projection done in the background has landed on the model it was
+    /// made from: it is put in place as one undo step, or none if nothing
+    /// was within reach.
+    fn project_landed(&mut self, from_name: &str, target_name: &str, reach: f32, started: Instant, done: &Projected) {
         let took = started.elapsed().as_millis();
         if done.indices.is_empty() {
             return self.status(
@@ -110,9 +144,10 @@ impl Running {
                 false,
             );
         }
+        let doc = &mut self.doc;
         // Reset Shape goes back to the shape before the first thing that moved the mesh (scene.rs).
         doc.scene.keep_baseline(&doc.mesh);
-        commit(&mut doc.mesh, &mut doc.history, &done);
+        commit(&mut doc.mesh, &mut doc.history, done);
         // The surface has moved out from under the last brush dab.
         doc.sculptor.last_hit = None;
         let moved = done.indices.len();

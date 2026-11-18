@@ -475,10 +475,14 @@ impl Running {
             self.recovery.owed = copy_owed(keeps, unsaved, self.recovery.held, mark);
             self.recovery.looked = Some(now);
         }
+        // A save or a copy written in the background lands here when it is
+        // done (app/files/writing.rs); while one is at work, a copy that falls
+        // due waits for it.
+        let writing = self.writes_poll();
         let changed = self.recovery.owed;
-        if self.recovery.schedule.due(now, changed, busy) {
+        if writing.is_none() && self.recovery.schedule.due(now, changed, busy) {
             self.recovery.schedule.restart();
-            if let Err(e) = self.keep_copy(false) {
+            if let Err(e) = self.keep_copy_behind() {
                 log::warn!("no recovery copy was written: {e}");
                 // Said once here; it is tried again when the next copy is due.
                 self.status(format!("No recovery copy could be kept. {e}"), false);
@@ -488,7 +492,14 @@ impl Running {
         // A look that was put off is still owed if nothing else happens: the
         // change it would have seen may have come with the very last event.
         let look = lately.map(|at| at + LOOK_EVERY);
-        match (self.recovery.schedule.wake(), look) {
+        // While a write is at work, the next look is for it, and a copy due
+        // meanwhile is not looked for again before then.
+        let writing = self.writing().then(|| now + super::files::WRITE_POLL);
+        let copy = match writing {
+            Some(at) => Some(at),
+            None => self.recovery.schedule.wake(),
+        };
+        match (copy, look) {
             (Some(copy), Some(look)) => Some(copy.min(look)),
             (copy, look) => copy.or(look),
         }
@@ -510,6 +521,9 @@ impl Running {
     /// kept (a scripted run that is not a check of recovery) or where one
     /// already holds the scene as it stands.
     pub(super) fn recovery_before_replacing(&mut self) {
+        // A save or a copy still writing in the background lands first: it
+        // belongs to the scene now on screen.
+        self.writes_finish();
         let mark = self.history_mark();
         if !copy_owed(self.recovery.store.keeps(), self.unsaved_at(mark), self.recovery.held, mark) {
             return;
@@ -527,6 +541,8 @@ impl Running {
     /// marks the copy made as the app stops on a fault: the scene is checked
     /// first, and no older copy is dropped for it.
     fn keep_copy(&mut self, stopped: bool) -> io::Result<()> {
+        // One write at a time: one still at work lands first.
+        self.writes_finish();
         let started = Instant::now();
         let mark = self.history_mark();
         let file = self.recovery.store.next_file(stopped)?;
@@ -556,6 +572,59 @@ impl Running {
             self.toast("Recovery copy kept");
         }
         Ok(())
+    }
+
+    /// The timed copy: [`Self::keep_copy`] with the file put on the disk by
+    /// a thread (app/files/writing.rs). The window's thread only makes the
+    /// file's bytes, so the copy no longer stops work while the disk takes
+    /// it. It counts once it has landed (`recovery_copy_landed`).
+    fn keep_copy_behind(&mut self) -> io::Result<()> {
+        let started = Instant::now();
+        let mark = self.history_mark();
+        let file = self.recovery.store.next_file(false)?;
+        let (bytes, about) = {
+            let (meshes, objects, active) = self.scene_for_file()?;
+            let bytes = io::SceneBytes::of(&meshes, &objects, active, &self.details(), &file)?;
+            let about = About {
+                when: io::time_stamp(),
+                document: self.doc.path.clone(),
+                objects: objects.len(),
+                triangles: meshes.iter().map(|mesh| mesh.live_triangle_count()).sum(),
+            };
+            (bytes, about)
+        };
+        let paused = started.elapsed();
+        let after = super::files::After::Copy { file: file.clone(), about, mark, started, paused };
+        self.write_behind(bytes, file, after);
+        Ok(())
+    }
+
+    /// A timed copy written in the background has landed: what
+    /// [`Self::keep_copy`] does after its write.
+    pub(super) fn recovery_copy_landed(
+        &mut self,
+        file: PathBuf,
+        about: About,
+        mark: Mark,
+        started: Instant,
+        paused: Duration,
+        written: io::Result<()>,
+    ) {
+        if let Err(e) = written {
+            log::warn!("no recovery copy was written: {e}");
+            return self.status(format!("No recovery copy could be kept. {e}"), false);
+        }
+        self.recovery.store.wrote(&file, &about);
+        self.recovery.copied(mark);
+        if self.recovery.script.on {
+            let name = file.file_name().unwrap_or_default().to_string_lossy();
+            let took = started.elapsed().as_secs_f64() * 1000.0;
+            println!("copy {name} {} triangles {took:.0} ms ({:.0} ms paused)", about.triangles, paused.as_secs_f64() * 1000.0);
+        }
+        // Only the part the window waited for could be felt.
+        if paused > FELT {
+            self.toast("Recovery copy kept");
+        }
     }
 
     /// The scene has been saved to a file of the user's: its copies are

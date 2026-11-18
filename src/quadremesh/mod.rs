@@ -22,7 +22,11 @@ mod project;
 #[cfg(test)]
 mod tests;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+// std's clock panics in a browser (the web version, web/).
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use glam::Vec3;
 use rayon::prelude::*;
@@ -207,7 +211,14 @@ pub const TARGET_RANGE: std::ops::RangeInclusive<f32> = 100.0..=200_000.0;
 
 /// Quad remesh of a sculpt, as a new sculptable mesh that keeps its quads.
 pub fn quad_remesh_mesh(mesh: &Mesh, target_quads: usize) -> Result<(Mesh, Report), String> {
-    let QuadRemesh { mesh: poly, report } = quad_remesh(&mesh.positions, &mesh.indices, target_quads)?;
+    quad_remesh_of(&mesh.positions, &mesh.indices, target_quads)
+}
+
+/// [`quad_remesh_mesh`] of the triangles `indices` over `positions`: what
+/// the app copies out of a mesh to remesh it on a thread of its own
+/// (app/behind.rs) while the mesh itself goes on being sculpted.
+pub fn quad_remesh_of(positions: &[Vec3], indices: &[u32], target_quads: usize) -> Result<(Mesh, Report), String> {
+    let QuadRemesh { mesh: poly, report } = quad_remesh(positions, indices, target_quads)?;
     let triangles = poly.triangulate();
     let PolyMesh { vertices, face_start, mut face_indices } = poly;
     let (mut out, remap) = Mesh::new_mapped(vertices, triangles, None);

@@ -45,6 +45,10 @@ use crate::printable::Cure;
 use crate::ui::question::Question;
 use crate::unity_import;
 
+// Saves and recovery copies written on a thread of their own.
+mod writing;
+pub(super) use writing::{After, POLL as WRITE_POLL};
+
 /// How often the settings are compared with what is on disk.
 const SETTINGS_CHECK: Duration = Duration::from_secs(1);
 
@@ -72,6 +76,8 @@ pub(super) struct State {
     left_out_on_open: usize,
     /// How many of that file's meshes had subdivision levels or sculpt layers that could not be read.
     lost_on_open: io::Lost,
+    /// A save or a recovery copy being written in the background (files/writing.rs).
+    writes: writing::Writes,
 }
 
 /// Everything there is to say about damage found as a file was read, as one
@@ -103,6 +109,7 @@ impl State {
             repaired_on_open,
             left_out_on_open,
             lost_on_open,
+            writes: writing::Writes::default(),
         }
     }
 
@@ -546,6 +553,8 @@ impl Running {
     /// The file that was there before is kept as an earlier save first
     /// (app/older.rs).
     pub(super) fn save_scene(&mut self, path: &Path) -> io::Result<()> {
+        // A save or a copy still writing in the background lands first.
+        self.writes_finish();
         let backup = self.older_before_save(path);
         let written = self.scene_for_file().and_then(|(meshes, objects, active)| {
             io::save_scene_with(&meshes, &objects, active, &self.details(), path)
@@ -925,23 +934,38 @@ impl Running {
     /// it: a model, or the objects of another `.sclp`. Either is one undo
     /// step. Nothing is asked here: the interface asks first (`open_chosen`),
     /// and the Claude bridge and the command line have already decided.
+    ///
+    /// The file is read, and its meshes built, in the background
+    /// (app/behind.rs): a big sculpt takes seconds to build, and the window
+    /// goes on drawing meanwhile. What it brings is put in place when it lands.
     pub(super) fn load(&mut self, path: PathBuf, native: bool) {
-        if native {
-            self.open_replacing(path);
-        } else if is_native(&path) {
-            self.add_scene(path);
+        let reading = path.clone();
+        if native || is_native(&path) {
+            let label = if native { "Open" } else { "Import" };
+            self.read_behind(label, move |cx| {
+                cx.progress(format!("reading {}", file_name(&reading)));
+                let saved = io::load_scene(&reading)?;
+                Ok(Box::new(move |app: &mut Running| match native {
+                    true => app.open_replacing(path, saved),
+                    false => app.add_scene(path, saved),
+                }) as super::behind::Land)
+            });
         } else {
-            self.add_model(path);
+            // A file without units is fitted to the size of the scene's first object (as Unity does).
+            let first = self.doc.scene.objects.first().and_then(|o| self.doc.scene.mesh(o.mesh, &self.doc.mesh));
+            let first_half_size = first.map(|m| m.bounds().size() * 0.5);
+            self.read_behind("Import", move |cx| {
+                cx.progress(format!("reading {}", file_name(&reading)));
+                let made = import_meshes(&reading, first_half_size)?;
+                Ok(Box::new(move |app: &mut Running| app.add_model(path, made)) as super::behind::Land)
+            });
         }
     }
 
     /// The file takes the scene's place and becomes the document: its look,
     /// mirror settings and view come with it, and Save writes back to it.
-    fn open_replacing(&mut self, path: PathBuf) {
-        let (count, details) = match self.replace_scene(&path) {
-            Ok(opened) => opened,
-            Err(e) => return self.status(e, false),
-        };
+    fn open_replacing(&mut self, path: PathBuf, saved: io::SavedScene) {
+        let (count, details) = self.put_in_place(saved, FileState::opened(path.clone()));
         // A sculpt from the Unity app says so, and what it could not bring.
         let note = unity_import::status_note(&details, true).map_or(String::new(), |note| format!(". {note}"));
         let note = note + &self.opened_note();
@@ -971,14 +995,6 @@ impl Running {
     /// damaged points were written mended. Empty when none were.
     pub(super) fn saved_note(&self) -> String {
         io::note_saved(self.files.mended_on_save).map_or(String::new(), |note| format!(". {note}"))
-    }
-
-    /// Opens `path` and puts its scene in place of the one that is open: the
-    /// file becomes the scene's own, with nothing unsaved. Nothing has been
-    /// touched if the file cannot be read.
-    fn replace_scene(&mut self, path: &Path) -> io::Result<(usize, io::Details)> {
-        let saved = io::load_scene(path)?;
-        Ok(self.put_in_place(saved, FileState::opened(path.to_owned())))
     }
 
     /// Puts `saved` in place of the scene that is open, as one undo step,
@@ -1027,11 +1043,7 @@ impl Running {
     /// The file's objects join the scene where they were saved. Nothing else
     /// of the file is used: the look, the view and the document stay the
     /// scene's own, as in the Unity app.
-    fn add_scene(&mut self, path: PathBuf) {
-        let saved = match io::load_scene(&path) {
-            Ok(saved) => saved,
-            Err(e) => return self.status(e, false),
-        };
+    fn add_scene(&mut self, path: PathBuf, saved: io::SavedScene) {
         let count = saved.objects.len();
         let note = unity_import::status_note(&saved.details, false).map_or(String::new(), |note| format!(". {note}"));
         let damage = damage_notes(saved.repaired, saved.left_out, saved.lost);
@@ -1049,44 +1061,38 @@ impl Running {
         self.status(format!("Added {} from {}{note}", how_many(count), file_name(&path)), true);
     }
 
-    fn add_model(&mut self, path: PathBuf) {
-        // A file without units is fitted to the size of the scene's first object (as Unity does).
-        let first = self.doc.scene.objects.first().and_then(|o| self.doc.scene.mesh(o.mesh, &self.doc.mesh));
-        let first_half_size = first.map(|m| m.bounds().size() * 0.5);
-        match import_meshes(&path, first_half_size) {
-            Ok((objects, at)) => {
-                let count = objects.len();
-                let (tris, verts) = objects.iter().fold((0, 0), |(t, v), (_, m)| (t + m.triangle_count(), v + m.vertex_count()));
-                let bounds = objects.iter().map(|(_, m)| m.bounds()).reduce(crate::mesh::bvh::Aabb::union);
-                let size = bounds.map_or(Vec3::ZERO, |b| b.size());
-                let size = size.to_array().map(|s| sculpt_geom::units::format(s, sculpt_geom::LengthUnit::Millimetres, false));
-                self.edit_scene(|scene, slot| {
-                    let mut first = None;
-                    for (name, mesh) in objects {
-                        let id = scene.add(&name, mesh, slot);
-                        scene.active_mut().position = at;
-                        first.get_or_insert(id);
-                    }
-                    // The first object in the file is the one to carry on with (a body before its eyes).
-                    if let Some(first) = first {
-                        scene.select(first, slot);
-                    }
-                    true
-                });
-                self.frame_view();
-                let objects = if count == 1 { String::new() } else { format!("{count} objects, ") };
-                let message = format!(
-                    "Added {} ({objects}{tris} triangles, {verts} vertices, {} x {} x {} mm)",
-                    path.display(),
-                    size[0],
-                    size[1],
-                    size[2]
-                );
-                // Models from elsewhere, scans above all, are often not closed.
-                self.status_checked(message, Cure::Remesh);
+    /// The objects `import_meshes` made of a model file join the scene.
+    fn add_model(&mut self, path: PathBuf, made: (Vec<(String, Mesh)>, Vec3)) {
+        let (objects, at) = made;
+        let count = objects.len();
+        let (tris, verts) = objects.iter().fold((0, 0), |(t, v), (_, m)| (t + m.triangle_count(), v + m.vertex_count()));
+        let bounds = objects.iter().map(|(_, m)| m.bounds()).reduce(crate::mesh::bvh::Aabb::union);
+        let size = bounds.map_or(Vec3::ZERO, |b| b.size());
+        let size = size.to_array().map(|s| sculpt_geom::units::format(s, sculpt_geom::LengthUnit::Millimetres, false));
+        self.edit_scene(|scene, slot| {
+            let mut first = None;
+            for (name, mesh) in objects {
+                let id = scene.add(&name, mesh, slot);
+                scene.active_mut().position = at;
+                first.get_or_insert(id);
             }
-            Err(e) => self.status(e, false),
-        }
+            // The first object in the file is the one to carry on with (a body before its eyes).
+            if let Some(first) = first {
+                scene.select(first, slot);
+            }
+            true
+        });
+        self.frame_view();
+        let objects = if count == 1 { String::new() } else { format!("{count} objects, ") };
+        let message = format!(
+            "Added {} ({objects}{tris} triangles, {verts} vertices, {} x {} x {} mm)",
+            path.display(),
+            size[0],
+            size[1],
+            size[2]
+        );
+        // Models from elsewhere, scans above all, are often not closed.
+        self.status_checked(message, Cure::Remesh);
     }
 
     // ---- visual checks

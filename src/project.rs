@@ -123,15 +123,37 @@ impl<'a> Ready<'a> {
 /// Projects `sources` onto `target`, whose object stands at `target_to_world`,
 /// moving no point further than `reach` (in the scene's units). Fully masked
 /// and hidden points are not asked about.
+#[cfg_attr(not(test), allow(dead_code))] // the app works on copies (app/behind.rs)
 pub fn project(target: &Mesh, target_to_world: Mat4, sources: &[Source], reach: f32) -> Projected {
+    let points = Points {
+        positions: &target.positions,
+        normals: &target.normals,
+        mask: &target.mask,
+        hidden: &|v| target.is_vertex_hidden(v as u32),
+    };
+    project_points(&points, target_to_world, sources, reach)
+}
+
+/// What [`project`] reads of the mesh it moves: each vertex's place, normal
+/// and mask, and whether it is hidden. Project Detail copies these out of
+/// the mesh to project on a thread of its own (app/project.rs).
+pub struct Points<'a> {
+    pub positions: &'a [Vec3],
+    pub normals: &'a [Vec3],
+    pub mask: &'a [f32],
+    pub hidden: &'a (dyn Fn(usize) -> bool + Sync),
+}
+
+/// [`project`] of `target`'s points.
+pub fn project_points(target: &Points, target_to_world: Mat4, sources: &[Source], reach: f32) -> Projected {
     let ready: Vec<Ready> = sources.iter().map(Ready::new).collect();
     let to_local = target_to_world.inverse();
     let normals = normal_matrix(target_to_world);
-    let found: Vec<Option<Option<Vec3>>> = (0..target.vertex_count())
+    let found: Vec<Option<Option<Vec3>>> = (0..target.positions.len())
         .into_par_iter()
         .map(|v| {
             let free = 1.0 - target.mask[v].clamp(0.0, 1.0);
-            if free <= 0.0 || target.is_vertex_hidden(v as u32) {
+            if free <= 0.0 || (target.hidden)(v) {
                 return None;
             }
             let p = target_to_world.transform_point3(target.positions[v]);

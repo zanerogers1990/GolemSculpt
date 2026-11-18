@@ -414,7 +414,11 @@ impl Running {
             }
             _ => return None,
         };
-        Some(self.said(|app| app.act(action)))
+        // Unwrap UVs and Project Detail run in the background: the reply is about the one done.
+        Some(self.said(|app| {
+            app.act(action);
+            app.behind_wait();
+        }))
     }
 
     // ---- for visual checks ---------------------------------------------------

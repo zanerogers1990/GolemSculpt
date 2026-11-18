@@ -77,8 +77,14 @@ pub const SIZES: [u32; 4] = [1024, 2048, 4096, 8192];
 /// A copy of `mesh` with UVs made for it, with seams along its face groups
 /// when `seams` is asked and it has any, and how many pieces they came to.
 /// `mesh` itself is left as it is.
+#[cfg_attr(not(test), allow(dead_code))] // the app works on copies (app/behind.rs)
 pub(crate) fn unwrapped(mesh: &Mesh, seams: bool) -> Result<(Mesh, usize, bool), String> {
-    let mut copy = crate::scene::copy_of(mesh);
+    unwrap_copy(crate::scene::copy_of(mesh), seams)
+}
+
+/// [`unwrapped`] of a copy already made (`scene::copy_of`): UVs made for
+/// `copy` itself. Unwrap UVs runs this on a job of its own (app/behind.rs).
+fn unwrap_copy(mut copy: Mesh, seams: bool) -> Result<(Mesh, usize, bool), String> {
     let seams = seams && copy.has_groups();
     let groups = seams.then(|| copy.group_ids());
     let options = sculpt_uv::Options::default();
@@ -354,24 +360,28 @@ impl Running {
     }
 
     /// The Unwrap UVs button: UVs for the selected object, as one undo step.
+    /// The copy is made here, with all the model has on it; the unwrap,
+    /// which is the slow part, is done on it in the background (app/behind.rs).
     pub(super) fn unwrap_uvs(&mut self) {
         let started = Instant::now();
-        let (copy, charts, seams) = match unwrapped(&self.doc.mesh, self.doc.opts.bake.seams_on_groups) {
-            Ok(made) => made,
-            Err(why) => return self.status(why, false),
-        };
+        let seams = self.doc.opts.bake.seams_on_groups;
         let name = self.doc.scene.active().name.clone();
-        let along = if seams { ", seams along its face groups" } else { "" };
-        let text = format!(
-            "Unwrapped \"{name}\": {charts} pieces in the square{along} ({:.0} ms). Export it as OBJ or FBX to take \
-             the UVs with it, or bake maps onto it.",
-            started.elapsed().as_secs_f64() * 1000.0
-        );
-        self.doc.history.name_next(Some("Unwrap UVs".to_owned()));
-        self.replace_mesh(copy, true);
-        self.doc.history.name_next(None);
-        self.toast("Unwrap UVs");
-        self.status(text, true);
+        let copy = crate::scene::copy_of(&self.doc.mesh);
+        self.run_behind("Unwrap UVs", move |cx| {
+            cx.progress("cutting and flattening the pieces");
+            let (copy, charts, seams) = unwrap_copy(copy, seams)?;
+            Ok(Box::new(move |app: &mut Running| {
+                let along = if seams { ", seams along its face groups" } else { "" };
+                let text = format!(
+                    "Unwrapped \"{name}\": {charts} pieces in the square{along} ({:.0} ms). Export it as OBJ or FBX to take \
+                     the UVs with it, or bake maps onto it.",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+                app.replace_mesh(copy, true);
+                app.toast("Unwrap UVs");
+                app.status(text, true);
+            }) as super::behind::Land)
+        });
     }
 }
 

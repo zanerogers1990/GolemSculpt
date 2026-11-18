@@ -68,6 +68,8 @@ mod step;
 mod uvs;
 #[cfg(test)]
 mod damage_tests;
+#[cfg(test)]
+mod write_timing_tests;
 
 #[cfg(test)]
 use fbx::export_fbx;
@@ -1305,6 +1307,38 @@ pub fn save_scene_with(
     let mended = meshes.iter().map(|m| repair::damaged_points(m)).sum();
     replace_file(path, |w| write_scene(w, meshes, details.pictures(), &info))?;
     Ok(mended)
+}
+
+/// A scene file made in memory, to be put on the disk by another thread
+/// (`app/files/writing.rs`). Making it only reads the scene and copies it,
+/// which takes a fraction of the time the disk does; writing it is
+/// [`save_scene_with`]'s own write, whole or not at all.
+pub struct SceneBytes {
+    bytes: Vec<u8>,
+    /// How many points it holds mended (see [`save_scene_with`]).
+    pub mended: usize,
+}
+
+impl SceneBytes {
+    /// The bytes [`save_scene_with`] would write to `path`, not yet written.
+    /// Refuses as it does: a sculpt from the Unity app is never written over.
+    pub fn of(meshes: &[&Mesh], objects: &[SavedObject], active: usize, details: &Details, path: &Path) -> Result<SceneBytes> {
+        crate::unity_import::refuse_to_overwrite(path)?;
+        let info = details.document(objects, active);
+        let mended = meshes.iter().map(|m| repair::damaged_points(m)).sum();
+        // Room for the two big arrays of each mesh at once; anything else grows it.
+        let room: usize = meshes.iter().map(|m| m.positions.len() * 12 + m.indices.len() * 4).sum();
+        let mut bytes = Vec::with_capacity(room + (1 << 20));
+        write_scene(&mut bytes, meshes, details.pictures(), &info).map_err(|e| format!("Could not save: {e}"))?;
+        Ok(SceneBytes { bytes, mended })
+    }
+
+    /// Writes them to `path`, replacing the file there only once they are
+    /// all on the disk (see [`replace_file`]).
+    pub fn write(&self, path: &Path) -> Result<()> {
+        replace_file(path, |w| w.write_all(&self.bytes))
+    }
+
 }
 
 /// The bytes of a scene file: the magic, each mesh's blocks, the reference
