@@ -628,7 +628,7 @@ fn tools() -> Value {
                 "strength": number("0.01 to 1. The app's default is 0.1. For Move it is how much of the drag the surface follows (default 0.5; 1 keeps the grabbed point under the pointer)."),
                 "focal_shift": number("-1 to 1: where the falloff sits between the centre and the rim."),
                 "direction": choice(&["add", "subtract"], "Whether the brush builds up or digs in."),
-                "accumulate": boolean("Whether passing over the same place again keeps adding. Off (every brush starts so): a stroke builds to a height and no further, and the next stroke builds on top."),
+                "accumulate": boolean("Whether passing over the same place again keeps adding (Standard and Inflate start so). Off: a stroke builds to a height and no further, and the next stroke builds on top."),
                 "spacing": number(
                     "This brush's distance between dabs as a fraction of its radius, 0.02 to 2.5. The app's default is \
                      0.2 (0.1 for Crease). It changes how smooth a stroke is, not how much it builds; from about 1 \

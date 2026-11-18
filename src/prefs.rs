@@ -419,8 +419,9 @@ pub struct BrushPrefs {
 /// The version of what the brush numbers in the settings file mean (see
 /// `BrushPrefs::feel_version`): 1 from the pen-feel changes of 2026-10-21,
 /// 2 from Accumulate starting off later that day, 3 from Auto Smooth, Even
-/// Out and plain Clay's deeper start, later still.
-pub const FEEL_VERSION: u32 = 3;
+/// Out and plain Clay's deeper start, later still, 4 from Standard and
+/// Inflate building with every pass on 2026-10-31.
+pub const FEEL_VERSION: u32 = 4;
 
 /// The brushes whose Accumulate started on until version 2.
 const ACCUMULATED: [Brush; 3] = [Brush::Standard, Brush::Inflate, Brush::Clay];
@@ -602,7 +603,35 @@ fn old_feel(brush: &mut BrushPrefs, raw: &serde_json::Value, version: u32) {
     if version < 3 {
         feel_3(brush, raw);
     }
+    if version < 4 {
+        feel_4(brush, raw, version);
+    }
     brush.feel_version = FEEL_VERSION;
+}
+
+/// Version 4: Standard and Inflate start with Accumulate on, at a Strength
+/// that goes straight through. Off was what they started with, never chosen,
+/// and comes on with its number as it is; on was chosen, and its Strength
+/// becomes the one that builds as it did. Lazy Mouse goes off on every brush
+/// (it reached them all from a setting they once shared, and trails the
+/// surface behind the pen), and Move follows the pen all the way. All at
+/// Zane's word on 2026-10-31; each can be set again on its brush.
+fn feel_4(brush: &mut BrushPrefs, raw: &serde_json::Value, version: u32) {
+    for b in [Brush::Standard, Brush::Inflate] {
+        let Some(tuning) = brush.brushes.get_mut(b.name()) else { continue };
+        // A file from before version 2 had its Accumulate turned off above,
+        // and its Strength brought over for that.
+        if version >= 2 && raw_accumulate(raw, b) == Some(true) {
+            tuning.strength = crate::sculpt::strength::from_old_piling(b, tuning.strength);
+        }
+        tuning.accumulate = true;
+    }
+    (brush.lazy_mouse, brush.lazy_radius, brush.lazy_strength) = (None, None, None);
+    for tuning in brush.brushes.values_mut() {
+        tuning.lazy_mouse = Some(false);
+    }
+    // (Move's Strength is kept apart from the other brushes': `move_strength`.)
+    brush.move_strength = 1.0;
 }
 
 /// Version 3: plain Clay starts deeper. Clay Depth at its old starting 0.3

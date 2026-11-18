@@ -182,17 +182,19 @@ shared by them all.
   brushes saved by an earlier version are brought over once: a Strength you
   had chosen becomes the one that does the same (as far as 100% reaches),
   and one left where the brush started takes the new starting value.
-- **Accumulate** starts off on every brush that has it (Standard, Inflate,
-  Clay and Crease). Off, a stroke builds up to a height and no further:
-  going back and forth over the same place in one stroke smooths the stroke
-  out rather than piling it up, and its cross-section stays the soft,
-  rounded shape of the brush. Lift the pen and stroke again to build on top.
-  Strength and the pen's pressure set how tall a stroke stands, and
-  **Build-Up** how quickly it gets there. With Accumulate on, every pass adds
-  more, with no limit. Standard and Inflate weigh the surface where the
-  stroke found it, so a stroke laid over itself is a rounded bead, not a
-  peaked ridge. (Settings from an earlier version: Accumulate on Standard,
-  Inflate and Clay where they started, which was on, becomes off once.)
+- **Accumulate** starts on for Standard and Inflate and off for Clay and
+  Crease. On, every pass adds more, with no limit, in proportion to Strength
+  and the pen's pressure: one pass of Standard stands 0.4 of the radius at
+  100%, 0.2 at 50% and 0.04 at 10%. The brush rides what it has built, so
+  going over a place again narrows the build as it climbs. Off, a stroke
+  builds up to a height and no further: going back and forth over the same
+  place in one stroke smooths the stroke out rather than piling it up, and
+  its cross-section stays the soft, rounded shape of the brush. Lift the pen
+  and stroke again to build on top. Strength and the pen's pressure set how
+  tall a stroke stands, and **Build-Up** how quickly it gets there. (Settings
+  from an earlier version: Standard and Inflate come on once, keeping their
+  Strength; Lazy Mouse goes off on every brush and Move goes to 100%, and
+  each can be set again.)
 - **Relax Normals** (Inflate, starts at 30%) evens out the directions
   Inflate pushes the surface in, so neighbouring bits swell together and a
   strong stroke does not split into spikes. With Accumulate on, Inflate also

@@ -544,9 +544,9 @@ fn brush_page(ui: &mut egui::Ui, doc: &mut Doc, state: &mut UiState, actions: &m
             tip(
                 theme::checkbox(ui, &mut bs.accumulate, label, ACCENT()),
                 tips,
-                "On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height \
-                 and no further, however often you go over the same place in it; lift the pen and stroke again \
-                 to build on top.",
+                "On: every pass over the same spot adds more, with no limit, and the brush rides what it has \
+                 built. Off: a stroke builds up to a height and no further, however often you go over the same \
+                 place in it; lift the pen and stroke again to build on top.",
             );
         }
         // Layer has no Accumulate, but this still sets how fast it rises.

@@ -22,6 +22,11 @@
 //! something (the pen's travel, a layer, the paint's opacity) and already
 //! spreads across its slider. A dragged print of an alpha is not either: its
 //! Strength is its height.
+//!
+//! Standard and Inflate with Accumulate on (as they start since 2026-10-31)
+//! are not mapped either: every dab adds a step in proportion to the slider
+//! ([`in_stroke`]), so 10% builds a tenth of what 100% does and a light hand
+//! keeps its whole range.
 
 use super::Brush;
 
@@ -54,6 +59,26 @@ pub fn effective(brush: Brush, ui: f32) -> f32 {
         Some(gain) => gain * ui.max(0.0).powf(POWER),
         None => ui,
     }
+}
+
+/// What a stroke of `brush` works at for the slider at `ui`: [`effective`],
+/// or the slider's own number for the brushes whose every dab adds a step in
+/// proportion to it.
+#[inline]
+pub fn in_stroke(brush: Brush, ui: f32, accumulate: bool) -> f32 {
+    if accumulate && matches!(brush, Brush::Standard | Brush::Inflate) { ui.max(0.0) } else { effective(brush, ui) }
+}
+
+/// The slider value at which Standard or Inflate with Accumulate on builds
+/// what it built at `ui` before 2026-10-31, when each dab added half a radius
+/// times [`effective`]: a brush saved with Accumulate on by an earlier version.
+pub fn from_old_piling(brush: Brush, ui: f32) -> f32 {
+    let step = match brush {
+        Brush::Standard => super::kernels::STANDARD_STEP,
+        Brush::Inflate => super::kernels::INFLATE_STEP,
+        _ => return ui,
+    };
+    (0.5 * effective(brush, ui) / step).clamp(0.01, 1.0)
 }
 
 /// The slider value that does what `old` did before the slider was mapped

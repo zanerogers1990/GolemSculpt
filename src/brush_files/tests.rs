@@ -154,7 +154,9 @@ fn a_brush_naming_an_alpha_that_is_not_here_has_none_and_says_so() {
         "brush": { "strength": 0.4, "alpha": { "name": "Somebody Else's Scales", "scale": 2.0, "follow": true } } }"#;
     let read = parse(text, "x").unwrap();
     assert!(read.record.alpha.image.is_none());
-    assert_eq!(read.record.settings.strength, 0.4, "the rest of the brush is as the file has it");
+    // Version 1 did not say Accumulate, which started on for Standard then.
+    let kept = crate::sculpt::strength::from_old_piling(Brush::Standard, 0.4);
+    assert_eq!(read.record.settings.strength, kept, "the rest of the brush is as the file has it");
     assert_eq!(read.missing_alpha.as_deref(), Some("Somebody Else's Scales"));
     let note = read.note().unwrap();
     assert!(note.contains("Lizard") && note.contains("Somebody Else's Scales") && note.contains("no alpha"), "{note}");
@@ -337,7 +339,8 @@ fn a_bad_file_in_the_folder_is_skipped_said_and_left_alone() {
     assert!(library.named("Fine Liner").is_some());
     let hand = at(&library, "hand made");
     // With no feel_version it is from before 2026-10-21: its Strength comes over (`sculpt::strength`).
-    let brought = crate::sculpt::strength::from_old(Brush::Inflate, 0.8);
+    use crate::sculpt::strength::{from_old, from_old_piling};
+    let brought = from_old_piling(Brush::Inflate, from_old(Brush::Inflate, 0.8));
     assert_eq!((library.entries()[hand].kernel, library.record(hand, &s).settings.strength), (Brush::Inflate, brought));
 
     // Keeping the folder up to date touches neither the bad file nor the
@@ -432,7 +435,8 @@ fn settings_files_from_before_the_library_carry_into_the_base_brushes() {
     assert_eq!((flatten.settings.flatten_mode, flatten.settings.lock_plane, flatten.numbers.flatten_offset), (FlattenMode::Scrape, true, 0.1));
     assert!(record(Brush::Standard).alpha.image.is_some() && record(Brush::Standard).alpha.follow);
     assert_eq!((record(Brush::Crease).numbers.crease_pinch, record(Brush::Layer).numbers.layer_height), (0.2, 0.3));
-    assert_eq!((record(Brush::Move).settings.strength, record(Brush::Move).numbers.move_connected), (0.7, true));
+    // Move's Strength goes to the whole of the pen's travel once, at version 4.
+    assert_eq!((record(Brush::Move).settings.strength, record(Brush::Move).numbers.move_connected), (1.0, true));
     assert_eq!(record(Brush::Pose).numbers.pose.mode, PoseMode::Stretch);
     assert_eq!((record(Brush::Pinch).settings.strength, s.radius_px, s.pressure_curve), (brought(Brush::Pinch, 0.2), 84.0, 2.0));
     // The shipped brushes are as they shipped, whatever the old file held:
@@ -537,7 +541,11 @@ fn a_brush_file_from_before_steady_plane_does_without_it() {
     let one = parse(r#"{ "kernel": "Standard", "feel_version": 1, "brush": { "strength": 0.5, "accumulate": false } }"#, "s").unwrap();
     assert_eq!(one.record.settings.strength, from_old_seeking(effective(Brush::Standard, 0.5)));
     let piled = parse(r#"{ "kernel": "Standard", "brush": { "strength": 0.06, "accumulate": true } }"#, "s").unwrap();
-    assert_eq!(piled.record.settings.strength, from_old(Brush::Standard, 0.06));
+    let kept = crate::sculpt::strength::from_old_piling(Brush::Standard, from_old(Brush::Standard, 0.06));
+    assert_eq!(piled.record.settings.strength, kept);
+    // Versions 2 and 3 started Accumulate off: a file that does not say keeps it so.
+    let quiet = parse(r#"{ "kernel": "Standard", "feel_version": 3, "brush": { "strength": 0.5 } }"#, "s").unwrap();
+    assert_eq!((quiet.record.settings.accumulate, quiet.record.settings.strength), (false, 0.5));
     // This version's, without them: the base brush's.
     let now = format!(r#"{{ "kernel": "Clay", "feel_version": {}, "brush": {{ "strength": 0.21 }} }}"#, crate::prefs::FEEL_VERSION);
     let read = parse(&now, "x").unwrap();
