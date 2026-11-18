@@ -26,6 +26,8 @@ use crate::mesh::{Mesh, Rings, StrokeVertex};
 use crate::mesh::bvh::Leaf;
 use crate::util::SharedMut;
 
+pub(super) mod untangle;
+
 /// Below this many vertices a dab runs on the calling thread; waking the
 /// thread pool costs more than the work.
 pub(super) const PAR_MIN: usize = 4096;
@@ -614,6 +616,8 @@ pub(super) fn fill<T: Copy + Default + Send>(
 pub struct Scratch {
     weights: Vec<f32>,
     pub(super) targets: Vec<Vec3>,
+    /// Where Smooth lays down each knotted vertex of a dimple ([`untangle`]).
+    knots: Vec<Option<Vec3>>,
     /// Where a Smooth dab found its vertices, for Keep Volume.
     before: Vec<Vec3>,
     /// Where each leaf of the dab in hand starts in those (see [`layout`]).
@@ -1547,12 +1551,19 @@ fn clay(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32], scrat
         for s in 1..=steps {
             // The alpha shapes what is laid down, not the plane it is laid
             // on: `fit` above is taken without it.
-            let w = if steps == 1 {
-                tip_w(start, vt.normal, vt.pos) * (1.0 - vt.mask) * p.printed(d, start - d.center)
+            // The alpha is looked up only where the tip gives weight: with
+            // none it could only multiply nothing. (The same weight to the
+            // bit: the tip's share times the alpha's, as before.)
+            let (tip, centre) = if steps == 1 {
+                (tip_w(start, vt.normal, vt.pos) * (1.0 - vt.mask), d.center)
             } else {
                 let centre = prev.lerp(d.center, s as f32 / steps as f32);
-                clay_weight(&p.falloff, start.distance(centre) / eff_r, soft) * guard * p.printed(d, start - centre)
+                (clay_weight(&p.falloff, start.distance(centre) / eff_r, soft) * guard, centre)
             };
+            if tip <= 0.0 {
+                continue;
+            }
+            let w = tip * p.printed(d, start - centre);
             if w <= 0.0 {
                 continue;
             }
@@ -1867,6 +1878,8 @@ fn smooth_dab(mesh: &mut Mesh, p: &Params, d: &Dab, leaves: &[u32], fit: &[u32],
             w.max(0.0)
         });
     }
+    // Dimples first: the knots smoothing alone passes over ([`untangle`]).
+    untangle::untangle(mesh, p, d, leaves, scratch);
     let amount = smooth_passes(p.e(d.pressure) * p.dose);
     match p.smooth_mode {
         // Smoothing that keeps the form's volume, holding each vertex to

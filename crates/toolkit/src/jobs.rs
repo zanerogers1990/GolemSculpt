@@ -162,6 +162,14 @@ impl Jobs {
             *lock(&slot) = Some(outcome);
             cx.shared.done.store(true, Ordering::Release);
         };
+        // A browser page has no threads to start (the web build, web/): the
+        // work is done there and then, and the job is finished when it returns.
+        #[cfg(target_arch = "wasm32")]
+        let thread: Option<JoinHandle<()>> = {
+            run();
+            None
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let thread = match std::thread::Builder::new().name(format!("job: {label}")).spawn(run) {
             Ok(thread) => Some(thread),
             Err(e) => {

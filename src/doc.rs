@@ -236,6 +236,10 @@ pub enum MaskOp {
     Sharpen,
     Grow,
     Shrink,
+    /// A tap on the model while mask painting: the edge blurred wider than Blur does.
+    Soften,
+    /// An Alt tap: the edge steepened.
+    Harden,
 }
 
 /// How a chosen `.sclp` file is brought in.

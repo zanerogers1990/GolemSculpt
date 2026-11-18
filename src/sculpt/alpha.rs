@@ -46,12 +46,41 @@ pub struct AlphaImage {
     pub name: String,
     size: usize,
     samples: Box<[f32]>,
+    /// How far out from the middle (in the stamp's own measure, 1 at the
+    /// picture's edge, the larger of across and down) the picture is still
+    /// exactly 1 everywhere, and past how far it is exactly 0. Both are a
+    /// sample and a half on the safe side, so a point inside the one or
+    /// past the other blends four samples that are all 1 (or all 0), which
+    /// gives exactly 1 (or 0): `Stamp::at` hands that back without blending.
+    /// Most of a brush ring lies in one or the other for a picture like
+    /// Square, and the blend was a third of a big Clay Strips dab.
+    solid: f32,
+    empty: f32,
 }
 
 impl AlphaImage {
     pub fn new(name: &str, size: usize, samples: Vec<f32>) -> AlphaImage {
         assert!(size > 0 && samples.len() == size * size, "an alpha is square");
-        AlphaImage { name: name.to_owned(), size, samples: samples.into_boxed_slice() }
+        // A sample's distance from the middle, in samples, the larger of
+        // across and down; the nearest that is not 1 and the furthest that
+        // is not 0.
+        let half = size as f32 / 2.0;
+        let (mut not_one, mut not_zero) = (f32::INFINITY, f32::NEG_INFINITY);
+        for (i, &sample) in samples.iter().enumerate() {
+            let off = |j: usize| (j as f32 + 0.5 - half).abs();
+            let d = off(i % size).max(off(i / size));
+            if sample != 1.0 {
+                not_one = not_one.min(d);
+            }
+            if sample != 0.0 {
+                not_zero = not_zero.max(d);
+            }
+        }
+        // A point at `e` (stamp measure) blends samples no more than
+        // `e * half + 1` from the middle and no less than `e * half - 1`.
+        let solid = (not_one - 1.5) / half;
+        let empty = (not_zero + 1.5) / half;
+        AlphaImage { name: name.to_owned(), size, samples: samples.into_boxed_slice(), solid, empty }
     }
 
     /// The picture drawn by `shade`, which is asked for each sample's centre
@@ -294,8 +323,20 @@ impl Stamp {
     pub fn at(&self, frame: &Frame, rel: Vec3) -> f32 {
         let u = rel.dot(frame.right) * self.inv;
         let v = rel.dot(frame.up) * self.inv;
-        if !self.tile && (u.abs() > 1.0 || v.abs() > 1.0) {
-            return 0.0;
+        if !self.tile {
+            if u.abs() > 1.0 || v.abs() > 1.0 {
+                return 0.0;
+            }
+            // Where the picture is all 1 or all 0 the blend below gives
+            // exactly that (see `AlphaImage::solid`). A repeating picture
+            // comes round again, so it is always blended.
+            let e = u.abs().max(v.abs());
+            if e < self.image.solid {
+                return if self.invert { 0.0 } else { 1.0 };
+            }
+            if e > self.image.empty {
+                return if self.invert { 1.0 } else { 0.0 };
+            }
         }
         let a = self.image.sample(0.5 + 0.5 * u, 0.5 - 0.5 * v, self.tile);
         if self.invert { 1.0 - a } else { a }

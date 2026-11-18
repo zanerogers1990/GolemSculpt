@@ -12,6 +12,11 @@
 //! | Ctrl+Z / Ctrl+Shift+Z | Undo / redo a change of setting or place |
 //! | Esc | Put the tool away; the settings are kept |
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use wasm_clock::Instant;
+
 use glam::{Quat, Vec2, Vec3};
 use sculpt_geom::{Aabb, TriMesh};
 use sculpt_toolkit::{
@@ -380,7 +385,7 @@ impl HandTool {
         if self.shown.as_ref().is_some_and(|shown| shown.body == body && (!shown.draft || moving)) {
             return;
         }
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let detail = if draft { DRAFT_DETAIL } else { PREVIEW_DETAIL };
         match body.surface(1.0 / detail) {
             Ok(surface) => {
@@ -622,6 +627,23 @@ impl Tool for HandTool {
                 let result = job.wait();
                 self.land(cx, result);
             }
+        }
+    }
+}
+
+/// A browser page has no clock the standard library can read (the web build, `web/`): there a preview
+/// is timed as instant, so it never drops to draft detail. Nothing changes on the desktop.
+#[cfg(target_arch = "wasm32")]
+mod wasm_clock {
+    pub struct Instant;
+
+    impl Instant {
+        pub fn now() -> Instant {
+            Instant
+        }
+
+        pub fn elapsed(&self) -> std::time::Duration {
+            std::time::Duration::ZERO
         }
     }
 }

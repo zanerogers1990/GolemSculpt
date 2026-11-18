@@ -100,6 +100,42 @@ fn a_thumbnail_is_the_picture_in_small() {
 // ------------------------------------------------------------------- stamp
 
 #[test]
+fn the_shortcut_through_solid_and_empty_parts_gives_the_blended_value_to_the_bit() {
+    // Every picture that comes with the app, a soft dot, and pictures all
+    // white, all black and of two samples, each laid without repeating
+    // (where the shortcut is taken) and inverted or not: at a grid of
+    // points over the whole picture, and many more along its middle row
+    // and diagonal where the solid and empty parts begin, the stamp's
+    // weight is exactly what blending the picture's samples gives.
+    let mut images: Vec<&'static AlphaImage> = patterns::ALL.iter().map(|(name, _)| the(name)).collect();
+    images.push(kept(AlphaImage::drawn("dot", 100, |x, y| 1.5 - 4.0 * ((x - 0.5).powi(2) + (y - 0.5).powi(2)).sqrt())));
+    images.push(kept(AlphaImage::new("white", 4, vec![1.0; 16])));
+    images.push(kept(AlphaImage::new("black", 3, vec![0.0; 9])));
+    images.push(kept(AlphaImage::new("two", 2, vec![0.0, 1.0, 1.0, 1.0])));
+    let mut points = Vec::new();
+    for i in 0..=200 {
+        for j in 0..=200 {
+            points.push((i as f32 / 100.0 - 1.0, j as f32 / 100.0 - 1.0));
+        }
+    }
+    for i in 0..=20_000 {
+        let t = i as f32 / 10_000.0 - 1.0;
+        points.extend([(t, 0.0), (t, t), (0.0, t), (t, -0.3 * t)]);
+    }
+    for image in images {
+        for invert in [false, true] {
+            let stamp = AlphaSettings { invert, ..settings_with(image) }.stamp(2.0).unwrap();
+            for &(u, v) in &points {
+                let blended = image.sample(0.5 + 0.5 * u, 0.5 - 0.5 * v, false);
+                let want = if invert { 1.0 - blended } else { blended };
+                let got = stamp.at(&UPRIGHT, Vec3::new(u * 2.0, v * 2.0, 0.0));
+                assert_eq!(got.to_bits(), want.to_bits(), "{} invert {invert} at ({u}, {v})", image.name);
+            }
+        }
+    }
+}
+
+#[test]
 fn a_stamp_lays_the_picture_upright_and_ends_at_its_edge() {
     let across = settings_with(left_to_right()).stamp(1.0).unwrap();
     assert!(near(across.at(&UPRIGHT, Vec3::X * 0.5), 0.75));

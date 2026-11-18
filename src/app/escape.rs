@@ -71,6 +71,16 @@ impl Running {
     /// dynamic topology added) is in the record it makes, and that record is
     /// undone at once instead of going on the history.
     fn cancel_stroke(&mut self) {
+        self.drop_stroke();
+        // The button is still down: the rest of the drag moves nothing.
+        self.input.drag = Drag::Ui;
+        self.toast("Stroke Cancelled");
+        self.redraw = true;
+    }
+
+    /// The stroke under way is put back as if never drawn, leaving no undo
+    /// step and saying nothing: Esc's, and a mask tap's (app/mask_gestures.rs).
+    pub(super) fn drop_stroke(&mut self) {
         // What the pen did since the last frame goes with the rest.
         self.input.samples.clear();
         let doc = &mut self.doc;
@@ -78,9 +88,6 @@ impl Running {
             doc.mesh.apply_delta(&delta, true);
         }
         doc.sculptor.last_hit = None;
-        // The button is still down: the rest of the drag moves nothing.
-        self.input.drag = Drag::Ui;
-        self.toast("Stroke Cancelled");
         self.redraw = true;
     }
 }

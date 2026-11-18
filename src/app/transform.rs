@@ -15,7 +15,7 @@ use sculpt_toolkit as kit;
 use winit::event::MouseButton;
 use winit::keyboard::ModifiersState;
 
-use super::masked::{Deform, Mirror, Turns};
+use super::masked::{self, Deform, Mirror, Turns};
 use super::mirror_copies::{place_shown, shown_target};
 use super::{Drag, Running};
 use crate::doc::{Action, Tool};
@@ -62,7 +62,17 @@ pub(super) struct State {
     /// With Edit Pivot on, where a press landed on the active object, in
     /// the window and in the world: let go there, it places the pivot.
     pub(super) pivot_click: Option<(Vec2, Vec3)>,
+    /// The joint a masked drag of the active object turns about
+    /// (`masked::joint`), as last worked out, and what it was worked out
+    /// from. Going over every triangle of a big mesh is too much to do each
+    /// time the gizmo is drawn, so it is done again only when the mesh, its
+    /// surface or mask, or its symmetry has changed.
+    joint: std::cell::RefCell<Option<(JointKey, Option<Vec3>)>>,
 }
+
+/// What a kept joint was worked out from: the mesh (`Mesh::uid`), how far
+/// its edits had got (`Mesh::edits`), and the symmetry.
+type JointKey = (u64, u64, Mirror);
 
 /// What the gizmo is on.
 enum Subject {
@@ -151,7 +161,37 @@ pub(super) fn green_ring(frame: &Frame, sweep: f32) -> Vec<Vec3> {
         .collect()
 }
 
+/// The symmetry a masked drag of the active object is repeated under: the
+/// object's own (masked.rs).
+fn active_mirror(scene: &Scene) -> Mirror {
+    let symmetry = scene.active_symmetry();
+    Mirror {
+        axes: symmetry.mirror,
+        world: (symmetry.space == Space::World).then(|| scene.active().matrix()),
+        radial: Some(Turns { radial: symmetry.radial, world: symmetry.world(scene.active()) }),
+    }
+}
+
 impl Running {
+    /// The joint a masked drag of the active object turns about, in its own
+    /// space (`masked::joint`); `None` leaves the gizmo on the pivot. Kept
+    /// from one call to the next while nothing it depends on has changed,
+    /// and while a drag is under way: the gizmo then draws from the drag.
+    fn masked_joint(&self) -> Option<Vec3> {
+        let mesh = &self.doc.mesh;
+        let mirror = active_mirror(&self.doc.scene);
+        let key = (mesh.uid, mesh.edits(), mirror);
+        let mut kept = self.transform.joint.borrow_mut();
+        match &*kept {
+            Some((was, joint)) if *was == key || self.transform_holds_mesh() => *joint,
+            _ => {
+                let joint = masked::joint(mesh, mirror);
+                *kept = Some((key, joint));
+                joint
+            }
+        }
+    }
+
     pub(super) fn transform_active(&self) -> bool {
         self.doc.tool == Tool::Transform
     }
@@ -177,7 +217,18 @@ impl Running {
                 let orientation = self.doc.opts.gizmo_axes;
                 return Some(Setup { subject: Subject::Pivot, targets: vec![target], handles, orientation });
             }
-            let (ids, targets) = selection_targets(&self.doc.scene, &self.doc.mesh);
+            let (ids, mut targets) = selection_targets(&self.doc.scene, &self.doc.mesh);
+            // A lone object with a mask: the drag reshapes the free part of
+            // its surface (masked.rs), and turns and stretches it about the
+            // joint where the free part meets the mask, so the gizmo sits
+            // there, not on the object's pivot. Under symmetry the other
+            // side turns about the joint's mirror image.
+            let scene = &self.doc.scene;
+            if ids == [scene.active_id()] && scene.selected_side() == 0 {
+                if let Some(joint) = self.masked_joint() {
+                    targets[0].placement.position = scene.active().matrix().transform_point3(joint);
+                }
+            }
             let orientation = self.doc.opts.gizmo_axes;
             return (!targets.is_empty()).then(|| Setup {
                 subject: Subject::Objects(ids),
@@ -235,12 +286,7 @@ impl Running {
                 // Under the object's mirror symmetry each half moves as the
                 // other's mirror image, and under radial symmetry each copy
                 // round the axis as the others do (masked.rs).
-                let symmetry = doc.scene.active_symmetry();
-                let mirror = Mirror {
-                    axes: symmetry.mirror,
-                    world: (symmetry.space == Space::World).then(|| doc.scene.active().matrix()),
-                    radial: Some(Turns { radial: symmetry.radial, world: symmetry.world(doc.scene.active()) }),
-                };
+                let mirror = active_mirror(&doc.scene);
                 match alone.then(|| Deform::begin(&mut doc.mesh, mirror)).flatten() {
                     Some(deform) => {
                         // The shape Reset Shape goes back to is the one
@@ -518,6 +564,9 @@ impl Running {
     ///   through a pull upwards on the green arrow
     /// - `masked-mirror`: a ball with its middle masked under X symmetry,
     ///   part of the way through a pull out on the red arrow: both sides go out
+    /// - `masked-turn`: the same ball part of the way through a turn on the
+    ///   green ring: the gizmo is on the joint of the plus end, and each end
+    ///   swings from its own joint, the mirror image of the other
     /// - `play`: works all of the above through the real pointer routines
     ///   and prints what came of each step
     /// - `pivot`: the same for Edit Pivot and its buttons (app/pivot.rs)
@@ -550,6 +599,14 @@ impl Running {
                 if let Some(frame) = self.demo_frame() {
                     let grab = frame.pivot + frame.axis(0) * frame.arm * 1.1;
                     self.demo_drag(&[grab, grab + frame.axis(0) * 0.3], false);
+                }
+            }
+            "masked-turn" => {
+                self.demo_mirror_masked();
+                self.doc.camera.pitch = 35.0;
+                self.sync_view();
+                if let Some(frame) = self.demo_frame() {
+                    self.demo_drag(&green_ring(&frame, std::f32::consts::FRAC_PI_4), false);
                 }
             }
             "play" => self.transform_play(),
@@ -784,6 +841,42 @@ impl Running {
         say("as one undo step", steps(self) == count + 1);
         self.act(Action::Undo);
         say("which puts both sides back", self.doc.mesh.positions == rest);
+
+        // The same, turned on the green ring: the gizmo is on the joint of
+        // the plus end, where its free part meets the mask, and each end
+        // swings from its own joint, the mirror image of the other.
+        let half = self.doc.mesh.bounds().size().x * 0.5;
+        let pitch = self.doc.camera.pitch;
+        self.doc.camera.pitch = 35.0;
+        self.sync_view();
+        let tips = {
+            let far = |sign: f32| (0..rest.len()).max_by(|&a, &b| (rest[a].x * sign).total_cmp(&(rest[b].x * sign)));
+            far(1.0).zip(far(-1.0))
+        };
+        if let (Some(frame), Some((plus, minus))) = (self.demo_frame(), tips) {
+            // In the ball's own space, where its vertices are.
+            let joint = self.doc.scene.active().matrix().inverse().transform_point3(frame.pivot);
+            println!("     the gizmo is at {joint} on the ball, whose half width is {half}");
+            say("under X symmetry the gizmo of a masked object sits on the joint of the plus end", {
+                (joint.x - 0.35 * half).abs() < 0.03 * half && joint.y.abs() < 0.02 * half && joint.z.abs() < 0.02 * half
+            });
+            let count = steps(self);
+            say("a press on its green ring takes the drag", self.demo_drag(&green_ring(&frame, std::f32::consts::FRAC_PI_4), true));
+            let (a, b) = (self.doc.mesh.positions[plus], self.doc.mesh.positions[minus]);
+            println!("     the ends went from {} and {} to {a} and {b}", rest[plus], rest[minus]);
+            say("each end turned about its own joint", {
+                let other = Vec3::new(-joint.x, joint.y, joint.z);
+                (a.distance(joint) - rest[plus].distance(joint)).abs() < 1e-3
+                    && (b.distance(other) - rest[minus].distance(other)).abs() < 1e-3
+                    && a.distance(rest[plus]) > 0.05 * half
+            });
+            say("the two ends are mirror images", (a.x + b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3 && (a.z - b.z).abs() < 1e-3);
+            say("as one undo step", steps(self) == count + 1);
+            self.act(Action::Undo);
+            say("which puts both ends back", self.doc.mesh.positions == rest);
+        }
+        self.doc.camera.pitch = pitch;
+        self.sync_view();
         self.doc.scene.set_symmetry(ids[0], symmetry);
 
         // A hosted tool's own target: the Studs example puts the gizmo on

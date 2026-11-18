@@ -930,12 +930,19 @@ fn tools() -> Value {
         ),
         tool(
             "edit_object",
-            "Rename, show, hide or move an object. Only what is given changes.",
+            "Rename, show, hide, move, turn or resize an object. Only what is given changes.",
             json!({
                 "object": object(),
                 "name": string("A new name."),
                 "visible": boolean("Shown or hidden."),
                 "position": xyz("A new position."),
+                "rotation": xyz(
+                    "How the object is turned, as three angles in degrees (what get_state gives): about the world's x \
+                     axis first, then y, then z. The whole turn is set, not added to: [0, 0, 0] is unturned. The \
+                     object turns about its own centre point (its pivot, which set_origin_to_mesh puts in the middle \
+                     of its mesh), and stays where its position says."
+                ),
+                "scale": xyz("A new size along the object's own x, y and z, as in get_state. Three non-zero numbers."),
             }),
             &[],
         ),

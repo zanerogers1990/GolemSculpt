@@ -8,7 +8,21 @@
 //! back live, so a merge that came out too thick is Z, a slider, and Enter
 //! again.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+// std's clock panics in a browser (the web build, web/), where a merge goes
+// untimed: it says it took no time rather than stopping the page.
+#[cfg(target_arch = "wasm32")]
+struct Instant;
+#[cfg(target_arch = "wasm32")]
+impl Instant {
+    fn now() -> Instant {
+        Instant
+    }
+    fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
 
 use glam::Vec3;
 use sculpt_geom::TriMesh;
