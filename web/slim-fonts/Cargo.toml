@@ -1,0 +1,7 @@
+[package]
+name = "epaint_default_fonts"
+version = "0.36.2"
+edition = "2024"
+description = "egui's default fonts, slimmed for the web build: see src/lib.rs."
+license = "(MIT OR Apache-2.0) AND Ubuntu-font-1.0"
+publish = false

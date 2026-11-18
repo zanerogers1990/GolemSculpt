@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>GolemSculpt</title>
+  <meta name="description" content="Digital sculpting in the browser: GolemSculpt's sculpting engine, no install.">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #121314; }
+    #golem_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+                    outline: none; touch-action: none; }
+    /* The loading screen, in the Midnight theme's colours: it covers the
+       canvas until the app says it has started (window.golem.ready). */
+    #golem_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                     background: #14141a; color: #e6e6ed; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+                     padding: 16px; box-sizing: border-box; }
+    #golem_loading .card { width: 100%; max-width: 380px; text-align: center; }
+    #golem_loading .title { font-size: 28px; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 18px; }
+    #golem_loading .track { height: 6px; border-radius: 3px; background: #0f0f13; overflow: hidden; }
+    #golem_bar { height: 100%; width: 0; border-radius: 3px; background: #408cf2; transition: width 0.15s linear; }
+    #golem_loading.busy #golem_bar { width: 100% !important; animation: golem_pulse 1.2s ease-in-out infinite; }
+    #golem_loading.failed .track { display: none; }
+    #golem_status { margin-top: 12px; color: #a6a6b2; font-size: 13px; min-height: 2.6em; }
+    #golem_loading.failed #golem_status { color: #e6e6ed; font-size: 14px; }
+    @keyframes golem_pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  </style>
+</head>
+<body>
+  <canvas id="golem_canvas"></canvas>
+  <div id="golem_loading" role="status">
+    <div class="card">
+      <div class="title">GolemSculpt</div>
+      <div class="track"><div id="golem_bar"></div></div>
+      <div id="golem_status">Loading…</div>
+    </div>
+  </div>
+
+  <script>
+  // What the page does for the app (src/browser.rs is the other half).
+  (function () {
+    let pressure = -1;
+    const track = (e) => {
+      // Only a pen reports pressure worth reading; a mouse says 0.5 when pressed.
+      pressure = e.pointerType === 'pen' ? e.pressure : -1;
+    };
+    for (const name of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+      window.addEventListener(name, track, { capture: true, passive: true });
+    }
+    // Right button is the brush's opposite, not the browser's menu.
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Keys the app uses that the browser would take for itself first:
+    // Ctrl+D (bookmark: the app's Subdivide), F1 (the browser's help: the
+    // app's welcome card), Page Up / Page Down (scrolling: the app's levels).
+    // The app still sees them; only the browser's own action is stopped.
+    window.addEventListener('keydown', (e) => {
+      const typing = e.target && (e.target.isContentEditable || /^(INPUT|TEXTAREA)$/.test(e.target.tagName));
+      if (typing && e.key !== 'F1') return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      if ((ctrl && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D'))
+          || e.key === 'F1' || e.key === 'PageUp' || e.key === 'PageDown') {
+        e.preventDefault();
+      }
+    }, { capture: true });
+
+    const DB = 'golemsculpt', STORE = 'scene', KEY = 'last';
+    const openDb = () => new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+    window.golem = {
+      penPressure: () => pressure,
+
+      // Small settings kept between visits: the theme, the interface size, the matcap.
+      pref(key) {
+        try { return localStorage.getItem('golemsculpt.' + key) || ''; } catch (e) { return ''; }
+      },
+      setPref(key, value) {
+        try { localStorage.setItem('golemsculpt.' + key, value); } catch (e) {}
+      },
+
+      download(name, bytes, mime) {
+        // A copy: the many-threads build's memory is shared, and a Blob
+        // refuses a view of shared memory (it threw, and stopped the app).
+        const url = URL.createObjectURL(new Blob([bytes.slice()], { type: mime }));
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      },
+
+      // `accept`: the kinds of file offered (a reference picture's), else a scene's or a model's.
+      pickFile(accept) {
+        return new Promise((resolve, reject) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = accept || '.golem,.obj,.stl,.ply,.fbx';
+          input.onchange = async () => {
+            const file = input.files && input.files[0];
+            if (!file) { reject('none'); return; }
+            resolve([file.name, new Uint8Array(await file.arrayBuffer())]);
+          };
+          input.click();
+        });
+      },
+
+      async storeScene(bytes) {
+        const db = await openDb();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE, 'readwrite');
+          tx.objectStore(STORE).put(bytes.slice(), KEY);
+          tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+      },
+
+      async loadScene() {
+        try {
+          const db = await openDb();
+          const found = await new Promise((resolve, reject) => {
+            const req = db.transaction(STORE).objectStore(STORE).get(KEY);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => reject(req.error);
+          });
+          db.close();
+          return found;
+        } catch (e) {
+          return null;
+        }
+      },
+
+      ready() {
+        const note = document.getElementById('golem_loading');
+        if (note) note.remove();
+      },
+    };
+  })();
+  </script>
+  <script>
+  // The pen's samples at the rate the tablet sends them (src/pen.rs is the
+  // other half). A browser hands the page one pointer move per frame and
+  // folds the rest of the pen's samples into it; every one is kept here,
+  // with its own place, pressure and time, until the app takes them.
+  (function () {
+    const canvas = document.getElementById('golem_canvas');
+    // Five numbers a sample: x and y in physical pixels on the canvas, the
+    // pressure (-1 for a mouse or a finger), seconds, and 1 for the press.
+    let samples = [];
+    const keep = (e, down) => {
+      // Of several fingers only the first draws; the rest pinch (src/mobile.rs).
+      if (e.pointerType === 'touch' && !e.isPrimary) return;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const each = !down && e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+      for (const s of each.length ? each : [e]) {
+        samples.push((s.clientX - rect.left) * dpr, (s.clientY - rect.top) * dpr,
+                     s.pointerType === 'pen' ? s.pressure : -1, s.timeStamp / 1000, down ? 1 : 0);
+      }
+      // Nobody is taking them (the tab is hidden, say): keep the last few seconds' worth.
+      if (samples.length > 100000) samples.splice(0, samples.length - 100000);
+    };
+    // A press starts the list afresh, so what follows it is that stroke's.
+    window.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' && !e.isPrimary) return;
+      samples = []; keep(e, true);
+    }, { capture: true, passive: true });
+    window.addEventListener('pointermove', (e) => { if (e.buttons) keep(e, false); }, { capture: true, passive: true });
+    // A finger reaches the app through its touch events alone: eframe reads
+    // both kinds, and a finger's pointer events as well would press twice
+    // and make each extra finger a press of its own (src/mobile.rs sorts the
+    // touch events out). Stopped here, after the lines above have seen them.
+    for (const name of ['pointerdown', 'pointerup', 'pointercancel']) {
+      window.addEventListener(name, (e) => {
+        if (e.pointerType === 'touch') e.stopImmediatePropagation();
+      }, { capture: true });
+    }
+    window.golem.takePenSamples = () => {
+      const out = new Float64Array(samples);
+      samples = [];
+      return out;
+    };
+  })();
+  </script>
+  <script type="module">
+  // Loads the app with a progress bar. There are three builds of it (see
+  // build.ps1), and a visitor downloads only one:
+  //
+  //   golem_web_mt   many threads, WebGPU: for a page that is cross-origin
+  //                  isolated (the two headers in README.md) in a browser
+  //                  with WebGPU.
+  //   golem_web_gpu  one thread, WebGPU: for a browser with WebGPU otherwise.
+  //   golem_web      one thread, WebGPU or WebGL2: for every other browser.
+  //
+  // A build that is missing from the folder or fails to load is passed over
+  // for the next one down the list; golem_web is always last.
+  const screen = document.getElementById('golem_loading');
+  const bar = document.getElementById('golem_bar');
+  const status = document.getElementById('golem_status');
+  const say = (text) => { status.textContent = text; };
+  const fail = (text) => { screen.classList.remove('busy'); screen.classList.add('failed'); say(text); };
+
+  // The size of each build's WebAssembly file, written in by build.ps1, so
+  // the bar is right even when the server compresses the download (the
+  // browser then only knows the compressed size). 0: unknown or not built.
+  const SIZES = { mt: 0, gpu: 0, full: 0 }; // GOLEM_SIZES
+
+  // Does the browser really have WebGPU? Some offer it but find no graphics
+  // card it may use (an old driver, a blocked card); those draw with WebGL2.
+  async function hasWebGpu() {
+    if (!navigator.gpu) return false;
+    try {
+      const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 3000));
+      return !!(await Promise.race([navigator.gpu.requestAdapter(), timeout]));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function hasWebGl2() {
+    try { return !!document.createElement('canvas').getContext('webgl2'); } catch (e) { return false; }
+  }
+
+  // Fetches a file and moves the bar as it arrives. The answer is handed on
+  // as a stream, so the browser compiles the WebAssembly while it downloads.
+  async function fetchWithProgress(url, expected) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(url + ': ' + response.status + ' ' + response.statusText);
+    const total = expected || Number(response.headers.get('Content-Length')) || 0;
+    if (!response.body || !total || typeof TransformStream === 'undefined') return response;
+    let loaded = 0;
+    const counted = response.body.pipeThrough(new TransformStream({
+      transform(chunk, out) {
+        loaded += chunk.byteLength;
+        const part = Math.min(1, loaded / total);
+        bar.style.width = (part * 100).toFixed(1) + '%';
+        say('Loading… ' + (loaded / 1048576).toFixed(1) + ' of ' + (total / 1048576).toFixed(1) + ' MB');
+        out.enqueue(chunk);
+      },
+    }));
+    return new Response(counted, { headers: { 'Content-Type': 'application/wasm' } });
+  }
+
+  // Loads one build and, for the many-threads one, starts its workers.
+  async function load(build) {
+    const name = { mt: 'golem_web_mt', gpu: 'golem_web_gpu', full: 'golem_web' }[build];
+    const app = await import('./' + name + '.js');
+    screen.classList.remove('busy');
+    bar.style.width = '0';
+    await app.default({ module_or_path: fetchWithProgress(new URL(name + '_bg.wasm', location.href), SIZES[build]) });
+    // The bar stays full and pulses from here until the app's first frame.
+    screen.classList.add('busy');
+    let threads = 1;
+    if (build === 'mt') {
+      // One worker per core, less the page's own thread (it waits while the
+      // workers work), and no more than 16: past that the gain is small and
+      // each worker costs memory.
+      threads = Math.max(1, Math.min(16, (navigator.hardwareConcurrency || 4) - 1));
+      say('Starting ' + threads + ' threads…');
+      await app.initThreadPool(threads);
+    }
+    window.golem.threads = threads;
+    window.golem.build = name;
+    return app;
+  }
+
+  (async () => {
+    if (typeof WebAssembly !== 'object') {
+      fail('GolemSculpt needs WebAssembly, which this browser does not have or has turned off. ' +
+           'Try a recent Chrome, Edge, Firefox or Safari.');
+      return;
+    }
+    const gpu = await hasWebGpu();
+    if (!gpu && !hasWebGl2()) {
+      fail('GolemSculpt needs WebGPU or WebGL2 to draw, and this browser has neither turned on. ' +
+           'Try a recent Chrome, Edge, Firefox or Safari, and check that hardware acceleration ' +
+           '(graphics acceleration) is switched on in the browser\'s settings.');
+      return;
+    }
+    const isolated = self.crossOriginIsolated === true && typeof SharedArrayBuffer === 'function';
+    const builds = [];
+    if (gpu && isolated) builds.push('mt');
+    if (gpu) builds.push('gpu');
+    builds.push('full');
+    let app;
+    // build.ps1 writes 0 for a build it did not make (-Quick, -NoThreads): skip it.
+    for (const build of builds.filter((b) => b === 'full' || !SIZES.full || SIZES[b])) {
+      try {
+        app = await load(build);
+        break;
+      } catch (e) {
+        if (build === 'full') throw e;
+        console.warn('GolemSculpt: the ' + build + ' build did not load, so the next is tried:', e);
+      }
+    }
+    console.info('GolemSculpt: ' + window.golem.build + ', ' + window.golem.threads +
+                 (window.golem.threads > 1 ? ' threads' : ' thread'));
+    say('Starting the graphics…');
+    app.start();
+  })().catch((e) => {
+    console.error(e);
+    fail('GolemSculpt could not start in this browser: ' + e);
+  });
+  </script>
+</body>
+</html>

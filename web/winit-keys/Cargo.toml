@@ -1,0 +1,9 @@
+[package]
+name = "golem-winit-keys"
+version = "0.1.0"
+edition = "2024"
+description = "The names of keys the desktop's key map (src/keymap.rs) writes as winit::keyboard::KeyCode, for the web build, which has no winit."
+publish = false
+
+[lib]
+path = "src/lib.rs"
