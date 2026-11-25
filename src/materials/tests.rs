@@ -51,10 +51,10 @@ fn every_preset_is_a_built_in_material() {
         + look::WOODS.len()
         + look::RESINS.len()
         + look::GLOWS.len();
-    assert_eq!(count, 40);
+    assert_eq!(count, 43);
     assert_eq!(library.entries().len(), count);
     assert!(library.entries().iter().all(|e| e.origin == Origin::BuiltIn));
-    for name in ["Plain", "Metal - Rust", "Lure - Blue Flake", "Clay - Terracotta", "Wood - Golden Oak", "Glow - Lava Cracks"] {
+    for name in ["Plain", "Metal - Rust", "Lure - Blue Flake", "Clay - Terracotta", "Wood - Golden Oak", "Glow - Lava Cracks", "Resin - Frosted Emerald"] {
         assert!(library.named(name).is_some(), "{name}");
     }
     // The plain material is the model's own colour as a new scene has it.

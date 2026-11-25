@@ -377,6 +377,15 @@ ko: 투명 파랑.
 en: Milky translucent white, like a frosted print: light glows through it softly.
 ko: 젖빛 반투명 흰색, 프로스트 처리한 출력물처럼 빛이 은은하게 번져 나옴.
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+ko: 아르데코 향수병처럼 압착된 새틴 무광 녹색 유리: 얇은 가장자리와 섬세한 조각은 밝은 녹색으로 빛나고, 두꺼운 부분은 깊고 어두워집니다.
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+ko: 옥이나 공작석 같은 우윳빛 녹색 유리: 빛이 안에서 빛나지만 반대편은 보이지 않습니다.
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+ko: 새틴 무광 짙은 파란 유리: 얇은 곳은 밝은 파랑, 두꺼운 곳은 거의 검정입니다.
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 ko: 식어 굳은 어두운 지각이 빛나는 용암 틈으로 갈라지고, 오목한 곳에서는 용암이 솟아오릅니다. 판들이 천천히 움직입니다.
 
@@ -2696,6 +2705,9 @@ ko: 얼마나 투명한지 정합니다. 값이 클수록 레진의 색이 나�
 en: Milkiness: light scattered inside, as in a frosted print.
 ko: 우윳빛 정도: 프로스트 처리한 출력물처럼 빛이 안에서 산란됩니다.
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+ko: 반투명 유리 같은 새틴 에칭 표면: 뒤에 있는 것은 흐려지고 얇은 부분은 유리의 색으로 빛납니다. 0은 광택, 2는 완전한 무광.
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 ko: 매트캡에는 자체 조명이 들어 있습니다. 이 조명을 보려면 Matcap을 끄세요.
 
@@ -2960,9 +2972,6 @@ ko: 칠해서 보호합니다. Ctrl이나 오른쪽 버튼을 누르면 지웁�
 en: Accumulate (Off)
 ko: Accumulate (Off) 설정
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-ko: On: 같은 곳을 지날 때마다 한도 없이 더 쌓입니다. Off: 한 스트로크 안에서는 같은 곳을 몇 번 지나가도 일정한 높이까지만 쌓입니다. 펜을 뗐다가 다시 스트로크하면 그 위에 더 쌓습니다.
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 ko: Strength와 별개로 브러시가 얼마나 빨리 쌓이는지 정합니다. 높을수록 더 적은 횟수로 최대 효과에 도달합니다. Layer에서는 단이 목표 높이까지 얼마나 빨리 올라가는지 정합니다.
 
@@ -3112,9 +3121,6 @@ ko: 선택한 오브젝트를 슬라이서용 바이너리 STL로 저장합니�
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 ko: Export FBX는 칠한 각 머티리얼이 점마다 얼마나 있는지도 오브젝트의 UV 세트 1~4에 기록합니다(세트당 머티리얼 두 개). 직접 만든 게임 셰이더에서 텍스처를 블렌딩할 때 쓰기 위한 것입니다. Unity에서는 uv2~uv5로 읽힙니다. Off: FBX에는 색과 면당 머티리얼 하나만 담기며, Blender와 Unity는 기본적으로 이것만 사용합니다.
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-ko: 오브젝트 {picked}개가 선택되어 있습니다. FBX는 모두 하나의 파일에 저장하고, OBJ, PLY, STL은 밝게 표시된 오브젝트만 저장합니다.
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 ko: 조명이 비친 구의 이미지로 셰이딩합니다. 빠르고 어느 각도에서나 똑같이 보입니다.
@@ -5021,12 +5027,6 @@ ko: 한 모서리에서 반대쪽 모서리까지 드래그하세요.
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 ko: 원하는 부분을 자유롭게 둘러 그리세요. 윤곽선은 시작한 곳으로 저절로 닫힙니다.
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-ko: 직선을 드래그하세요. 양쪽 끝 너머로 계속 이어집니다. 정확한 선을 그으려면 Snap을 체크하거나 Shift를 누르세요.
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-ko: 정확한 절단용입니다. 선이 15도 단위(수평, 수직, 45...)로 돌아가며, 오브젝트의 중심이나 원점 근처를 지날 때는 정확히 그 지점을 통과합니다. Shift를 누르고 있는 동안에는 이 체크와 반대로 작동합니다.
-
 en: Shift (box, lasso)
 ko: Shift (상자, 올가미)
 
@@ -5044,9 +5044,6 @@ ko: 상자, 올가미, 직선이 덮는 부분을 잘라 내고 남은 구멍을
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 ko: 선, 올가미, 상자를 따라 모델을 둘로 자릅니다. 두 조각 모두 남고, 덮인 쪽은 새 오브젝트가 됩니다(K).
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-ko: Snap 켜짐: 선이 15도 단위로 돌아가고 오브젝트의 중심과 원점에 붙습니다.
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 ko: Snap 꺼짐: 선이 드래그한 대로 정확히 그어집니다. Shift를 누르면 스냅됩니다.

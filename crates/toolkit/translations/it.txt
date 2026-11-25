@@ -378,6 +378,15 @@ it: Blu trasparente.
 en: Milky translucent white, like a frosted print: light glows through it softly.
 it: Bianco lattiginoso traslucido, come una stampa satinata: la luce lo attraversa con un bagliore morbido.
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+it: Vetro verde satinato, come venivano pressate le bottiglie di profumo Art Déco: i bordi sottili e i tagli fini brillano di verde vivo, le parti spesse diventano profonde e scure.
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+it: Vetro verde lattiginoso come la giada o la malachite: la luce vi risplende dentro, ma non si vede attraverso.
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+it: Vetro blu intenso satinato: blu brillante dove è sottile, quasi nero dove è spesso.
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 it: Crosta scura e raffreddata spaccata da crepe di lava incandescente, con la lava che affiora negli incavi. Le placche si spostano lentamente.
 
@@ -2697,6 +2706,9 @@ it: Quanto è trasparente: di più lascia entrare la luce più a fondo prima che
 en: Milkiness: light scattered inside, as in a frosted print.
 it: Lattiginosità: luce diffusa all'interno, come in una stampa satinata.
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+it: Una superficie satinata e incisa all'acido, come il vetro smerigliato: ciò che sta dietro si sfoca e le parti sottili brillano del colore del vetro. 0 lucido, 2 completamente smerigliato.
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 it: Un matcap porta con sé la propria illuminazione. Disattiva Matcap per vedere queste luci.
 
@@ -2961,9 +2973,6 @@ it: Dipingi per proteggere. Ctrl o il tasto destro cancella.
 en: Accumulate (Off)
 it: Accumulate (Off)
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-it: On: ogni passaggio sullo stesso punto aggiunge di più, senza limite. Off: una pennellata costruisce fino a un'altezza e non oltre, per quante volte tu ripassi sullo stesso punto al suo interno; solleva la penna e fai un'altra pennellata per costruire sopra.
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 it: Quanto velocemente il pennello costruisce, in aggiunta a Strength: più alto raggiunge l'effetto pieno in meno passaggi. Su Layer, quanto velocemente il gradino sale alla sua altezza.
 
@@ -3113,9 +3122,6 @@ it: Scrive l'oggetto selezionato come STL binario per uno slicer: posizionato co
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 it: Export FBX scrive anche quanta parte di ogni materiale dipinto c'è in ogni punto nei set UV da 1 a 4 dell'oggetto (due materiali per set), perché uno shader per giochi tuo possa miscelare le texture. Unity li legge da uv2 a uv5. Off: l'FBX ha il suo colore e un materiale per faccia, che è tutto ciò che Blender e Unity usano da soli.
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-it: {picked} oggetti sono selezionati. FBX li scrive tutti in un unico file; OBJ, PLY e STL scrivono solo quello evidenziato.
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 it: Ombreggia con l'immagine di una sfera illuminata: veloce, e uguale da ogni angolazione.
@@ -5022,12 +5028,6 @@ it: Trascina da un angolo a quello opposto.
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 it: Disegna a mano libera attorno a ciò che vuoi; il contorno si chiude da solo fino al punto in cui è iniziato.
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-it: Trascina una linea retta; prosegue oltre entrambe le estremità. Spunta Snap, oppure tieni premuto Shift, per averne una esatta.
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-it: Per un taglio esatto: la linea ruota a passi di 15 gradi (orizzontale, verticale, 45...) e, dove passa vicino al centro dell'oggetto o alla sua origine, passa esattamente per esso. Shift fa il contrario di questa spunta finché è premuto.
-
 en: Shift (box, lasso)
 it: Shift (riquadro, lazo)
 
@@ -5045,9 +5045,6 @@ it: Taglia via ciò che un riquadro, un lazo o una linea retta copre, e chiude i
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 it: Taglia il modello in due lungo una linea, un lazo o un riquadro: entrambi i pezzi vengono conservati, quello coperto come nuovo oggetto (K).
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-it: Snap attivo: una linea ruota a passi di 15 gradi e aggancia il centro e l'origine dell'oggetto.
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 it: Snap disattivato: una linea va esattamente dove viene trascinata. Tieni premuto Shift per agganciarne una.

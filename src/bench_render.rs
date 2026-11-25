@@ -642,6 +642,7 @@ fn shots() -> Vec<Shot> {
         ("lure", "matcap=off,finish=lure"),
         ("wood", "matcap=off,finish=wood"),
         ("resin", "matcap=off,finish=resin:clear,gradient"),
+        ("glass", "matcap=off,finish=resin:frosted_emerald,gradient"),
     ] {
         out.push(shot(&format!("{name}_refined"), &format!("{spec},refine,samples=128")));
         out.push(shot(&format!("{name}_rays"), &format!("{spec},refine,samples=128,rays")));
@@ -743,7 +744,7 @@ pub fn run_shots(folder: &Path) {
 /// The studio pictures: shapes standing on a slab, one floating above it,
 /// for the shadows (crisp where they touch, soft farther off) and later the
 /// floor and the lights.
-const STUDIO: [(&str, &str); 22] = [
+const STUDIO: [(&str, &str); 26] = [
     ("studio", "matcap=off"),
     ("studio_hard", "matcap=off,softness=0"),
     ("studio_softbox", "matcap=off,light=softclay"),
@@ -764,6 +765,10 @@ const STUDIO: [(&str, &str); 22] = [
     ("floor_white_glossy", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=64,light=highkey,backdrop=1"),
     ("studio_resin_amber", "matcap=off,finish=resin:amber,refine,samples=64"),
     ("studio_resin_clear_white", "matcap=off,finish=resin:clear,refine,samples=64,light=highkey,backdrop=1,floor"),
+    // Frosted glass, in the studio and backlit on white as glass is shown.
+    ("studio_glass_emerald", "matcap=off,finish=resin:frosted_emerald,refine,samples=64"),
+    ("studio_glass_emerald_white", "matcap=off,finish=resin:frosted_emerald,refine,samples=64,light=highkey,backdrop=1,floor"),
+    ("studio_glass_jade", "matcap=off,finish=resin:jade_glass,refine,samples=64"),
     // Ray traced, as a render with Ray Traced on is (render/ray.rs), on a
     // card that traces rays.
     ("studio_rays", "matcap=off,refine,samples=256,rays"),
@@ -772,6 +777,7 @@ const STUDIO: [(&str, &str); 22] = [
     ("floor_white_glossy_rays", "matcap=off,floor,floorreflect=0.5,floorrough=0.15,refine,samples=256,light=highkey,backdrop=1,rays"),
     ("studio_resin_amber_rays", "matcap=off,finish=resin:amber,refine,samples=256,rays"),
     ("studio_resin_clear_white_rays", "matcap=off,finish=resin:clear,refine,samples=256,light=highkey,backdrop=1,floor,rays"),
+    ("studio_glass_emerald_white_rays", "matcap=off,finish=resin:frosted_emerald,refine,samples=256,light=highkey,backdrop=1,floor,rays"),
 ];
 
 /// The studio scene under the HDRI named by `SCULPT_SHOT_HDRI`, which is

@@ -377,6 +377,15 @@ fr: Bleu transparent.
 en: Milky translucent white, like a frosted print: light glows through it softly.
 fr: Blanc translucide laiteux, comme une pièce imprimée dépolie : la lumière la traverse doucement.
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+fr: Verre vert satiné, comme les flacons de parfum Art déco pressés : les bords fins et les tailles délicates brillent d'un vert vif, les parties épaisses deviennent profondes et sombres.
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+fr: Verre vert laiteux comme le jade ou la malachite : la lumière y rayonne, mais on ne voit pas au travers.
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+fr: Verre bleu profond satiné : bleu vif là où il est fin, presque noir là où il est épais.
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 fr: Croûte sombre refroidie fendue de fissures de roche en fusion incandescentes, avec de la lave qui remonte dans les creux. Les plaques se déplacent lentement.
 
@@ -2696,6 +2705,9 @@ fr: Le degré de transparence : plus il est élevé, plus la lumière pénètre
 en: Milkiness: light scattered inside, as in a frosted print.
 fr: Laiteux : de la lumière diffusée à l’intérieur, comme dans une impression dépolie.
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+fr: Une surface satinée, gravée à l'acide, comme du verre dépoli : ce qui est derrière devient flou et les parties fines brillent de la couleur du verre. 0 poli, 2 entièrement dépoli.
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 fr: Un matcap porte son propre éclairage. Désactivez Matcap pour voir ces lumières.
 
@@ -2960,9 +2972,6 @@ fr: Peignez pour protéger. Ctrl ou le bouton droit efface.
 en: Accumulate (Off)
 fr: Accumulate (Off)
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-fr: On : chaque passage au même endroit ajoute davantage, sans limite. Off : un trait monte jusqu’à une hauteur et pas plus, même si vous repassez souvent au même endroit ; levez le stylet et retracez pour construire par-dessus.
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 fr: La vitesse à laquelle le pinceau construit, en plus de Strength : plus haut, l’effet complet est atteint en moins de passages. Sur Layer, la vitesse à laquelle la marche monte à sa hauteur.
 
@@ -3112,9 +3121,6 @@ fr: Écrivez l’objet sélectionné en STL binaire pour un slicer : placé com
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 fr: Export FBX écrit aussi la quantité de chaque matériau peint en chaque point dans les jeux d’UV 1 à 4 de l’objet (deux matériaux par jeu), pour qu’un shader de jeu de votre cru mélange les textures. Unity les lit comme uv2 à uv5. Off : le FBX contient sa couleur et un matériau par face, ce que Blender et Unity utilisent seuls.
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-fr: {picked} objets sont sélectionnés. FBX les écrit tous dans un seul fichier ; OBJ, PLY et STL n’écrivent que celui en surbrillance.
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 fr: Ombrez avec l’image d’une sphère éclairée : rapide, et identique sous tous les angles.
@@ -5021,12 +5027,6 @@ fr: Faites glisser d’un coin au coin opposé.
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 fr: Dessinez à main levée autour de ce que vous voulez ; le contour se referme tout seul à son point de départ.
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-fr: Faites glisser une ligne droite ; elle se prolonge au-delà des deux extrémités. Cochez Snap, ou maintenez Shift, pour une ligne exacte.
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-fr: Pour une coupe exacte : la ligne tourne par pas de 15 degrés (horizontale, verticale, 45...) et, là où elle passe près du milieu de l’objet ou de son origine, passe exactement par lui. Shift fait le contraire de cette case tant qu’il est maintenu.
-
 en: Shift (box, lasso)
 fr: Shift (rectangle, lasso)
 
@@ -5044,9 +5044,6 @@ fr: Découpez ce qu’un rectangle, un lasso ou une ligne droite couvre, et refe
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 fr: Coupez le modèle en deux le long d’une ligne, d’un lasso ou d’un rectangle : les deux morceaux sont gardés, celui qui est couvert en nouvel objet (K).
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-fr: Snap activé : une ligne tourne par pas de 15 degrés et s’accroche au milieu et à l’origine de l’objet.
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 fr: Snap désactivé : une ligne va exactement où on la fait glisser. Maintenez Shift pour en accrocher une.

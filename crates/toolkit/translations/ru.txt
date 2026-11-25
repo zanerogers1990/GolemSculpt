@@ -379,6 +379,15 @@ ru: Прозрачный синий.
 en: Milky translucent white, like a frosted print: light glows through it softly.
 ru: Молочно-белый полупрозрачный, как матовая печать: свет мягко просвечивает сквозь него.
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+ru: Сатинированное зелёное стекло, как прессованные флаконы духов в стиле ар-деко: тонкие края и мелкие насечки светятся ярко-зелёным, толстые части становятся глубокими и тёмными.
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+ru: Молочно-зелёное стекло, как нефрит или малахит: свет светится внутри, но насквозь ничего не видно.
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+ru: Сатинированное тёмно-синее стекло: ярко-синее там, где тонкое, почти чёрное там, где толстое.
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 ru: Тёмная остывшая корка, рассечённая светящимися трещинами расплава; в углублениях выступает лава. Плиты медленно смещаются.
 
@@ -2698,6 +2707,9 @@ ru: Насколько он прозрачен: чем больше, тем гл
 en: Milkiness: light scattered inside, as in a frosted print.
 ru: Молочность: свет рассеивается внутри, как в матовой печати.
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+ru: Сатиновая травлёная поверхность, как у матового стекла: то, что позади, размывается, а тонкие части светятся цветом стекла. 0 полированная, 2 полностью матовая.
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 ru: У matcap своё освещение. Выключите Matcap, чтобы увидеть эти источники света.
 
@@ -2962,9 +2974,6 @@ ru: Рисуйте, чтобы защитить. Ctrl или правая кно
 en: Accumulate (Off)
 ru: Accumulate (Off)
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-ru: On: каждый проход по одному и тому же месту добавляет ещё, без предела. Off: мазок наращивает до определённой высоты и не выше, сколько бы раз вы ни проходили по одному месту в нём; оторвите перо и проведите мазок снова, чтобы нарастить сверху.
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 ru: Как быстро кисть наращивает — сверх Strength: чем больше, тем меньше проходов нужно для полного эффекта. У Layer — как быстро ступень поднимается до своей высоты.
 
@@ -3114,9 +3123,6 @@ ru: Запишите выбранный объект как бинарный STL
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 ru: Export FBX также записывает, сколько каждого нанесённого материала приходится на каждую точку, в наборы UV объекта с 1 по 4 (по два материала на набор) — чтобы ваш собственный игровой шейдер смешивал по ним текстуры. Unity читает их как uv2–uv5. Off: в FBX есть цвет и один материал на полигон — это всё, что Blender и Unity используют сами по себе.
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-ru: Выбрано объектов: {picked}. FBX записывает их все в один файл; OBJ, PLY и STL — только подсвеченный.
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 ru: Затенять по изображению освещённой сферы: быстро и одинаково с любого ракурса.
@@ -5023,12 +5029,6 @@ ru: Тяните от одного угла к противоположному.
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 ru: Обведите нужное от руки; контур сам замкнётся в начальной точке.
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-ru: Проведите прямую линию; она продолжается за оба конца. Отметьте Snap или удерживайте Shift для точной линии.
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-ru: Для точного разреза: линия поворачивается шагами по 15° (горизонтально, вертикально, 45...) и, если проходит близко к середине объекта или к его началу координат, идёт точно через них. Shift, пока удерживается, делает обратное этой галочке.
-
 en: Shift (box, lasso)
 ru: Shift (рамка, лассо)
 
@@ -5046,9 +5046,6 @@ ru: Отрежьте то, что накрывает рамка, лассо ил
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 ru: Разрежьте модель на две части по линии, лассо или рамке: сохраняются обе, накрытая — как новый объект (K).
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-ru: Snap включён: линия поворачивается шагами по 15° и цепляется за середину и начало координат объекта.
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 ru: Snap выключен: линия идёт точно туда, куда её тянут. Удерживайте Shift, чтобы привязать линию.

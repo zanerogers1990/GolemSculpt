@@ -379,6 +379,15 @@ tr: Saydam mavi.
 en: Milky translucent white, like a frosted print: light glows through it softly.
 tr: Buzlu bir baskı gibi sütlü yarı saydam beyaz: ışık içinden yumuşakça parlıyor.
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+tr: Saten buzlu yeşil cam, Art Deco parfüm şişelerinin preslendiği gibi: ince kenarlar ve ince kesimler parlak yeşil parlar, kalın kısımlar derin ve koyu olur.
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+tr: Yeşim ya da malakit gibi süt yeşili cam: ışık içinde parlar ama içinden görülmez.
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+tr: Saten buzlu koyu mavi cam: ince olduğu yerde parlak mavi, kalın olduğu yerde neredeyse siyah.
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 tr: Parlayan erimiş çatlaklarla yarılmış koyu, soğumuş kabuk; girintilerde yükselen lav. Plakalar yavaşça kayıyor.
 
@@ -2698,6 +2707,9 @@ tr: Ne kadar saydam olduğu: daha fazlası, reçinenin rengi baskın çıkmadan 
 en: Milkiness: light scattered inside, as in a frosted print.
 tr: Sütlülük: buzlu bir baskıdaki gibi içeride saçılan ışık.
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+tr: Buzlu cam gibi saten, asitle aşındırılmış bir yüzey: arkasındaki bulanıklaşır ve ince kısımlar camın renginde parlar. 0 cilalı, 2 tamamen buzlu.
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 tr: Bir matcap kendi ışığını taşır. Bu ışıkları görmek için Matcap'i kapat.
 
@@ -2962,9 +2974,6 @@ tr: Korumak için boya. Ctrl veya sağ tuş siler.
 en: Accumulate (Off)
 tr: Accumulate (Off)
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-tr: On: aynı noktanın üzerinden her geçiş, sınır olmadan daha fazla ekler. Off: bir darbe bir yüksekliğe kadar birikir ve daha öteye gitmez, aynı yerin üzerinden kaç kez geçersen geç; üstüne eklemek için kalemi kaldır ve yeniden darbe yap.
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 tr: Fırçanın Strength değerine ek olarak ne kadar hızlı biriktirdiği: yüksek değer tam etkiye daha az geçişte ulaşır. Layer'da basamağın yüksekliğine ne kadar hızlı çıktığı.
 
@@ -3114,9 +3123,6 @@ tr: Seçili nesneyi bir slicer için ikili (binary) STL olarak yaz: sahnede durd
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 tr: Export FBX ayrıca her boyalı malzemeden her noktada ne kadar olduğunu nesnenin UV setleri 1 ile 4'e (set başına iki malzeme) yazar; kendi oyun shader'ının dokuları buna göre karıştırması için. Unity bunları uv2 ile uv5 olarak okur. Off: FBX rengini ve yüz başına bir malzemeyi içerir; Blender ve Unity kendi başlarına yalnızca bunu kullanır.
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-tr: {picked} nesne seçili. FBX hepsini tek bir dosyaya yazar; OBJ, PLY ve STL yalnızca parlak olanı yazar.
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 tr: Işıklı bir kürenin resmiyle gölgelendir: hızlı ve her açıdan aynı.
@@ -5023,12 +5029,6 @@ tr: Bir köşeden karşı köşeye sürükle.
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 tr: İstediğin yerin etrafını serbest elle çiz; dış hat başladığı yere kendiliğinden kapanır.
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-tr: Düz bir çizgi sürükle; iki ucunun ötesine de devam eder. Tam bir çizgi için Snap'i işaretle veya Shift tuşunu basılı tut.
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-tr: Tam bir kesik için: çizgi 15 derecelik adımlarla döner (yatay, dikey, 45...) ve nesnenin ortasına ya da orijinine yakın geçtiği yerde tam olarak içinden geçer. Shift basılı tutulduğu sürece bu işaretin tersini yapar.
-
 en: Shift (box, lasso)
 tr: Shift (box, lasso)
 
@@ -5046,9 +5046,6 @@ tr: Bir kutunun, kementin veya düz çizginin kapsadığı kısmı kes ve bırak
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 tr: Modeli bir çizgi, kement veya kutu boyunca ikiye kes: iki parça da korunur, kapsanan parça yeni bir nesne olarak (K).
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-tr: Snap açık: çizgi 15 derecelik adımlarla döner ve nesnenin ortasını ve orijinini yakalar.
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 tr: Snap kapalı: çizgi tam olarak sürüklendiği yere gider. Birini yakalamak için Shift tuşunu basılı tut.

@@ -1616,9 +1616,14 @@ fn finish_glow(s: Surface, params: FinishParams) -> MaterialSample {
 // is drawn, so a resin in a dark studio looks dark through and one in front
 // of an HDRI shows it.
 fn backdrop(dir: vec3<f32>) -> vec3<f32> {
+    return backdrop_blurred(dir, 2.0);
+}
+
+// The same, an HDRI read at picture level `lod`: blurrier the higher.
+fn backdrop_blurred(dir: vec3<f32>, lod: f32) -> vec3<f32> {
     let mode = look.bg_params.x;
     if (mode > 1.5) {
-        return textureSampleLevel(hdri_tex, hdri_smp, hdri_uv(dir, look.bg_params.y), 2.0).rgb * look.bg_params.z;
+        return textureSampleLevel(hdri_tex, hdri_smp, hdri_uv(dir, look.bg_params.y), lod).rgb * look.bg_params.z;
     }
     if (mode > 0.5) {
         let t = pow(clamp(dir.y * 0.5 + 0.5, 0.0, 1.0), 1.0 / max(look.bg_params.w, 0.001));
@@ -1636,12 +1641,20 @@ fn traced_through(s: Surface) -> vec4<f32> {
     return vec4<f32>(-1.0);
 }
 
+// Frosted (v[1].w above 0), as satin Art Deco glass is: the etched surface
+// spreads what passes through it, so what is behind blurs and the light
+// behind arrives from all round, and light coming in at the front is
+// scattered back out by the etched far side having crossed the glass twice,
+// so thin edges and fine cuts light up in the glass's colour while thick
+// parts go deep.
+//
 // v[0] the colour light takes on through `w` of resin (world units); v[1]
-// x haze, y smoothness, z transmission.
+// x haze, y smoothness, z transmission, w frost.
 fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
     let tint = params.v[0].rgb;
     let depth = max(params.v[0].w, 1e-5);
     let haze = saturate(params.v[1].x);
+    let frost = saturate(params.v[1].w);
     let n = s.n;
     // How much resin the view crosses; with nothing behind, a solid body.
     var thickness = depth * 2.0;
@@ -1655,6 +1668,9 @@ fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
     if (seen.a >= 0.0) {
         thickness = seen.a;
     }
+    // Light wanders inside frosted glass, so it crosses more glass than the
+    // thickness: even thin parts take on a rich colour.
+    thickness += frost * depth * 0.7;
     let through = pow(max(tint, vec3<f32>(1e-3)), vec3<f32>(thickness / depth));
     // What is behind, along the view bent into the resin, and only what the
     // surface does not reflect (the lighting adds the reflection).
@@ -1666,22 +1682,33 @@ fn finish_resin(s: Surface, params: FinishParams) -> MaterialSample {
     let passes = 1.0 - (0.04 + 0.96 * pow5(1.0 - nv));
     var beyond = backdrop(bent);
     if (seen.a >= 0.0) {
+        // Traced: the rays spread through the frost themselves.
         beyond = seen.rgb;
+    } else if (frost > 0.0) {
+        // Frosted: what is behind blurred, and the light from all round it.
+        let soft = backdrop_blurred(bent, 2.0 + 5.0 * frost);
+        beyond = mix(beyond, mix(soft, ambient(bent), 0.5), frost);
     }
     let behind = beyond * through * passes * (1.0 - haze);
     // A light behind the model seen through it, tinted by the resin: where
     // the bent view points at it, sharply in clear resin and spread wide in
     // milky.
     var glow = vec3<f32>(0.0);
-    let spread = mix(48.0, 3.0, sqrt(haze));
+    let spread = mix(48.0, 3.0, sqrt(max(haze, frost)));
+    // Light in at the front, back out off the etched far side, tinted by
+    // the glass there and back.
+    var inside = ambient(n) * s.ao;
     let count = light_count();
     for (var i = 0; i < count; i++) {
         let light = get_light(i, s);
         glow += light.color * pow(saturate(dot(bent, light.dir)), spread);
+        inside += light.color * light.shadow * saturate(dot(n, light.dir));
     }
+    let twice = through * through;
     var m = material(s, tint * haze);
     m.smoothness = params.v[1].y;
-    m.emission = behind + glow * through * params.v[1].z * passes;
+    m.emission = behind + glow * through * params.v[1].z * passes
+        + inside * twice * (frost * 0.6 * (1.0 - haze) * passes * s.ao);
     // A milky resin scatters light past the shadow line, as clay does.
     m.scatter_color = tint * haze * 0.5;
     m.scatter_wrap = 0.6;

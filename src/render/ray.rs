@@ -67,7 +67,7 @@ pub struct HitMaterial {
     /// rgb colour (linear), a metallic.
     pub color: [f32; 4],
     /// x smoothness, y how much light passes through it (resin), tinted by
-    /// the colour.
+    /// the colour, z how frosted the resin's surface is.
     pub params: [f32; 4],
 }
 
@@ -79,6 +79,7 @@ pub fn hit_material(look: &Look, base: [f32; 4]) -> HitMaterial {
     let mix = |a: look::Rgb, b: look::Rgb| [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5];
     let pick = |i: usize, len: usize| i.min(len - 1);
     let mut through = 0.0;
+    let mut frost = 0.0;
     let (color, metallic, smoothness) = match look.finish {
         Finish::None => ([base[0], base[1], base[2]], look.metallic, base[3]),
         Finish::LurePlastic => {
@@ -101,12 +102,13 @@ pub fn hit_material(look: &Look, base: [f32; 4]) -> HitMaterial {
             // What lies beyond shows through it, tinted, as much as it is not milky.
             let p = &look::RESINS[pick(look.resin.preset, look::RESINS.len())];
             through = 1.0 - (p.haze * look.resin.haze).clamp(0.0, 1.0);
+            frost = look::frost_of(p.frost, look.resin.frost);
             (look::linear(p.color), 0.0, p.smoothness * look.resin.gloss)
         }
     };
     HitMaterial {
         color: [color[0], color[1], color[2], metallic.clamp(0.0, 1.0)],
-        params: [smoothness.clamp(0.0, 1.0), through, 0.0, 0.0],
+        params: [smoothness.clamp(0.0, 1.0), through, frost, 0.0],
     }
 }
 
@@ -515,7 +517,8 @@ pub fn params(view_proj: &[[f32; 4]; 4], sample: u32, through: bool, material: &
     let roughness = (1.0 - material.params[0]).clamp(0.0, 1.0);
     TraceParams {
         unproject: unproject.to_cols_array_2d(),
-        params: [sample as f32, if through { 1.0 } else { 0.0 }, REACH, (roughness * roughness).max(0.002)],
+        // y above 1 by how frosted the resin is.
+        params: [sample as f32, if through { 1.0 + material.params[2] } else { 0.0 }, REACH, (roughness * roughness).max(0.002)],
     }
 }
 

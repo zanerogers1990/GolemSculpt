@@ -289,6 +289,11 @@ pub(super) fn resin(ui: &mut egui::Ui, look: &mut Look, tips: bool, size: f32) {
         "How see-through it is: more lets the light further in before the resin's colour takes over.",
     );
     tip(theme::slider(ui, "Haze", &mut s.haze, 0.0..=3.0, two), tips, "Milkiness: light scattered inside, as in a frosted print.");
+    tip(
+        theme::slider(ui, "Frost", &mut s.frost, 0.0..=2.0, two),
+        tips,
+        "A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.",
+    );
     theme::slider(ui, "Gloss", &mut s.gloss, 0.0..=1.0, two);
 }
 

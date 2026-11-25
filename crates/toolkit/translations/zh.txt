@@ -379,6 +379,15 @@ zh: 透明蓝色。
 en: Milky translucent white, like a frosted print: light glows through it softly.
 zh: 乳白色半透明，像磨砂打印件：光线柔和地透出来。
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+zh: 缎面磨砂绿玻璃，如同压制的装饰艺术风格香水瓶：薄边和细刻处发出明亮的绿光，厚的部分则深沉暗淡。
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+zh: 像玉石或孔雀石一样的乳白绿玻璃：光在其中发亮，但看不透。
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+zh: 缎面磨砂深蓝玻璃：薄处呈明亮的蓝色，厚处几乎是黑色。
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 zh: 冷却的深色外壳被发光的熔融裂缝撕开，岩浆从凹处涌出。壳板缓缓移动。
 
@@ -2698,6 +2707,9 @@ zh: 透明程度：越高，光线进入得越深，树脂的颜色才会接管�
 en: Milkiness: light scattered inside, as in a frosted print.
 zh: 乳白度：光线在内部散射，就像磨砂打印件。
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+zh: 像磨砂玻璃一样的缎面蚀刻表面：后面的东西变模糊，薄的部分发出玻璃的颜色。0 为抛光，2 为完全磨砂。
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 zh: Matcap 自带光照。关闭 Matcap 才能看到这些灯光。
 
@@ -2962,9 +2974,6 @@ zh: 涂抹以保护。Ctrl 或右键擦除。
 en: Accumulate (Off)
 zh: Accumulate (Off)（累积）
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-zh: 开：每次经过同一处都会继续添加，没有上限。关：一笔最多累积到一定高度，无论在这一笔里反复经过同一处多少次都不会更高；抬笔后再画一笔才能继续往上叠加。
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 zh: 在 Strength 之外，笔刷累积的速度：越高，用越少遍数就能达到完整效果。对 Layer 来说，则是台阶升到其高度的速度。
 
@@ -3114,9 +3123,6 @@ zh: 把所选物体写成供切片软件使用的二进制 STL：保持它在场
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 zh: Export FBX 还会把每种绘制材质在各点上的占比写入物体的 UV 集 1 到 4（每集两种材质），供你自己的游戏着色器据此混合贴图。Unity 会把它们读作 uv2 到 uv5。关闭时：FBX 只带颜色和每个面一种材质，这就是 Blender 和 Unity 自身所能用到的全部内容。
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-zh: 已选中 {picked} 个物体。FBX 会把它们全部写入同一个文件；OBJ、PLY 和 STL 只写入高亮的那个。
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 zh: 用一张受光球体的图片着色：速度快，而且从任何角度看都一样。
@@ -5023,12 +5029,6 @@ zh: 从一个角拖到对角。
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 zh: 围着你想要的部分徒手画圈；轮廓会自动闭合回起点。
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-zh: 拖出一条直线；它会向两端继续延伸。勾选 Snap，或按住 Shift，可得到精确的直线。
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-zh: 用于精确切割：直线按 15° 一档旋转（水平、垂直、45°……），当它靠近物体中心或原点时，会精确穿过它。按住 Shift 时，效果与这个勾选框相反。
-
 en: Shift (box, lasso)
 zh: Shift（方框、套索）
 
@@ -5046,9 +5046,6 @@ zh: 切掉方框、套索或直线所覆盖的部分，并封上留下的洞。
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 zh: 沿直线、套索或方框把模型切成两半：两部分都会保留，被覆盖的那部分成为新物体（K）。
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-zh: 吸附已开启：直线按 15° 一档旋转，并吸附到物体的中心和原点。
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 zh: 吸附已关闭：直线完全跟随拖动的位置。按住 Shift 可对这条线进行吸附。

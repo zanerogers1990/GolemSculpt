@@ -379,6 +379,15 @@ es: Azul transparente.
 en: Milky translucent white, like a frosted print: light glows through it softly.
 es: Blanco lechoso translúcido, como una impresión esmerilada: la luz lo atraviesa con suavidad.
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+es: Vidrio verde satinado, como se prensaban los frascos de perfume Art Déco: los bordes finos y los cortes delicados brillan en verde vivo, y las partes gruesas se vuelven profundas y oscuras.
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+es: Vidrio verde lechoso como el jade o la malaquita: la luz brilla dentro, pero no se ve a través.
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+es: Vidrio azul intenso satinado: azul brillante donde es fino, casi negro donde es grueso.
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 es: Corteza oscura y enfriada, partida por grietas de roca fundida incandescentes, con lava que brota en los huecos. Las placas se desplazan lentamente.
 
@@ -2698,6 +2707,9 @@ es: Cuánto se ve a través: más deja entrar la luz más adentro antes de que d
 en: Milkiness: light scattered inside, as in a frosted print.
 es: Lechosidad: luz dispersa en el interior, como en una impresión esmerilada.
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+es: Una superficie satinada y grabada al ácido, como el vidrio esmerilado: lo que hay detrás se difumina y las partes finas brillan con el color del vidrio. 0 pulido, 2 totalmente esmerilado.
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 es: Un matcap lleva su propia iluminación. Desactiva Matcap para ver estas luces.
 
@@ -2962,9 +2974,6 @@ es: Pinta para proteger. Ctrl o el botón derecho borra.
 en: Accumulate (Off)
 es: Accumulate (Off)
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-es: On: cada pasada sobre el mismo punto añade más, sin límite. Off: un trazo se acumula hasta una altura y no más, por muchas veces que pases por el mismo lugar; levanta el lápiz y traza de nuevo para seguir acumulando encima.
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 es: A qué velocidad acumula el pincel, además de Strength: un valor mayor alcanza el efecto completo en menos pasadas. En Layer, la rapidez con que el escalón sube hasta su altura.
 
@@ -3114,9 +3123,6 @@ es: Guarda el objeto seleccionado como un STL binario para un slicer: colocado c
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 es: Export FBX también escribe cuánto hay de cada material pintado en cada punto en los conjuntos UV 1 a 4 del objeto (dos materiales por conjunto), para que un shader de juego propio mezcle texturas con ellos. Unity los lee como uv2 a uv5. Off: el FBX incluye su color y un material por cara, que es todo lo que Blender y Unity usan por sí solos.
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-es: Hay {picked} objetos seleccionados. FBX los escribe todos en un solo archivo; OBJ, PLY y STL escriben solo el objeto resaltado.
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 es: Sombrea con una imagen de una esfera iluminada: rápido, e igual desde cualquier ángulo.
@@ -5023,12 +5029,6 @@ es: Arrastra de una esquina a la opuesta.
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 es: Dibuja a mano alzada alrededor de lo que quieras; el contorno se cierra solo hasta donde empezó.
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-es: Arrastra una línea recta; continúa más allá de ambos extremos. Marca Snap, o mantén Shift, para una exacta.
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-es: Para un corte exacto: la línea gira en pasos de 15 grados (horizontal, vertical, 45...) y, donde pasa cerca del centro del objeto o de su origen, pasa exactamente por él. Shift hace lo contrario de esta casilla mientras se mantiene pulsada.
-
 en: Shift (box, lasso)
 es: Shift (recuadro, lazo)
 
@@ -5046,9 +5046,6 @@ es: Corta lo que cubre un recuadro, un lazo o una línea recta, y cierra el aguj
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 es: Corta el modelo en dos a lo largo de una línea, un lazo o un recuadro: se conservan ambas piezas, la cubierta como un objeto nuevo (K).
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-es: Snap activado: una línea gira en pasos de 15 grados y se engancha al centro y al origen del objeto.
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 es: Snap desactivado: una línea va exactamente donde se arrastra. Mantén Shift para ajustar una.

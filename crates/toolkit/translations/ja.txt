@@ -379,6 +379,15 @@ ja: 透明な青。
 en: Milky translucent white, like a frosted print: light glows through it softly.
 ja: つや消しの3Dプリントのような乳白色の半透明で、光がやわらかく透けて光る。
 
+en: Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.
+ja: アール・デコの香水瓶のようにプレスされたサテン仕上げの緑のガラス：薄い縁や細かな彫りは明るい緑に輝き、厚い部分は深く暗くなります。
+
+en: Milky green glass like jade or malachite: light glows into it but you cannot see through.
+ja: 翡翠やマラカイトのような乳白色の緑のガラス：光は内側で輝きますが、向こう側は見えません。
+
+en: Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.
+ja: サテン仕上げの深い青のガラス：薄いところは明るい青、厚いところはほぼ黒になります。
+
 en: Dark cooled crust split by glowing molten cracks, with lava welling up in the recesses. The plates slowly shift.
 ja: 冷えて固まった暗い地殻が、赤熱した溶岩の割れ目で裂けており、くぼみには溶岩が湧き上がる。地殻のプレートはゆっくり動く。
 
@@ -2698,6 +2707,9 @@ ja: どれだけ透けるか。大きいほど、レジンの色が支配的に�
 en: Milkiness: light scattered inside, as in a frosted print.
 ja: 乳白度。つや消しの造形物のように、内部で光が散乱します。
 
+en: A satin, etched surface like frosted glass: what is behind blurs and thin parts glow in the glass's colour. 0 polished, 2 fully frosted.
+ja: すりガラスのようなサテン状のエッチング面：後ろにあるものはぼやけ、薄い部分はガラスの色に輝きます。0 は磨き仕上げ、2 は完全なすりガラス。
+
 en: A matcap carries its own lighting. Turn Matcap off to see these lights.
 ja: マットキャップは独自のライティングを持っています。これらのライトを見るには Matcap をオフにしてください。
 
@@ -2962,9 +2974,6 @@ ja: 塗って守ります。Ctrl または右ボタンで消します。
 en: Accumulate (Off)
 ja: Accumulate (Off)(蓄積)
 
-en: On: every pass over the same spot adds more, with no limit. Off: a stroke builds up to a height and no further, however often you go over the same place in it; lift the pen and stroke again to build on top.
-ja: オン: 同じ場所をなぞるたびに、限りなく足されます。オフ: ストロークは一定の高さまで盛り上がり、同じストローク内で何度なぞってもそれ以上にはなりません。ペンを離して新しくストロークすると、さらに上に盛れます。
-
 en: How fast the brush builds, on top of Strength: higher gets to the full effect in fewer passes. On Layer, how fast the step rises to its height.
 ja: Strength に加えた、ブラシの効きの速さ。高いほど、少ない回数で最大の効果に達します。Layer では、段が目標の高さまで上がる速さです。
 
@@ -3114,9 +3123,6 @@ ja: 選択中のオブジェクトを、スライサー用のバイナリ STL �
 
 en: Export FBX also writes how much of each painted material is at each point into the object's UV sets 1 to 4 (two materials a set), for a game shader of your own to blend textures by. Unity reads them as uv2 to uv5. Off: the FBX has its colour and one material per face, which is all Blender and Unity use by themselves.
 ja: Export FBX で、塗られた各マテリアルの各頂点での割合を、オブジェクトの UV セット 1~4(1 セットにつきマテリアル 2 つ)にも書き出します。自作のゲームシェーダーでテクスチャをブレンドするためのものです。Unity では uv2~uv5 として読めます。オフ: FBX には色と面ごとのマテリアル 1 つが入り、Blender と Unity が単独で使うのはこれだけです。
-
-en: {picked} objects are selected. FBX writes them all into one file; OBJ, PLY and STL write the bright one only.
-ja: {picked} 個のオブジェクトを選択中です。FBX はすべてを 1 つのファイルに書き出し、OBJ、PLY、STL は明るく表示されているオブジェクトだけを書き出します。
 
 en: Shade with a picture of a lit sphere: quick, and the same from every angle.
 ja: ライトの当たった球の画像でシェーディングします。高速で、どの角度から見ても同じ見た目です。
@@ -5023,12 +5029,6 @@ ja: 一方の角から反対側の角までドラッグします。
 en: Draw freehand round what you want; the outline closes itself back to where it began.
 ja: 必要な範囲を自由に囲んで描きます。輪郭は始めた位置に自動で閉じます。
 
-en: Drag a straight line; it carries on past both ends. Tick Snap, or hold Shift, for an exact one.
-ja: 直線をドラッグします。線は両端の先まで続きます。正確な線にするには、Snap にチェックを入れるか、Shift を押したままにします。
-
-en: For an exact cut: the line turns in steps of 15 degrees (level, upright, 45...) and, where it passes close to the middle of the object or to its origin, goes exactly through it. Shift does the opposite of this tick while it is held.
-ja: 正確なカットのための設定です。線は 15 度刻みで回り(水平、垂直、45 度など)、オブジェクトの中央や原点の近くを通るときは、ちょうどそこを通ります。Shift を押している間は、このチェックの逆の動作になります。
-
 en: Shift (box, lasso)
 ja: Shift (box, lasso)(ボックス、ラッソ)
 
@@ -5046,9 +5046,6 @@ ja: ボックス、ラッソ、直線で覆った範囲をカットして、で�
 
 en: Cut the model in two along a line, lasso or box: both pieces are kept, the covered one as a new object (K).
 ja: 線、ラッソ、ボックスに沿ってモデルを 2 つに切ります。両方が残り、覆った側は新しいオブジェクトになります(K)。
-
-en: Snap on: a line turns in 15 degree steps and catches the middle and the origin of the object.
-ja: Snap オン: 線は 15 度刻みで回り、オブジェクトの中央と原点に吸着します。
 
 en: Snap off: a line goes exactly where it is dragged. Hold Shift to snap one.
 ja: Snap オフ: 線はドラッグしたとおりの位置に引かれます。Shift を押したままにすると、その線だけスナップします。

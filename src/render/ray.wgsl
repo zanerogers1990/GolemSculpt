@@ -16,15 +16,17 @@
 struct HitMaterial {
     // rgb colour (linear), a metallic
     color: vec4<f32>,
-    // x smoothness, y how much light passes through (resin), tinted by the colour
+    // x smoothness, y how much light passes through (resin), tinted by the
+    // colour, z how frosted
     params: vec4<f32>,
 };
 
 struct TraceParams {
     // Clip space back to the world, for the view as this sample draws it.
     unproject: mat4x4<f32>,
-    // x the sample, y 1 when the view through resin is traced, z how far a
-    // ray reaches, w the roughness reflections are traced with (GGX alpha)
+    // x the sample, y 1 when the view through resin is traced (more by how
+    // frosted it is), z how far a ray reaches, w the roughness reflections
+    // are traced with (GGX alpha)
     params: vec4<f32>,
 };
 
@@ -393,7 +395,18 @@ fn cs_trace(@builtin(global_invocation_id) id: vec3<u32>) {
     // leave), and on to whatever is there.
     var through = vec4<f32>(0.0, 0.0, 0.0, -1.0);
     if (trace.params.y > 0.5) {
-        var dir = refract(-v, n, 1.0 / 1.5);
+        // A frosted surface bends each sample's ray in by a slightly
+        // different slope of the etching, so what is seen through blurs as
+        // the samples add up.
+        let frost = clamp(trace.params.y - 1.0, 0.0, 1.0);
+        var into = n;
+        if (frost > 0.0) {
+            let u = ray_random(pixel, 15u);
+            let r = 0.6 * frost * sqrt(u.x);
+            let f = ray_frame(n);
+            into = normalize(n + f[0] * (r * cos(TAU * u.y)) + f[1] * (r * sin(TAU * u.y)));
+        }
+        var dir = refract(-v, into, 1.0 / 1.5);
         var start = world - n * lift;
         var crossed = 0.0;
         // Across, and back across where the far side reflects it inside,

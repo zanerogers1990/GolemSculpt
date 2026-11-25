@@ -400,23 +400,23 @@ pub const METALS: [MetalPreset; 7] = [
     MetalPreset {
         id: "patina",
         name: "Patina",
-        description: "Chalky blue-green verdigris over bronze, dark in the grooves, copper on the edges.",
-        metal: [0.70, 0.45, 0.25],
-        metal_smoothness: 0.55,
+        description: "Antique bronze: dark brown metal with soft blue-green verdigris settled in the folds, rubbed back to gold on the raised edges.",
+        metal: [0.50, 0.42, 0.26],
+        metal_smoothness: 0.45,
         metal_metallic: 0.85,
-        coat_a: [0.36, 0.64, 0.58],
-        coat_b: [0.17, 0.38, 0.36],
-        coat_metallic: 0.0,
-        coat_smoothness: 0.12,
-        wash_color: [0.11, 0.07, 0.045],
-        wash: 0.8,
-        coverage: 0.8,
-        edge_wear: 0.6,
-        patch_size: 0.07,
-        patch_contrast: 3.0,
-        patchiness: 0.8,
-        follows_recesses: 0.6,
-        grain: 0.35,
+        coat_a: [0.12, 0.115, 0.095],
+        coat_b: [0.24, 0.29, 0.28],
+        coat_metallic: 0.2,
+        coat_smoothness: 0.3,
+        wash_color: [0.04, 0.035, 0.03],
+        wash: 0.4,
+        coverage: 0.92,
+        edge_wear: 0.4,
+        patch_size: 0.05,
+        patch_contrast: 2.5,
+        patchiness: 0.7,
+        follows_recesses: 0.7,
+        grain: 0.25,
         grain_size: 0.005,
         patch_breakup: 0.0,
         sparkle: 0.0,
@@ -874,9 +874,13 @@ pub struct ResinPreset {
     pub smoothness: f32,
     /// Light from behind glowing through.
     pub transmission: f32,
+    /// A satin, acid-etched surface (0 polished, 1 fully frosted): what is
+    /// behind blurs, light glows through softly from all round, and light
+    /// coming in at the front lights the thin parts up in the glass's colour.
+    pub frost: f32,
 }
 
-pub const RESINS: [ResinPreset; 7] = [
+pub const RESINS: [ResinPreset; 10] = [
     ResinPreset {
         id: "clear",
         name: "Clear",
@@ -886,6 +890,7 @@ pub const RESINS: [ResinPreset; 7] = [
         haze: 0.02,
         smoothness: 0.97,
         transmission: 1.0,
+        frost: 0.0,
     },
     ResinPreset {
         id: "smoky",
@@ -896,6 +901,7 @@ pub const RESINS: [ResinPreset; 7] = [
         haze: 0.05,
         smoothness: 0.95,
         transmission: 0.8,
+        frost: 0.0,
     },
     ResinPreset {
         id: "amber",
@@ -906,6 +912,7 @@ pub const RESINS: [ResinPreset; 7] = [
         haze: 0.04,
         smoothness: 0.96,
         transmission: 1.0,
+        frost: 0.0,
     },
     ResinPreset {
         id: "ruby",
@@ -916,6 +923,7 @@ pub const RESINS: [ResinPreset; 7] = [
         haze: 0.03,
         smoothness: 0.97,
         transmission: 1.0,
+        frost: 0.0,
     },
     ResinPreset {
         id: "emerald",
@@ -926,6 +934,7 @@ pub const RESINS: [ResinPreset; 7] = [
         haze: 0.03,
         smoothness: 0.97,
         transmission: 1.0,
+        frost: 0.0,
     },
     ResinPreset {
         id: "sapphire",
@@ -936,6 +945,7 @@ pub const RESINS: [ResinPreset; 7] = [
         haze: 0.03,
         smoothness: 0.97,
         transmission: 1.0,
+        frost: 0.0,
     },
     ResinPreset {
         id: "frosted",
@@ -946,6 +956,40 @@ pub const RESINS: [ResinPreset; 7] = [
         haze: 0.55,
         smoothness: 0.6,
         transmission: 1.0,
+        frost: 0.0,
+    },
+    ResinPreset {
+        id: "frosted_emerald",
+        name: "Frosted Emerald",
+        description: "Satin-frosted green glass, as Art Deco perfume bottles were pressed: thin edges and fine cuts glow bright green, the thick parts go deep and dark.",
+        color: [0.02, 0.42, 0.12],
+        depth: 0.2,
+        haze: 0.06,
+        smoothness: 0.5,
+        transmission: 1.0,
+        frost: 0.85,
+    },
+    ResinPreset {
+        id: "jade_glass",
+        name: "Jade Glass",
+        description: "Milky green glass like jade or malachite: light glows into it but you cannot see through.",
+        color: [0.16, 0.66, 0.36],
+        depth: 0.18,
+        haze: 0.55,
+        smoothness: 0.62,
+        transmission: 0.8,
+        frost: 0.5,
+    },
+    ResinPreset {
+        id: "frosted_cobalt",
+        name: "Frosted Cobalt",
+        description: "Satin-frosted deep blue glass: bright blue where it is thin, nearly black where it is thick.",
+        color: [0.05, 0.15, 0.62],
+        depth: 0.2,
+        haze: 0.06,
+        smoothness: 0.5,
+        transmission: 1.0,
+        frost: 0.85,
     },
 ];
 
@@ -1243,12 +1287,15 @@ pub struct ResinSettings {
     pub clarity: f32,
     pub haze: f32,
     pub gloss: f32,
+    /// The preset's frost (see `ResinPreset::frost`) at 1; below, polished
+    /// toward none at 0; above, frosted toward fully at 2.
+    pub frost: f32,
     pub reference: f32,
 }
 
 impl Default for ResinSettings {
     fn default() -> Self {
-        Self { preset: 0, clarity: 1.0, haze: 1.0, gloss: 1.0, reference: 0.0 }
+        Self { preset: 0, clarity: 1.0, haze: 1.0, gloss: 1.0, frost: 1.0, reference: 0.0 }
     }
 }
 
@@ -1726,6 +1773,17 @@ pub const WOOD_SLOTS: usize = 12;
 pub const GLOW_SLOTS: usize = 5;
 pub const RESIN_SLOTS: usize = 2;
 
+/// A preset's `frost` turned by the Frost slider (`ResinSettings::frost`):
+/// as it is at 1, none at 0, fully frosted at 2.
+pub fn frost_of(preset: f32, slider: f32) -> f32 {
+    let preset = clamp01(preset);
+    if slider <= 1.0 {
+        preset * slider.max(0.0)
+    } else {
+        preset + (1.0 - preset) * (slider - 1.0).min(1.0)
+    }
+}
+
 /// What the uniform builder needs to know about the frame.
 pub struct Frame {
     pub cam_right: Vec3,
@@ -2202,7 +2260,7 @@ impl Look {
         let p = &RESINS[idx(s.preset, RESINS.len())];
         FinishParams::of::<RESIN_SLOTS>([
             rgba(p.color, p.depth * size * s.clarity.clamp(0.05, 10.0)),
-            [clamp01(p.haze * s.haze), clamp01(p.smoothness * s.gloss), p.transmission, 0.0],
+            [clamp01(p.haze * s.haze), clamp01(p.smoothness * s.gloss), p.transmission, frost_of(p.frost, s.frost)],
         ])
     }
 
