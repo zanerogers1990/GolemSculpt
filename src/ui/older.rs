@@ -1,6 +1,6 @@
 //! The Older Versions window (File tab): the earlier saves of the scene's
 //! file, kept beside it (`crate::backups`), and the recovery copies kept for
-//! a week (`crate::recovery::kept`). Each row adds its objects to the scene,
+//! a week (`crate::recovery::kept`), one list per file they are copies of. Each row adds its objects to the scene,
 //! which is how one lost object is brought back into today's work, or opens
 //! the whole of it in place of the scene. The app makes the list when the
 //! window opens (`app/older.rs`); the window only shows it.
@@ -23,6 +23,19 @@ pub struct Row {
     pub what: String,
 }
 
+/// The recovery copies of one file (or of the scenes never saved).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    /// "Door.sclp", or "Scenes never saved".
+    pub title: String,
+    /// The folder that file is in, to tell two of one name apart.
+    pub folder: Option<String>,
+    /// Whether it is the scene's own file: that list is shown open, first.
+    pub current: bool,
+    /// Newest first.
+    pub rows: Vec<Row>,
+}
+
 /// What the window shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Listing {
@@ -31,8 +44,9 @@ pub struct Listing {
     /// Its earlier saves, newest first.
     pub saves: Vec<Row>,
     pub saves_folder: Option<PathBuf>,
-    /// The recovery copies kept for a week, newest first.
-    pub copies: Vec<Row>,
+    /// The recovery copies kept for a week, one list per file: the scene's
+    /// own first, then the others with the most recently kept first.
+    pub copies: Vec<Group>,
     pub copies_folder: Option<PathBuf>,
     /// Whether a version may take the scene's place: nothing unsaved, and
     /// nothing that is in no file.
@@ -126,9 +140,21 @@ pub fn show(ctx: &egui::Context, doc: &Doc, state: &mut UiState, actions: &mut V
             ui.add_space(6.0);
             heading(ui, "Recovery copies from the past week", listing.copies_folder.as_ref(), actions);
             if listing.copies.is_empty() {
-                theme::hint(ui, "None yet. Each time GolemSculpt closes, or saves, its newest recovery copy is kept here for a week, even after Exit Without Saving.");
+                theme::hint(ui, "None yet. Each time GolemSculpt closes, or saves, its newest recovery copy of each file you worked on is kept here for a week, even after Exit Without Saving.");
             } else {
-                rows(ui, &listing.copies, listing.can_replace, tips, actions);
+                theme::hint(ui, "One list per file. Click a file's name to see its copies.");
+            }
+            for (i, group) in listing.copies.iter().enumerate() {
+                let count = if group.rows.len() == 1 { "1 copy".to_owned() } else { format!("{} copies", group.rows.len()) };
+                let open_now = if group.current { " (open now)" } else { "" };
+                let title = RichText::new(format!("{}{open_now}  -  {count}", group.title)).font(theme::font(12.5)).color(theme::TEXT());
+                let header = egui::CollapsingHeader::new(title)
+                    .id_salt(("older_copies", i, &group.title))
+                    .default_open(group.current)
+                    .show(ui, |ui| rows(ui, &group.rows, listing.can_replace, tips, actions));
+                if let Some(folder) = &group.folder {
+                    header.header_response.on_hover_text(format!("In {folder}"));
+                }
             }
         });
         if !listing.can_replace {

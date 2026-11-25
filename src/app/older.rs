@@ -29,7 +29,7 @@ use crate::backups;
 use crate::history::{FileState, Restored};
 use crate::io;
 use crate::recovery;
-use crate::ui::older::{Listing, Row};
+use crate::ui::older::{Group, Listing, Row};
 use crate::ui::question::listed;
 
 /// An object deleted since the scene was last saved.
@@ -158,10 +158,32 @@ impl Running {
             listed.push((backup.file.clone(), document.clone()));
             Row { file: backup.file, when: format!("Saved {}", when(&backup.stamp)), what: size_words(backup.bytes) }
         }).collect();
-        let copies: Vec<Row> = self.recovery_kept().into_iter().map(|copy| {
+        // The recovery copies, one list per file they are copies of: the
+        // scene's own file first, then the others, most recently kept first.
+        let this = self.doc.path.as_ref().and_then(|path| {
+            recovery::kept::group_of(&recovery::About { document: Some(path.clone()), ..Default::default() })
+        });
+        let mut copies: Vec<(Option<String>, Group)> = Vec::new();
+        for copy in self.recovery_kept() {
             listed.push((copy.file.clone(), copy.about.document.clone()));
-            Row { file: copy.file.clone(), when: format!("Kept {}", when(&copy.stamp())), what: copy.about.words() }
-        }).collect();
+            let key = recovery::kept::group_of(&copy.about);
+            let row = Row { file: copy.file.clone(), when: format!("Kept {}", when(&copy.stamp())), what: copy.about.contents() };
+            match copies.iter_mut().find(|(seen, _)| *seen == key) {
+                Some((_, group)) => group.rows.push(row),
+                None => {
+                    let title = match copy.about.document.as_deref().and_then(Path::file_name) {
+                        Some(name) => name.to_string_lossy().into_owned(),
+                        None => "Scenes never saved".to_owned(),
+                    };
+                    let folder = copy.about.document.as_deref().and_then(Path::parent).map(|f| f.display().to_string());
+                    let current = key.is_some() && key == this;
+                    copies.push((key, Group { title, folder, current, rows: vec![row] }));
+                }
+            }
+        }
+        let mut copies: Vec<Group> = copies.into_iter().map(|(_, group)| group).collect();
+        // Stable: the rest keep their order, newest first.
+        copies.sort_by_key(|group| !group.current);
         self.older.listed = listed;
         let unsaved = self.unsaved() || !self.scaffolds_at_risk(Loss::SceneReplaced).is_empty();
         let copies_folder = self.recovery_kept_folder().filter(|folder| folder.is_dir());

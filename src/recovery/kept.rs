@@ -4,18 +4,26 @@
 //! properly (rules (a) and (c) at the top of `crate::recovery`). "Exit
 //! Without Saving" over an afternoon's work then left nothing anywhere. So
 //! before a run removes its copies, the newest of them is moved here, under
-//! the run's name, in place of the one that run kept here before:
+//! the run's name and the name of the file the scene was open from, in place
+//! of the one that run kept here before for that same file:
 //!
 //! ```text
 //! %APPDATA%\Sculpt\kept recovery copies\
-//!     2026-10-15_201203-89660.sclp    the newest copy that run made
-//!     2026-10-15_201203-89660.json    what it is a copy of
+//!     2026-10-15_201203-89660 Door 1a2b3c4d.sclp   the newest copy of Door.sclp
+//!     2026-10-15_201203-89660 Door 1a2b3c4d.json   what it is a copy of
+//!     2026-10-15_201203-89660 Head 9f8e7d6c.sclp   the same run, later, on Head.sclp
+//!     2026-10-15_201203-89660 never saved 2026-10-15_213000.sclp
 //! ```
 //!
-//! One file per run of the app, then, never more, and each is kept for
-//! [`DAYS`] days from when it was written; past [`MOST`] the oldest go
-//! sooner. They are not crash copies: nothing asks about them at start-up.
-//! The File tab's Older Versions opens them, or adds their objects to the
+//! One file per run of the app and per file worked on in it, then: opening
+//! one file, working on it, then moving on to another no longer takes the
+//! first one's copy away (until 2026-11-24 a run kept one copy, whatever
+//! file it was of). A scene that was never saved is named by when its copy
+//! was written, so each one stays apart. Each is kept for [`DAYS`] days from
+//! when it was written; past [`PER_FILE`] copies of one file, [`MOST`] in
+//! all, or [`BUDGET`] bytes in all, the oldest go sooner. They are not crash
+//! copies: nothing asks about them at start-up. The File tab's Older
+//! Versions lists them by file, opens them, or adds their objects to the
 //! scene. The folder is beside the `recovery` one, not in it, so the rule
 //! that offers what a crash left behind never looks at it.
 
@@ -29,8 +37,15 @@ pub const FOLDER: &str = "kept recovery copies";
 /// How long a kept copy stays.
 pub const DAYS: i64 = 7;
 
-/// At most this many are kept, the newest.
-pub const MOST: usize = 20;
+/// At most this many are kept in all, the newest.
+pub const MOST: usize = 40;
+
+/// At most this many of any one file (or of scenes never saved), the newest.
+pub const PER_FILE: usize = 5;
+
+/// The copies take no more room than this in all: past it the oldest go,
+/// though never the newest copy of each file.
+pub const BUDGET: u64 = 6_000_000_000;
 
 /// One kept copy.
 #[derive(Clone, Debug, PartialEq)]
@@ -51,13 +66,47 @@ impl Copy {
     }
 }
 
+/// The part of a kept copy's name that says what it is a copy of: the file's
+/// name and a hash of its whole path (two files of one name in two folders
+/// stay apart), or, for a scene never saved, when the copy was written.
+fn subject(about: &About) -> String {
+    match &about.document {
+        Some(path) => {
+            let stem = path.file_stem().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            let stem: String = stem
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+                .take(40)
+                .collect();
+            format!("{} {:08x}", stem.trim(), group_of(about).map_or(0, |key| hash(&key)) as u32)
+        }
+        None => format!("never saved {}", about.when),
+    }
+}
+
+/// FNV-1a of `text`: the same in every build, unlike std's hasher.
+fn hash(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// Which file a copy is of, as one key for all its copies: the whole path,
+/// with case folded where the file system ignores it. `None` for a scene
+/// that was never saved.
+pub fn group_of(about: &About) -> Option<String> {
+    let path = about.document.as_deref()?;
+    let whole = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    let text = whole.to_string_lossy().replace('/', "\\");
+    Some(if cfg!(windows) { text.to_lowercase() } else { text })
+}
+
 /// The folder, for the `recovery` folder `root`.
 pub fn folder(root: &Path) -> PathBuf {
     root.parent().unwrap_or(Path::new("")).join(FOLDER)
 }
 
 /// Moves `newest`, a copy of the run called `run`, here, in place of what
-/// that run kept here before, and drops what has been kept long enough.
+/// that run kept here before of the same file, and drops what has been kept
+/// long enough.
 /// `now` is the time it is, as a stamp. Nothing is moved if anything fails:
 /// the copy is then removed with the rest, as it always was.
 pub fn keep(root: &Path, run: &str, newest: &Kept, now: &str) {
@@ -65,7 +114,12 @@ pub fn keep(root: &Path, run: &str, newest: &Kept, now: &str) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let file = dir.join(format!("{run}.sclp"));
+    let file = dir.join(format!("{run} {}.sclp", subject(&newest.about)));
+    if file.exists() {
+        // Rename does not replace a file on every system.
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_file(file.with_extension("json"));
+    }
     match std::fs::rename(&newest.file, &file) {
         Ok(()) => {
             let _ = std::fs::rename(newest.file.with_extension("json"), file.with_extension("json"));
@@ -94,16 +148,29 @@ pub fn list(root: &Path) -> Vec<Copy> {
     found
 }
 
-/// Removes the copies older than [`DAYS`], and past the newest [`MOST`].
-/// A copy that says nothing of when it was written stays until the count
-/// pushes it out.
+/// Removes the copies older than [`DAYS`], those past the newest
+/// [`PER_FILE`] of their file, past the newest [`MOST`] in all, and the
+/// oldest past [`BUDGET`] bytes (never a file's newest). A copy that says
+/// nothing of when it was written stays until a count pushes it out.
 pub fn prune(root: &Path, now: &str) {
     let Some(now) = crate::backups::seconds_of(now) else { return };
-    for (i, copy) in list(root).iter().enumerate() {
+    let mut per_file: std::collections::HashMap<Option<String>, usize> = std::collections::HashMap::new();
+    let mut bytes = 0u64;
+    let mut kept = 0usize;
+    for copy in list(root) {
         let age = crate::backups::seconds_of(&copy.stamp()).map(|at| now - at);
-        if i >= MOST || age.is_some_and(|age| age > DAYS * 86_400) {
+        let seen = per_file.entry(group_of(&copy.about)).or_default();
+        let size = std::fs::metadata(&copy.file).map_or(0, |m| m.len());
+        let too_old = age.is_some_and(|age| age > DAYS * 86_400);
+        let too_many = *seen >= PER_FILE || kept >= MOST;
+        let too_big = *seen > 0 && bytes + size > BUDGET;
+        if too_old || too_many || too_big {
             let _ = std::fs::remove_file(&copy.file);
             let _ = std::fs::remove_file(copy.file.with_extension("json"));
+        } else {
+            *seen += 1;
+            kept += 1;
+            bytes += size;
         }
     }
 }
@@ -122,10 +189,16 @@ mod tests {
 
     /// A copy as a run writes one, with its notes beside it.
     fn copy(dir: &Path, number: u32, when: &str, scene: &str) -> Kept {
+        copy_of(dir, number, when, scene, Some("C:/sculpts/Door.sclp"))
+    }
+
+    /// The same, of the file `document` (or of a scene never saved).
+    fn copy_of(dir: &Path, number: u32, when: &str, scene: &str, document: Option<&str>) -> Kept {
         std::fs::create_dir_all(dir).unwrap();
         let file = dir.join(format!("copy-{number:04}.sclp"));
         std::fs::write(&file, scene).unwrap();
-        let about = About { when: when.to_owned(), objects: 1, triangles: 10, document: None };
+        let document = document.map(PathBuf::from);
+        let about = About { when: when.to_owned(), objects: 1, triangles: 10, document };
         std::fs::write(file.with_extension("json"), serde_json::to_string(&about).unwrap()).unwrap();
         Kept { file, stopped: false, number, about }
     }
@@ -160,9 +233,52 @@ mod tests {
 
         for i in 0..MOST + 5 {
             let run = format!("2026-10-16_{:02}0000-{i}", i % 24);
-            let made = copy(&root.join(&run), 1, &format!("2026-10-16_{:02}{:02}00", i % 24, i / 24), "a run");
+            let when = format!("2026-10-16_{:02}{:02}00", i % 24, i / 24);
+            let document = format!("C:/sculpts/piece {i}.sclp");
+            let made = copy_of(&root.join(&run), 1, &when, "a run", Some(&document));
             keep(&root, &run, &made, "2026-10-16_235900");
         }
         assert_eq!(list(&root).len(), MOST);
+    }
+
+    #[test]
+    fn moving_on_to_another_file_keeps_the_first_ones_copy() {
+        let root = root("per_file");
+        let run = "2026-11-24_100000-1";
+        let door = copy_of(&root.join(run), 1, "2026-11-24_101000", "the door", Some("C:/sculpts/Door.sclp"));
+        keep(&root, run, &door, "2026-11-24_101100");
+        let head = copy_of(&root.join(run), 2, "2026-11-24_110000", "the head", Some("C:/sculpts/Head.sclp"));
+        keep(&root, run, &head, "2026-11-24_110100");
+        let fresh = copy_of(&root.join(run), 3, "2026-11-24_113000", "a sketch", None);
+        keep(&root, run, &fresh, "2026-11-24_113100");
+        let other = copy_of(&root.join(run), 4, "2026-11-24_114000", "another sketch", None);
+        keep(&root, run, &other, "2026-11-24_114100");
+        // Back to the door: it takes the place of the door's earlier copy, and no other.
+        let again = copy_of(&root.join(run), 5, "2026-11-24_120000", "the door, later", Some("C:/sculpts/Door.sclp"));
+        keep(&root, run, &again, "2026-11-24_120100");
+        let scenes: Vec<String> = list(&root).iter().map(|c| std::fs::read_to_string(&c.file).unwrap()).collect();
+        assert_eq!(scenes, ["the door, later", "another sketch", "a sketch", "the head"]);
+        // The same name in another folder is another file.
+        let elsewhere = copy_of(&root.join(run), 6, "2026-11-24_121000", "another door", Some("D:/old/Door.sclp"));
+        keep(&root, run, &elsewhere, "2026-11-24_121100");
+        assert_eq!(list(&root).len(), 5);
+    }
+
+    #[test]
+    fn each_file_keeps_its_newest_few() {
+        let root = root("few");
+        for i in 0..PER_FILE + 3 {
+            let run = format!("2026-11-24_{:02}0000-{i}", i);
+            let when = format!("2026-11-24_{:02}3000", i);
+            let made = copy_of(&root.join(&run), 1, &when, &format!("door {i}"), Some("C:/sculpts/Door.sclp"));
+            keep(&root, &run, &made, "2026-11-24_235900");
+        }
+        let head = copy_of(&root.join("h"), 1, "2026-11-20_120000", "the head", Some("C:/sculpts/Head.sclp"));
+        keep(&root, "2026-11-20_110000-9", &head, "2026-11-24_235900");
+        let kept = list(&root);
+        let doors = kept.iter().filter(|c| c.about.document.as_deref() == Some(Path::new("C:/sculpts/Door.sclp"))).count();
+        assert_eq!(doors, PER_FILE, "the door's oldest went");
+        assert!(kept.iter().any(|c| std::fs::read_to_string(&c.file).unwrap() == "the head"), "not another file's");
+        assert_eq!(std::fs::read_to_string(&kept[0].file).unwrap(), format!("door {}", PER_FILE + 2));
     }
 }

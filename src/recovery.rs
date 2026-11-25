@@ -28,7 +28,7 @@
 //!
 //! (A run also drops its own regular copies beyond the newest three as it
 //! writes new ones. When (a) or (c) removes a run's own copies, the newest
-//! is first moved aside and kept for a week, one per run of the app, where
+//! is first moved aside and kept for a week, one per run and file, where
 //! the File tab's Older Versions can open it: `recovery/kept.rs`. Nothing
 //! asks about those at start-up.) Nothing else removes a copy: not restoring it, not this
 //! run writing a copy of its own, not Not Now, not Undo, and not an answer
@@ -124,6 +124,16 @@ impl About {
             n => format!("{n} triangles"),
         };
         format!("{name}, {objects}, {triangles}")
+    }
+
+    /// "3 objects, 2.1 million triangles": [`About::words`] without the
+    /// file's name, for a list that already says which file it is.
+    pub fn contents(&self) -> String {
+        let words = self.words();
+        match words.split_once(", ") {
+            Some((_, rest)) if self.objects > 0 => rest.to_owned(),
+            _ => words,
+        }
     }
 }
 
